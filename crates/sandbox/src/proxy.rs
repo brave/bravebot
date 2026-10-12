@@ -16,6 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::{
+    os::unix::fs::DirBuilderExt,
+    os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
+};
 
 use crate::hosts::{HostList, Refusal, Verdict, recordable};
 
@@ -87,6 +93,17 @@ pub struct Proxy {
     stop: Arc<AtomicBool>,
     decisions: Arc<Mutex<Log>>,
     accept: Option<JoinHandle<()>>,
+    #[cfg(target_os = "linux")]
+    socket: Option<UnixSocket>,
+}
+
+/// The unix socket a proxy also listens on, in a directory of its own that only this account can
+/// enter, and the thread accepting on it.
+#[cfg(target_os = "linux")]
+struct UnixSocket {
+    directory: PathBuf,
+    path: PathBuf,
+    accept: Option<JoinHandle<()>>,
 }
 
 impl Proxy {
@@ -97,31 +114,30 @@ impl Proxy {
         let stop = Arc::new(AtomicBool::new(false));
         let decisions = Arc::new(Mutex::new(Log::default()));
         let shared = Arc::new(config);
+        #[cfg(target_os = "linux")]
+        let socket = UnixSocket::bind(&stop, &shared, &decisions);
         let accept = {
             let (stop, decisions) = (stop.clone(), decisions.clone());
             thread::Builder::new()
                 .name("allowed-hosts-proxy".into())
-                .spawn(move || {
-                    for stream in listener.incoming() {
-                        if stop.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        let Ok(stream) = stream else { continue };
-                        let (config, decisions) = (shared.clone(), decisions.clone());
-                        let _ = thread::Builder::new()
-                            .name("allowed-hosts-tunnel".into())
-                            .spawn(move || {
-                                let _ = serve(stream, &config, &decisions);
-                            });
-                    }
-                })?
+                .spawn(move || accept_on(listener.incoming(), &stop, &shared, &decisions))?
         };
         Ok(Self {
             addr,
             stop,
             decisions,
             accept: Some(accept),
+            #[cfg(target_os = "linux")]
+            socket,
         })
+    }
+
+    /// The unix socket the proxy also listens on, where it could be made. A backend that runs a
+    /// stage in a network of its own reaches the proxy through it, since its loopback port is not
+    /// in that network. `None` leaves such a backend unable to hold a stage to the proxy.
+    #[cfg(target_os = "linux")]
+    pub fn socket_path(&self) -> Option<&Path> {
+        self.socket.as_ref().map(|socket| socket.path.as_path())
     }
 
     /// The loopback address a stage is allowed to reach.
@@ -167,14 +183,123 @@ impl Drop for Proxy {
         self.stop.store(true, Ordering::SeqCst);
         // A blocked `accept` only returns for a connection, so make one.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
+        #[cfg(target_os = "linux")]
+        if let Some(mut socket) = self.socket.take() {
+            // The same wake-up for the other listener.
+            let _ = UnixStream::connect(&socket.path);
+            if let Some(accept) = socket.accept.take() {
+                let _ = accept.join();
+            }
+            let _ = std::fs::remove_file(&socket.path);
+            let _ = std::fs::remove_dir(&socket.directory);
+        }
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
         }
     }
 }
 
-fn serve(mut client: TcpStream, config: &ProxyConfig, decisions: &Mutex<Log>) -> io::Result<()> {
-    client.set_read_timeout(Some(HEAD_TIMEOUT))?;
+/// Serves each connection `incoming` yields, on a thread of its own, until `stop` is set.
+fn accept_on<S: Peer>(
+    incoming: impl Iterator<Item = io::Result<S>>,
+    stop: &AtomicBool,
+    config: &Arc<ProxyConfig>,
+    decisions: &Arc<Mutex<Log>>,
+) {
+    for stream in incoming {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let Ok(stream) = stream else { continue };
+        let (config, decisions) = (config.clone(), decisions.clone());
+        let _ = thread::Builder::new()
+            .name("allowed-hosts-tunnel".into())
+            .spawn(move || {
+                let _ = serve(stream, &config, &decisions);
+            });
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl UnixSocket {
+    /// Binds a socket in a new directory under the temporary one, or `None` where that cannot be
+    /// done, such as a temporary directory whose path is too long for a socket address.
+    fn bind(
+        stop: &Arc<AtomicBool>,
+        config: &Arc<ProxyConfig>,
+        decisions: &Arc<Mutex<Log>>,
+    ) -> Option<Self> {
+        static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        // The directory is created fresh and private to this account, and creating it fails where
+        // anything is already at the path, so nothing another user planted is followed.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-proxy-{}-{}",
+            std::process::id(),
+            COUNT.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .ok()?;
+        let path = directory.join("proxy.sock");
+        let Ok(listener) = UnixListener::bind(&path) else {
+            let _ = std::fs::remove_dir(&directory);
+            return None;
+        };
+        let (stop, config, decisions) = (stop.clone(), config.clone(), decisions.clone());
+        let accept = thread::Builder::new()
+            .name("allowed-hosts-proxy-socket".into())
+            .spawn(move || accept_on(listener.incoming(), &stop, &config, &decisions))
+            .ok();
+        if accept.is_none() {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&directory);
+            return None;
+        }
+        Some(Self {
+            directory,
+            path,
+            accept,
+        })
+    }
+}
+
+/// What a connection to the proxy has to do, so a loopback connection and a unix one are served
+/// by the same code.
+trait Peer: Read + Write + Send + Sized + 'static {
+    fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()>;
+    fn duplicate(&self) -> io::Result<Self>;
+    fn finish_writing(&self);
+}
+
+impl Peer for TcpStream {
+    fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()> {
+        self.set_read_timeout(limit)
+    }
+    fn duplicate(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+    fn finish_writing(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Peer for UnixStream {
+    fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()> {
+        self.set_read_timeout(limit)
+    }
+    fn duplicate(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+    fn finish_writing(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+fn serve<C: Peer>(mut client: C, config: &ProxyConfig, decisions: &Mutex<Log>) -> io::Result<()> {
+    client.set_read_limit(Some(HEAD_TIMEOUT))?;
     let (head, rest) = read_head(&mut client)?;
     let Some((host, port)) = connect_target(&head) else {
         return client.write_all(NOT_A_TUNNEL);
@@ -198,14 +323,14 @@ fn serve(mut client: TcpStream, config: &ProxyConfig, decisions: &Mutex<Log>) ->
     let Some(upstream) = open(&host, port) else {
         return client.write_all(UNREACHABLE);
     };
-    client.set_read_timeout(None)?;
+    client.set_read_limit(None)?;
     client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
     tunnel(client, upstream, &rest)
 }
 
 /// Reads up to the blank line ending a request head. Returns the head and any bytes that arrived
 /// after it, which belong to the tunnel.
-fn read_head(client: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
+fn read_head(client: &mut impl Read) -> io::Result<(Vec<u8>, Vec<u8>)> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -250,17 +375,17 @@ fn open(host: &str, port: u16) -> Option<TcpStream> {
 }
 
 /// Copies each stream into the other until both have finished. Nothing is parsed.
-fn tunnel(client: TcpStream, upstream: TcpStream, first: &[u8]) -> io::Result<()> {
+fn tunnel<C: Peer>(client: C, upstream: TcpStream, first: &[u8]) -> io::Result<()> {
     let mut upstream_writer = upstream.try_clone()?;
     upstream_writer.write_all(first)?;
-    let mut client_reader = client.try_clone()?;
+    let mut client_reader = client.duplicate()?;
     let outbound = thread::spawn(move || {
         let _ = io::copy(&mut client_reader, &mut upstream_writer);
         let _ = upstream_writer.shutdown(Shutdown::Write);
     });
     let (mut upstream_reader, mut client_writer) = (upstream, client);
     let _ = io::copy(&mut upstream_reader, &mut client_writer);
-    let _ = client_writer.shutdown(Shutdown::Write);
+    client_writer.finish_writing();
     let _ = outbound.join();
     Ok(())
 }
@@ -268,6 +393,41 @@ fn tunnel(client: TcpStream, upstream: TcpStream, first: &[u8]) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The unix socket a Linux stage reaches the proxy by is served by the same code as the
+    /// loopback port, and is gone with the proxy. The regressions it rejects: a socket nobody
+    /// accepts on, one that decides differently from the port, and one left on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_unix_socket_is_served_like_the_port_and_removed_with_the_proxy() {
+        let proxy = Proxy::start(ProxyConfig::new(HostList::default())).unwrap();
+        let path = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .write_all(b"CONNECT unlisted.example:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+        assert_eq!(
+            proxy
+                .decisions()
+                .into_iter()
+                .filter_map(|decision| decision.host)
+                .collect::<Vec<_>>(),
+            ["unlisted.example"]
+        );
+
+        drop(proxy);
+        assert!(!path.exists(), "the socket outlived the proxy");
+        assert!(
+            !path.parent().unwrap().exists(),
+            "the directory outlived the proxy"
+        );
+    }
     use std::io::BufRead;
 
     /// A server that echoes what its first connection sends.
