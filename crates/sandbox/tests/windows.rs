@@ -12,10 +12,15 @@
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::windows::AppContainerSandbox;
-use bravebot_sandbox::{Environment, Sandbox, SandboxError, Stream, Streams};
+use bravebot_sandbox::{
+    ConfinedChild, ConfinedStdin, ConfinedStdout, Environment, Sandbox, SandboxError, Stream,
+    Streams,
+};
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn sandbox() -> AppContainerSandbox {
     AppContainerSandbox::new().expect("a container profile can be created on this machine")
@@ -90,6 +95,81 @@ fn cmd(
     policy: &SandboxPolicy,
 ) -> Result<(Option<i32>, String), SandboxError> {
     run(sandbox, "cmd.exe", &["/c", line], policy)
+}
+
+/// How long a program in a container is given to run the first line it is handed.
+const STARTING: Duration = Duration::from_secs(60);
+
+/// How long a pipe is given to reach its end once nothing should be left holding it.
+const ENDING: Duration = Duration::from_secs(30);
+
+/// What the thread reading a program's output has seen.
+#[derive(Debug, PartialEq, Eq)]
+enum Seen {
+    /// `started` was printed.
+    Started,
+    /// The pipe reached its end, which is every process holding its write end gone.
+    Ended,
+}
+
+/// Read `stdout` on a thread of its own, saying once when `started` has been printed and once when
+/// the pipe reaches its end.
+fn watch(mut stdout: ConfinedStdout) -> mpsc::Receiver<Seen> {
+    let (seen, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut printed = Vec::new();
+        let mut chunk = [0u8; 512];
+        let mut started = false;
+        while let Ok(read) = stdout.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            printed.extend_from_slice(&chunk[..read]);
+            if !started && String::from_utf8_lossy(&printed).contains("started") {
+                started = true;
+                let _ = seen.send(Seen::Started);
+            }
+        }
+        let _ = seen.send(Seen::Ended);
+    });
+    receiver
+}
+
+/// A stage whose program, `cmd.exe /c cmd`, has started a second `cmd.exe` that reads commands from
+/// the input this process holds, has run the line it was handed, and is waiting for the next one.
+///
+/// The second is the only process that prints, so `started` arriving is that child running, and it
+/// holds the write end of the stage's output, so the pipe reaching its end is that child gone.
+fn a_stage_with_a_child_waiting_on_its_input(
+    sandbox: &AppContainerSandbox,
+    name: &str,
+) -> (ConfinedChild, ConfinedStdin, mpsc::Receiver<Seen>) {
+    let streams = Streams {
+        stdin: Stream::Piped,
+        stdout: Stream::Piped,
+        stderr: Stream::Null,
+    };
+    let mut child = sandbox
+        .spawn(
+            "cmd.exe".as_ref(),
+            &[OsString::from("/c"), OsString::from("cmd")],
+            &the_base(name),
+            streams,
+            Environment::Inherited,
+        )
+        .expect("the stage starts");
+    let mut input = child.take_stdin().expect("a stdin that was piped");
+    let seen = watch(child.take_stdout().expect("a stdout that was piped"));
+
+    input
+        .write_all(b"echo started\r\n")
+        .expect("the child is handed a line");
+    assert_eq!(
+        seen.recv_timeout(STARTING),
+        Ok(Seen::Started),
+        "the stage's child never ran the line it was handed"
+    );
+    (child, input, seen)
 }
 
 /// The first `name.exe` on this process's `PATH`.
@@ -204,6 +284,47 @@ fn git_starts_under_the_empty_base() {
          PACKAGES)"
     );
     assert!(printed.starts_with("git version"), "{printed}");
+}
+
+/// The regression it rejects: a kill that ends the stage's own process and nothing it started, so
+/// a line that was cancelled or ran out of time goes on running in its children, with the
+/// container's token, its network and the stage's pipes.
+#[test]
+fn killing_a_stage_ends_the_programs_it_started() {
+    let sandbox = sandbox();
+    let (mut child, input, seen) = a_stage_with_a_child_waiting_on_its_input(&sandbox, "kill");
+
+    child.kill().expect("the stage is killed");
+    let ended = seen.recv_timeout(ENDING);
+    // A child still running reads the end of its input here and exits, so a failure below leaves
+    // no process behind.
+    drop(input);
+
+    assert_eq!(
+        ended,
+        Ok(Seen::Ended),
+        "a program the stage started outlived the kill"
+    );
+    assert_ne!(child.wait().expect("the stage ends").code(), Some(0));
+}
+
+/// The regression it rejects: a stage whose programs outlive every handle this process holds on
+/// it. That is what is left when this process crashes or is ended before it kills the stage: the
+/// platform closes its handles, and nothing else ends the programs.
+#[test]
+fn a_stage_let_go_of_while_running_leaves_no_program_behind() {
+    let sandbox = sandbox();
+    let (child, input, seen) = a_stage_with_a_child_waiting_on_its_input(&sandbox, "dropped");
+
+    drop(child);
+    let ended = seen.recv_timeout(ENDING);
+    drop(input);
+
+    assert_eq!(
+        ended,
+        Ok(Seen::Ended),
+        "a program outlived the handle on its stage"
+    );
 }
 
 /// The regression it rejects: a refusal of a read or a write that this backend cannot apply being

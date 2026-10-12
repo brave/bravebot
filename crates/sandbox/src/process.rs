@@ -327,7 +327,8 @@ enum Started {
 ///
 /// Dropping this leaves the process running, as dropping a
 /// [`Child`](std::process::Child) does: a caller that needs it gone calls
-/// [`kill`](Self::kill) and then [`wait`](Self::wait).
+/// [`kill`](Self::kill) and then [`wait`](Self::wait). On Windows dropping it ends the process
+/// and every process it started, which are in a job that ends when this lets go of it.
 #[derive(Debug)]
 pub struct ConfinedChild {
     started: Started,
@@ -391,7 +392,7 @@ impl ConfinedChild {
         }
     }
 
-    /// Ask the operating system to end the process.
+    /// Ask the operating system to end the process, and on Windows every process it started.
     pub fn kill(&mut self) -> io::Result<()> {
         match &mut self.started {
             #[cfg(not(windows))]

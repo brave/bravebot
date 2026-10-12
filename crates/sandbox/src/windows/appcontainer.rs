@@ -45,13 +45,18 @@ use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
 };
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
     InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// The numbers the parent module writes its grants in are the platform's own rights.
@@ -303,15 +308,23 @@ fn readable_by_every_container() -> Vec<PathBuf> {
     .collect()
 }
 
-/// A process started under a container.
+/// The code a killed process reports. One rather than zero, so a caller reading the status cannot
+/// mistake a process this ended for one that succeeded.
+const KILLED: u32 = 1;
+
+/// A process started under a container, with the job it and every process it starts are in.
 ///
 /// The standard library's [`Child`](std::process::Child) cannot be built from a handle,
 /// and a process started through `CreateProcessW` with an attribute list is one this crate
 /// created itself, so this is what a caller waits on and kills instead.
+///
+/// The job ends every process in it when its last handle is closed, and this holds the only one,
+/// so dropping this ends them, as this process ending does.
 #[derive(Debug)]
 pub(crate) struct CreatedProcess {
     handle: OwnedHandle,
     id: u32,
+    job: OwnedHandle,
 }
 
 impl CreatedProcess {
@@ -367,20 +380,52 @@ impl CreatedProcess {
         Ok(Some(std::process::ExitStatus::from_raw(code)))
     }
 
+    /// End the process and every process it started.
+    ///
+    /// The job rather than the process, since a child of a confined process outlives its parent
+    /// and keeps its token, its network and the pipes it was handed.
     #[allow(unsafe_code)]
     pub(crate) fn kill(&mut self) -> Result<()> {
-        // The code a killed process reports. One rather than zero, so a caller reading the
-        // status cannot mistake a process this ended for one that succeeded.
-        const KILLED: u32 = 1;
-
-        let process = self.raw();
+        let job = self.job.as_raw_handle() as HANDLE;
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let ended = unsafe { TerminateProcess(process, KILLED) };
+        let ended = unsafe { TerminateJobObject(job, KILLED) };
         if ended == 0 {
             return Err(Error::last_os_error());
         }
         Ok(())
     }
+}
+
+/// A job that ends every process in it when its last handle is closed.
+///
+/// Not inheritable, and handed to no process, so the handle this returns is the last one.
+#[allow(unsafe_code)]
+fn job_ending_on_close() -> Result<OwnedHandle> {
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let job = unsafe { CreateJobObjectW(null(), null()) };
+    if job.is_null() {
+        return Err(Error::last_os_error());
+    }
+    // Sound because the call reported success, which means it returned a handle nothing else
+    // owns.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
+
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let limited = unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as HANDLE,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast::<c_void>(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if limited == 0 {
+        return Err(Error::last_os_error());
+    }
+    Ok(job)
 }
 
 /// A security identifier held as its own bytes.
@@ -867,7 +912,12 @@ fn started(
     let directory = directory.map(|path| wide(path.as_os_str())).transpose()?;
     let start_in = directory.as_ref().map_or(null(), |path| path.as_ptr());
 
+    // Made before the process, so a job the platform will not create costs no process.
+    let job = job_ending_on_close()?;
+
     let mut created = PROCESS_INFORMATION::default();
+    // Suspended, so the process runs nothing before it is in the job: a child it started first
+    // would be outside the job and outlive a kill.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let started = unsafe {
         CreateProcessW(
@@ -876,7 +926,7 @@ fn started(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | unicode,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | unicode,
             block,
             start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),
@@ -887,20 +937,43 @@ fn started(
         return Err(Error::last_os_error());
     }
 
-    // Nothing here resumes or waits on the initial thread, and a handle to it left open
-    // keeps the thread object alive for as long as this process runs.
+    // Sound because the call reported success, which means it wrote a process handle and a
+    // thread handle nothing else owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    unsafe { CloseHandle(created.hThread) };
+    let (handle, thread) = unsafe {
+        (
+            OwnedHandle::from_raw_handle(created.hProcess as RawHandle),
+            OwnedHandle::from_raw_handle(created.hThread as RawHandle),
+        )
+    };
 
-    // Sound because the call reported success, which means it wrote a process handle
-    // nothing else owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    let handle = unsafe { OwnedHandle::from_raw_handle(created.hProcess as RawHandle) };
+    let assigned = unsafe {
+        AssignProcessToJobObject(
+            job.as_raw_handle() as HANDLE,
+            handle.as_raw_handle() as HANDLE,
+        )
+    };
+    if assigned == 0 {
+        let refused = Error::last_os_error();
+        // Outside the job nothing else ends it, and suspended it never ends by itself.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { TerminateProcess(handle.as_raw_handle() as HANDLE, KILLED) };
+        return Err(refused);
+    }
+
+    // A thread that is not resumed has run nothing. Returning drops the job, which ends it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let resumed = unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) };
+    if resumed == u32::MAX {
+        return Err(Error::last_os_error());
+    }
 
     Ok(crate::process::confined(
         CreatedProcess {
             handle,
             id: created.dwProcessId,
+            job,
         },
         stdin.ours,
         stdout.ours,
