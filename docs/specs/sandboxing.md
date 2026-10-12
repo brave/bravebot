@@ -304,6 +304,9 @@ directory, and refuses one that is there and cannot be opened. The same path nam
 refused as before, in a policy that lists as in one that does not, and when a listed row names it
 too.
 
+On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
+not what a junction beneath the directory leads to.
+
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
 forbids, reached one grant at a time: the process runs, the record says the policy was applied,
@@ -328,6 +331,7 @@ depend on whatever else was changing that directory.
 `verified-by: bravebot_sandbox::windows::a_grant_reaches_what_is_under_the_directory_it_is_written_on`
 `verified-by: bravebot_sandbox::windows::a_program_is_refused_a_file_outside_its_grants_and_reads_one_inside`
 `verified-by: bravebot_sandbox::windows::a_program_writes_inside_its_grants_and_not_outside`
+`verified-by: bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_to_where_it_leads`
 
 <a id="SANDBOX-7"></a>
 ### SANDBOX-7: a write grant covers moving a file within it

@@ -209,6 +209,48 @@ fn a_program_is_refused_a_file_outside_its_grants_and_reads_one_inside() {
     assert!(!printed.contains("outside"), "{printed}");
 }
 
+/// The regression it rejects: a grant whose entry reaches through a junction inside the granted
+/// directory onto the directory the junction leads to. The entry is one the directory's contents
+/// inherit, and writing it rewrites the access list of everything beneath, so a junction that a
+/// person's tools or an earlier program left there would hand the container whatever it leads to.
+/// The junction is made the way `mklink /J` makes one, by this process and outside any container.
+#[test]
+fn a_grant_does_not_reach_through_a_junction_to_where_it_leads() {
+    let sandbox = sandbox();
+    let granted = scratch("junction-granted");
+    let withheld = scratch("junction-withheld");
+    std::fs::write(granted.join("note.txt"), "inside\n").expect("a file");
+    std::fs::write(withheld.join("note.txt"), "outside\n").expect("a file");
+    let link = granted.join("link");
+    let made = std::process::Command::new("cmd.exe")
+        .arg("/c")
+        .arg("mklink")
+        .arg("/J")
+        .arg(&link)
+        .arg(&withheld)
+        .output()
+        .expect("cmd.exe starts");
+    assert!(
+        made.status.success(),
+        "the junction was not made: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let policy = the_base("junction").allow_write(&granted);
+    let read = |path: &Path| {
+        cmd(&sandbox, &format!("type {}", path.display()), &policy).expect("the program starts")
+    };
+
+    let (code, printed) = read(&granted.join("note.txt"));
+    assert_eq!(code, Some(0), "a granted read failed: {printed}");
+    assert_eq!(printed, "inside");
+
+    for path in [withheld.join("note.txt"), link.join("note.txt")] {
+        let (code, printed) = read(&path);
+        assert_ne!(code, Some(0), "{} was read", path.display());
+        assert!(!printed.contains("outside"), "{printed}");
+    }
+}
+
 /// The regression it rejects: a write grant that is not applied, so a program cannot make a file
 /// in the directory it was given, or one that reaches past the directory, so it makes a file
 /// beside it.
