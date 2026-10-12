@@ -49,7 +49,7 @@ export interface Listing {
 }
 
 /** What became of a double-click. */
-export type OpenOutcome = { status: 'opened' } | { status: 'failed'; message: string }
+export type OpenOutcome = { status: 'opened' } | { status: 'revealed' } | { status: 'failed'; message: string }
 
 export interface FilePreview { path: string; text: string; truncated: boolean }
 export interface FileSearch { paths: string[]; incomplete: boolean }

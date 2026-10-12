@@ -8,21 +8,26 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
   const [preview, setPreview] = useState<Preview | null>(null)
   const [loading, setLoading] = useState(true)
   const [problem, setProblem] = useState('')
+  const [revealed, setRevealed] = useState(false)
   const [wrap, setWrap] = useState(false)
   useEffect(() => {
     let gone = false
-    setLoading(true); setPreview(null); setProblem('')
+    setLoading(true); setPreview(null); setProblem(''); setRevealed(false)
     void window.bravebot.previewFile(session, path).then((value) => { if (!gone) setPreview(value) })
       .catch(() => { if (!gone) setProblem('Preview unavailable.') }).finally(() => { if (!gone) setLoading(false) })
     return () => { gone = true }
   }, [session, path])
   const open = () => {
-    void window.bravebot.openFile(session, path).then((outcome) => { if (outcome.status === 'failed') setProblem(outcome.message) }).catch(() => setProblem('The file could not be opened.'))
+    void window.bravebot.openFile(session, path).then((outcome) => {
+      if (outcome.status === 'failed') setProblem(outcome.message)
+      else if (outcome.status === 'revealed') setRevealed(true)
+    }).catch(() => setProblem('The file could not be opened.'))
   }
   return <Modal title={`Preview ${path}`} size="xl" onClose={onClose} className="file-preview"
     subtitle="For your review only. Previewing a file does not put its contents in the agent’s context."
     actions={<Button kind="filled" onClick={onClose}>Done</Button>}>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
+    {revealed && <Alert type="info" size="small" role="status">This file could run as a program when opened, so it is shown in its folder instead.</Alert>}
     <div className="code-block preview-code">
       <div className="code-toolbar">
         <FileGlyph name={path} />

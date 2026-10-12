@@ -26,7 +26,7 @@ import { shell, dialog, type BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join, sep, relative } from 'node:path'
+import { extname, join, sep, relative } from 'node:path'
 import { isProjectPath } from '../shared/recents'
 import {
   ROWS_MAX,
@@ -241,24 +241,52 @@ export function list(handle: string, subpath: string): Listing | null {
 }
 
 /**
- * Hand a file to whichever app the system assigns its type.
+ * Extensions of the files handed to the system's default app: documents and media.
+ *
+ * An allow list, because which files the system runs when opened differs by platform and grows:
+ * `.command` and `.terminal` on macOS, `.desktop` on Linux, `.bat`, `.lnk` and `.js` on Windows.
+ * A program a person approved with `run` can write any of them into the project, and opening one
+ * runs it on the host, outside the sandbox. Source files are left out because Windows runs `.js`,
+ * `.vbs` and, where Python is installed, `.py` when opened, and HTML and SVG because they run
+ * script.
+ */
+const OPENS_IN_APP = new Set([
+  'txt', 'md', 'markdown', 'log', 'csv', 'tsv', 'json', 'rtf',
+  'pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic',
+  'mp3', 'm4a', 'wav', 'flac', 'ogg', 'aac', 'mp4', 'm4v', 'mov', 'webm',
+])
+
+/**
+ * Hand a file to whichever app the system assigns its type, or show it in its folder.
  *
  * Only a regular file: a directory would open a Finder window nobody asked for, and a device or a
  * socket is not something to hand to `open(1)` at all. `shell.openPath` resolves to an empty
  * string when it worked and to a message when it did not, and that message is worth repeating —
  * somebody double-clicked and nothing happened, which is the one case here they can act on.
+ *
+ * A file whose extension is not on `OPENS_IN_APP`, or that is marked executable, is shown in the
+ * file manager instead, so the person decides there whether to open it.
  */
 export async function open(handle: string, subpath: string): Promise<OpenOutcome> {
   const target = inside(handle, subpath)
   // The same refusal for a path outside the project as for one that is not a file. The renderer
   // has no business telling those apart, and the person sees a row that would not open either way.
   if (target === null) return { status: 'failed', message: 'that is not a file in this project' }
+  let mode: number
   try {
-    if (!statSync(target).isFile()) {
+    const stat = statSync(target)
+    if (!stat.isFile()) {
       return { status: 'failed', message: 'that is not a file' }
     }
+    mode = stat.mode
   } catch {
     return { status: 'failed', message: 'that is not a file in this project' }
+  }
+  // `target` is past `realpath`, so a link is judged by the name of the file it reaches.
+  if ((mode & 0o111) !== 0 || !OPENS_IN_APP.has(extname(target).slice(1).toLowerCase())) {
+    shell.showItemInFolder(target)
+    return { status: 'revealed' }
   }
   const failure = await shell.openPath(target)
   return failure === '' ? { status: 'opened' } : { status: 'failed', message: failure }
