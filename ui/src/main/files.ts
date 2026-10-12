@@ -247,8 +247,8 @@ export function list(handle: string, subpath: string): Listing | null {
  * `.command` and `.terminal` on macOS, `.desktop` on Linux, `.bat`, `.lnk` and `.js` on Windows.
  * A program a person approved with `run` can write any of them into the project, and opening one
  * runs it on the host, outside the sandbox. Source files are left out because Windows runs `.js`,
- * `.vbs` and, where Python is installed, `.py` when opened, and HTML and SVG because they run
- * script.
+ * `.vbs` and, where Python is installed, `.py` when opened, and HTML and SVG because the browser
+ * that opens them runs the script they contain.
  */
 const OPENS_IN_APP = new Set([
   'txt', 'md', 'markdown', 'log', 'csv', 'tsv', 'json', 'rtf',

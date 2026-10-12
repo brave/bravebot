@@ -44,8 +44,8 @@ Three columns, each side one resizable and foldable:
   provides a lazily loaded tree and project-wide filename search, including folders
   not yet expanded. Text files can be previewed. **Open in default app** opens plain text,
   Markdown, CSV, JSON, PDF, office documents, images, audio and video, and shows any other
-  file, or one marked executable, in its folder instead, since the system may run it as a
-  program when opened. A link is judged by the file it points at.
+  file, or on macOS and Linux one marked executable, in its folder instead, since the system
+  may run it as a program when opened. A symbolic link is judged by the file it points at.
   On narrow windows the inspector opens as a drawer.
 
 The two side columns fold from controls at either end of the transcript header, and their

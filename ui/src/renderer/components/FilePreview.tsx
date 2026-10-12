@@ -18,6 +18,7 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
     return () => { gone = true }
   }, [session, path])
   const open = () => {
+    setRevealed(false)
     void window.bravebot.openFile(session, path).then((outcome) => {
       if (outcome.status === 'failed') setProblem(outcome.message)
       else if (outcome.status === 'revealed') setRevealed(true)
@@ -27,7 +28,7 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
     subtitle="For your review only. Previewing a file does not put its contents in the agent’s context."
     actions={<Button kind="filled" onClick={onClose}>Done</Button>}>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
-    {revealed && <Alert type="info" size="small" role="status">This file could run as a program when opened, so it is shown in its folder instead.</Alert>}
+    {revealed && <Alert type="info" size="small" role="status">Only documents and media files that are not marked executable open from here, so this one is shown in its folder.</Alert>}
     <div className="code-block preview-code">
       <div className="code-toolbar">
         <FileGlyph name={path} />

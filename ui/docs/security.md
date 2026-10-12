@@ -20,11 +20,12 @@ Project-file operations use a session handle and a relative path. Main-process
 code resolves the session root and validates the path. Text previews and memory
 operations use the descriptor-based `bravebot-ui-files` helper; directory listing
 and opening files in an external app use separate validation in `src/main/files.ts`.
-Opening hands the system only a document or media file that is not marked executable,
-judged by the file a link resolves to. Any other file is shown in the file manager,
-because a program run under the sandbox can write a file the system runs when opened
-(`.command` on macOS, `.desktop` on Linux, `.bat` or `.lnk` on Windows), and opening it
-would run it outside the sandbox. `scripts/open-in-app.test.mjs` holds this.
+Opening hands the system only a document or media file that is not marked executable
+(a mark Windows does not have), judged by the file a symbolic link resolves to. Any other
+file is shown in the file manager, because a program run under the sandbox can write a
+file the system runs when opened (`.command` on macOS, `.desktop` on Linux, `.bat` or
+`.lnk` on Windows), and opening it would run it outside the sandbox. The check reads the
+file's name and mode and no other metadata. `scripts/open-in-app.test.mjs` holds this.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 
