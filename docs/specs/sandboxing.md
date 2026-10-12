@@ -2286,11 +2286,13 @@ the person's access, which the confinement exists to deny it.
 <a id="SANDBOX-31"></a>
 ### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others
 
-A Seatbelt profile allows a Mach lookup of the services in a fixed list and of nothing else, for
-every policy: the account and group lookups a program makes as it starts (`opendirectoryd`), the
-notification and log services of libSystem, the per-user directory helper, the network
-configuration services, certificate trust (`trustd`, `trustd.agent`), and the keychain service
-`SecurityServer` ([SANDBOX-12](#SANDBOX-12)). The list is code. No value, argument vector, printed
+A Seatbelt profile allows a Mach lookup of the services in a fixed list and of nothing else: the
+account and group lookups a program makes as it starts (`opendirectoryd`), the notification and log
+services of libSystem, the per-user directory helper, the network configuration services, and the
+keychain service `SecurityServer` ([SANDBOX-12](#SANDBOX-12)) for every policy, and certificate
+trust (`trustd`, `trustd.agent`) only for a policy that allows network egress, to every host or to
+a proxy's port. A stage whose network is closed ([SANDBOX-20](#SANDBOX-20)) is refused both. The
+list is code. No value, argument vector, printed
 output or configuration file adds to it, and it is not written as a pattern. A lookup of any other
 service is refused, which includes LaunchServices (`com.apple.coreservices.launchservicesd` and
 `com.apple.lsd.*`), the pasteboard (`com.apple.pasteboard.1`) and the other services that open a
@@ -2304,7 +2306,16 @@ everyday programs need: `gh` fails to verify a certificate without `trustd.agent
 `osxkeychain` fails with `-50` without `SecurityServer`. A program that looks up another service
 is refused the lookup.
 
+The trust services are the exception to "answers a question about the machine": evaluating a
+certificate chain makes them fetch the issuer from the certificate's Authority Information Access
+URL, from their own process and outside the profile, so a stage that held them with no network
+could make a request to any URL it names, with data in it. A program with no network has no
+certificate to verify, so it loses nothing. A stage held to a proxy's port
+([SANDBOX-24](#SANDBOX-24)) does need verification, and for it the host list does not stop that
+fetch on macOS.
+
 `verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
+`verified-by: bravebot_sandbox::macos::the_trust_services_are_looked_up_only_where_the_network_is_allowed`
 `verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
 
 ## Programs a person asked for
@@ -2659,6 +2670,11 @@ reported as what it is.
   scope has to leave the service out of the list for the stages without it, the same step the
   socket above needs. Since the base reads the login keychain file, a lookup through that service
   from any stage can reach the login keychain's database.
+- A stage held to a proxy's port has the certificate trust services of [SANDBOX-31](#SANDBOX-31),
+  and trustd fetches a certificate's issuer from its own process, so the host list of
+  [SANDBOX-24](#SANDBOX-24) does not bound that request on macOS. No way to keep verification
+  without the fetch is known. The seatbelt test of the closed case runs on macOS only; the AIA
+  fetch itself was observed with a hand-built profile and not through `SeatbeltSandbox::profile`.
 - A program that looks up a Mach service outside the list of [SANDBOX-31](#SANDBOX-31) has the
   lookup refused. The usability suite ([SANDBOX-21](#SANDBOX-21)) passes with the list; a program
   that needs another service (a file watcher through `com.apple.FSEvents`, Spotlight through
