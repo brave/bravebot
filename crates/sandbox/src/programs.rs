@@ -64,15 +64,12 @@ pub fn find(program: &OsStr) -> Option<PathBuf> {
 /// [`find`] against a given `PATH`, leaving out every directory recorded with [`keep_out`] or
 /// [`keep_out_where_writable`].
 pub fn find_on(program: &OsStr, path: &OsStr) -> Option<PathBuf> {
-    find_in_with(
-        program,
-        path,
-        &registered(),
-        &WRITABLE_WHERE_THE_ACCOUNT_CAN
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
-    )
+    // Copied out first, so the lock is not held while every entry on `PATH` is read.
+    let where_the_account_can = WRITABLE_WHERE_THE_ACCOUNT_CAN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    find_in_with(program, path, &registered(), &where_the_account_can)
 }
 
 /// Every directory recorded with [`keep_out`] so far.

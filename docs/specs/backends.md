@@ -2632,4 +2632,5 @@ as the `model` key is, and the switch is decided by a category the driver derive
   such a cache is found before the first such stage and not after. Where the permission mode
   answers every question and the sandbox mode is standard, a stage is given every path the account
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
-  the first stage runs and not after, until bravebot exits.
+  the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
+  `NotInstalled`.

@@ -24,16 +24,16 @@ governs:
   - crates/sandbox/src/programs.rs
   - crates/tui/src/status.rs
 guards:
-  - symbol: programs::find_in
+  - symbol: find_in
     sites:
       - crates/agent/src/confine.rs: 1
       - crates/agent/src/workspace.rs: 1
-      - crates/sandbox/src/programs.rs: 1
-      - crates/tui/src/clipboard.rs: 4
-      - crates/tui/src/editor.rs: 1
-  - symbol: programs::find_in_with
+      - crates/sandbox/src/programs.rs: 17
+      - crates/tui/src/clipboard.rs: 8
+      - crates/tui/src/editor.rs: 2
+  - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 1
+      - crates/sandbox/src/programs.rs: 6
 documented-by: docs/website/docs/security/security.md
 ---
 
