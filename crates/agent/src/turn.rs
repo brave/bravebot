@@ -3587,6 +3587,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 }
                                 crate::repeated_call::Held::Refuse => {
                                     Some(tools::refused_without_running(
+                                        &mut policy,
                                         &mut reporter,
                                         call,
                                         crate::repeated_call::refusal(

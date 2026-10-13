@@ -50525,6 +50525,54 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
     assert!(held[0].write);
 }
 
+/// TOOL-5, PATHREQ-1: a request for a path runs the same with any reason or with none. A refusal
+/// for want of one would ask nobody, so each of the three is asked about and granted.
+#[test]
+fn a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("no-reason");
+    let asking = |arguments: serde_json::Value| {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            "path-no-reason",
+            &places,
+            &[("request_path", arguments)],
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        let asked = paths.lock().unwrap().clone();
+        (turn, asked)
+    };
+    let beside = places.beside.display().to_string();
+    for (arguments, drawn) in [
+        (serde_json::json!({ "path": beside }), ""),
+        (
+            serde_json::json!({ "path": beside, "why": " \u{7}\n " }),
+            "",
+        ),
+        (
+            serde_json::json!({ "path": beside, "why": "the build writes its output there" }),
+            "the build writes its output there",
+        ),
+    ] {
+        let (turn, asked) = asking(arguments.clone());
+        assert_eq!(asked.len(), 1, "{arguments} was not asked about");
+        assert_eq!(asked[0].why, drawn, "{arguments}");
+        assert!(
+            path_result(&turn.results[0]).starts_with("approved"),
+            "{arguments}: {}",
+            turn.results[0]
+        );
+    }
+}
+
 /// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `workspace-write` stage writes beside the session with no
 /// request, and the trail says it was given what a request would be granted. The regression it
 /// rejects is a run that fails before the planner asks. The same line under `strict`, and under the

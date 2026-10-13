@@ -24,11 +24,13 @@ saying what the person answered.
 
 `path` decides what the programs may reach, so it is read through the routing gate and must be
 trusted and public. `write` is a flag that shapes the grant and is routing too. `why` is content,
-drawn for the person and recorded, and decides nothing ([TOOL-5](tool-surface.md#TOOL-5)). A call
-without a path, or without a reason, is answered with an error and asks nobody.
+drawn for the person and recorded, and decides nothing ([TOOL-5](tool-surface.md#TOOL-5)): it is
+read through the display release alone, so a call with none, or a blank one, is asked about like any
+other. A call without a path is answered with an error and asks nobody.
 
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
+`verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
 
 <a id="PATHREQ-2"></a>
 ### PATHREQ-2: only a yes grants, and a run with nobody to ask refuses
