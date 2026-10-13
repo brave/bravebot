@@ -8641,13 +8641,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.record_ambient(&spends);
     }
     if !left.scanned.refused().is_empty() {
-        let refused = credential_refusal_after_a_line(&displayed, &left, &stuck);
-        // A line that ran to its end has run, whatever the scan made of what it left (TURN-4). One
-        // that stopped on an error may not have started anything, and the error does not say.
-        return match ran.is_ok() {
-            true => refused.having_run_a_program(),
-            false => refused.having_started_a_program(),
-        };
+        // A program in the line put the credential there, so one ran whatever the line ended in
+        // (TURN-4).
+        return credential_refusal_after_a_line(&displayed, &left, &stuck).having_run_a_program();
     }
 
     match ran {
@@ -8733,9 +8729,16 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
         // a person endorsed it, so it is not something an attacker chose.
-        // A stage may have spawned before the one that failed, so the checkout is marked.
-        Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}"))
-            .having_started_a_program(),
+        // A stage may have spawned before the one that failed, so the checkout is marked. A line is
+        // stopped only once its stages have been spawned, so one the turn stopped has run (TURN-4).
+        Err(error) => {
+            let stopped = matches!(error, crate::exec::ExecError::Cancelled);
+            let produced = Produced::problem(format!("error: `{displayed}` did not run: {error}"));
+            match stopped {
+                true => produced.having_run_a_program(),
+                false => produced.having_started_a_program(),
+            }
+        }
     }
 }
 

@@ -129,9 +129,11 @@ ending a person is least able to spot for themselves: no outcome is drawn to rea
 **What happened, not what was asked for.** Both lines are about the workspace, so both count a
 write that landed and a program that started, never the call the planner made. A write the person
 declined and a write plan mode refused leave nothing to build, and a run the person declined
-builds nothing. A line refused for a credential it left behind had run to its end, so it counts.
-A line that stopped on an error does not, since the error does not say whether any program in it
-had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for the opposite reason:
+builds nothing. A line refused for a credential it left behind counts, since a program in it put
+the credential there, and so does a line stopped with the turn, which is stopped only once its
+programs have started. A line that ended in any other error does not, since the error does not
+say whether a program in it had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for
+the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on.
 
@@ -160,6 +162,7 @@ driver's record of a delegate's work does not say where a write landed.
 `verified-by: bravebot_agent::turn::the_question_waits_for_a_delegate_still_working_in_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_refused_for_a_credential_it_left_counts_as_run`
 `verified-by: bravebot_agent::turn::a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::a_line_stopped_with_the_turn_counts_as_run`
 
 <a id="TURN-5"></a>
 ### TURN-5: completed work remains charged when a turn fails or stops

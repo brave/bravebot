@@ -12837,8 +12837,8 @@ fn the_question_waits_for_a_delegate_still_working_in_the_workspace() {
     );
 }
 
-/// A line refused for a credential it left behind had run to its end before the scan read what it
-/// left, so the turn that ran it is not told that nothing was run.
+/// A line refused for a credential it left behind had a program in it put the credential there, so
+/// the turn that ran it is not told that nothing was run.
 #[test]
 fn a_line_refused_for_a_credential_it_left_counts_as_run() {
     let scratch = Scratch::new("credential-refused-still-ran");
@@ -12979,6 +12979,94 @@ fn a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_n
             .iter()
             .any(|said| said.contains("no command was run")),
         "the person was not told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
+/// A line stopped with the turn had started its programs, since a line is only stopped once they
+/// are running, so a turn stopped part way through its build is not told that no command was run.
+#[test]
+fn a_line_stopped_with_the_turn_counts_as_run() {
+    /// Stops the turn at the moment a line that can be moved starts, which is just before its
+    /// programs are spawned, and records what the person was told.
+    struct StopAsTheLineStarts {
+        cancel: bravebot_core::cancel::Cancel,
+        narration: Vec<String>,
+        notes: Vec<String>,
+    }
+
+    impl bravebot_agent::report::Reporter for StopAsTheLineStarts {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn narration(&mut self, text: String) {
+            self.narration.push(text);
+        }
+
+        fn movable(&mut self, _handoff: bravebot_core::cancel::Handoff) {
+            self.cancel.cancel();
+        }
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            self.notes.extend(activity.note);
+        }
+    }
+
+    let scratch = Scratch::new("line-stopped-with-the-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        tool_request("run", r#"{"command":"sleep 30"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopAsTheLineStarts {
+        cancel: cancel.clone(),
+        narration: Vec::new(),
+        notes: Vec::new(),
+    };
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect_err("a stopped turn must not succeed");
+
+    assert!(
+        matches!(error, turn::TurnError::Cancelled { .. }),
+        "the turn ended some other way, so this says nothing about a stop: {error:?}"
+    );
+    assert!(
+        reporter
+            .notes
+            .iter()
+            .any(|note| note.contains("stopped because the turn was cancelled")),
+        "the line was not stopped part way, so this is not the case under test: {:?}",
+        reporter.notes
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told no command was run after the turn stopped one: {:?}",
         reporter.narration
     );
 }
