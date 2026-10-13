@@ -809,6 +809,62 @@ fn plan_mode_refuses_a_plan_that_writes() {
     );
 }
 
+/// A plan that plan mode refused is a refusal in the trail, naming the step that writes.
+///
+/// The run is refused before any step is read or the plan is put to the person, so no other gate
+/// sees the write. With no record of its own, the trail ends at the planning calls that passed.
+#[test]
+fn a_plan_refused_by_plan_mode_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("plan-mode-write-recorded");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+            false,
+        ),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("plan mode must refuse a plan that writes");
+
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "permission_mode",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["step 2: write_file: plan mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes: {:?}",
+        sink.events()
+    );
+}
+
 /// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
 /// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
 /// the mode mean "no manifest runs", which is not what it says.

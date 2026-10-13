@@ -3401,6 +3401,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             .saying_why(why.clone()),
     );
 
+    // Read once, so a write refused below is recorded under the mode that refused it.
+    let mode = tools.permission_mode.get();
     let mut produced = match name.as_str() {
         // A server's tool is not one of this program's, so no definition's `tools:` line names
         // it, and it was offered only where the run holds its server.
@@ -3425,7 +3427,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the
         // person's behalf. Checked before the tool runs, so nothing is read and no path resolved.
-        writing if tools.permission_mode.get().refuses_writes() && writes_a_file(writing) => {
+        writing if mode.refuses_writes() && writes_a_file(writing) => {
+            policy.refuse_write_in_mode(strip_namespace(writing), mode.name());
             Produced::problem(
                 "refused: the session is in plan mode, so writing is refused however the user would \
                  have answered. Do not retry; say what you would change and why.",

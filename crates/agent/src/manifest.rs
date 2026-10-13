@@ -646,35 +646,6 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         Err(error) => return Err(stopped(attempt, error)),
     };
 
-    // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
-    // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
-    // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
-    // body it carried into a path the person vouched for asks nobody and goes straight through:
-    // that is the case the clause is written for, so the mode has to be answered from the plan or
-    // it does not hold in this mode at all.
-    //
-    // Here rather than at the step, so the refusal costs what a decline costs: nothing has been
-    // read, nothing has been written, and nobody has been asked to approve a plan whose writes
-    // were never going to land. A plan that writes nothing runs, because there is nothing in it
-    // for the mode to refuse.
-    if task.permission_mode.get().refuses_writes()
-        && let Some((index, _)) = planned
-            .plan
-            .steps()
-            .iter()
-            .enumerate()
-            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
-    {
-        return Err(stopped(
-            attempt,
-            TurnError::Precommit(format!(
-                "plan mode refuses a write, and step {} of this plan writes a file, so nothing \
-                 ran. Leave plan mode and ask again.",
-                index + 1
-            )),
-        ));
-    }
-
     let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let result = execute(
         config,
@@ -933,6 +904,34 @@ fn plan<S: Sink, R: Reporter>(
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
     attempt.plan = Some(template(&plan));
+
+    // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
+    // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
+    // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
+    // body it carried into a path the person vouched for asks nobody and goes straight through:
+    // that is the case the clause is written for, so the mode has to be answered from the plan or
+    // it does not hold in this mode at all.
+    //
+    // Here rather than at the step, so the refusal costs what a decline costs: nothing has been
+    // read, nothing has been written, and nobody has been asked to approve a plan whose writes
+    // were never going to land. A plan that writes nothing runs, because there is nothing in it
+    // for the mode to refuse. Decided before the planner's policy finishes, so that policy records
+    // the refusal (TRACE-1).
+    let mode = task.permission_mode.get();
+    if mode.refuses_writes()
+        && let Some((index, step)) = plan
+            .steps()
+            .iter()
+            .enumerate()
+            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
+    {
+        policy.refuse_write_in_mode(&format!("step {}: {}", index + 1, step.tool()), mode.name());
+        return Err(TurnError::Precommit(format!(
+            "plan mode refuses a write, and step {} of this plan writes a file, so nothing ran. \
+             Leave plan mode and ask again.",
+            index + 1
+        )));
+    }
 
     Ok(Planned {
         plan,

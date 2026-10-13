@@ -30,7 +30,9 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise.
+reference, the path otherwise. A write call the permission mode refuses before the tool runs
+([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
+refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode.
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
@@ -61,6 +63,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
+`verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::manifest::a_plan_refused_by_plan_mode_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
