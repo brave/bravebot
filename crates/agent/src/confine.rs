@@ -349,14 +349,59 @@ impl Confinement {
         }
     }
 
+    /// Whether `file` is under a directory the plan may write to, so that its name is one the plan
+    /// could have chosen (SANDBOX-16, SANDBOX-20): the session's directories, the scratch and
+    /// temporary directories, and every row some stage of this session may be given for writing,
+    /// whatever its program. A file another stage could have written is as much the plan's as one
+    /// this stage could.
     fn writable_by_the_plan(&self, file: &Path) -> bool {
         let file = canonical(file);
-        self.roots
+        if self
+            .roots
             .iter()
             .chain(self.scratch.iter())
             .any(|dir| file.starts_with(dir))
             || file.starts_with(&self.temporary)
             || file.starts_with(canonical(&self.temporary))
+        {
+            return true;
+        }
+        let policy = self.written_by_some_stage();
+        let rows: Vec<PathBuf> = policy
+            .writable
+            .iter()
+            .map(|row| canonical(&row.path))
+            .collect();
+        // A read refusal inside a write row is a write refusal too (SANDBOX-12, SANDBOX-18).
+        let refused: Vec<PathBuf> = policy
+            .unwritable
+            .iter()
+            .chain(&policy.unreadable)
+            .map(|row| canonical(row))
+            .collect();
+        written_under(&rows, &refused, &file)
+    }
+
+    /// The write rows [`Confinement::composed`] can give some stage of this session from anything
+    /// but its step, with the person's refusals.
+    ///
+    /// Every toolchain's caches are among them in every mode, since a stage may carry or ask for
+    /// any toolchain's list, and a file one left there outlives a switch to `read-only`. A scope's
+    /// write rows are not: they are the file `~/.ssh/known_hosts` and the agent socket the person's
+    /// environment names, and the plan chose neither name. Nor are the rows bypass gives without a
+    /// request (SANDBOX-28), which are every path the account can write, so counting them would
+    /// take its reason from every program the account installed (SANDBOX-20).
+    fn written_by_some_stage(&self) -> SandboxPolicy {
+        let mut policy = self.base_policy();
+        if let Some(home) = self.home.as_deref() {
+            policy = Toolchain::grant_every_cache(policy, self.prelude, home);
+            for grant in self.grants.iter().filter(|grant| grant.write) {
+                if let Some(path) = grant.directory(home) {
+                    policy = policy.allow_write(path);
+                }
+            }
+        }
+        self.filesystem.apply(self.path_reach.apply(policy))
     }
 
     /// What the trail records about the network for the stages of one run, or `None` where the
@@ -1997,6 +2042,23 @@ fn is_git(prelude: Prelude, resolved: &Path, planted: &[&Path]) -> bool {
         && !planted
             .iter()
             .any(|row| file.starts_with(row) || file.starts_with(canonical(row)))
+}
+
+/// Whether a stage holding `rows` may write `file`: the narrowest row holding it lies beneath the
+/// narrowest of `refused` holding it, since a write row beneath a refusal stands and one equal to
+/// it is withdrawn ([`SandboxPolicy::unwritable`]).
+fn written_under(rows: &[PathBuf], refused: &[PathBuf], file: &Path) -> bool {
+    let narrowest = |rows: &[PathBuf]| {
+        rows.iter()
+            .filter(|row| file.starts_with(row))
+            .map(|row| row.components().count())
+            .max()
+    };
+    match (narrowest(rows), narrowest(refused)) {
+        (Some(row), Some(refusal)) => row > refusal,
+        (row, None) => row.is_some(),
+        (None, Some(_)) => false,
+    }
 }
 
 /// Whether one of `a` and `b` is the other or lies inside it, comparing components without regard
@@ -4916,39 +4978,139 @@ mod tests {
     }
 
     /// A file the plan could have written, under a directory it may write to, gets no network by
-    /// being named `curl` or `cargo`: the reasons are read from the file name.
+    /// being named `curl` or `cargo`: the reasons are read from the file name. A toolchain cache is
+    /// such a directory on every platform and in every mode, including where the stage running the
+    /// file is not given the cache itself, because another stage of the plan could have written the
+    /// file there, and including `read-only`, which a session can switch to after one did.
     #[test]
     fn a_program_the_plan_could_have_written_keeps_no_network_by_its_name() {
-        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
-        for (program, args) in [
-            ("/work/project/bin/curl", vec!["https://a.example"]),
-            ("/work/project/target/cargo", vec!["build"]),
-            ("/var/scratch/ssh", vec!["host"]),
-            ("/work/project/git", vec!["push"]),
-            ("/tmp/curl", vec![]),
+        for (what, confined) in [
+            ("windows", confinement(&["/work/project"])),
+            (
+                "linux",
+                reading_confinement(Prelude::Linux, &["/work/project"]),
+            ),
+            (
+                "macos",
+                reading_confinement(Prelude::MacOs, &["/work/project"]),
+            ),
+            (
+                "strict",
+                reading_confinement(Prelude::MacOs, &["/work/project"])
+                    .with_mode(SandboxMode::Strict),
+            ),
+            (
+                "read-only",
+                reading_confinement(Prelude::Linux, &["/work/project"])
+                    .with_mode(SandboxMode::ReadOnly),
+            ),
         ] {
-            let step = step(program, &args);
-            assert!(!closed.egress(&step), "{program}");
+            let closed = confined.with_network(Network::Closed);
+            for (program, args) in [
+                (
+                    "/work/project/bin/curl".to_string(),
+                    vec!["https://a.example"],
+                ),
+                ("/work/project/target/cargo".to_string(), vec!["build"]),
+                ("/var/scratch/ssh".to_string(), vec!["host"]),
+                ("/work/project/git".to_string(), vec!["push"]),
+                ("/tmp/curl".to_string(), vec![]),
+                (
+                    format!("{HOME}/.cargo/registry/curl"),
+                    vec!["https://a.example"],
+                ),
+                (format!("{HOME}/go/pkg/mod/cargo"), vec!["build"]),
+                (format!("{HOME}/.m2/repository/ssh"), vec!["host"]),
+            ] {
+                let step = step(&program, &args);
+                assert!(!closed.egress(&step), "{what}: {program}");
+                assert!(
+                    !closed.policy(&step, Path::new("/work"), &[]).allow_network,
+                    "{what}: {program}"
+                );
+                assert!(
+                    closed
+                        .network_for_the_trail(&[&step])
+                        .unwrap()
+                        .contains("every stage"),
+                    "{what}: {program}"
+                );
+            }
+            let installed = step("/usr/bin/curl", &["https://a.example"]);
+            assert!(closed.egress(&installed), "{what}");
+        }
+    }
+
+    /// A file under a directory a person let programs write, by an `allowWrite` entry, a
+    /// remembered directory or a `request_path`, gets no network by its name either, whichever
+    /// command the remembered directory was for. Reach that only reads, and a `denyWrite` the person
+    /// carved out of an `allowWrite`, leave a file there its network, so what decides is that a
+    /// stage may write the file and not that the person named the place.
+    #[test]
+    fn a_program_in_a_directory_a_person_let_programs_write_keeps_no_network_by_its_name() {
+        let top = crate::testutil::scratch_dir("confine-person-written-network");
+        let _ = std::fs::remove_dir_all(&top);
+        let place = |name: &str| {
+            std::fs::create_dir_all(top.join(name)).expect("directory");
+            top.join(name).canonicalize().expect("canonical")
+        };
+        let allowed = place("allowed");
+        let carved = place("allowed/carved");
+        let remembered_write = place("remembered-write");
+        let remembered_read = place("remembered-read");
+        let requested_write = place("requested-write");
+        let requested_read = place("requested-read");
+        let reach = |path: &Path, write| crate::workspace::PathReach {
+            path: path.to_path_buf(),
+            write,
+            why: "the build needs it".to_string(),
+        };
+        let closed = reading_confinement(Prelude::Linux, &["/work/project"])
+            .with_network(Network::Closed)
+            .with_filesystem(&listed(
+                &[],
+                &[allowed.to_str().unwrap()],
+                &[carved.to_str().unwrap()],
+            ))
+            .with_grants(vec![
+                remembered(
+                    "/usr/bin/make",
+                    None,
+                    Reached::Directory(remembered_write.clone()),
+                    true,
+                ),
+                remembered(
+                    "/usr/bin/make",
+                    None,
+                    Reached::Directory(remembered_read.clone()),
+                    false,
+                ),
+            ])
+            .with_path_reach(&[reach(&requested_write, true), reach(&requested_read, false)]);
+        let curl = |directory: &Path| step(directory.join("curl").to_str().unwrap(), &[]);
+
+        for written in [&allowed, &remembered_write, &requested_write] {
+            let step = curl(written);
+            assert!(!closed.egress(&step), "{}", written.display());
             assert!(
                 !closed.policy(&step, Path::new("/work"), &[]).allow_network,
-                "{program}"
-            );
-            assert!(
-                closed
-                    .network_for_the_trail(&[&step])
-                    .unwrap()
-                    .contains("every stage")
+                "{}",
+                written.display()
             );
         }
-        let installed = step("/usr/bin/curl", &["https://a.example"]);
-        assert!(closed.egress(&installed));
+        for kept in [&carved, &remembered_read, &requested_read] {
+            assert!(closed.egress(&curl(kept)), "{}", kept.display());
+        }
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     /// A file the plan could have written carries no credential scope by being named `aws` or
-    /// `git`: a project's `.venv/bin/aws` would otherwise be handed `~/.aws`. The same names
-    /// installed outside the plan's directories keep their scope.
+    /// `git`: a project's `.venv/bin/aws`, or one a stage left in a toolchain cache, would
+    /// otherwise be handed `~/.aws`. The same names installed outside the plan's directories keep
+    /// their scope.
     #[test]
     fn a_program_the_plan_could_have_written_carries_no_scope_by_its_name() {
+        let cached = format!("{HOME}/.cargo/registry/aws");
         for prelude in [Prelude::Linux, Prelude::MacOs] {
             let confined = reading_confinement(prelude, &["/work/project"]);
             // The remote scope's row on these platforms is the one write, since the base already
@@ -4973,6 +5135,7 @@ mod tests {
                     true,
                 ),
                 ("/tmp/kubectl", vec!["get", "pods"], ".kube/config", false),
+                (cached.as_str(), vec!["s3", "ls"], ".aws/credentials", false),
             ] {
                 let path = format!("{HOME}/{credential}");
                 let lifted = |policy: &SandboxPolicy| {

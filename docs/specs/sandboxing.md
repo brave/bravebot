@@ -873,8 +873,8 @@ or `ssh+git`, before a `--` or after one; where a signing `git` argv holds any a
 `--exec` or `--strategy`, or a `-x` or `-s` to `rebase` or a `-s` to `merge`, which run a command or
 a `git-merge-<name>` from the search path; where a `gh` argv holds `--`; and where `kubectl` is
 given `--kubeconfig` or `docker` is given `--config`. None is carried by a program whose resolved
-file is under a directory the plan may write to (the session's directories, the scratch directory
-and the temporary directory), which could have been named `aws` or `git` by the plan itself, as
+file is under a directory the plan may write to ([SANDBOX-20](#SANDBOX-20) says which those are,
+toolchain caches among them), which could have been named `aws` or `git` by the plan itself, as
 [SANDBOX-20](#SANDBOX-20) holds for the network. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
@@ -910,8 +910,7 @@ after it only the keys an `IdentityFile` line of the person's ssh configuration 
 and no other key the agent holds. The value is judged as an `IdentityFile` name is: absolute or
 beginning `~/`, `.pub` added to a name that does not end in it, a regular file named `*.pub` once a
 link is followed, and outside every credential location other than `~/.ssh`. It must also lie
-outside every directory the plan may write (the session's directories, the scratch directory and the
-temporary directory). A path holding `'` is refused, since git hands the variable to a shell, and so
+outside every directory the plan may write ([SANDBOX-20](#SANDBOX-20)). A path holding `'` is refused, since git hands the variable to a shell, and so
 is one holding `%` or `$`, which ssh expands in a key's name, and one that is not valid UTF-8. A
 refused key, an address with no entry, an argv naming two different addresses and an argv naming
 none leave the stage as it was. The address is read from the argv and nothing else: a remote given
@@ -1650,6 +1649,19 @@ what a program printed, and none is granted to a file under a directory the plan
 it could have named `curl` itself. A stage that carries one is also granted the resolver ([SANDBOX-3](#SANDBOX-3)) and keeps the unix socket rule
 it already had, so the agent socket still reaches a remote stage. A stage started with `NAME=value`
 assignments carries no scope ([SANDBOX-16](#SANDBOX-16)), and so none of the third kind.
+A directory the plan may write to is one of the session's directories, the scratch directory or the
+temporary directory, or a row some stage of the session may be given for writing, whatever that
+stage's program: each toolchain's caches, in every mode, since a file left there outlives a switch to
+`read-only`; a directory a person remembered for writing ([SANDBOX-23](#SANDBOX-23)); a path a
+`request_path` for writing was granted ([SANDBOX-28](#SANDBOX-28)); and an `allowWrite` entry
+([SANDBOX-25](#SANDBOX-25)), less what a `denyWrite` or `denyRead` entry takes back. A stage that
+runs a file is often not given the row it lies under, and the file counts all the same, since
+another stage of the plan could have written it. The rows the mode bypass gives without a request
+([SANDBOX-28](#SANDBOX-28)) are left out, as they are for `git` ([SANDBOX-18](#SANDBOX-18)): they are
+every path the account can write, so counting them would take the reason from every program the
+account installed, rustup's `cargo` and a Homebrew `git` among them. Under bypass a stage can
+therefore still write a file the account owns, name it `curl`, and have a later stage keep the
+network by running it.
 
 The setting is read from `--run-network <open|closed>`, from `run.network` in a settings file, and
 from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and
@@ -1682,6 +1694,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_sandbox::network::curl_and_ssh_are_known_by_the_file_and_nothing_else_is`
 `verified-by: bravebot_sandbox::toolchain::only_the_programs_that_fetch_are_known_to_fetch`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_keeps_no_network_by_its_name`
+`verified-by: bravebot_agent::confine::a_program_in_a_directory_a_person_let_programs_write_keeps_no_network_by_its_name`
 `verified-by: bravebot_config::run_network::a_managed_pin_that_is_neither_word_closes_the_network`
 `verified-by: bravebot_agent::confine::the_policy_the_line_and_the_description_agree_on_which_stages_keep_the_network`
 `verified-by: bravebot_agent::confine::the_fetch_bit_is_keyed_on_the_resolved_file`
