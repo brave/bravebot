@@ -6,6 +6,13 @@ governs:
   - crates/tui/src/indicator.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
+  - crates/tui/src/render/watching.rs
+  - crates/tui/src/render/scroller.rs
+  - crates/tui/src/render/transcript.rs
+  - crates/tui/src/render/export.rs
+  - crates/tui/src/render/prompt.rs
+  - crates/tui/src/render/beneath.rs
+  - crates/tui/src/render/hint.rs
   - crates/tui/src/state.rs
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
