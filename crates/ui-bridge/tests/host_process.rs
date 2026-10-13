@@ -539,7 +539,9 @@ fn told_to_a_hosts_planner(named: Option<&str>) -> String {
         "turn.send",
         json!({"session": session, "prompt": "do the work"}),
     );
-    client.event("turn.done");
+    let ended =
+        client.until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");
+    assert_eq!(ended["event"], "turn.done", "{ended}");
     rounds
         .recv_timeout(PATIENCE)
         .expect("the turn reached the model service")

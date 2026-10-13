@@ -4,7 +4,7 @@
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The command line `bravebot-rpc` and `bravebot-acp` take: nothing, `--settings <path>`, or
-//! `--version`.
+//! `--version` (`-V`).
 //!
 //! What to print is returned rather than printed, because only the transport binaries may write
 //! to the standard streams or end the process (docs/specs/layering.md).

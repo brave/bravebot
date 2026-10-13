@@ -260,6 +260,10 @@ impl FrontEnd {
             json!({"sessionId": session, "prompt": [{"type": "text", "text": "do the work"}]}),
         );
         let asked = self.until(|message| message["method"] == "session/request_permission");
+        assert_eq!(
+            asked["params"]["toolCall"]["toolCallId"], "trust",
+            "{asked}"
+        );
         self.write(json!({"jsonrpc": "2.0", "id": asked["id"],
             "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}}}));
         let ended = self.answer_to(prompt);
