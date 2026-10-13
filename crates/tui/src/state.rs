@@ -2676,12 +2676,7 @@ impl Session {
         self.written = 0;
         self.progress = Default::default();
         self.todos.clear();
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
+        self.clear_in_progress();
         self.started = None;
         self.scroll = 0;
         self.selection = None;
@@ -7237,12 +7232,7 @@ impl Session {
     pub fn restore(&mut self, prompt: impl Into<String>) {
         self.status = Status::Idle;
         self.started = None;
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
+        self.clear_in_progress();
         // A prompt is English and a command line is not, so the line coming back must not land
         // behind a marker that would run it. Belt and braces with the guard in
         // [`Session::type_char`]: this is the state the returning text lands in, and it has to be
@@ -9129,12 +9119,7 @@ impl Session {
         self.todos.clear();
         self.written = 0;
         self.progress = Default::default();
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
+        self.clear_in_progress();
         self.started = Some(Instant::now());
         // The last turn's jobs ended with it, and the rows stay in the list; what the hint line
         // and `/status` say about jobs is about this turn's from here on. Where the session keeps
@@ -9168,12 +9153,7 @@ impl Session {
         self.timing.entry(self.turns).or_default().wall_ms +=
             u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
         self.started = None;
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
+        self.clear_in_progress();
         self.streaming.clear();
         self.composing = None;
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
@@ -9457,12 +9437,7 @@ impl Session {
         self.status = Status::Working;
         self.turn_in_flight = false;
         self.back_to_the_tail();
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
+        self.clear_in_progress();
         self.started = Some(Instant::now());
     }
 
@@ -9477,32 +9452,11 @@ impl Session {
     /// before the first turn is one nothing else ever writes to. Skipping the breakdown there
     /// would be the same disagreement by another route, since the total is added to either way.
     pub fn end_aside(&mut self, tokens: u64) {
-        self.status = Status::Idle;
-        // An aside that wrote something as it went has been drawing it at the tail, where the
-        // turn's own half-written reply is drawn. Left up it would read as the planner having
-        // said it, which the planner has not: what an aside wrote is the aside's, and the row it
-        // becomes is where it is drawn.
-        self.streaming.clear();
-        self.composing = None;
-        // Read before the timer is cleared. A `/compact` is a model call and nothing else, so all
-        // of it is inference: charged to the turn it interrupted, exactly as its tokens are, and to
-        // both figures rather than only to the wall clock, or an aside would read as time the
+        let took = self.leave_work(tokens);
+        // All of it is inference: a `/compact` is a model call and nothing else, so it is charged
+        // to both figures rather than only to the wall clock, or an aside would read as time the
         // harness spent on itself.
-        let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.started = None;
-        self.phase = None;
-        self.checking = None;
-        self.hook = None;
-        self.waiting_on = None;
-        self.running = None;
-        self.movable = None;
-        self.tokens += tokens;
-        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
-        // outside every turn, and that is what the number says.
-        *self.spend.entry(self.turns).or_insert(0) += tokens;
-        let entry = self.timing.entry(self.turns).or_default();
-        entry.wall_ms += took;
-        entry.inference_ms += took;
+        self.timing.entry(self.turns).or_default().inference_ms += took;
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -9517,28 +9471,50 @@ impl Session {
     /// `spent` is absent only when no timing report arrived. Failed and stopped runs retain the
     /// latest measured breakdown. The session measures its own wall time.
     pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
-        self.status = Status::Idle;
-        self.streaming.clear();
-        self.composing = None;
-        // Read before the timer is cleared, as an aside's is.
-        let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.started = None;
+        self.leave_work(tokens);
+        let entry = self.timing.entry(self.turns).or_default();
+        if let Some(spent) = spent {
+            entry.inference_ms += spent.inference_ms;
+            entry.tools_ms += spent.tools_ms;
+            entry.stalled_ms += spent.stalled_ms;
+        }
+    }
+
+    /// Clear what the status line shows of work in progress, which a turn, an aside or a run each
+    /// begins and ends with.
+    ///
+    /// One place, so a seventh indicator cannot be cleared at five of the sites and left stale at
+    /// the sixth.
+    fn clear_in_progress(&mut self) {
         self.phase = None;
         self.checking = None;
         self.hook = None;
         self.waiting_on = None;
         self.running = None;
         self.movable = None;
+    }
+
+    /// What [`Session::end_aside`] and [`Session::end_run`] share: leave the working state and
+    /// charge `tokens` and the wall clock to the turn in flight. Returns the milliseconds the wall
+    /// clock read, for the caller to charge to whichever other figures it knows about.
+    fn leave_work(&mut self, tokens: u64) -> u64 {
+        self.status = Status::Idle;
+        // An aside that wrote something as it went has been drawing it at the tail, where the
+        // turn's own half-written reply is drawn. Left up it would read as the planner having
+        // said it, which the planner has not: what an aside wrote is the aside's, and the row it
+        // becomes is where it is drawn.
+        self.streaming.clear();
+        self.composing = None;
+        // Read before the timer is cleared.
+        let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.started = None;
+        self.clear_in_progress();
         self.tokens += tokens;
-        // To the leading entry before the first turn, for the reason an aside is.
+        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
+        // outside every turn, and that is what the number says.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
-        let entry = self.timing.entry(self.turns).or_default();
-        entry.wall_ms += took;
-        if let Some(spent) = spent {
-            entry.inference_ms += spent.inference_ms;
-            entry.tools_ms += spent.tools_ms;
-            entry.stalled_ms += spent.stalled_ms;
-        }
+        self.timing.entry(self.turns).or_default().wall_ms += took;
+        took
     }
 
     pub fn note(&mut self, message: impl Into<String>) {

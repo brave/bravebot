@@ -1731,28 +1731,34 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
     None
 }
 
+/// The answer to a key that a mode standing over the session takes, and `None` where no mode is
+/// open.
+///
+/// A mode owns every key before anything edits the line: while a delegate is being watched, the
+/// scroller is open or a history search is, there is no line being edited, and a letter belongs to
+/// the mode rather than to a box nobody can see. Checked in that order.
+fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    if session.watching().is_some() {
+        return Some(watching_key(session, key));
+    }
+    if session.scrolling() {
+        return Some(scroller_key(session, key));
+    }
+    if session.searching_history() {
+        return Some(history_search_key(session, key));
+    }
+    None
+}
+
 /// Interpret a key press against the session.
 ///
 /// Separated from the loop so it can be tested without a terminal.
 pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // Before the key edits anything: a brief whose box was emptied is no longer being edited.
     session.drop_a_wiped_handoff();
-    // Before everything, including the keys that edit the line: while a delegate is being watched
-    // there is no line being edited, and every key belongs to the mode.
-    if session.watching().is_some() {
-        return watching_key(session, key);
-    }
-
-    // Before everything, including the keys that edit the line: while the scroller is open there
-    // is no line being edited, and the keys belong to it.
-    if session.scrolling() {
-        return scroller_key(session, key);
-    }
-
-    // On the same footing, and for the same reason: while a search is open every letter is
-    // narrowing a list rather than being typed into a box nobody can see.
-    if session.searching_history() {
-        return history_search_key(session, key);
+    // At rest, so the modes are the whole of what stands between the key and the box.
+    if let Some(action) = claimed_by_a_mode(session, key) {
+        return action;
     }
 
     // After the modes above, which claim every key of their own, and before anything that edits the
@@ -2818,8 +2824,8 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 ///
 /// The same folding as the idle path, for the same reason: a stack trace pasted mid-turn would
 /// otherwise push the reply being read off the screen, and mid-turn is exactly when there is a
-/// reply worth reading. Named rather than bound inline at each working loop, because there are two
-/// of them and writing the same arm twice is how they came to disagree.
+/// reply worth reading. Named rather than bound inline at each working loop, because writing the
+/// same arm in each is how they came to disagree. It is written once now, in [`pump_terminal`].
 ///
 /// A drop is recognised here too, since a drop reaches the terminal as a paste of the path and a
 /// running turn is when people drop a file: they are watching a reply and want to hand over the
@@ -2863,8 +2869,8 @@ pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
 /// cannot carry out itself, since reading the clipboard runs the platform's own tools. Everything
 /// else they return is a redraw the loops do every frame regardless.
 ///
-/// Every working loop goes through here rather than answering the event and dropping what came
-/// back. Four of them did exactly that, so Ctrl-V mid-turn reached its arm, produced the right
+/// Every working loop goes through here, by way of [`pump_terminal`], rather than answering the
+/// event and dropping what came back. Four of them did exactly that, so Ctrl-V mid-turn reached its arm, produced the right
 /// answer, and had it thrown away: the clipboard was never read and the picture never staged, on a
 /// key the idle path has always answered (INPUT-9, PASTE-7).
 ///
@@ -2881,6 +2887,46 @@ fn act_while_working(
     }
 }
 
+/// Wait for the terminal for a frame, and handle everything that has arrived.
+///
+/// Every loop that waits on a worker does this the same way, and the waiting is done here so that
+/// a key press wakes the loop rather than queueing behind the worker. Everything waiting is read,
+/// not one event per pass: a drag read one event at a time takes seconds to catch up with the
+/// pointer.
+///
+/// A key goes to `on_key`, which is the one part that differs between the loops. A paste and the
+/// mouse are the same in all of them, so they are answered here, and a paste reaches
+/// [`act_while_working`] so the clipboard is read for it.
+fn pump_terminal(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    mut on_key: impl FnMut(&mut Session, KeyEvent),
+) -> io::Result<()> {
+    if input::poll(FRAME)? {
+        while input::poll(Duration::ZERO)? {
+            let taken = input::read()?;
+            took_input(session, &taken);
+            match taken {
+                TermEvent::Key(key) => on_key(session, key),
+                TermEvent::Paste(text) => {
+                    let action = handle_paste_while_working(session, &text);
+                    act_while_working(session, action, crate::clipboard::paste);
+                }
+                TermEvent::Mouse(mouse) => {
+                    // Bound rather than tested inline, because handling the event scrolls and
+                    // moves the selection whatever it returns. A match guard would hide that.
+                    let action = handle_mouse(session, mouse);
+                    if action == Action::Copy {
+                        copy_selection(terminal, session)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Interpret a key press while a turn is running.
 ///
 /// Only the ones that cannot start anything. What the user types goes into the box and stays
@@ -2892,22 +2938,12 @@ fn act_while_working(
 /// therefore watched their words go nowhere, with nothing on the screen to say why, which is
 /// indistinguishable from an interface that has stopped responding.
 pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action {
-    // Watching sends nothing either, and mid-turn is the whole of when there is a delegate to
-    // watch: one does not outlive the turn that spawned it.
-    if session.watching().is_some() {
-        return watching_key(session, key);
-    }
-
-    // The same list as at rest, for the reason the ladder below is the same list: nothing the
-    // scroller does sends anything, and sending is the whole of what a running turn refuses.
-    if session.scrolling() {
-        return scroller_key(session, key);
-    }
-
-    // Searching sends nothing either, and mid-turn is when the prompt somebody wants back is most
-    // likely to be one they can no longer see: the turn they are watching has filled the screen.
-    if session.searching_history() {
-        return history_search_key(session, key);
+    // None of the modes sends anything, and sending is the whole of what a running turn refuses.
+    // Mid-turn is also when a delegate is there to watch, since one does not outlive the turn that
+    // spawned it, and when the prompt somebody wants back is most likely one they can no longer
+    // see: the turn they are watching has filled the screen.
+    if let Some(action) = claimed_by_a_mode(session, key) {
+        return action;
     }
 
     // The same translation the idle path makes, in the same place: after the modes that claim every
@@ -3091,11 +3127,10 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 
 /// Interpret a paste.
 ///
-/// A paste is one act rather than a run of keys, which is the whole point of asking the
-/// terminal for it separately: the text lands in the box and the user decides when to send it.
-/// It never submits, whatever it ends with.
 /// Answer a paste the terminal delivered, which is what Command-V and the middle mouse button
-/// become by the time they reach this process.
+/// become by the time they reach this process. A paste is one act rather than a run of keys, which
+/// is the whole point of asking the terminal for it separately: the text lands in the box and the
+/// user decides when to send it. It never submits, whatever it ends with.
 ///
 /// A paste that arrives carrying nothing is the interesting one. It means the terminal wrote the
 /// bracketed-paste markers with nothing between them, which is what happens when the clipboard
@@ -3210,16 +3245,6 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     }
 }
 
-/// Take what the selection covers and put it on the clipboard.
-///
-/// What the user swept over is what they saw: wrapped, scrolled and trimmed exactly as it was
-/// drawn. So it is read back off a frame rather than out of the transcript, which would have to
-/// be laid out a second time to say what any of it looked like.
-///
-/// Drawn again to get one. A finished draw resets the buffer the next one will be built in, so
-/// the frame that drew the screen is the only place the screen can be read from.
-///
-/// A click that swept over nothing just puts the selection away.
 /// Draw a frame, and take back what it laid the transcript out to.
 ///
 /// Every draw a person looks at goes through here, so nothing can redraw without the session
@@ -3264,6 +3289,16 @@ fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crat
     let _ = crate::title::mark(terminal.backend_mut(), state);
 }
 
+/// Take what the selection covers and put it on the clipboard.
+///
+/// What the user swept over is what they saw: wrapped, scrolled and trimmed exactly as it was
+/// drawn. So it is read back off a frame rather than out of the transcript, which would have to
+/// be laid out a second time to say what any of it looked like.
+///
+/// Drawn again to get one. A finished draw resets the buffer the next one will be built in, so
+/// the frame that drew the screen is the only place the screen can be read from.
+///
+/// A click that swept over nothing just puts the selection away.
 fn copy_selection(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -3705,8 +3740,6 @@ fn show_transcript(
     Ok(())
 }
 
-/// Concrete in the backend rather than generic: the loop is only ever driven by a real
-/// terminal, and a generic backend's error type carries no bounds to convert from.
 /// The session left behind, for telling somebody how to pick it up again.
 ///
 /// Nothing for a session that was opened and left without sending anything: there is no record to
@@ -3882,6 +3915,41 @@ fn list_rewind_points(session: &mut Session) {
     }
 }
 
+/// Build what the session amounts to, as a record is written, and hand it to `then`.
+///
+/// Every write of the session's record takes the same fifteen fields from the same places, so
+/// they are named once. `Standing` is `Copy` and borrows temporaries, so it cannot be returned;
+/// a closure is how a caller gets to use it.
+fn with_standing<R>(
+    session: &Session,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+    then: impl FnOnce(bravebot_session::sessions::Standing<'_>) -> R,
+) -> R {
+    then(bravebot_session::sessions::Standing {
+        history: Some(session.turn_history()),
+        conversation: &conversation.snapshot(),
+        turns: session.turns,
+        tokens: session.tokens,
+        spend: session.spend_by_turn(),
+        timing: session.timing_by_turn(),
+        model: session.served_model(),
+        todos: &session.todos_by_turn(),
+        asides: session.asides(),
+        trust,
+        programs,
+        directories: &workspace.added_directories(),
+        // None, and it stays none however many runs this session starts. Its presence is what
+        // makes a record a manifest run, and this record is a conversation that can be resumed;
+        // the run has a record of its own where that field is filled.
+        manifest: None,
+        rewind: session.rewind.points(),
+        checkouts: &workspace.session_checkouts(),
+    })
+}
+
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
 ///
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
@@ -3956,25 +4024,13 @@ fn rewind(
     {
         stored.discard_unwritten(&snapshot.title);
     } else {
-        stored.save(
-            &snapshot.title,
-            bravebot_session::sessions::Standing {
-                history: Some(session.turn_history()),
-                conversation: &conversation.snapshot(),
-                turns: session.turns,
-                tokens: session.tokens,
-                spend: session.spend_by_turn(),
-                timing: session.timing_by_turn(),
-                model: session.served_model(),
-                todos: &session.todos_by_turn(),
-                asides: session.asides(),
-                trust,
-                programs,
-                directories: &workspace.added_directories(),
-                manifest: None,
-                rewind: session.rewind.points(),
-                checkouts: &workspace.session_checkouts(),
-            },
+        with_standing(
+            session,
+            conversation,
+            trust,
+            programs,
+            workspace,
+            |standing| stored.save(&snapshot.title, standing),
         );
     }
     // Where it landed rather than how far it came, because that is the fact a person checks the
@@ -4040,6 +4096,9 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
     }
 }
 
+/// Concrete in the backend rather than generic: the loop is only ever driven by a real
+/// terminal, and a generic backend's error type carries no bounds to convert from.
+///
 /// Returns the session left behind, where there is one to pick up again.
 #[allow(clippy::too_many_arguments)]
 fn event_loop(
@@ -4586,25 +4645,13 @@ fn event_loop(
                     // leave, and not only once a turn has been had.
                     if session.turns > 0 || stored.resumable().is_some() {
                         let title = stored.title().to_string();
-                        stored.save(
-                            &title,
-                            bravebot_session::sessions::Standing {
-                                history: Some(session.turn_history()),
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &answers.trust,
-                                programs: &answers.programs,
-                                directories: &workspace.added_directories(),
-                                manifest: None,
-                                rewind: session.rewind.points(),
-                                checkouts: &workspace.session_checkouts(),
-                            },
+                        with_standing(
+                            &session,
+                            &conversation,
+                            &answers.trust,
+                            &answers.programs,
+                            &workspace,
+                            |standing| stored.save(&title, standing),
                         );
                     }
                 }
@@ -4622,25 +4669,13 @@ fn event_loop(
                     |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
                 );
                 if changed != Changed::Stayed {
-                    stored.move_to(
-                        workspace.root(),
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
-                        },
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| stored.move_to(workspace.root(), standing),
                     );
                 }
                 // After the move, so the session picked up again is picked up where it went.
@@ -4857,25 +4892,13 @@ fn event_loop(
                 // Written now rather than at the end of the next turn: the shortening is the
                 // change, and a session that compacted and then slept should resume compacted.
                 let title = stored.title().to_string();
-                stored.save(
-                    &title,
-                    bravebot_session::sessions::Standing {
-                        history: Some(session.turn_history()),
-                        conversation: &conversation.snapshot(),
-                        turns: session.turns,
-                        tokens: session.tokens,
-                        spend: session.spend_by_turn(),
-                        timing: session.timing_by_turn(),
-                        model: session.served_model(),
-                        todos: &session.todos_by_turn(),
-                        asides: session.asides(),
-                        trust: &answers.trust,
-                        programs: &answers.programs,
-                        directories: &workspace.added_directories(),
-                        manifest: None,
-                        rewind: session.rewind.points(),
-                        checkouts: &workspace.session_checkouts(),
-                    },
+                with_standing(
+                    &session,
+                    &conversation,
+                    &answers.trust,
+                    &answers.programs,
+                    &workspace,
+                    |standing| stored.save(&title, standing),
                 );
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
@@ -4918,25 +4941,13 @@ fn event_loop(
                     // a question asked before the first prompt was asked over an empty exchange.
                     if session.turns > 0 {
                         let title = stored.title().to_string();
-                        stored.save(
-                            &title,
-                            bravebot_session::sessions::Standing {
-                                history: Some(session.turn_history()),
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &answers.trust,
-                                programs: &answers.programs,
-                                directories: &workspace.added_directories(),
-                                manifest: None,
-                                rewind: session.rewind.points(),
-                                checkouts: &workspace.session_checkouts(),
-                            },
+                        with_standing(
+                            &session,
+                            &conversation,
+                            &answers.trust,
+                            &answers.programs,
+                            &workspace,
+                            |standing| stored.save(&title, standing),
                         );
                         stored.append_audit(session.turns, &events);
                     }
@@ -4980,30 +4991,15 @@ fn event_loop(
                     // the change, and a session that started one and then slept should resume
                     // with the note saying where it went still in the transcript. The run's own
                     // record is a separate file that `manifest_animated` already wrote.
-                    crate::manifest_run::save_session(
-                        &mut stored,
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            // None, and it stays none however many runs this session starts.
-                            // Its presence is what makes a record a manifest run, and this
-                            // record is a conversation that can be resumed; the run has a
-                            // record of its own where that field is filled.
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| {
+                            crate::manifest_run::save_session(&mut stored, standing, &events)
                         },
-                        &events,
                     );
                 }
                 needs_draw = true;
@@ -5198,25 +5194,13 @@ fn event_loop(
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never
                     // woke. Best-effort, like everything else under ~/.bravebot.
-                    stored.save(
-                        &prompt,
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
-                        },
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| stored.save(&prompt, standing),
                     );
                     stored.append_audit(session.turns, &events);
 
@@ -5253,25 +5237,13 @@ fn event_loop(
                 // Saved like a turn, and for the same reason: the command is in the conversation
                 // now, so a session resumed without it would have the planner referring to output
                 // it can no longer see.
-                stored.save(
-                    &line,
-                    bravebot_session::sessions::Standing {
-                        history: Some(session.turn_history()),
-                        conversation: &conversation.snapshot(),
-                        turns: session.turns,
-                        tokens: session.tokens,
-                        spend: session.spend_by_turn(),
-                        timing: session.timing_by_turn(),
-                        model: session.served_model(),
-                        todos: &session.todos_by_turn(),
-                        asides: session.asides(),
-                        trust: &answers.trust,
-                        programs: &answers.programs,
-                        directories: &workspace.added_directories(),
-                        manifest: None,
-                        rewind: session.rewind.points(),
-                        checkouts: &workspace.session_checkouts(),
-                    },
+                with_standing(
+                    &session,
+                    &conversation,
+                    &answers.trust,
+                    &answers.programs,
+                    &workspace,
+                    |standing| stored.save(&line, standing),
                 );
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
@@ -5707,15 +5679,6 @@ fn expand_home(directory: &str) -> String {
     }
 }
 
-/// Ask the endpoint what it offers, let the user pick, and remember what they picked.
-///
-/// A refusal or an unreachable endpoint leaves the model as it was and says so. That is the right
-/// outcome for a list nobody could fetch: guessing a set of names would offer choices the backend
-/// may not have, and a picker showing only "automatic" would look like a server with one model.
-///
-/// The list is content and the choice is routing. Nothing here is quarantined, because there is no
-/// planner context to keep it out of: the names are drawn for a person, and their pick is the
-/// endorsement for the request field it lands in.
 /// Ask the endpoint what it offers.
 ///
 /// Shared by the picker and by the budget lookup a session does when it starts, because both want
@@ -6172,6 +6135,15 @@ fn advertised_inputs<'a>(
         .map_or(&[], |model| model.advertised.input_modalities.as_slice())
 }
 
+/// Ask the endpoint what it offers, let the user pick, and remember what they picked.
+///
+/// A refusal or an unreachable endpoint leaves the model as it was and says so. That is the right
+/// outcome for a list nobody could fetch: guessing a set of names would offer choices the backend
+/// may not have, and a picker showing only "automatic" would look like a server with one model.
+///
+/// The list is content and the choice is routing. Nothing here is quarantined, because there is no
+/// planner context to keep it out of: the names are drawn for a person, and their pick is the
+/// endorsement for the request field it lands in.
 fn choose_model(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -6521,25 +6493,13 @@ fn branch_session(
             session.clear_goal();
             session.stop_watches();
             let title = stored.title().to_string();
-            stored.save(
-                &title,
-                bravebot_session::sessions::Standing {
-                    history: Some(session.turn_history()),
-                    conversation: &conversation.snapshot(),
-                    turns: session.turns,
-                    tokens: session.tokens,
-                    spend: session.spend_by_turn(),
-                    timing: session.timing_by_turn(),
-                    model: session.served_model(),
-                    todos: &session.todos_by_turn(),
-                    asides: session.asides(),
-                    trust: &answers.trust,
-                    programs: &answers.programs,
-                    directories: &workspace.added_directories(),
-                    manifest: None,
-                    rewind: session.rewind.points(),
-                    checkouts: &workspace.session_checkouts(),
-                },
+            with_standing(
+                session,
+                conversation,
+                &answers.trust,
+                &answers.programs,
+                workspace,
+                |standing| stored.save(&title, standing),
             );
             session.note(t!(
                 session_branched,
@@ -7592,30 +7552,11 @@ fn compact_animated(
         // Input is still read, so a long summary does not leave the interface deaf, and the
         // frame's waiting is done here for the reason the turn loop does it here: a key press
         // has to wake the loop rather than queue behind it.
-        if input::poll(FRAME)? {
-            while input::poll(Duration::ZERO)? {
-                let taken = input::read()?;
-                took_input(session, &taken);
-                match taken {
-                    // The one place Ctrl-C still leaves with something in flight, and what a mode
-                    // standing over the session takes ahead of it, are both that function's.
-                    TermEvent::Key(key) => {
-                        one_request_key(session, key, t!(compact_uninterruptible));
-                    }
-                    TermEvent::Paste(text) => {
-                        let action = handle_paste_while_working(session, &text);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Mouse(mouse) => {
-                        let action = handle_mouse(session, mouse);
-                        if action == Action::Copy {
-                            copy_selection(terminal, session)?;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        pump_terminal(terminal, session, |session, key| {
+            // The one place Ctrl-C still leaves with something in flight, and what a mode
+            // standing over the session takes ahead of it, are both that function's.
+            one_request_key(session, key, t!(compact_uninterruptible));
+        })?;
 
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
         // for the same reason it does: a person may be typing their next prompt while this runs.
@@ -7835,29 +7776,10 @@ fn ask_animated(
         // Input is still read for the reason a summary reads it: a long answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if input::poll(FRAME)? {
-            while input::poll(Duration::ZERO)? {
-                let taken = input::read()?;
-                took_input(session, &taken);
-                match taken {
-                    // The same shape as a summary's keys, and the same function reads them.
-                    TermEvent::Key(key) => {
-                        one_request_key(session, key, t!(btw_uninterruptible));
-                    }
-                    TermEvent::Paste(text) => {
-                        let action = handle_paste_while_working(session, &text);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Mouse(mouse) => {
-                        let action = handle_mouse(session, mouse);
-                        if action == Action::Copy {
-                            copy_selection(terminal, session)?;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        pump_terminal(terminal, session, |session, key| {
+            // The same shape as a summary's keys, and the same function reads them.
+            one_request_key(session, key, t!(btw_uninterruptible));
+        })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
             aside_reported(session, message);
@@ -8127,38 +8049,25 @@ fn manifest_animated(
         // Read here rather than in the outer loop, which is blocked for the duration, and for the
         // reason a turn reads it here: a run that walks for ten minutes must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
-        if input::poll(FRAME)? {
-            while input::poll(Duration::ZERO)? {
-                let taken = input::read()?;
-                took_input(session, &taken);
-                match taken {
-                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
-                    // Both keys stop the run and neither leaves, exactly as in a turn. A person
-                    // watching a plan go wrong is asking for the plan to stop; the next press, at
-                    // the box, is the one that leaves.
-                    TermEvent::Key(key) if stops_the_turn(session, key) => {
-                        stop_what_is_running(session, &cancel);
-                    }
-                    TermEvent::Key(key) => {
-                        let action = handle_key_while_working(session, key);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Paste(text) => {
-                        let action = handle_paste_while_working(session, &text);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Mouse(mouse) => {
-                        let action = handle_mouse(session, mouse);
-                        if action == Action::Copy {
-                            copy_selection(terminal, session)?;
-                        }
-                    }
-                    _ => {}
-                }
+        pump_terminal(terminal, session, |session, key| {
+            if key.kind == KeyEventKind::Release {
+                return;
             }
-        }
+            // Both keys stop the run and neither leaves, exactly as in a turn. A person
+            // watching a plan go wrong is asking for the plan to stop; the next press, at
+            // the box, is the one that leaves.
+            if stops_the_turn(session, key) {
+                stop_what_is_running(session, &cancel);
+            } else {
+                let action = handle_key_while_working(session, key);
+                act_while_working(session, action, crate::clipboard::paste);
+            }
+        })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            // Progress, with no reply to give. The goal as the planner understood it and the frozen
+            // plan both arrive as narration, and each step as an activity, so the transcript of a
+            // run reads the way the transcript of a turn does.
             let Some(message) = run.progress(session, message) else {
                 return;
             };
@@ -8171,7 +8080,7 @@ fn manifest_animated(
                     mark_title(terminal, crate::title::State::Waiting);
                     let answer = crate::confirm::ask_manifest(terminal, &request);
                     mark_title(terminal, crate::title::State::Working);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     // Nothing is noted on the transcript, for the reason a turn notes nothing: the
@@ -8192,29 +8101,26 @@ fn manifest_animated(
                 }
                 crate::remote_confirm::ToMain::Fetch(request) => {
                     let answer = crate::confirm::ask_fetch(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Vouch(request) => {
                     let answer = crate::confirm::ask_vouch(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Exposure(request) => {
                     let answer = crate::confirm::ask_exposure(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ =
                         answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
                 }
-                // Progress, with no reply to give. The goal as the planner understood it and the frozen
-                // plan both arrive as narration, and each step as an activity, so the transcript of a
-                // run reads the way the transcript of a turn does.
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose
@@ -8223,59 +8129,14 @@ fn manifest_animated(
                 // nothing can break: the loop would go round forever with the worker waiting on a
                 // reply and the cancel token never looked at. Answered the way every other failure to
                 // carry a question is answered, with the negative one.
-                crate::remote_confirm::ToMain::Run(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
-                        bravebot_agent::confirm::RunDecision::reject(),
-                    ));
-                }
-                crate::remote_confirm::ToMain::ReadOutput(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Vet(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Server(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Ask(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
-                }
-                // A plan names no server tool, so a run neither settles a server's list nor calls one.
-                crate::remote_confirm::ToMain::ToolList(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::McpCall(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(
-                        bravebot_agent::confirm::CallDecision::reject(),
-                    ));
-                }
-                crate::remote_confirm::ToMain::Move(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Move(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Path(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Host(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Host(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
                 // What is left announces rather than asks, so nothing waits on it. The manifest is the
                 // task list, so no list changes; there is no planner to delegate or to be interjected
                 // at; and a run's steps report through `Started` and `Finished` above.
-                _ => {}
+                other => {
+                    if let Some(reply) = refusal(&other) {
+                        let _ = answer_tx.send(reply);
+                    }
+                }
             }
         });
 
@@ -8482,28 +8343,11 @@ fn goal_check_animated(
         // Input is still read for the reason an aside reads it: a slow answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if input::poll(FRAME)? {
-            while input::poll(Duration::ZERO)? {
-                let taken = input::read()?;
-                took_input(session, &taken);
-                match taken {
-                    // Which of the goal, a mode over the session, and the session itself a stop
-                    // key is asking about is that function's to say.
-                    TermEvent::Key(key) => goal_check_key(session, key),
-                    TermEvent::Paste(text) => {
-                        let action = handle_paste_while_working(session, &text);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Mouse(mouse) => {
-                        let action = handle_mouse(session, mouse);
-                        if action == Action::Copy {
-                            copy_selection(terminal, session)?;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        pump_terminal(terminal, session, |session, key| {
+            // Which of the goal, a mode over the session, and the session itself a stop
+            // key is asking about is that function's to say.
+            goal_check_key(session, key);
+        })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
@@ -8845,47 +8689,28 @@ fn run_turn_animated(
         // it, so typing during a turn lagged while typing between turns did not, for no reason a
         // person could see. A keystroke wakes this the instant it arrives; the worker's messages
         // are picked up on the way round and drawn at the frame rate, which is all they need.
-        //
-        // Everything waiting, not one event per pass: a drag read one event at a time would take
-        // seconds to catch up with the pointer.
-        if input::poll(FRAME)? {
-            while input::poll(Duration::ZERO)? {
-                let taken = input::read()?;
-                took_input(session, &taken);
-                match taken {
-                    // Presses only, for the reason the outer loop ignores releases: a release taken
-                    // for a press would type every character twice, and cancel the turn on the way up
-                    // from the Escape that already cancelled it.
-                    TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
-                    // Both keys stop the turn and neither leaves. Ctrl-C is the way out of the
-                    // program, but there is a turn to stop first, and a person watching an answer
-                    // go wrong is asking for the answer to stop rather than for the session to
-                    // end. The next press, at the box, is the one that leaves.
-                    //
-                    // The status line says the turn is stopping from this press until it ends.
-                    // The prompt coming back to the box is the answer, but it comes only once the
-                    // worker and every delegate have returned, which can be seconds, and a screen
-                    // that stands still that long reads as a press nobody heard.
-                    TermEvent::Key(key) if stops_the_turn(session, key) => {
-                        stop_what_is_running(session, &cancel);
-                    }
-                    TermEvent::Key(key) => turn_key(session, key, &cancel, &mut beside),
-                    TermEvent::Paste(text) => {
-                        let action = handle_paste_while_working(session, &text);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
-                    TermEvent::Mouse(mouse) => {
-                        // Bound rather than tested inline, because handling the event scrolls and
-                        // moves the selection whatever it returns. A match guard would hide that.
-                        let action = handle_mouse(session, mouse);
-                        if action == Action::Copy {
-                            copy_selection(terminal, session)?;
-                        }
-                    }
-                    _ => {}
-                }
+        pump_terminal(terminal, session, |session, key| {
+            // Presses only, for the reason the outer loop ignores releases: a release taken
+            // for a press would type every character twice, and cancel the turn on the way up
+            // from the Escape that already cancelled it.
+            if key.kind == KeyEventKind::Release {
+                return;
             }
-        }
+            // Both keys stop the turn and neither leaves. Ctrl-C is the way out of the
+            // program, but there is a turn to stop first, and a person watching an answer
+            // go wrong is asking for the answer to stop rather than for the session to
+            // end. The next press, at the box, is the one that leaves.
+            //
+            // The status line says the turn is stopping from this press until it ends.
+            // The prompt coming back to the box is the answer, but it comes only once the
+            // worker and every delegate have returned, which can be seconds, and a screen
+            // that stands still that long reads as a press nobody heard.
+            if stops_the_turn(session, key) {
+                stop_what_is_running(session, &cancel);
+            } else {
+                turn_key(session, key, &cancel, &mut beside);
+            }
+        })?;
 
         // A question that arrives once the work has been stopped is refused undrawn, by the
         // wrapper below; see [`drain_worker_until_stopped`].
