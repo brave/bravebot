@@ -37,6 +37,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// What a `SKILL.md` declares about itself.
@@ -792,12 +793,12 @@ fn discover_workspace<S: Sink>(
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) {
-    // The skipped names are held back rather than reported as each root is read, because the roots
+    // The skipped roots are held back rather than reported as each root is read, because the roots
     // are read least specific first and a more specific one later in the list may offer the same
     // skill. Reporting in place would tell a person a skill was not loaded while they can see that
     // it was: the layout `make init` creates in this repository symlinks the same skills into all
     // three, so that notice would be wrong on every turn.
-    let mut skipped: Vec<(String, Vec<String>)> = Vec::new();
+    let mut skipped: Vec<(String, usize)> = Vec::new();
     for root in WORKSPACE_SKILL_ROOTS {
         discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
     }
@@ -807,12 +808,24 @@ fn discover_workspace<S: Sink>(
         let root = format!("{directory}/{WORKSPACE_SKILLS}");
         discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
     }
-    for (root, names) in skipped {
-        let missing = names.len()
-            - names
-                .iter()
-                .filter(|name| catalogue.get(name).is_some())
-                .count();
+    // The directory names of the project's skills on the list, every one of which a vouched root
+    // offered. A built-in or a skill of the user's own is under no vouched root and covers nothing.
+    let offered: BTreeSet<&str> = catalogue
+        .iter()
+        .filter(|skill| skill.source == Source::Workspace)
+        .filter_map(|skill| skill.directory.as_deref()?.rsplit_once('/'))
+        .map(|(_, name)| name)
+        .collect();
+    for (root, held) in skipped {
+        // Only names from the list are looked up in the untrusted root, so no name of its own is
+        // held or compared (SKILL-4).
+        let path = workspace.root().join(&root);
+        let covered = offered
+            .iter()
+            .filter(|name| is_skill_directory(&path.join(name)))
+            .count();
+        // Saturating because a case-insensitive filesystem answers for two spellings of one entry.
+        let missing = held.saturating_sub(covered);
         if missing == 0 {
             continue;
         }
@@ -830,25 +843,25 @@ fn discover_workspace_root<S: Sink>(
     skills_root: &str,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-    skipped: &mut Vec<(String, Vec<String>)>,
+    skipped: &mut Vec<(String, usize)>,
 ) {
     let root = workspace.root().join(skills_root);
-    let names = skill_directories(&root);
-    if names.is_empty() {
-        return;
-    }
 
     // Checked before anything is enumerated, and checked on the label rather than on any
     // content. A directory name is content too: a skill directory in a project nobody vouched
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
     if !policy.trusts_path(skills_root) {
-        // The names, so the caller can drop the ones a more specific root went on to offer. Held
-        // here and never put in a notice: a directory name in a project nobody vouched for is
-        // content, and only the count of it reaches a screen (SKILL-6).
-        skipped.push((skills_root.to_string(), names));
+        // Counted with no entry's name held, so the caller has nothing of this directory's to
+        // compare, and only the count reaches a screen (SKILL-6).
+        let held = skill_entries(&root).count();
+        if held > 0 {
+            skipped.push((skills_root.to_string(), held));
+        }
         return;
     }
+
+    let names = skill_directories(&root);
 
     // Counted rather than named, as the directory above is (SKILL-6). The directory is vouched
     // for, but a skill file inside it can still be distrusted, and the name of a directory a
@@ -1009,18 +1022,25 @@ fn counted(n: usize) -> (String, &'static str) {
 /// Sorted so a turn offers the same skills in the same order every time. An order that came from
 /// the filesystem would vary by machine, which would make the prompt vary with it.
 fn skill_directories(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_dir())
+    let mut names: Vec<String> = skill_entries(root)
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| root.join(name).join(SKILL_FILE).is_file())
         .collect();
     names.sort();
     names
+}
+
+/// The entries under a skills root that hold a skill, in whatever order the filesystem gives.
+fn skill_entries(root: &Path) -> impl Iterator<Item = std::fs::DirEntry> {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| is_skill_directory(&entry.path()))
+}
+
+/// Only a directory can have a `SKILL.md` beneath it, so the one lookup also says it is a directory.
+fn is_skill_directory(directory: &Path) -> bool {
+    directory.join(SKILL_FILE).is_file()
 }
 
 #[cfg(test)]

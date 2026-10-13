@@ -448,9 +448,13 @@ them, each directory is checked for trust before it is enumerated at all, and wh
 counted with the directory it was skipped from named and no skill inside it
 ([SKILL-4](skills.md#SKILL-4), [SKILL-6](skills.md#SKILL-6)).
 
-The count is what a more specific root did not go on to offer. A skill of the same name under a
-vouched root is on the list a person can see, so counting it as not loaded would contradict what is
-in front of them. A root whose every skill was covered that way is not reported at all.
+The count leaves out each entry with the directory name of a skill on the list that a vouched root
+offered. That skill is on the list a person can see, so counting the entry as not loaded would
+contradict what is in front of them. The untrusted root is asked only whether it holds an entry of
+each such name, and none of its own names is held or compared. A skill from `~/.bravebot` and a
+built-in skill are under no vouched root and leave the count as it is, and so does a vouched skill
+that a more specific one of the same name took off the list. A root whose every skill was covered
+that way is not reported at all.
 
 **Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
 user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
@@ -461,6 +465,9 @@ here.
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
+`verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
+`verified-by: bravebot_agent::skills::a_skill_from_no_vouched_root_leaves_an_untrusted_entry_counted`
+`verified-by: bravebot_agent::skills::a_vouched_skill_shadowed_off_the_list_leaves_an_untrusted_entry_counted`
 
 <a id="INSTR-14"></a>
 ### INSTR-14: a directory the session has worked in adds its own `AGENTS.md` and `.bravebot/skills`
