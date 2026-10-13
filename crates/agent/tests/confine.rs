@@ -674,6 +674,46 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
     );
 }
 
+/// SANDBOX-4 through the agent: a `cmd` line holding an argument `cmd.exe` reads as its own syntax
+/// is refused before its redirection's file is opened, and nothing is made. The same line with a
+/// plain name is the control that it starts and the redirection's file is made. The regression it
+/// rejects is the agent's early check given the program without its arguments, so the file is
+/// created before the backend refuses the stage.
+#[cfg(windows)]
+#[test]
+fn a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("cmd-refused");
+    let confinement = places.confinement();
+
+    let control = places.run("cmd /c mkdir plain > control.txt", Some(&confinement));
+    let refused = exec::run_plan_observed(
+        &places.plan("cmd /c mkdir 'R&D' > refused.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&confinement),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        control.ended_well
+            && places.session.join("plain").is_dir()
+            && places.session.join("control.txt").exists(),
+        "{control:?}"
+    );
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("'&'")),
+        "{refused:?}"
+    );
+    for unmade in ["refused.txt", "R&D", "R"] {
+        assert!(!places.session.join(unmade).exists(), "{unmade} was made");
+    }
+}
+
 /// The lists a person writes, as the command line and the settings file hand them over: each entry a
 /// spelling and nothing else.
 fn written(
