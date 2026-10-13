@@ -6,15 +6,22 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
   - crates/tui/src/render.rs
+  - crates/tui/src/render/transcript.rs
+  - crates/tui/src/render/prompt.rs
+  - crates/tui/src/render/beneath.rs
   - crates/core/src/delegate.rs
   - crates/core/src/policy.rs
   - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: Policy::address
   - symbol: Session::address
@@ -260,7 +267,7 @@ definition's name is only ever the argument of `/agent`, so a row for one would 
 line that starts a run.
 
 `verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
-`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
+`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line except that Tab finishes a level typed after /effort from the fixed set of levels, which no definition name is part of, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
 
@@ -307,7 +314,7 @@ authority, which is the one thing a definition is not.
 <a id="ADDRESS-8"></a>
 ### ADDRESS-8: the tools withheld from every delegate are not withheld here, except what arms a later turn
 
-Asking a person, writing the task list, fetching a URL, asking for a second opinion on quarantined
+Asking a person, asking a person for reach to a path, writing the task list, fetching a URL, asking for a second opinion on quarantined
 content and spawning a delegate are offered to an addressed run wherever the session holds them,
 subject to [ADDRESS-7](#ADDRESS-7) like anything else. Scheduling a next turn and watching a file
 are not offered, and nothing else the run is offered tells it to use them.

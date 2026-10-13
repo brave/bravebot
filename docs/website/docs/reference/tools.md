@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are nineteen tools, and no way to add another from a configuration file. Each one splits its
+There are twenty tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -15,23 +15,27 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | no |
+| [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
+| [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
+| [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Three more are offered only where they mean something.
+Four more are offered only where they mean something.
+[`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
 it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
@@ -145,7 +149,35 @@ walk stopped at are entries too, and each reference says which of the two it sta
 nothing behind a directory to read, and the way to what is inside it is another listing with a
 greater depth.
 
+A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
+left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,
+`build`, `coverage`, `__pycache__` and similar), dependencies (`node_modules`, `vendor`,
+`third_party`, `site-packages`, virtual environments and similar) and linked worktrees (`.worktrees`,
+`.claude/worktrees`). A project with a `vendor` or `build` directory therefore lists as though it had
+none. The tool description gives the planner the full list, and naming one of them as `directory`
+lists it.
+
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
+
+## `repo_map`
+
+Lists the declarations in a directory's source files, the ones other files mention most first. It
+needs no language server, so it answers where [`lsp`](#lsp) cannot be started.
+
+| Parameter | |
+|---|---|
+| `directory` | workspace-relative, defaults to `.` |
+| `budget` | optional; tokens the map may take, 100 to 8000, 1000 unless given |
+
+It reads Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C and C++ files, and recognises a
+declaration by the line that opens it, so a signature split over lines is shown by its first line. In
+Java, C and C++ it finds types and macros, not functions or methods. A name is ranked by how many
+other files mention it, so the ranking is a guide, not a call graph.
+
+Only files you vouched for are read. Files you did not are counted and never named, a file holding
+what looks like a credential contributes nothing, and a file a `deny` rule covers is not mapped. A map
+that shows fewer declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise
+`budget`.
 
 ## `search`
 
@@ -326,8 +358,8 @@ make what this tool can reach a property of whichever server you installed.
 | Python | `pyright-langserver` |
 | Go | `gopls` |
 
-The table is fixed and there is nothing to configure. The binary has to be installed and on your
-`PATH`.
+The binary has to be installed and on your `PATH`. A language not in the table has no server until
+you declare one, [below](#declaring-a-server-of-your-own).
 
 **A server runs with the access your own shell would give it, and is not confined.** The prompt says
 so in those words: it reads the whole tree and the dependency sources, and starting it runs code
@@ -369,6 +401,49 @@ again and the tree is not indexed twice. A `reader` delegate is not offered `lsp
 server runs the project's build tooling, and a reader may not run programs. A delegate working in a
 [checkout](../customize/agents.md#a-checkout-of-its-own) is not offered it either, since the server
 indexes your working tree.
+
+### Declaring a server of your own
+
+A C, C++, Java, Kotlin, Ruby, PHP, Swift, Lua or C# project needs a server the table does not hold.
+Declare one in `~/.bravebot/lsp.json`:
+
+```json
+{
+  "servers": {
+    "clangd": {
+      "command": "clangd",
+      "args": ["--background-index"],
+      "extensions": { "c": "c", "h": "c", "cpp": "cpp", "hpp": "cpp" },
+      "env": { "CLANGD_FLAGS": "--log=error" },
+      "initializationOptions": {}
+    }
+  }
+}
+```
+
+| Key | |
+|---|---|
+| `command` | a program name looked up on your `PATH`, or an absolute path; a relative path is refused |
+| `args` | arguments, optional |
+| `extensions` | each file extension the server handles, with the language id the protocol wants; required |
+| `env` | variables set for it, optional |
+| `initializationOptions` | sent to the server as written, optional |
+
+**Only this file is read.** A `lsp.json`, `.lsp.json` or `.github/lsp.json` in a project changes
+nothing, because a command in a file a project carries is a command a tool call could have written.
+
+A declared extension wins over the table, so declaring `rs` replaces `rust-analyzer`. Where two
+declarations name one extension, the first by name wins. An extension nothing names answers that no
+server is configured.
+
+**The prompt names the whole command and says what starting it runs is not known.** It does not
+say the server runs nothing, and it does not say it runs your dependencies' code, because
+bravebot did not choose the program. It runs with your own access and is not confined. Your
+answer is kept for the session against the declaration as it stood: edit the file and the next
+question is put to you again.
+
+A declared server is settled once the progress it reported has ended. One that reports no progress
+is waited on for twenty seconds once, and every answer after that says it may be short.
 
 ### A location is structure; the text at it is content
 
@@ -444,6 +519,12 @@ since you are the only one who sees which file it is.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+Where a language server for the file's language is **already running**, the result also says how many
+errors it found and on which lines, and how many warnings. A write never starts a server, and the
+server's own messages are never shown, only counts and line numbers. A server that has not finished
+indexing, or that did not answer in a few seconds, is reported as such rather than as "no errors". A
+file written from a `contents_ref` reports nothing.
+
 ## `edit_file`
 
 Replaces an exact passage in an existing file. **You approve every edit, as a diff.** The agent
@@ -455,6 +536,11 @@ prefers this to rewriting a whole body.
 | `old_text` | the exact text to replace, matched byte for byte (a file whose lines all end in `\r\n` is the one exception, below) |
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
+| `edits` | instead of `old_text` and `new_text`: several pairs of them for this one file |
+
+`edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
+one pair fails, the agent is told which and the file is not changed. You are asked once, about one
+diff of the combined result.
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.
@@ -667,6 +753,15 @@ A hop that keeps the approved host but drops TLS is a separate question, decided
 leaves the process: an `https` chain is not followed into cleartext. See
 [Security](../security/security.md).
 
+**A name that resolves to a non-public address is not fetched.** Approving `docs.example.com` approves
+a name, and a name resolves to whatever its server says. Each hop's host is looked up once, and if any
+address in the answer is loopback, private, link-local (the cloud metadata address among them),
+unique-local, carrier-grade NAT or otherwise reserved, the fetch fails before anything is sent and the
+connection is made only to the addresses that were checked. A URL whose host is written as an address,
+such as `http://127.0.0.1:8080/`, is what you approved and is fetched; `localhost` is a name. Behind a
+proxy the proxy resolves the target, so the check does not apply there. A model running on loopback is
+unaffected, since this applies to `fetch_url` and nothing else.
+
 **A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
 as the origin of what came back; one that fails or is refused names it as the request that did not work,
 with the kind of failure. Past the first hop the address a request is on is a string a server wrote into
@@ -688,6 +783,37 @@ Markdown is the only type ranked. A site holding no Markdown answers with whatev
 answered without the header, so a page that is only ever HTML arrives as it did before. Ranking HTML
 above the wildcard would cost more than sending no header at all, since an endpoint that serves both
 a compact form and a full page reads that as a request for the page.
+
+## `download_url`
+
+Saves what an `http` or `https` URL serves to a file in the workspace, byte for byte.
+[`fetch_url`](#fetch_url) cannot do this: it decodes a body that is not text lossily and stops at
+2 MiB, so a picture, an archive, a PDF or a font comes out corrupted.
+
+| Parameter | |
+|---|---|
+| `url` | the one URL to download |
+| `path` | the workspace file to save it to |
+
+**You are asked about the host, and then about the destination.** The host question and the rules
+that answer it are [`fetch_url`](#fetch_url)'s: an `allow` rule matching the host answers it, a
+`deny` rule refuses without asking, a redirect may not leave the approved host, and a name that
+resolves to a non-public address is not fetched. The destination is put to you every time, whatever
+the trust map says about the path, as `url -> path`, and an existing file is shown as an overwrite.
+Nothing is sent before you answer.
+
+**The bytes go from the network to the file.** They are written as they arrive and are never held by
+the agent or shown to the model. The file is recorded as not vouched for, so reading it later is
+quarantined as a fetched page is. The model is told the path, the number of bytes and the HTTP
+status. The content type the server named is shown to you and not to the model.
+
+**A failed download changes nothing.** The file is staged beside its destination and replaces it
+only once the whole body has arrived, so a dropped connection, a stop or a body over the size cap
+leaves what was there and no partial file.
+
+The cap is 100 MiB per call and is the [`download.maxBytes`](../customize/configuration.md#downloadmaxbytes)
+setting. A delegate is never offered the tool, and plan mode
+refuses it, since it writes a file.
 
 ## `spawn_processor`
 
@@ -811,6 +937,11 @@ The name selects from a set fixed before the turn started and **never becomes a 
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
 guessed at. See [Skills](../customize/skills.md).
 
+Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
+and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
+for the rest of the turn; a project's skill is read through the trust map like any other file in the
+project.
+
 ## `ask_user`
 
 Puts up to four questions to you and waits. More than four is refused whole rather than trimmed.
@@ -830,6 +961,34 @@ every question is declined rather than answered on your behalf.
 
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
+
+## `request_path`
+
+Asks you to let the programs a `run` starts reach one path they otherwise cannot, for the rest of the
+session. A command that fails with `Operation not permitted` on a path outside the directories the
+session was opened on is the usual cause.
+
+| Parameter | |
+|---|---|
+| `path` | one absolute path, or one beginning `~/`; it must exist and may not hold `*` or `?` |
+| `write` | `true` to let programs write it as well as read it; defaults to `false` |
+
+You are shown the path, whether it is to be read or written, and the planner's reason, and you
+answer yes or no. A yes lasts for this session, is not saved, and does **not** mark the directory
+trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
+`list_files` or `search` reach the path either: those are opened with `/add-dir`. `/reach paths` lists what you have allowed and
+`/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
+the answer is yes without a question, and the directory is also opened for those five tools and
+trusted, as `/add-dir` would: `/add-dir close` and `/clear` close it, and `--resume` carries it. A
+directory inside the working directory, or one that `/add-dir` would otherwise refuse, is not opened,
+and the planner is told so. One that holds the working directory ends checkouts while it is open.
+
+The same paths are refused as an `allowWrite` entry would be, whatever you would answer, and you are
+not asked: `~`, `/`, a drive root, your home directory and any directory above it, `~/.ssh`,
+`~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A path your `denyRead` or `denyWrite` entries cover is
+refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
+trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
+settings file can allow one in advance.
 
 ## `todo_write`
 

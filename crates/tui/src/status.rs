@@ -136,13 +136,23 @@ pub struct Facts<'a> {
     pub premium: Option<bool>,
     pub theme: &'a str,
     pub config: &'a Config,
+    /// What the platform can confine, without the sandbox mode: the mode is [`Facts::sandbox_mode`]
+    /// and is put beside it here, so the line follows `/sandbox`.
     pub confinement: &'a str,
+    /// Whether this kernel leaves every unix socket that has a path reachable from a confined
+    /// stage, as [`crate::state::Session::sockets_with_a_path_reachable`] holds it.
+    pub sockets_with_a_path_reachable: bool,
+    /// The sandbox mode programs `run` starts are held to now, which `/sandbox` can change.
+    pub sandbox_mode: bravebot_sandbox::SandboxMode,
     /// The MCP servers the session started.
     pub servers: &'a crate::state::Servers,
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
     /// Whether the session was started with the flag that skips permissions.
     pub began_in_bypass: bool,
+    /// Whether the programs `run` starts write every path a request for writing would be granted,
+    /// as [`programs_write_unasked`] answers it.
+    pub programs_write_unasked: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
     /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
@@ -203,6 +213,9 @@ pub struct Facts<'a> {
     ///
     /// Empty says nothing, for the reason no remembered line says nothing.
     pub reach: &'a [String],
+    /// The paths the person let programs reach for this session, one row each as `/reach paths`
+    /// lists it (SANDBOX-28). Empty says nothing.
+    pub requested_paths: &'a [String],
     /// The answer about this directory a session was told to remember, where one is kept and
     /// would settle the next session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
@@ -251,6 +264,26 @@ pub fn named_mode(
     }
 }
 
+/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
+/// runs under unless somebody chose otherwise.
+///
+/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
+/// one a person has to be able to see without asking, since nothing else on the screen shows that a
+/// program `run` starts is not confined at all (SANDBOX-22).
+pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxMode) -> String {
+    use bravebot_sandbox::SandboxMode;
+    match mode {
+        SandboxMode::Standard => confinement.to_string(),
+        SandboxMode::Strict => t!(
+            confinement_with_mode,
+            level = confinement,
+            mode = mode.name()
+        )
+        .to_string(),
+        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
+    }
+}
+
 /// Compose the report.
 /// The line for the network the programs `run` starts have, where it is closed.
 fn network_line(
@@ -266,6 +299,39 @@ fn network_line(
         Line::new(t!(status_network), t!(status_network_closed))
             .with_note(run_network_source(&settled.decided)),
     )
+}
+
+/// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
+/// does not govern them and the mode is `standard`. `strict` refuses such a stage, and under `off`
+/// the confinement line already says nothing is confined (SANDBOX-3).
+pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
+    reachable && mode == bravebot_sandbox::SandboxMode::Standard
+}
+
+/// The line for the unix sockets the programs `run` starts can reach, where every one that has a
+/// path is open to them.
+fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<Line> {
+    sockets_with_a_path_open(reachable, mode).then(|| {
+        Line::new(t!(status_path_sockets), t!(status_path_sockets_reachable))
+            .with_note(t!(status_path_sockets_why))
+    })
+}
+
+/// Whether the stages this session's `run` starts write every path a request for writing would be
+/// granted, as [`bravebot_agent::confine::Confinement::writes_without_a_request`] answers for the
+/// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
+/// lead session, so bypass alone decides whether the confinement is told to.
+pub fn programs_write_unasked(
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    home: Option<&Path>,
+) -> bool {
+    bravebot_agent::confine::Confinement::here(Vec::new(), None, home).is_some_and(|confinement| {
+        confinement
+            .with_mode(mode)
+            .with_unasked_writes(permission == bravebot_agent::PermissionMode::Bypass)
+            .writes_without_a_request()
+    })
 }
 
 /// The line for the person's own filesystem lists, where any has an entry: how many each holds and
@@ -305,6 +371,46 @@ fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line
             status_sandbox_filesystem_files,
             files = sources.join(", ")
         )),
+    )
+}
+
+/// The line for the hosts a program `run` starts may reach, where a list is set: how many entries
+/// each list holds and the files that wrote them, never an entry, for the reason the filesystem
+/// line gives. Nothing for a session with no `allowedHosts`, which filters nothing, and nothing
+/// under `off`, where nothing confines a program to the list.
+fn hosts_line(
+    settled: Option<&bravebot_config::sandbox_network::Resolved>,
+    mode: bravebot_sandbox::SandboxMode,
+) -> Option<Line> {
+    let hosts = &settled?.hosts;
+    let allowed = hosts.allowed.as_ref()?;
+    if mode == bravebot_sandbox::SandboxMode::Off {
+        return None;
+    }
+    let mut sources: Vec<String> = Vec::new();
+    for entry in allowed.iter().chain(&hosts.denied) {
+        let source = match &entry.by {
+            Some(path) => path.display().to_string(),
+            None => t!(status_hosts_managed).to_string(),
+        };
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    let counts = t!(
+        status_hosts_counts,
+        allowed = allowed.len(),
+        denied = hosts.denied.len()
+    )
+    .to_string();
+    let asks = hosts.on_unlisted == Some(bravebot_config::sandbox_network::OnUnlisted::Ask);
+    Some(
+        Line::new(t!(status_hosts), counts).with_note(match (sources.is_empty(), asks) {
+            (true, false) => t!(status_hosts_refused).to_string(),
+            (true, true) => t!(status_hosts_asked).to_string(),
+            (false, false) => t!(status_hosts_files, files = sources.join(", ")).to_string(),
+            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")).to_string(),
+        }),
     )
 }
 
@@ -406,14 +512,20 @@ pub fn report(facts: &Facts<'_>) -> Report {
     let definitions = facts
         .agent
         .and_then(|agent| agent.model.as_deref().map(|model| (agent, model)));
-    lines.push(match (definitions, facts.model) {
-        (Some((agent, model)), _) => Line::new(t!(status_model), model)
-            .with_note(t!(status_model_definitions, definition = &agent.name)),
+    lines.extend(match (definitions, facts.model) {
+        (Some((agent, model)), _) => model_lines(
+            facts.config,
+            model,
+            t!(status_model_definitions, definition = &agent.name),
+        ),
         (None, Some(model)) => {
-            Line::new(t!(status_model), model).with_note(t!(status_model_chosen))
+            model_lines(facts.config, model, t!(status_model_chosen).to_string())
         }
-        (None, None) => Line::new(t!(status_model), &facts.config.default_model)
-            .with_note(t!(status_model_default)),
+        (None, None) => model_lines(
+            facts.config,
+            &facts.config.default_model,
+            t!(status_model_default).to_string(),
+        ),
     });
 
     // Nothing else on the screen shows that the session is not the planner's, since the input box
@@ -486,12 +598,14 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // it, the same line reads as a guarantee over the reads, writes and programs the session runs,
     // which have never been confined. A local MCP server is the one process it does confine.
     lines.push(
-        Line::new(t!(status_confinement), facts.confinement).with_note(
-            match facts.servers.confined {
-                true => t!(status_confinement_servers),
-                false => t!(status_confinement_nothing_confined),
-            },
-        ),
+        Line::new(
+            t!(status_confinement),
+            with_the_sandbox_mode(facts.confinement, facts.sandbox_mode),
+        )
+        .with_note(match facts.servers.confined {
+            true => t!(status_confinement_servers),
+            false => t!(status_confinement_nothing_confined),
+        }),
     );
 
     // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
@@ -499,12 +613,25 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // closed it, because the way to open it again depends on that.
     lines.extend(network_line(
         bravebot_config::settled_run_network(),
-        bravebot_config::sandbox::in_force().mode,
+        facts.sandbox_mode,
+    ));
+    // Only where the kernel leaves them open, which is most Linux machines today: a person who
+    // trusts the profile to keep a program from the SSH agent should be told where it does not.
+    lines.extend(sockets_line(
+        facts.sockets_with_a_path_reachable,
+        facts.sandbox_mode,
     ));
     // Beside it and on the same terms: nothing for a session that wrote no list, which is the
     // session this screen has always described.
     lines.extend(filesystem_line(
         bravebot_config::settled_sandbox_filesystem(),
+    ));
+
+    // After the filesystem lists and on the same terms: nothing for a session that wrote no host
+    // list, which is the session this screen has always described.
+    lines.extend(hosts_line(
+        bravebot_config::sandbox_network::settled(),
+        facts.sandbox_mode,
     ));
 
     // Named rather than counted, since the question is which of them this session can reach, and
@@ -528,6 +655,18 @@ pub fn report(facts: &Facts<'_>) -> Report {
     if let Some(named) = named_mode(facts.permission_mode, facts.began_in_bypass) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
+    }
+
+    // Only where it is so, for the reason the network line is: the ordinary session writes the
+    // directories it was opened on, and a line saying so on each would be skimmed past.
+    if facts.programs_write_unasked {
+        lines.push(
+            Line::new(
+                t!(status_programs_write),
+                t!(status_programs_write_anywhere),
+            )
+            .with_note(t!(status_programs_write_except)),
+        );
     }
 
     // Beside it for the same reason, and only where it is on: this is the other standing answer
@@ -840,6 +979,19 @@ pub fn report(facts: &Facts<'_>) -> Report {
         }
     }
 
+    if !facts.requested_paths.is_empty() {
+        lines.push(
+            Line::new(
+                t!(status_requested_paths),
+                t!(count_requested_paths, count = facts.requested_paths.len()),
+            )
+            .with_note(t!(status_requested_paths_note)),
+        );
+        for row in facts.requested_paths {
+            lines.push(Line::new("", row.as_str()));
+        }
+    }
+
     Report { lines }
 }
 
@@ -856,6 +1008,45 @@ pub fn configured_tier(config: &Config) -> &'static str {
     match config.premium_endpoint {
         Some(_) => t!(status_premium_available),
         None => t!(status_no_subscription),
+    }
+}
+
+/// What the info panel and `/status` call the model whose request name is `model`, where the
+/// configuration names it.
+///
+/// The name the `/model` picker gives its row ([`bravebot_config::bedrock::Entry::display_name`]),
+/// so a person who chose "Sonnet" there is not shown an inference-profile ARN for it. A tier word
+/// gets the service after it, since no heading over it says whose account answers and the Brave
+/// roster has a Sonnet of its own; a name a `provider` block chose is the person's own words and
+/// stands alone. `None` for a model no configured account offers, or one the configuration gave no
+/// name other than its request name, which is drawn by that.
+pub fn model_label(config: &Config, model: &str) -> Option<String> {
+    let entry = config.bedrock_entry(model)?;
+    let label = match (&entry.name, entry.tier) {
+        (None, Some(_)) => t!(model_label_bedrock, name = entry.display_name()),
+        _ => entry.display_name().to_string(),
+    };
+    (label != model).then_some(label)
+}
+
+/// The request names and labels of every model a configured account offers, for a session to draw
+/// its chosen model by without holding the configuration.
+pub fn model_labels(config: &Config) -> Vec<(String, String)> {
+    config
+        .bedrock_entries()
+        .filter_map(|entry| Some((entry.id.clone(), model_label(config, &entry.id)?)))
+        .collect()
+}
+
+/// The `/status` lines for the model in force: its name, and under it the request name where the
+/// two differ, because that is what an error from the service quotes.
+fn model_lines(config: &Config, model: &str, note: String) -> Vec<Line> {
+    match model_label(config, model) {
+        Some(label) => vec![
+            Line::new(t!(status_model), label).with_note(note),
+            Line::new("", t!(status_model_id, id = model)),
+        ],
+        None => vec![Line::new(t!(status_model), model).with_note(note)],
     }
 }
 
@@ -970,6 +1161,70 @@ mod tests {
         trust
     }
 
+    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`, and the
+    /// report draws the mode its facts carry. The regressions it rejects are `off` shown as the
+    /// platform's level alone, which reads as a session whose programs are confined, and a report
+    /// that reads the mode start-up settled and so ignores `/sandbox`.
+    #[test]
+    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
+        use bravebot_sandbox::SandboxMode;
+        let level = "kernel-enforced";
+        assert_eq!(with_the_sandbox_mode(level, SandboxMode::Standard), level);
+        let strict = with_the_sandbox_mode(level, SandboxMode::Strict);
+        assert!(
+            strict.starts_with(level) && strict.contains("strict"),
+            "{strict}"
+        );
+        let off = with_the_sandbox_mode(level, SandboxMode::Off);
+        assert!(off.starts_with(level) && off.contains("off"), "{off}");
+        assert_ne!(off, strict);
+
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = TrustStore::new("/work");
+        for mode in [SandboxMode::Strict, SandboxMode::Off] {
+            let mut facts = facts(&config, &trust);
+            facts.sandbox_mode = mode;
+            let shown = report(&facts)
+                .lines
+                .into_iter()
+                .find(|line| line.label.trim() == t!(status_confinement))
+                .expect("the confinement is on the report")
+                .value;
+            assert!(shown.contains(mode.name()), "{mode}: {shown}");
+        }
+    }
+
+    /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
+    /// the kernel leaves them open, under `standard` alone, with why beside it. The regressions it
+    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
+    /// under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    #[test]
+    fn reachable_sockets_with_a_path_are_reported_under_standard_alone() {
+        use bravebot_sandbox::SandboxMode;
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = TrustStore::new("/work");
+        let shown = |mode, reachable| {
+            let mut facts = facts(&config, &trust);
+            facts.sandbox_mode = mode;
+            facts.sockets_with_a_path_reachable = reachable;
+            report(&facts)
+                .lines
+                .into_iter()
+                .find(|line| line.label.trim() == t!(status_path_sockets))
+        };
+
+        let line = shown(SandboxMode::Standard, true).expect("the sockets are on the report");
+        assert_eq!(line.value, t!(status_path_sockets_reachable));
+        assert_eq!(line.note, t!(status_path_sockets_why));
+        for (mode, reachable) in [
+            (SandboxMode::Standard, false),
+            (SandboxMode::Strict, true),
+            (SandboxMode::Off, true),
+        ] {
+            assert_eq!(shown(mode, reachable), None, "{mode} {reachable}");
+        }
+    }
+
     /// Facts with nothing vouched for, which is what a session that has not been asked looks like.
     /// Tests about the programs line build their own list and set it.
     fn facts<'a>(config: &'a Config, trust: &'a TrustStore) -> Facts<'a> {
@@ -996,11 +1251,16 @@ mod tests {
             theme: "brave",
             config,
             confinement: "kernel-enforced",
+            // Governed, which is what every platform but a Linux kernel below Landlock ABI 9
+            // reports. The test about the line sets it itself.
+            sockets_with_a_path_reachable: false,
+            sandbox_mode: bravebot_sandbox::SandboxMode::Standard,
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
             began_in_bypass: false,
+            programs_write_unasked: false,
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
@@ -1029,6 +1289,7 @@ mod tests {
             remembered: None,
             // No reach remembered for any command, on the same footing.
             reach: &[],
+            requested_paths: &[],
             // No answer about the directory kept past a session, on the same footing.
             kept_trust: None,
         }
@@ -1306,6 +1567,111 @@ mod tests {
             .find(|line| line.label.trim() == t!(status_goal))
             .expect("the goal is on the report");
         assert!(line.note.ends_with(" · 2.9k tokens"), "{:?}", line.note);
+    }
+
+    const SONNET_ARN: &str =
+        "arn:aws:bedrock:us-west-2:1:application-inference-profile/pzko74tz7aq5";
+    const HAIKU_ARN: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/h4ik0";
+
+    fn bedrock_tiers() -> Config {
+        Config::from_lookup(|key| match key {
+            "BRAVEBOT_USE_BEDROCK" => Some("1".into()),
+            "AWS_REGION" => Some("us-west-2".into()),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL" => Some(SONNET_ARN.into()),
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL" => Some(HAIKU_ARN.into()),
+            _ => None,
+        })
+        .expect("config")
+    }
+
+    /// PANEL-9. A tier set to an ARN is shown by the name the `/model` picker gave its row, with
+    /// the ARN kept under it because the service's errors quote that.
+    ///
+    /// Rejects: the ARN on the model line, the label of another tier, a label on a model no account
+    /// offers, and a second line under a model that is already shown by its own name.
+    #[test]
+    fn the_model_line_names_a_tier_and_keeps_its_arn_beneath() {
+        let config = bedrock_tiers();
+        let trust = trusting();
+        let model_rows = |model: Option<&str>| {
+            let mut facts = facts(&config, &trust);
+            facts.model = model;
+            let report = report(&facts);
+            let at = report
+                .lines
+                .iter()
+                .position(|line| line.label.trim() == t!(status_model))
+                .expect("a model line");
+            (
+                report.lines[at].value.clone(),
+                report.lines[at].note.clone(),
+                report.lines[at + 1].clone(),
+            )
+        };
+
+        let (value, note, below) = model_rows(Some(SONNET_ARN));
+        assert_eq!(value, "Sonnet (Bedrock)");
+        assert_eq!(note, t!(status_model_chosen));
+        assert_eq!(below.label, "");
+        assert_eq!(below.value, t!(status_model_id, id = SONNET_ARN));
+
+        let (value, _, below) = model_rows(Some(HAIKU_ARN));
+        assert_eq!(value, "Haiku (Bedrock)");
+        assert_eq!(below.value, t!(status_model_id, id = HAIKU_ARN));
+
+        // No model chosen: the configured default is the strongest tier set, here Sonnet.
+        let (value, note, below) = model_rows(None);
+        assert_eq!(value, "Sonnet (Bedrock)");
+        assert_eq!(note, t!(status_model_default));
+        assert_eq!(below.value, t!(status_model_id, id = SONNET_ARN));
+
+        let (value, _, below) = model_rows(Some("claude-3-sonnet"));
+        assert_eq!(value, "claude-3-sonnet");
+        assert_ne!(
+            below.value,
+            t!(status_model_id, id = "claude-3-sonnet"),
+            "a model no account offers has no second name to quote"
+        );
+    }
+
+    /// A model a `provider` block named is shown by the name the block gave it, as written: that
+    /// name is the person's own words and already says which service answers. One it gave no name
+    /// is drawn by its id, with no second line quoting the same id.
+    #[test]
+    fn a_name_a_provider_block_chose_is_shown_without_a_service_added() {
+        let mut config = config_for("http://127.0.0.1:1", None);
+        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![bravebot_config::bedrock::Entry {
+                tier: None,
+                id: "openai.gpt-5.6-sol".to_string(),
+                name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
+                context_window: None,
+                output_limit: None,
+            }],
+        ));
+        assert_eq!(
+            model_label(&config, "openai.gpt-5.6-sol").as_deref(),
+            Some("GPT-5.6 Sol (Bedrock)")
+        );
+
+        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![bravebot_config::bedrock::Entry {
+                tier: None,
+                id: "openai.gpt-5.6-sol".to_string(),
+                name: None,
+                context_window: None,
+                output_limit: None,
+            }],
+        ));
+        assert_eq!(
+            model_label(&config, "openai.gpt-5.6-sol"),
+            None,
+            "a model with no name but its id has no label to put before the id"
+        );
     }
 
     /// CLI-17. The note saying a session works under a definition scrolls away, and the input box
@@ -1753,6 +2119,35 @@ mod tests {
         }
     }
 
+    /// SANDBOX-28: a path the person let programs reach is listed as `/reach paths` lists it, with
+    /// the note that the directory is not trusted and how to end one. A session that was asked for
+    /// none draws no heading.
+    #[test]
+    fn the_report_lists_the_paths_programs_were_let_reach() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains(t!(status_requested_paths)), "{quiet}");
+
+        let rows = vec![
+            "1. every command also reads /opt/toolchain, for this session".to_string(),
+            "2. every command also reads and writes /srv/out, for this session".to_string(),
+        ];
+        let mut facts = facts(&config, &trust);
+        facts.requested_paths = &rows;
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_requested_paths)), "{shown}");
+        assert!(
+            shown.contains(&t!(count_requested_paths, count = 2)),
+            "{shown}"
+        );
+        assert!(shown.contains(t!(status_requested_paths_note)), "{shown}");
+        for row in &rows {
+            assert!(shown.contains(row.as_str()), "{shown}");
+        }
+    }
+
     /// RUN-19: where the list is shortened it says how many of each it left out. A bare count would
     /// leave a person unable to tell how much of what they are carrying came from another session,
     /// which is the whole question the two lifetimes raise.
@@ -1934,6 +2329,48 @@ mod tests {
         assert!(!shown.contains(asking), "{shown}");
     }
 
+    /// SANDBOX-22: a session whose programs write what a request would be granted says so, and a
+    /// session that does not is silent. The regressions it rejects are a line shown in `strict`, in
+    /// `off`, outside bypass, on Windows, or with no home directory, where the stage is given no
+    /// extra row.
+    #[test]
+    fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
+        use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
+        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        let home = std::env::temp_dir();
+        let home = Some(home.as_path());
+
+        assert_eq!(
+            programs_write_unasked(Standard, Bypass, home),
+            cfg!(any(target_os = "linux", target_os = "macos"))
+        );
+        for (mode, permission, home) in [
+            (Standard, Bypass, None),
+            (Standard, Ask, home),
+            (Standard, AcceptEdits, home),
+            (Strict, Bypass, home),
+            (Off, Bypass, home),
+        ] {
+            assert!(
+                !programs_write_unasked(mode, permission, home),
+                "{mode:?} {permission:?} {home:?}"
+            );
+        }
+
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        let said = |facts: &Facts<'_>| {
+            report(facts)
+                .lines
+                .iter()
+                .any(|line| line.label == t!(status_programs_write))
+        };
+        assert!(!said(&facts));
+        facts.programs_write_unasked = true;
+        assert!(said(&facts));
+    }
+
     fn rendered(report: &Report) -> String {
         report
             .lines
@@ -2057,11 +2494,18 @@ mod tests {
 
         for config in [&premium, &free] {
             let session = crate::state::Session::new("kernel-enforced").on_tier(config);
-            let opening = crate::logo::lines(&session.confinement, &session.tier, 90, 24)
-                .iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let opening = crate::logo::lines(
+                &session.confinement,
+                session.sandbox_mode(),
+                session.sockets_with_a_path_reachable,
+                &session.tier,
+                90,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
             assert!(
                 opening.contains(configured_tier(config)),
                 "the opening screen says something the configuration does not: {opening}"
@@ -2143,6 +2587,90 @@ mod tests {
         assert!(!line.value.contains("very-secret") && !line.note.contains("very-secret"));
         assert!(line.note.contains("/home/a/.bravebot/settings.json"));
         assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
+    }
+
+    /// The host list is on the report with how many entries each list holds and the files that
+    /// wrote them, never a host, and a session with no `allowedHosts` or none under `off` says
+    /// nothing. The regression it rejects is a list in force that the screen never mentions.
+    #[test]
+    fn host_lists_are_reported_by_count_and_file_and_never_by_host() {
+        use bravebot_config::sandbox_network::{HostEntry, Hosts, Resolved};
+        use bravebot_sandbox::SandboxMode::{Off, Standard};
+        let entry = |host: &str, by: Option<&str>| HostEntry {
+            entry: host.to_string(),
+            by: by.map(Into::into),
+        };
+        let settled = |allowed, denied| Resolved {
+            hosts: Hosts {
+                allowed,
+                denied,
+                on_unlisted: None,
+            },
+            ..Default::default()
+        };
+
+        assert!(hosts_line(None, Standard).is_none());
+        assert!(
+            hosts_line(
+                Some(&settled(None, vec![entry("a.example", None)])),
+                Standard
+            )
+            .is_none()
+        );
+        let listed = settled(
+            Some(vec![
+                entry(
+                    "very-secret.example",
+                    Some("/home/a/.bravebot/settings.json"),
+                ),
+                entry("*.other.example", Some("/home/a/.bravebot/settings.json")),
+            ]),
+            vec![entry("bad.example", None)],
+        );
+        assert!(hosts_line(Some(&listed), Off).is_none());
+        let line = hosts_line(Some(&listed), Standard).expect("a line");
+
+        assert_eq!(line.label.trim(), t!(status_hosts));
+        assert!(
+            line.value.contains("2 allowed") && line.value.contains("1 denied"),
+            "{}",
+            line.value
+        );
+        let shown = format!("{} {}", line.value, line.note);
+        assert!(
+            !shown.contains("very-secret") && !shown.contains("bad.example"),
+            "{shown}"
+        );
+        assert!(line.note.contains("/home/a/.bravebot/settings.json"));
+        assert!(line.note.contains(t!(status_hosts_managed)));
+        let empty = hosts_line(Some(&settled(Some(vec![]), vec![])), Standard).expect("a line");
+        assert!(empty.value.contains("0 allowed"), "{}", empty.value);
+        assert_eq!(empty.note, t!(status_hosts_refused));
+
+        let asking = Resolved {
+            hosts: Hosts {
+                on_unlisted: Some(bravebot_config::sandbox_network::OnUnlisted::Ask),
+                ..settled(Some(vec![]), vec![]).hosts
+            },
+            ..Default::default()
+        };
+        let asked = hosts_line(Some(&asking), Standard).expect("a line");
+        assert_eq!(asked.note, t!(status_hosts_asked));
+
+        let asking_with_files = Resolved {
+            hosts: Hosts {
+                on_unlisted: Some(bravebot_config::sandbox_network::OnUnlisted::Ask),
+                ..listed.hosts.clone()
+            },
+            ..Default::default()
+        };
+        let asked_files = hosts_line(Some(&asking_with_files), Standard).expect("a line");
+        assert!(
+            asked_files.note.contains("/home/a/.bravebot/settings.json")
+                && asked_files.note != line.note,
+            "{}",
+            asked_files.note
+        );
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

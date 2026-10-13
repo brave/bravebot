@@ -411,6 +411,7 @@ one thing leaves everything else in force:
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
+| `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -452,18 +453,23 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
-| `limit` | the most tokens a session may spend before it asks ([below](#limit)) |
+| `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
 | `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
+| `git.identities` | the ssh key a `git` command offers first for one owner's repositories ([below](#gitidentities)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
+| `download.maxBytes` | the most one `download_url` call may save to a file ([below](#downloadmaxbytes)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
+| `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
+| `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -732,12 +738,54 @@ a checkout, which is why a file in a repository is the weaker claim.
 { "limit": "500k" }
 ```
 
-The most tokens a session may spend before the terminal client asks whether to stop, to go on without
-a limit or to go on under a new one. A whole number of tokens, or a string with `k` or `m` after it for
-thousands or millions. A value that is none of these, and zero, sets no limit. The nearest settings
-file that names it wins, and [`/limit`](../reference/commands.md#limit-tokens--off) changes it for one
-session. It counts the usage the model service reports, so it is a bound on tokens and not on money.
-The one-shot `-p` run and the desktop app do not apply it.
+The most tokens or Leo Premium credits a session may spend before the terminal client asks whether to
+stop, to go on without a limit or to go on under a new one. A whole number of tokens, or a string with
+`k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
+to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
+none of these, and zero, sets no limit. The nearest settings file that names it wins, and
+[`/limit`](../reference/commands.md#limit-tokens--credits--off) changes it for one session. Tokens are
+the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
+one-shot `-p` run and the desktop app do not apply it.
+
+### `deferMcpToolsAbove`
+
+```json
+{ "deferMcpToolsAbove": "20k" }
+```
+
+Every tool of a server you approved is otherwise sent to the model in full on every turn. With this
+set, a turn whose server tools would weigh more than that many tokens, estimated from their length,
+sends only their names, `alias:tool`, and a `load_tool` the model calls with one name to have that
+tool's definition sent from its next request on. The name has to match one on the list exactly.
+Loading changes what is sent and not who is asked: a loaded tool still asks you before each call.
+A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
+default. It lasts a turn, so a later turn loads again.
+
+### `awaySummaryEnabled`
+
+```json
+{ "awaySummaryEnabled": false }
+```
+
+After the terminal has been unfocused for five minutes since the last turn finished, a session of at
+least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
+It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
+still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
+on.
+
+### `suggestions`
+
+```json
+{ "suggestions": true }
+```
+
+Off by default. With `true`, once a turn has ended with a reply, the model `summaryModel` names (the
+session's own where it names none) is asked for the next prompt you are likely to type, and the
+box shows it dimmed where the invitation was. Tab or Right moves it into the box as text you can
+edit; nothing sends it, and a suggestion that begins with `/` is only text until you press Enter.
+Any other key removes it. Each one is a request that costs tokens, charged to the session and shown
+by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
+was stopped. Only the boolean `true` turns it on.
 
 ### `terminalTitle`
 
@@ -894,6 +942,46 @@ grant.
 The desktop app shows the lists in the conversation's permissions view, each entry with the file
 that wrote it, and says in the notice above the conversation when an entry is not in force. It does
 not edit them: change the settings file, and the next conversation reads it.
+
+### `git.identities`
+
+```json
+{ "git": { "identities": { "github.com/your-account": "~/.ssh/your-account.pub" } } }
+```
+
+Which of your ssh keys a `git` command the agent runs offers a host first, for the repositories of
+one owner. Each name is `<host>/<owner>`, where the owner is the account or organisation the
+repository's path starts with, and each value is a public key file, absolute or starting `~/`; a
+name without `.pub` reads the file beside it. Use it when your ssh agent holds keys of more than one
+GitHub account: ssh offers the agent's keys in order and GitHub accepts the first one any account
+holds, so without it every push goes out as one account.
+
+It applies where the command's own arguments name an ssh address of that owner, such as
+`git push git@github.com:your-account/repo.git main` or `ssh://git@github.com/your-account/repo`.
+The command then runs ssh as `ssh -i '<key>' -o IdentitiesOnly=yes`, which offers that key first and
+after it only keys your `~/.ssh/config` names, and is lent that one public file. The run prompt names
+the key. A remote given by name, such as `origin`, is not matched, because its address is in the
+repository's own configuration; nor is an https address. Your ssh agent still signs, so no private key
+is read.
+
+On the commands it applies to it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` of
+yours. Your own file and a `--settings` file outside the project may write it; a project or local
+file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and a key it would not
+lend: a path that is not a regular `*.pub` file, one inside another credential location such as
+`~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
+either.
+
+### `download.maxBytes`
+
+```json
+{ "download": { "maxBytes": 524288000 } }
+```
+
+The most bytes one `download_url` call may write to a file. A body over it is not saved, and the
+agent is told that this setting names the limit. Without this key the figure is 100 MiB. It is a
+budget on your disk, not on the conversation, because the bytes never enter the conversation. Zero
+and anything that is not a whole number leave the built-in figure in force, and the nearest settings
+file that names one wins.
 
 ### `run.maxOutput`
 
@@ -1160,7 +1248,7 @@ Ten actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt
 | `trail` | `ctrl-t` | toggle the [audit trail](../security/audit-trail.md) |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
-| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
+| `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action

@@ -4,7 +4,7 @@
 // way to fake it that would prove anything — the whole question is whether an approval
 // made in the interface reaches the turn that is blocked waiting for it.
 //
-// Needs credentials baked into bravebot-rpc (`npm run bridge` in a configured shell).
+// Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { _electron as electron } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 

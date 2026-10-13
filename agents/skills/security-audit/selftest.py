@@ -1027,6 +1027,26 @@ def test_privileged_job_runs_only_its_own_code():
     for name, command in (
         ("npm exec", "npm exec -- lockfile-lint"),
         ("yarn install", "yarn install --frozen-lockfile"),
+        ("npm with an option first", "npm --prefix ui ci"),
+        ("pnpm install", "pnpm install --frozen-lockfile"),
+        ("pnpm i", "pnpm i"),
+        ("pnpm add", "pnpm add left-pad"),
+        ("pnpm run", "pnpm run lint"),
+        ("pnpm run-script", "pnpm run-script lint"),
+        ("pnpm exec", "pnpm exec lockfile-lint"),
+        ("pnpm dlx", "pnpm dlx lockfile-lint"),
+        ("pnpm x", "pnpm x lockfile-lint"),
+        ("pnpm with a script name", "pnpm lint:lockfile"),
+        ("pnpm test", "pnpm test"),
+        ("pnpm start", "pnpm start"),
+        ("pnpm rebuild", "pnpm rebuild"),
+        ("pnpm approve-builds", "pnpm approve-builds"),
+        ("pnpm --dir before the subcommand", "pnpm --dir ui install"),
+        ("pnpm -C before the subcommand", "pnpm -C ui run build"),
+        ("pnpm --filter before the subcommand", "pnpm --filter app exec tsc"),
+        ("pnpm -r before the subcommand", "pnpm -r run build"),
+        ("pnpm -w before the subcommand", "pnpm -w test"),
+        ("corepack pnpm", "corepack pnpm install --frozen-lockfile"),
     ):
         other = in_tree(
             {
@@ -1045,6 +1065,25 @@ def test_privileged_job_runs_only_its_own_code():
             kinds(found) == ["privileged-job-runs-dependencies"],
             str(kinds(found)),
         )
+
+    for name, command in (
+        ("pnpm publish", "pnpm publish --provenance"),
+        ("pnpm config", "pnpm config set registry https://registry.npmjs.org/"),
+        ("a sentence that names pnpm", "echo pnpm build is not run here"),
+    ):
+        other = in_tree(
+            {
+                ".github/workflows/publish-npm.yml": "jobs:\n"
+                "  publish:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+                "    steps:\n"
+                f"      - run: {command}\n"
+            }
+        )
+        found = with_cwd(other, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+        check(f"{name} runs no dependency code", kinds(found) == [], str(kinds(found)))
 
     # The publish workflow holds the one grant in this tree, and this is what keeps the install out of
     # the job that holds it.
@@ -1988,7 +2027,7 @@ def test_the_prompt_lane_starts_from_every_prompt():
     class Governing:
         id = "PROMPT"
         rel = "docs/specs/asking.md"
-        governs = ["crates/tui/src/asks.rs"]
+        governs = ["crates/tui/src/asks.rs", "ui/src/Cards.tsx"]
 
     sources = {
         Path("crates/tui/src/asks.rs"): [
@@ -1998,18 +2037,34 @@ def test_the_prompt_lane_starts_from_every_prompt():
             "pub(crate) fn ask_move(request: &MoveRequest) -> Answer {",
         ],
         Path("crates/tui/src/elsewhere.rs"): ["pub fn ask_other<B: Backend>() {}"],
+        Path("ui/src/Cards.tsx"): [
+            "    case 'write': {",
+            "      return (",
+            "        <DecisionCard",
+            "          head={<YesOrNo />}",
+            "    case 'plan-task':",
+            "    case 'plan-reply':",
+            "      return <div className=\"plan-reply\" />",
+            "    case 'fetch': {",
+            "          <YesOrNo",
+            "    case 'move':",
+            "      return <ThreeAnswers />",
+        ],
     }
     found = [
         (site["path"], site["line"], site["function"])
         for site in audit.prompt_sites(sources, [Governing()])
     ]
     check(
-        "the prompt lane starts from every function the prompting spec's files ask with",
+        "the prompt lane starts from every function and card the prompting spec's files ask with",
         found
         == [
             ("crates/tui/src/asks.rs", 1, "ask"),
             ("crates/tui/src/asks.rs", 2, "ask_vet"),
             ("crates/tui/src/asks.rs", 4, "ask_move"),
+            ("ui/src/Cards.tsx", 1, "case 'write'"),
+            ("ui/src/Cards.tsx", 8, "case 'fetch'"),
+            ("ui/src/Cards.tsx", 10, "case 'move'"),
         ],
         str(found),
     )
@@ -2018,10 +2073,17 @@ def test_the_prompt_lane_starts_from_every_prompt():
         ROOT, lambda: audit.prompt_sites(audit.mechanics.load_sources(), audit.load_specs())
     )
     names = {(Path(site["path"]).name, site["function"]) for site in real}
-    wanted = {("confirm.rs", "ask"), ("confirm.rs", "ask_mcp_call"), ("trust_prompt.rs", "ask")}
+    wanted = {
+        ("confirm.rs", "ask"),
+        ("confirm.rs", "ask_mcp_call"),
+        ("trust_prompt.rs", "ask"),
+        ("Transcript.tsx", "case 'confirm'"),
+        ("Transcript.tsx", "case 'vet'"),
+        ("Transcript.tsx", "case 'mcp-call'"),
+    }
     check(
-        "the tree's write, call and trust prompts are on the lane's list",
-        wanted <= names,
+        "the tree's write, call and trust prompts and the window's cards are on the lane's list",
+        wanted <= names and ("Transcript.tsx", "case 'ask'") not in names,
         str(sorted(names)),
     )
 
@@ -2476,6 +2538,22 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
     )
 
 
+def test_the_manifest_is_read_from_the_work_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "manifest.json").write_text('{"lanes": []}', encoding="utf-8")
+        check("a manifest in the work directory is read", collect.read_manifest(tmp) == {"lanes": []})
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            missing = collect.read_manifest(empty)
+        check(
+            "a work directory without one reads as none and says where it looked",
+            missing is None and err.getvalue() == f"no manifest at {empty / 'manifest.json'}\n",
+            err.getvalue(),
+        )
+
+
 def main():
     for test in (
         test_exception_counts,
@@ -2504,6 +2582,7 @@ def main():
         test_posting_skips_what_the_tracker_already_holds,
         test_an_assignee_reaches_the_create,
         test_a_run_writes_a_manifest_and_posts_nothing,
+        test_the_manifest_is_read_from_the_work_directory,
     ):
         print(test.__name__)
         test()

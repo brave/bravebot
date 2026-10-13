@@ -87,6 +87,63 @@ we are trying to do, where the work stands, and what is next.";
 /// The most a recap shows or keeps, in characters.
 pub const RECAP_LIMIT: usize = 400;
 
+/// What a follow-up suggestion asks, in the driver's own words (INPUT-43).
+///
+/// The exchange it is asked over is the planner's own context, so the suggestion is written from
+/// what the person and the planner have said and from nothing else.
+pub const SUGGEST_QUESTION: &str = "\
+Suggest the one thing I am most likely to type next to carry this work on, written as I would \
+write it to the agent. Use between 2 and 12 words, fewer than 100 characters, on one line, with no \
+quotation marks, no explanation, and no opinion of the work. Answer with the suggestion only.";
+
+/// The most a suggestion may run to, in characters, and the fewest and most words it may hold.
+pub const SUGGEST_CHARS: usize = 100;
+pub const SUGGEST_MIN_WORDS: usize = 2;
+pub const SUGGEST_MAX_WORDS: usize = 12;
+
+/// The most of an answer that is read at all when it is a suggestion, in characters.
+///
+/// Well past [`SUGGEST_CHARS`], so an answer that ran on is cut here and refused by
+/// [`suggestion`] rather than being let through as the front of a longer one.
+const SUGGEST_READ: usize = 4 * SUGGEST_CHARS;
+
+/// What `/handoff` asks, in the driver's own words, ahead of the goal the person typed.
+///
+/// The exchange it is asked over is the planner's own context, so the brief is written from what
+/// the planner has read and from nothing else. It is a message to a planner that has read none of
+/// the exchange, which is why it is asked to be self-contained.
+pub const HANDOFF_QUESTION: &str = "\
+I am starting a new session to carry this work on, and the agent in it will not have read any of \
+this exchange. Write the brief it starts from, in plain text and as short as it can be while still \
+being enough: what we are trying to do, what has been decided and why, what has been done and what \
+state it is in, and the files and commands that matter. Leave out anything the next piece of work \
+does not need. Write the brief only: do not carry the work on, and do not address me. The next \
+piece of work is:";
+
+/// The most a handoff brief shows or keeps, in characters.
+pub const HANDOFF_LIMIT: usize = 4000;
+
+/// What the new session is told about what did not cross, written by the driver after the brief.
+///
+/// A brief cannot say this itself: the model that writes it knows what the old session held, and
+/// not what a new one is asked again.
+pub const HANDOFF_NOTICE: &str = "\
+This session was started from a handoff. Only the brief above came from the earlier session. Its \
+file decisions and permissions did not come with it, so ask before reading a file or running \
+something that the brief says was allowed there.";
+
+/// The first prompt of a handed-off session: the brief, what did not cross, and what is next.
+///
+/// Built by the driver from the brief and the goal, both of which the person has read. They edit
+/// it in the box before it is sent, and it is sent as a line they typed.
+pub fn handoff_prompt(brief: &str, goal: &str) -> String {
+    format!(
+        "{}\n\n{HANDOFF_NOTICE}\n\nNext: {}",
+        brief.trim(),
+        goal.trim()
+    )
+}
+
 /// Cut `text` to at most `limit` characters, ending in an ellipsis where something was cut.
 fn capped(text: &str, limit: usize) -> String {
     let text = text.trim();
@@ -97,6 +154,21 @@ fn capped(text: &str, limit: usize) -> String {
     cut.truncate(cut.trim_end().len());
     cut.push('\u{2026}');
     cut
+}
+
+/// The answer to [`SUGGEST_QUESTION`] as something the box may offer, or `None` where it breaks
+/// a count the instruction set (INPUT-43).
+///
+/// Counts only: characters, words and lines. What the words say is not read, so a suggestion that
+/// is a poor one or an odd one is offered as it came, and one that is too long is not offered at
+/// all rather than cut to something the model did not write.
+pub fn suggestion(shown: &str) -> Option<String> {
+    let text = shown.trim();
+    let words = text.split_whitespace().count();
+    let counted = (SUGGEST_MIN_WORDS..=SUGGEST_MAX_WORDS).contains(&words)
+        && text.chars().count() < SUGGEST_CHARS
+        && text.lines().count() == 1;
+    counted.then(|| text.to_string())
 }
 
 /// One question, and the exchange it was asked beside.
@@ -156,6 +228,32 @@ impl Question {
         }
     }
 
+    /// The next prompt, asked over the exchange as it stands (INPUT-43).
+    ///
+    /// A question the driver writes, over the planner's own context. The answer is read through
+    /// [`suggestion`], which holds it to the counts the instruction asked for.
+    pub fn suggest(conversation: &Conversation) -> Self {
+        Self {
+            limit: Some(SUGGEST_READ),
+            ..Self::about(conversation, SUGGEST_QUESTION, Vec::new())
+        }
+    }
+
+    /// The brief a new session starts from, for the work `goal` names.
+    ///
+    /// A question the driver writes, over the exchange as it stands. The answer is cut to
+    /// [`HANDOFF_LIMIT`] whatever the model made of the instruction.
+    pub fn handoff(conversation: &Conversation, goal: &str) -> Self {
+        Self {
+            limit: Some(HANDOFF_LIMIT),
+            ..Self::about(
+                conversation,
+                &format!("{HANDOFF_QUESTION} {}", goal.trim()),
+                Vec::new(),
+            )
+        }
+    }
+
     /// Carry the files dropped onto the line, already read.
     ///
     /// Separate from [`Question::about`] because the two happen in different places. The exchange is
@@ -180,10 +278,10 @@ impl Question {
     ///
     /// Dropped files first and pasted pictures after them, which is the order a turn puts them in,
     /// so one line sends the same request whichever of the three carries it. On a line that both
-    /// pasted and dropped that order is not the order its markers number them, which is a cost
-    /// `dropping.md` carries rather than one this fixes: a picture travels as bytes with nothing
-    /// beside it to say which marker it answers, so ordering differently here would mean the same
-    /// line reaching the planner one way from a prompt and another from a question.
+    /// pasted and dropped that order is not the order its markers number them, which `dropping.md`
+    /// DROP-11 answers for the dropped half: each dropped picture is sent with its path beside it,
+    /// so the marker is matched by the file the part names rather than by counting parts. A pasted
+    /// picture carries no path and is still only its position, which is a cost `pasting.md` holds.
     ///
     /// The record `pasting.md` PASTE-8 asks for is not taken here. This runs wherever the request is
     /// assembled and the gate belongs to the policy, so [`ask`] takes it before calling this.
@@ -194,7 +292,11 @@ impl Question {
             (true, true) => Message::user(text),
             _ => Message::user_parts(
                 std::iter::once(Part::Text { text })
-                    .chain(self.dropped.iter().map(crate::attached::Carried::part))
+                    .chain(
+                        self.dropped
+                            .iter()
+                            .flat_map(crate::attached::Carried::parts),
+                    )
                     .chain(self.pasted.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             ),
@@ -284,13 +386,7 @@ pub fn ask<S: Sink>(
     let limit = question.limit;
     let request = ChatRequest::new(model, question.into_request()).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Minted before the request goes out, because the gate needs the policy and the policy is
     // lent to the client for the duration of the call. One witness for the whole answer rather
@@ -363,6 +459,58 @@ mod tests {
         assert!(
             text.contains("why is the parser recursive?"),
             "the question itself did not reach the request: {text}"
+        );
+    }
+
+    /// INPUT-43: only an answer inside the counts is offered, and the counts are the whole of the
+    /// rule. A word count of one, thirteen words, a hundred characters and a second line each fail
+    /// it, and a good one passes with its surrounding whitespace gone.
+    #[test]
+    fn a_suggestion_is_offered_only_inside_its_counts() {
+        assert_eq!(
+            suggestion("  run the tests again \n"),
+            Some("run the tests again".to_string())
+        );
+        assert_eq!(suggestion("continue"), None);
+        let thirteen = "one two three four five six seven eight nine ten eleven twelve thirteen";
+        assert_eq!(suggestion(thirteen), None);
+        let twelve = "one two three four five six seven eight nine ten eleven twelve";
+        assert_eq!(suggestion(twelve), Some(twelve.to_string()));
+        let long = format!("go {}", "a".repeat(SUGGEST_CHARS - 3));
+        assert_eq!(long.chars().count(), SUGGEST_CHARS);
+        assert_eq!(suggestion(&long), None);
+        let short = format!("go {}", "a".repeat(SUGGEST_CHARS - 4));
+        assert_eq!(suggestion(&short), Some(short.clone()));
+        assert_eq!(suggestion("fix it\nthen run the tests"), None);
+        assert_eq!(suggestion(""), None);
+    }
+
+    /// The characters are counted, not the bytes: a hundred-character line of two-byte letters is
+    /// refused for its characters, and one of ninety-nine is offered although it is over a hundred
+    /// bytes.
+    #[test]
+    fn the_suggestion_limit_counts_characters_rather_than_bytes() {
+        let ninety_nine = format!("go {}", "é".repeat(SUGGEST_CHARS - 4));
+        assert!(ninety_nine.len() > SUGGEST_CHARS);
+        assert_eq!(suggestion(&ninety_nine), Some(ninety_nine.clone()));
+        let hundred = format!("go {}", "é".repeat(SUGGEST_CHARS - 3));
+        assert_eq!(hundred.chars().count(), SUGGEST_CHARS);
+        assert_eq!(suggestion(&hundred), None);
+    }
+
+    /// INPUT-43: a suggestion is a question with a limit, asked over the exchange, in the driver's
+    /// words, and it leaves the exchange as it was.
+    #[test]
+    fn a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone() {
+        let conversation = an_exchange();
+        let before = conversation.len();
+        let request = Question::suggest(&conversation).into_request();
+        assert_eq!(conversation.len(), before);
+        let said: Vec<String> = request.iter().map(|m| m.content.text()).collect();
+        assert!(said.iter().any(|text| text.contains("add the feature")));
+        assert!(
+            said.last()
+                .is_some_and(|text| text.contains(SUGGEST_QUESTION))
         );
     }
 
@@ -483,5 +631,54 @@ mod tests {
                 .any(|message| message.content.text().contains("add the feature")),
             "the recap was asked without the exchange"
         );
+    }
+
+    /// The brief is asked for over the whole exchange, with the goal in the question, and leaves
+    /// the exchange as it was.
+    #[test]
+    fn a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange() {
+        let conversation = an_exchange();
+        let before = conversation.len();
+
+        let asking = Question::handoff(&conversation, "  port the parser to the new lexer ");
+
+        assert_eq!(asking.limit, Some(HANDOFF_LIMIT));
+        assert_eq!(conversation.len(), before);
+        let request = asking.into_request();
+        let last = request.last().expect("the question closes the request");
+        let text = last.content.text();
+        assert!(
+            text.contains(HANDOFF_QUESTION),
+            "no brief was asked for: {text}"
+        );
+        assert!(
+            text.ends_with("port the parser to the new lexer"),
+            "the goal did not reach the question: {text}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|message| message.content.text().contains("add the feature")),
+            "the brief was asked for without the exchange"
+        );
+    }
+
+    /// What crosses is the brief, then the sentence saying what did not, then the goal: a prompt
+    /// missing the notice would let the new session assume the old one's permissions.
+    #[test]
+    fn the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order() {
+        let prompt = handoff_prompt("  We are porting the parser.\n", " write the tests ");
+
+        let brief = prompt
+            .find("We are porting the parser.")
+            .expect("the brief");
+        let notice = prompt.find(HANDOFF_NOTICE).expect("the notice");
+        let goal = prompt.find("Next: write the tests").expect("the goal");
+        assert!(brief < notice && notice < goal, "out of order: {prompt}");
+        assert!(
+            prompt.starts_with("We are porting"),
+            "untrimmed: {prompt:?}"
+        );
+        assert!(prompt.ends_with("write the tests"), "untrimmed: {prompt:?}");
     }
 }

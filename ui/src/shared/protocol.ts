@@ -231,6 +231,8 @@ export interface OpenedSession {
   autoVetting: boolean
   /** Always `ask`: a mode is not read from the record (MODE-10). */
   permissionMode: PermissionMode
+  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
 }
@@ -245,6 +247,17 @@ export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
 
 /** The order the mode shortcut walks, ending back at the first. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+
+/**
+ * What a program the agent runs is held to, as `session.sandbox` names it.
+ *
+ * Two of the agent's three. `off` starts a program with no profile, which a window has no way to
+ * show, so the bridge refuses it from a window (SANDBOX-22).
+ */
+export type SandboxMode = 'standard' | 'strict'
+
+/** The order the sandbox menu lists them. */
+export const SANDBOX_MODES: readonly SandboxMode[] = ['standard', 'strict']
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -316,6 +329,8 @@ export interface ForkedSession {
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
   permissionMode: PermissionMode
+  /** What the settings give, whatever the parent chose: a fork opens as any session does. */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
   parent: {
@@ -335,7 +350,7 @@ export interface Vetting { verdict: string; reason?: string | null; detail?: str
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -447,6 +462,8 @@ export interface Stage {
   resolved: string | null
   /** The path the program is started by, which is `resolved` unless the name reached it through a link. */
   startedAs?: string
+  /** The file the step runs, which is what the terminal shows under the step. */
+  binary?: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
@@ -489,14 +506,20 @@ export interface FetchRequest {
  * the name from its own table, so nothing a turn read chooses what runs.
  *
  * When `runsBuildTooling` is true, starting the server runs code from the dependency tree with
- * the person's own access, as a build does. The card must say so.
+ * the person's own access, as a build does. The card must say so. When `declared` is true the
+ * person declared the server themselves, so what starting it runs is not known and the card
+ * says that in place of either sentence (LSP-11). `args` are the arguments it is started with.
  */
 export interface ServerRequest {
   request: number
   language: string
   program: string
+  args: string[]
+  /** The arguments as one line, quoted where one holds a space, so it reads back into the list. */
+  argumentsLine: string
   workspace: string
   runsBuildTooling: boolean
+  declared: boolean
   summary: string
 }
 
@@ -554,6 +577,7 @@ export interface ManifestDone {
   notices?: string[]
   attempt: PlanAttempt | null
   record: string | null
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /** A manifest run that stopped: declined, stopped by the person, or failed. */
@@ -573,6 +597,7 @@ export interface ManifestError {
   attempt: PlanAttempt | null
   record: string | null
   notices?: string[]
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /**
@@ -617,6 +642,8 @@ export interface McpServerRequest {
   requestedBy: string
   changed: boolean
   fetching: string[]
+  /** The question as the agent words it, one string per line. */
+  lines?: string[]
 }
 
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
@@ -665,6 +692,16 @@ export interface McpMoveRequest {
   mayRecord: boolean
 }
 
+/**
+ * Hosts a confined program asked the session proxy for that `sandbox.network.allowedHosts` does
+ * not list (SANDBOX-24). Each is a host name or IP address as the program chose it, so it is drawn
+ * as text. A yes allows them for the rest of the session and writes nothing to disk.
+ */
+export interface HostRequest {
+  request: number
+  hosts: string[]
+}
+
 /** What starting a session's MCP servers came to: the ones started, and why each other was not. */
 export interface McpStarted { servers: string[]; confined: boolean; notes: string[] }
 
@@ -693,6 +730,8 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
+  /** What the stages are confined to, or `null` where the turn does not confine them. */
+  confinement?: { heading: string; directories: string[]; sentences: string[] } | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
@@ -802,7 +841,7 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
   'trust.request': { directory: string; keeping?: string | null }
-  'turn.started': { turn: number }
+  'turn.started': { turn: number; sandbox?: SandboxMode }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
@@ -833,10 +872,11 @@ export interface EventMap {
   'mcp-tools.request': McpToolsRequest
   'mcp-call.request': McpCallRequest
   'mcp-move.request': McpMoveRequest
+  'host.request': HostRequest
   /** Sent as a session's first turn starts the MCP servers its project requests. */
   'mcp.starting': { servers: string[] }
   'mcp.started': McpStarted
-  'manifest.started': { run: number }
+  'manifest.started': { run: number; sandbox?: SandboxMode }
   'manifest.done': ManifestDone
   'manifest.error': ManifestError
   'ask.request': AskRequest
@@ -864,17 +904,6 @@ export interface BridgeFailure {
 }
 
 // ---------------------------------------------------------------- reading tags
-
-/**
- * Whether content at this landing reached the planner.
- *
- * Anything unrecognised reads as *not* reaching it, which is the safe direction: calling
- * quarantined content "read by the model" understates the confinement, and calling
- * context "quarantined" merely overstates it.
- */
-export function reachedThePlanner(landing: Landing | string): boolean {
-  return landing === 'context'
-}
 
 /** Whether a tag names something the planner was kept away from. */
 export function isConfined(landing: Landing | string): boolean {

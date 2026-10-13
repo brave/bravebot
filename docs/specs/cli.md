@@ -4,12 +4,16 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs
   - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
+  - crates/agent/src/output_schema.rs
+  - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
 documented-by:
@@ -54,6 +58,13 @@ would say which effects may happen unwatched, and one line in a file in the home
 do what the flag is named and warned about for. A record of command lines somebody asked to be
 remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
 reason.
+
+A trust answer is not an allow rule, though both are kept in the home directory. It approves no
+effect: it says which files are the person's own, so the planner may read them, and it covers one
+directory the person answered about. A run therefore opens trusting its working directory when the
+person typed `--trust-workspace` or kept an answer that settles a session there
+([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
+answer. Writing stays refused without the flag above.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -128,6 +139,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 3 | `BB1003` | cannot use the configuration, so nothing ran |
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
+| 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -163,6 +175,7 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 
@@ -215,6 +228,10 @@ reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no ot
 `--agent` and `--system-prompt` are refused with it as with `doctor`. It ends on the failed status
 when a workflow failed, and on success when each worked or was skipped for a program that is not
 installed. It also checks that `gh` can read the login it holds in the real home, when it holds one.
+
+`bravebot doctor --push-identity [<host>/<owner>]` reports which GitHub account each of the person's
+ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
+that is not `<host>/<owner>` is refused with the status an argument error has.
 
 `verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
@@ -475,8 +492,9 @@ against one.
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. An absolute path that exists, is a directory, and is not already inside the
 working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map stays empty, so a file read there is read on the same footing as the project's own
-files: nothing vouched for it. A write there is refused as any other write in an unattended run is,
+run's trust map holds nothing for it, so a file read there is read on the same footing as the
+project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
+the working directory alone. A write there is refused as any other write in an unattended run is,
 and the flag in CLI-1 lifts that exactly as it does elsewhere.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
@@ -486,9 +504,9 @@ cannot be done at all.
 Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
 command of the same name records that a person vouched for the directory, which it can do because a
 person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer, its own working directory included, so a
-rule trusting the tree named on the command line would leave it more trusted than the tree the run
-works in. Reaching a directory is what the work needs; trusting what is in it is not.
+working in. A run nobody is watching holds no such answer unless the person gave one for its working
+directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
+line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further
@@ -522,7 +540,9 @@ The object takes the reply's place on stdout and nothing else goes there. Progre
 the trail stay on stderr, exactly as they are without the flag.
 
 It carries a schema number. Within one number a field may be added, and never removed, renamed or
-given a different meaning, so a caller reading the fields it knows keeps working.
+given a different meaning, so a caller reading the fields it knows keeps working. `structured`
+(CLI-28) is such a field: the reply as a JSON value when the run was given `--output-schema`, and
+`null` otherwise.
 
 **Why.** The prose reply is written for a person, and a program can recover almost nothing from it:
 which files changed, what the turn cost, which tools ran and why an effect was refused are either
@@ -1065,7 +1085,7 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `import-leo-creds`,
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
@@ -1082,7 +1102,7 @@ remove it.
 **Known costs.** `--append-system-prompt "$(cat notes.md)"` gives the file's bytes the authority of
 the person who typed the flag, whatever the file holds and whoever wrote it. Content that should not
 have that authority is passed as piped input (CLI-3), which is quarantined. There is no settings
-key, no slash command that takes words (`/style` picks a built-in one, [INSTR-12](instructions.md#INSTR-12)), no tool and no `--system-prompt-file`, so words a checkout always wants are
+key, no slash command that takes words (`/style` picks a built-in one or the person's own file, [INSTR-12](instructions.md#INSTR-12)), no tool and no `--system-prompt-file`, so words a checkout always wants are
 written in its `AGENTS.md`. `auth` is refused as well as the commands that read no words at all,
 because no part of `auth` would use them.
 
@@ -1103,7 +1123,7 @@ because no part of `auth` would use them.
 ### CLI-20: `completion <shell>` prints a completion script and does nothing else
 
 `bravebot completion bash`, `zsh` or `fish` writes a script to stdout that completes the
-subcommands, the words after `auth`, `mcp` and `completion`, and every flag in the usage table.
+subcommands, the words after `auth`, `mcp`, `permissions` and `completion`, and every flag in the usage table.
 Anything else completes as a file path. The script is the whole of stdout and stderr is empty:
 CLI-5 says stdout carries the reply, and for this command the script is the reply.
 
@@ -1363,7 +1383,7 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
@@ -1403,3 +1423,132 @@ the managed floor, not a partial read of it.
 `verified-by: bravebot_cli::running::a_locked_run_refuses_the_bypass_flag_and_a_background_start`
 `verified-by: bravebot_cli::running::a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out`
 `verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`
+
+<a id="CLI-28"></a>
+### CLI-28: `--output-schema` holds a one-shot run's reply to a JSON Schema the caller supplied
+
+`--output-schema <path>` is valid with a one-shot run and names a file holding a JSON Schema. The
+file is the person's, trusted as `--settings` is, and the planner never holds its path. The schema is
+sent with every request the run's own turn makes to the backend as its `response_format`
+(`json_schema`, named `reply`), since the request that produces the final reply cannot be told apart
+beforehand. When the turn finishes, the reply is read as one JSON value, with nothing around it, and
+held to the schema before anything is written.
+
+A reply that conforms is written as it always is (CLI-5), and with `--json` the same value is also in
+the result object's `structured` field (CLI-12), as JSON and not as a string. A reply that does not
+conform ends the run on status 6, `BB1006` (CLI-6): stdout carries nothing, `structured` is `null`,
+and the message names where the reply broke and which constraint, as a position the schema's own
+`properties` and an array index give. It never contains a key or value the reply wrote.
+
+The check covers `type`, `enum`, `const`, `properties`, `required`, `additionalProperties` as a
+boolean, `items` as one schema, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum` and
+`maximum`. A schema using any other keyword, or a covered one with a value it cannot take, is refused
+when it is loaded, with the status for an argument (CLI-6), because a constraint the run did not hold
+the reply to is the failure the flag exists to remove. `$schema`, `$id`, `title`, `description`,
+`default` and `examples` constrain nothing and are accepted.
+
+The flag is refused, with the status for an argument and before anything is sent, when no path
+follows it, when the file cannot be read or is not a usable schema, with `--mode manifest` (a reply per
+step and none for the run), and when the backend or model cannot honour a schema: Bedrock, and a
+roster row that states its supported parameters without `structured_outputs` or `response_format`. A
+row that states none is not refused, and the check after the turn is what holds there.
+
+**Why.** A script that consumes a reply as data is parsing English with a regular expression. Asking
+the service for the shape lowers how often the reply is wrong, and checking it is what makes a wrong
+one a status a caller can branch on rather than a parse error three steps later.
+
+The check is made on the finished text the driver already holds, and its answer reaches only an exit
+status and one field, so a reply written by an untrusted page cannot choose anything by being
+shaped one way or another. Its message is built from the schema's positions for the same reason.
+
+A subset checked in full beats a larger one checked partly. No JSON Schema crate is a dependency, and
+a regular-expression `pattern` would need one the dependency policy bans.
+
+`verified-by: bravebot_agent::output_schema::a_reply_that_matches_comes_back_as_one_line`
+`verified-by: bravebot_agent::output_schema::prose_is_not_a_value`
+`verified-by: bravebot_agent::output_schema::each_constraint_names_where_it_was_broken`
+`verified-by: bravebot_agent::output_schema::a_mismatch_never_carries_what_the_reply_spelt`
+`verified-by: bravebot_agent::output_schema::a_keyword_outside_the_subset_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::output_schema::a_delete_character_in_a_string_is_escaped_on_the_way_out`
+`verified-by: bravebot_agent::turn::an_output_schema_is_requested_with_the_planners_request`
+`verified-by: bravebot_agent::turn::without_an_output_schema_no_response_format_is_requested`
+`verified-by: bravebot_aichat::protocol::a_schema_is_sent_as_the_response_format_this_protocol_names`
+`verified-by: bravebot_tui::app::a_schema_is_refused_only_where_the_roster_states_parameters_without_it`
+`verified-by: bravebot_cli::main::an_output_schema_flag_naming_no_file_is_refused`
+`verified-by: bravebot_cli::json::a_structured_reply_is_a_value_and_not_a_string`
+`verified-by: bravebot_cli::running::a_reply_matching_the_output_schema_is_returned_as_a_value`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_writes_nothing_to_stdout`
+`verified-by: bravebot_cli::running::a_run_given_no_output_schema_has_a_null_structured_field`
+`verified-by: bravebot_cli::running::an_output_schema_that_cannot_be_honoured_is_refused_before_the_run`
+
+<a id="CLI-29"></a>
+### CLI-29: `update` says the command that updates this copy, and runs nothing
+
+`bravebot update` prints the command for the way this copy was installed: the npm package's line
+for one the npm launcher started, and the install script's own line for the binary that script
+recorded putting there. A copy neither of those put here, a build from source above all, is told
+there is no update command for it and that a build is updated by building again; that is a success
+rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
+after it is refused with the status for an argument (CLI-6).
+
+Nothing is fetched, so the command is the same whether or not a newer version has been published,
+and the output never names a version. The command is a literal per installation and no part of it
+comes from a file, an environment variable or a response.
+
+**Why.** How to update is a question with an answer the program already holds and the person does
+not: which of the two installers put this binary here is not something somebody can read off their
+own machine, and the two commands are not interchangeable. The npm line installs a package
+manager's copy, so sent to a script install it leaves the running binary untouched and a second one
+elsewhere; the script's line writes over the path the script recorded, so sent to a build from
+source it would replace a binary this program did not install.
+
+It prints rather than runs for the same reason the startup notice prints: replacing the running
+binary is an effect nobody approved by typing one word, and the line goes to a shell the person
+reads first. A copy nothing here installed gets no command rather than a guess, which is the rule
+the startup notice already follows by saying nothing to such a copy
+([LAYER-1](layering.md#LAYER-1) puts the facts both read in the configuration surface).
+
+`verified-by: bravebot_cli::running::update_says_the_command_for_the_way_this_copy_was_installed`
+`verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
+`verified-by: bravebot_cli::running::update_takes_no_argument`
+`verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
+
+<a id="CLI-30"></a>
+### CLI-30: `permissions check` reports which rule decides a call, and starts nothing
+
+`bravebot permissions check <Family> <what>` loads the `permissions` rules the way a session started in
+this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
+decides it as its file spelled it, and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
+`WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
+separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
+URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
+[PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
+no rule matches, the line says so and no rule is named, since the ordinary gates decide.
+
+It reads the rules and nothing else: nothing is opened, fetched or started, no server is
+contacted, and no file is written. The words are typed by the person and matched on routing alone
+([PERM-1](permissions.md#PERM-1)), so no content decides anything. The exit status is success for
+any call that names one; a command line that names none is refused with the status for an argument
+(CLI-6), says why on stderr and prints nothing on stdout.
+
+An `allow` rule a checkout wrote is not in force until the person grants it at the question
+[PERM-15](permissions.md#PERM-15) puts, so it is never named as the rule that decides. Where one
+would have allowed the call, a further line names it and the file that proposed it and says it is not
+in force; where the person granted it, the file line says it was granted for this workspace. It
+reports the rules of the `permissions` block only: the modes of [permission-modes.md](permission-modes.md),
+`readsStayInWorkspace` and `bypassUnreachable` ([PERM-16](permissions.md#PERM-16),
+[PERM-17](permissions.md#PERM-17)) are not consulted, and a manifest run reads no rule.
+
+**Why.** A person finds out whether a rule works by hitting the prompt or the refusal, and when two
+layers disagree the precedence is the thing they cannot see. Naming the file is what narrows a
+surprising answer to one place to edit, and naming a checkout's ungranted allow rule says why a rule
+that is written down is still asking.
+
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_the_one_the_order_picks`
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_named_for_a_host_and_for_a_tool`
+`verified-by: bravebot_config::settings::a_rule_is_traced_to_the_file_and_list_that_wrote_it`
+`verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
+`verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
+`verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`

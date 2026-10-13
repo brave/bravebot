@@ -11,6 +11,8 @@ repository.workspace = true
 # A pasted picture crosses the pipe as base64 and the agent takes its bytes.
 base64 = { workspace = true }
 bravebot-agent = { path = "../agent" }
+# One reading of a proposed write as plain lines, the one the command-line session shows.
+bravebot-approval = { path = "../approval" }
 # For `Message` and `Role`: cutting a conversation has to look at what a message *is*, and
 # `Snapshot::messages` is a `Vec<Message>` from this crate. Reading the type the agent already
 # hands us is not a widening of what this depends on.
@@ -32,4 +34,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# O_NONBLOCK and read(2) for the boundary test, whose value differs between Unixes.
+libc = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# pidfd_open(2) and pidfd_getfd(2), which the boundary test's attacker uses to try to copy a
+# descriptor out of the bridge. rustix rather than libc so the test needs no unsafe, as the agent
+# crate takes it for its own calls. It is already in Cargo.lock at this version.
+rustix = { workspace = true, features = ["process"] }

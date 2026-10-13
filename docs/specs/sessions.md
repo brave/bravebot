@@ -13,6 +13,7 @@ governs:
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/background.rs
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
@@ -298,6 +299,7 @@ here would make the session's own advice look broken to the person who followed 
 still refused, since a fork continues a conversation and there is none to continue.
 
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
+`verified-by: bravebot_cli::running::naming_a_manifest_run_prints_its_report_and_succeeds`
 `verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`
 
@@ -528,6 +530,7 @@ context already built up without polluting the original session. Refusing manife
 the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
+`verified-by: bravebot_session::sessions::a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail`
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>
@@ -543,8 +546,19 @@ conversation. Their display prompts, outcomes, and task lists are removed with t
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
 
+The prompt the session now stands before goes back into the composer, so it can be edited and sent
+again rather than retyped. It is the prompt of the earliest turn gone back past, read off the
+rewind point rather than off the display, since the display prompts of those turns are removed with
+them. It arrives as a prompt and not as a shell-mode command, and it arrives only into an empty
+composer: a line typed since the turn was sent is what the person is looking at, and the returning
+prompt written over it would cost them that line.
+
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+`verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
+`verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
+`verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
+`verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
@@ -1010,9 +1024,9 @@ go stale independently: one build ships both surfaces, and every build ships the
 ### SESSION-30: a stored session can be deleted, and nothing else goes with it
 
 The desktop app can delete a session from disk with `session.delete`, which takes the `directory`
-and `id` that `session.list` gave. It removes the record and the trail beside it, and nothing else:
-not another session in the same project, not a session in another project, and not anything a bot
-keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
+and `id` that `session.list` gave. It removes the record, the trail beside it and the index of what the session said
+([SESSION-33](#SESSION-33)), and nothing else: not another session in the same project, not a
+session in another project, and not anything a bot keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
 decides whether or what to delete.
 
 The id has to be shaped like a session's name, letters, digits, `-` and `_` in one path segment,
@@ -1043,6 +1057,7 @@ deleted an open session would have the next save write the record back.
 
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_record_and_trail_and_only_those`
 `verified-by: bravebot_session::sessions::deleting_in_one_project_leaves_another_projects_session_alone`
+`verified-by: bravebot_session::sessions::deleting_a_session_takes_what_the_search_index_kept_of_it`
 `verified-by: bravebot_session::sessions::a_manifest_run_can_be_deleted`
 `verified-by: bravebot_session::sessions::deleting_refuses_a_name_that_could_leave_the_directory_and_one_that_names_nothing`
 `verified-by: bravebot_session::sessions::deleting_does_not_follow_a_link_out_of_the_state_directory`
@@ -1187,6 +1202,16 @@ row. Control characters and the characters that reorder or hide text are removed
 they are from every line before it is compared. Enter resumes the session as it does for any row.
 The records are read the first time a character is typed, not when the picker opens.
 
+What a record says is kept in an index entry beside it, `<id>.search`, built from the lines above the
+first time the session is searched, so a session saved before the entry existed is found too. An
+entry holds only those lines, so it holds nothing a search does not cover. It is current when the
+record's size and modification time are the ones it was built from, and a current entry answers the
+search without the record being opened or parsed. Any other entry is rebuilt from the record, and so
+is one written by a build whose rules for the lines differed. An entry whose record is gone is
+removed. Nothing is kept where nothing may be written, as in an incognito session, and then the
+record is read as it was. A search with a `since:` word, or whose phrase a session's title already
+holds, does not look at the words of a session that settles it without them.
+
 `since:<n>h`, `since:<n>d` and `since:<n>w` are fixed words the driver parses, not text the model or
 a record can supply. They keep the sessions last written within that many hours, days or weeks, and
 the rest of what was typed is the text to find. Until the word is complete it is typed text.
@@ -1216,6 +1241,12 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
 `verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
 `verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
+`verified-by: bravebot_session::search::a_session_saved_before_the_index_is_found_and_indexed`
+`verified-by: bravebot_session::search::a_current_entry_answers_without_the_record_being_read`
+`verified-by: bravebot_session::search::a_record_written_since_is_read_again`
+`verified-by: bravebot_session::search::an_entry_built_by_another_rule_is_not_trusted`
+`verified-by: bravebot_session::search::a_session_nobody_asked_for_is_neither_read_nor_indexed`
+`verified-by: bravebot_session::search::the_index_holds_only_what_a_search_covers_and_goes_with_its_record`
 `verified-by: bravebot_tui::resume::typing_words_said_in_a_session_finds_it_and_enter_resumes_it`
 `verified-by: bravebot_tui::resume::a_session_whose_words_do_not_hold_the_phrase_is_left_out`
 `verified-by: bravebot_tui::resume::a_since_word_keeps_only_the_sessions_written_within_it`
@@ -1227,6 +1258,44 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_cli::session_search::a_title_or_a_line_said_matches_and_a_session_with_neither_does_not`
 `verified-by: bravebot_cli::session_search::a_row_is_the_id_and_a_title_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::running::sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it`
+
+<a id="SESSION-34"></a>
+### SESSION-34: `/handoff` starts a new session from a brief the person has read
+
+`/handoff <next goal>` has one request made from the planner's own context, with the goal on the end
+and no tools, as `/recap` is ([CMD-16](commands.md#CMD-16)). The conversation is not changed by it.
+The brief that comes back is cut to 4000 characters and put in the input box with a sentence the
+driver adds saying that the file decisions and permissions of this session did not come with it,
+and the goal. A line already in the box is kept as the draft Up brings back. The person reads and
+edits it. Enter then starts a new session, as `/clear` does, whose first prompt is what the box held
+then; Escape, or emptying the box, drops it, and a prompt typed afterwards is an ordinary prompt.
+The prompt is sent as a line the person typed, because they read and approved it.
+
+The new record holds the id of the session it came from, which the resume picker shows on the
+row; the source's record is not touched and is still resumable. Only the brief crosses. File
+decisions, standing permissions, the trust map, the directories opened and the quarantine are not
+carried, so the new session asks again as after `/clear`. The command is refused, with a line
+saying why and nothing requested, with no goal, and before a turn has ended, because there is no
+record to link back to. A brief is not offered where the exchange has met something untrusted
+([SESSION-20](#SESSION-20)): the planner could not have held it.
+
+**Why.** A long session is worth leaving for the next piece of work without carrying all of it
+([COMPACT](compaction.md)). Writing the brief from the planner's own context adds nothing the
+planner had not been shown, and the person's reading of it is what makes it a prompt. The permissions
+stay behind because they were given for work that the brief describes only in words.
+
+`verified-by: bravebot_agent::aside::a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange`
+`verified-by: bravebot_agent::aside::the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order`
+`verified-by: bravebot_tui::app::the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
+`verified-by: bravebot_tui::app::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
+`verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
+`verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
+`verified-by: bravebot_tui::resume::a_handed_off_session_names_its_source_on_its_row`
 
 ## Known costs
 
@@ -1317,3 +1386,12 @@ same reason: the driver may carry text it did not write but does not decide from
   something it is not.
 - **Only Claude Code is read.** opencode keeps its sessions in a database file and no reader for
   one is built.
+
+<a id="SESSION-35"></a>
+### SESSION-35: a process can keep its records in a directory of its own
+
+A process that owns its sessions, and must keep them apart from the ones a terminal or a window resumes, can be told once to keep every record it reads, lists or writes under a directory of its choosing, in place of the state directory's `sessions`. Only that directory moves. The per-project layout inside it, the modes, and degrading to nothing where there is no state directory or in an incognito session are unchanged. A second choice in the same process is refused, naming the root in force. [HOST-4](local-host.md#HOST-4) is the process that does this.
+
+`verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
+`verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
+`verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`

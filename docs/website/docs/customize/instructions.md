@@ -21,7 +21,7 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The eight sources
+## The ten sources
 
 | File | Applies to |
 |---|---|
@@ -33,8 +33,10 @@ planner can hand a sub-task to, see [Delegate definitions](agents.md).
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/<directory>/AGENTS.md` | this project, once a turn has worked in that directory |
+| `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once a turn has worked in that directory |
 
-And no others. There is **no search of parent directories** and no nested instructions file. A rule
+And no others. There is **no search of parent directories**. A rule
 that walked upwards would pick up instructions from whatever happened to be above a project on this
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
@@ -44,6 +46,17 @@ ordinary file, read only when something asks for it by name, or when the source 
 wins a name clash with either of the others. Skills you wrote for another agent work here without
 being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
 `~/.bravebot` is the one user directory tried.
+
+**A directory the session has worked in adds its own.** Once the planner has read a file in
+`packages/api/`, or written one, the `AGENTS.md` in `packages/api/` and in each directory above it
+down from the project root follows the project's, the deeper last so it wins, and so do the skills
+under `.bravebot/skills` there; a skill of the same name replaces the project's. The next turn
+picks it up, not the one that read the file. Each goes through the same trust check as the project's
+own file, and one that fails it is left out with a notice naming the file. A pointer or an `@path`
+import inside a nested file is not followed. Only `.bravebot/skills` is read below the root, not
+`.claude/skills` or `.agents/skills`. A directory is counted when a file is read or written in it,
+not when it is only listed or searched, and a session remembers up to 64 of them until `/cd` moves
+the project.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading
@@ -170,7 +183,8 @@ username on its own, no file contents, no directory listing.
 They are labelled as facts about the machine rather than as instructions. One of them asks something
 of the planner as well, and only because a probe found what the request names: the scratch directory
 is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
-is for is said too, just outside this block, and [below](#the-github-cli) is what it says.
+is for is said too, just outside this block, and [below](#the-github-cli) is what it says. So is
+[what to do about a missing Python module](#a-missing-python-module).
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
 ago that was. The rest is stated because discovering any of it otherwise costs a `run`, and a run
@@ -200,6 +214,22 @@ planner never told of it puts an intermediate file in the project instead. Reach
 A file there is read and written by its absolute path, but it prompts exactly when a file in the
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
+
+### A missing Python module
+
+Where the session has a scratch directory, the planner is also told what to do when a Python program
+fails because a module is missing, such as `tomllib` on a Python older than 3.11. It checks whether
+an installed package provides the same module under another name, with a command like
+`python3 -c 'import tomli'` whose exit status answers it. Where one does, it writes a module of the
+missing name that re-exports the package in a new directory inside the scratch directory, and runs
+the program again with `PYTHONPATH='<that directory>'` in front of it on that one command. The
+program, your machine and your settings are left as they were, and the module goes with the session.
+Where nothing installed provides it, the planner says which module is missing and what provides it.
+
+Only the new directory goes on `PYTHONPATH`, because Python imports from a directory there ahead of
+its standard library, and the scratch directory may hold other files the session put there. You
+approve each of these commands as you would any other. A session with no scratch directory is not
+told any of this, and neither is a delegate.
 
 ### The GitHub CLI
 

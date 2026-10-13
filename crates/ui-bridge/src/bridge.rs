@@ -12,20 +12,22 @@
 //! store one: `session.list` returns the durable `(directory, id)`, and opening converts
 //! that into a handle again.
 
+use crate::answerers::Answerers;
 use crate::emit::{Emitter, Listener};
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
-use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
+use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
-use bravebot_agent::{Confining, PermissionMode, Workspace};
+use bravebot_agent::{Confining, LiveMode, PermissionMode, Workspace};
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
 use bravebot_net::Egress;
+use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::{Handle, Record, Standing};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -68,7 +70,38 @@ struct Open {
     ///
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
-    permission_mode: PermissionMode,
+    permission_mode: LiveMode,
+    /// The sandbox mode the window chose for this session's programs, or `None` while it has not
+    /// chosen and the settings decide. Like the permission mode it is never read from a record
+    /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
+    /// and copied into it, so a choice applies from the next turn.
+    sandbox: Option<SandboxMode>,
+}
+
+impl Open {
+    /// A session as it opens, with no turn in flight. The trust answer and the record that would
+    /// keep one are required, since a default either way answers for somebody who was never asked.
+    fn opened(
+        project: PathBuf,
+        state: State,
+        answered_trust: bool,
+        keeping: Option<(trusted::Store, trusted::Identity)>,
+        auto_vetting: bool,
+    ) -> Self {
+        Self {
+            project,
+            state: Arc::new(Mutex::new(state)),
+            answered_trust,
+            keeping,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting,
+            definition: None,
+            permission_mode: LiveMode::default(),
+            sandbox: None,
+        }
+    }
 }
 
 /// Drives the agent for a front-end.
@@ -77,6 +110,14 @@ pub struct Bridge {
     next_handle: u64,
     settings: Option<PathBuf>,
     emitter: Emitter,
+    /// The worker threads each open session has started, so a close can say when they have ended.
+    workers: HashMap<String, Arc<crate::workers::Workers>>,
+    /// Who can answer each session's questions. A session with no entry is answered by anyone,
+    /// as every client of the stdio transports does.
+    answerers: HashMap<String, Answerers>,
+    /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
+    /// make answerable is not.
+    refuse_until_set: bool,
 }
 
 impl Bridge {
@@ -86,7 +127,17 @@ impl Bridge {
             next_handle: 0,
             settings: None,
             emitter: Emitter::new(emit),
+            workers: HashMap::new(),
+            answerers: HashMap::new(),
+            refuse_until_set: false,
         }
+    }
+
+    /// Refuse every question of a session until [`Bridge::set_answerable`] or
+    /// [`Bridge::attach_view`] says who can answer it.
+    pub fn refusing_questions_until_set(mut self) -> Self {
+        self.refuse_until_set = true;
+        self
     }
 
     /// Preserve the selected path even if it disappeared: future requests must fail rather
@@ -137,6 +188,7 @@ impl Bridge {
             "session.delete" => self.delete_session(request),
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
+            "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "turn.send" => self.send_turn(request),
             "mentions.offer" => {
@@ -145,11 +197,16 @@ impl Bridge {
                     .get(&request.string("session")?)
                     .ok_or_else(Failure::no_such_session)?;
                 let cursor = request.param("cursor").as_u64().unwrap_or(0);
-                Ok(crate::mentions::offer(
+                crate::mentions::offer(
                     &open.project,
                     &request.string("line")?,
                     usize::try_from(cursor).unwrap_or(usize::MAX),
-                ))
+                    || {
+                        let settings =
+                            crate::settings::layers(Some(&open.project), self.settings.as_deref());
+                        Ok(session_workspace(open, &settings)?.reference_sources())
+                    },
+                )
             }
             "mentions.named" => {
                 let open = self
@@ -182,6 +239,7 @@ impl Bridge {
             "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "exposure.reply" => self.reply_decision(request, Reply::Exposure),
+            "host.reply" => self.reply_decision(request, Reply::Host),
             "mcp-server.reply" => self.deliver(
                 request,
                 Reply::McpServer(wire::start_answer(
@@ -312,18 +370,13 @@ impl Bridge {
         let state = State::resumed(&directory, &record, opening.trust);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            state,
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        ));
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
 
@@ -465,6 +518,7 @@ impl Bridge {
             ),
             "autoVetting": auto_vetting,
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(directory, None)),
         })
     }
 
@@ -508,18 +562,13 @@ impl Bridge {
         // then, so it is never the map a turn uses.
         let opening = Opening::of(&directory, None);
         let reported = opening.json();
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(State::fresh(opening.trust))),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            State::fresh(opening.trust),
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        ));
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -535,6 +584,7 @@ impl Bridge {
             "autoVetting": auto_vetting,
             "scratch": self.scratch_report(&handle),
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -653,9 +703,9 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::forked(
+        let child = self.mint(Open::opened(
+            project.clone(),
+            State::forked(
                 begun,
                 cut.before,
                 opening.trust,
@@ -664,21 +714,15 @@ impl Bridge {
                 ordinal,
                 todos.clone(),
                 first_prompt,
-            ))),
+            ),
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+            opening.answered,
+            opening.keeping,
             // The parent's, not read again: the child's transcript is the parent's up to the cut,
             // and the notice at its top says what the parent opened under.
             auto_vetting,
-            definition: None,
-            // Not the parent's. A fork is a session opened again, and opens asking as one does.
-            permission_mode: PermissionMode::Ask,
-        });
+        ));
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
@@ -704,6 +748,7 @@ impl Bridge {
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&project, None)),
             "settingsRules": settings_rules,
             "scratch": self.scratch_report(&child),
             "parent": {
@@ -791,13 +836,119 @@ impl Bridge {
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
-        let handle = request.string("session")?;
+        self.close(&request.string("session")?)?;
+        Ok(json!({}))
+    }
+
+    /// Close every open session and return the workers each one still has running.
+    pub fn stop_all(&mut self) -> Vec<Arc<crate::workers::Workers>> {
+        let handles: Vec<String> = self.open.keys().cloned().collect();
+        handles
+            .iter()
+            .filter_map(|handle| self.close(handle).ok())
+            .collect()
+    }
+
+    /// Say which kinds of question the session's controller can answer from now on. A question of
+    /// another kind is refused when it is asked, without being shown; one already waiting is not
+    /// touched. An empty list is nobody.
+    pub fn set_answerable(&mut self, handle: &str, kinds: &[Kind]) -> Result<(), Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        self.answerers_of(handle).only(kinds)
+    }
+
+    /// The session's controller is gone. Nobody can answer from now on, and the question waiting
+    /// is refused and shown as resolved. The turn or run goes on without it: what it asks next is
+    /// refused when asked. Nothing happens to a session with no question waiting.
+    pub fn lose_control(&mut self, handle: &str) {
+        if !self.open.contains_key(handle) {
+            return;
+        }
+        // First, so that a question asked from here on is refused and one asked just before this
+        // is registered where the refusal below finds it.
+        // Where the set cannot be written no question is answerable either, so a failure is the
+        // same refusal.
+        let _ = self.answerers_of(handle).nobody();
+        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
+            running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
+        }
+    }
+
+    /// Give a session's view to a client that is taking it over.
+    ///
+    /// `hand_over` switches where the session's events go, and runs between the end of what the
+    /// previous client was sent and the start of what the new one is. The client is sent the
+    /// session's current state as `session.view.snapshot`, with the startup question again if it
+    /// is still unanswered, and is then able to answer the `kinds` named. The session must have
+    /// started a view.
+    pub fn attach_view(
+        &mut self,
+        handle: &str,
+        kinds: &[Kind],
+        hand_over: impl FnOnce() -> Result<(), Failure>,
+    ) -> Result<Value, Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        let answerers = self.answerers_of(handle);
+        let sequence = self.emitter.resume_view(handle, || {
+            // Who can answer is set first, so a failure to set it leaves the previous controller
+            // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
+            // set here, since no client has the session.
+            answerers.only(kinds)?;
+            if let Err(failed) = hand_over() {
+                let _ = answerers.nobody();
+                return Err(failed);
+            }
+            Ok(())
+        })?;
+        self.ask_about_trust(handle);
+        Ok(json!({"version": 1, "sequence": sequence, "history": "omitted"}))
+    }
+
+    /// Whether a thread is still working for the session: a turn or a run that has not yet
+    /// returned, saving included.
+    pub fn is_working(&self, handle: &str) -> bool {
+        self.workers
+            .get(handle)
+            .is_some_and(|workers| !workers.is_idle())
+    }
+
+    fn answerers_of(&mut self, handle: &str) -> Answerers {
+        let refuse = self.refuse_until_set;
+        self.answerers
+            .entry(handle.to_string())
+            .or_insert_with(|| {
+                if refuse {
+                    Answerers::none()
+                } else {
+                    Answerers::default()
+                }
+            })
+            .clone()
+    }
+
+    /// The workers a session has started, which a close waits on.
+    fn workers_of(&mut self, handle: &str) -> Arc<crate::workers::Workers> {
+        Arc::clone(self.workers.entry(handle.to_string()).or_default())
+    }
+
+    /// Close a session: stop its work and refuse what that work waits on.
+    ///
+    /// Returns once the work has been told, not once it has stopped. The returned workers say when
+    /// the session's threads have ended, which is when it is closed: until then a turn can still
+    /// save its record.
+    pub fn close(&mut self, handle: &str) -> Result<Arc<crate::workers::Workers>, Failure> {
+        let handle = handle.to_string();
         let open = self
             .open
             .remove(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
         self.emitter.detach_view(&handle);
+        self.answerers.remove(&handle);
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -806,13 +957,13 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
-        Ok(json!({}))
+        Ok(self.workers.remove(&handle).unwrap_or_default())
     }
 
     /// Choose what the session's next turn asks before it acts.
     ///
-    /// Accepted while a turn runs, and it changes nothing about that turn: the turn read its mode
-    /// when it was accepted and keeps it (MODE-8). A write already on screen keeps its question.
+    /// Accepted while a turn runs, and the turn follows it from its next decision: it holds this
+    /// session's own handle on the mode (MODE-8). A write already on screen keeps its question.
     fn set_permission_mode(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let mode = wire::permission_mode(request.param("mode"))?;
@@ -820,8 +971,46 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        open.permission_mode = mode;
+        open.permission_mode.set(mode);
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
+    }
+
+    /// Choose the sandbox mode the session's next turn runs its programs under.
+    ///
+    /// `strict` or `standard`: a window has no way to show that nothing confines a program, so
+    /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
+    /// is read again when the turn starts. A turn already running keeps the mode it began with.
+    fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
+        self.set_sandbox_mode_under(request, &bravebot_config::Managed::load())
+    }
+
+    /// As [`Bridge::set_sandbox_mode`], under the managed layer `managed`, so a test can pin one.
+    fn set_sandbox_mode_under(
+        &mut self,
+        request: &Request,
+        managed: &bravebot_config::Managed,
+    ) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let mode = wire::sandbox_mode(request.param("mode"))?;
+        if let Err(refused) = bravebot_config::sandbox::allowed_in_session(mode, managed) {
+            return Err(Failure::bad_request(wire::sandbox_refusal(&refused)));
+        }
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.sandbox = Some(mode);
+        Ok(json!({ "sandboxMode": wire::sandbox_mode_name(mode) }))
+    }
+
+    /// The sandbox mode a turn in `project` runs under now.
+    fn sandbox_mode_in(&self, project: &Path, chosen: Option<SandboxMode>) -> SandboxMode {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_config::sandbox::for_a_window_choosing(
+            chosen,
+            &settings,
+            &bravebot_config::Managed::load(),
+        )
     }
 
     // ------------------------------------------------------------ turns
@@ -944,14 +1133,17 @@ impl Bridge {
         }
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
+        let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
-        let sandbox =
-            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
-        // Read once, here, and carried to the worker: the mode the planner is told and the mode its
-        // prompts are answered in are then the same one, whatever the window chooses while the turn
-        // runs (MODE-8).
-        let permission_mode = open.permission_mode;
+        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
+            open.sandbox,
+            &settings,
+            &bravebot_config::Managed::load(),
+        );
+        // The session's own handle, carried to the worker: the planner, the tools and the prompts all
+        // read what the window chose last, including a choice made while the turn runs (MODE-8).
+        let permission_mode = open.permission_mode.clone();
         // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
         // on every turn and used by the first, which is the one that starts them.
         let mcp_requested: Vec<(PathBuf, String)> = settings
@@ -981,6 +1173,7 @@ impl Bridge {
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
+        let answerers = self.answerers_of(&handle);
 
         let worker_model = model.clone();
 
@@ -995,7 +1188,8 @@ impl Bridge {
             &handle,
             json!({
                 "turn": turn_number,
-                "mode": wire::permission_mode_name(permission_mode),
+                "mode": wire::permission_mode_name(permission_mode.get()),
+                "sandbox": wire::sandbox_mode_name(sandbox),
             }),
         ));
 
@@ -1004,7 +1198,7 @@ impl Bridge {
             open.model = model;
             open.definition = addressing.clone();
         }
-        thread::spawn(move || {
+        self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
                 addressing,
@@ -1016,6 +1210,7 @@ impl Bridge {
                 config,
                 attribution,
                 output_cap,
+                download_cap,
                 deadlines,
                 auto_vetting,
                 sandbox,
@@ -1032,6 +1227,7 @@ impl Bridge {
                 turn: turn_number,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -1106,10 +1302,13 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
-        let sandbox =
-            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
-        // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
-        let permission_mode = open.permission_mode;
+        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
+            open.sandbox,
+            &settings,
+            &bravebot_config::Managed::load(),
+        );
+        // The session's own handle, as a turn holds it (MODE-8).
+        let permission_mode = open.permission_mode.clone();
         let workspace = session_workspace(open, &settings)?;
 
         let project = open.project.clone();
@@ -1141,7 +1340,11 @@ impl Bridge {
         self.emitter.send(Event::new(
             "manifest.started",
             &handle,
-            json!({ "run": run, "mode": wire::permission_mode_name(permission_mode) }),
+            json!({
+                "run": run,
+                "mode": wire::permission_mode_name(permission_mode.get()),
+                "sandbox": wire::sandbox_mode_name(sandbox),
+            }),
         ));
 
         if let Some(open) = self.open.get_mut(&handle) {
@@ -1150,7 +1353,8 @@ impl Bridge {
         }
         let emitter = self.emitter.clone();
         let session = handle.clone();
-        thread::spawn(move || {
+        let answerers = self.answerers_of(&handle);
+        self.workers_of(&handle).spawn(move || {
             crate::manifest::walk(crate::manifest::Walk {
                 emitter,
                 session,
@@ -1168,6 +1372,7 @@ impl Bridge {
                 run,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -1928,6 +2133,9 @@ struct Work {
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
+    /// What the settings say one `download_url` call this turn makes may write to a file, where they
+    /// said anything (DOWNLOAD-4). Read where the cap above was and carried the same way.
+    download_cap: Option<usize>,
     /// How long a command this turn runs may take, and the most one call may ask for (RUN-23). Read
     /// where the cap was and carried the same way.
     deadlines: bravebot_agent::exec::Deadlines,
@@ -1935,8 +2143,8 @@ struct Work {
     auto_vetting: bool,
     /// How far the programs this turn runs may reach, from the settings and the managed file.
     sandbox: bravebot_sandbox::SandboxMode,
-    /// The session's as it stood when the turn was accepted.
-    permission_mode: PermissionMode,
+    /// The session's own handle, so a change made while the turn runs reaches it.
+    permission_mode: LiveMode,
     /// Each MCP server the settings request, with the file that requested it.
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
@@ -1959,6 +2167,7 @@ struct Work {
     turn: usize,
     cancel: Cancel,
     pending: crate::turn::Pending,
+    answerers: Answerers,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -2044,6 +2253,7 @@ fn work(work: Work) {
         config,
         attribution,
         output_cap,
+        download_cap,
         deadlines,
         auto_vetting,
         sandbox,
@@ -2063,6 +2273,7 @@ fn work(work: Work) {
         turn,
         cancel,
         pending,
+        answerers,
         answers,
         finished,
     } = work;
@@ -2083,7 +2294,8 @@ fn work(work: Work) {
         answers,
         Arc::clone(&state.question_ids),
         cancel.clone(),
-    );
+    )
+    .answerable_by(answerers);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -2119,11 +2331,12 @@ fn work(work: Work) {
         .with_model(model)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
+        .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)
         .with_auto_vetting(auto_vetting)
-        .with_permission_mode(permission_mode)
+        .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).
         .with_permissions(state.rules.permissions.clone())
         .with_mcp(mcp)
@@ -2772,18 +2985,7 @@ mod coverage_tests {
         let workspace = Workspace::new(&directory).unwrap();
         open_rewind_point(&mut state, &workspace, "list the files");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
         let call = |bridge: &mut Bridge, method: &str, params: Value| {
             let line = json!({"id": 1, "method": method, "params": params}).to_string();
             bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
@@ -2864,22 +3066,13 @@ mod coverage_tests {
         }))
         .unwrap();
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let parent = bridge.mint(Open {
-            project: root.to_path_buf(),
-            state: Arc::new(Mutex::new(State::resumed(
-                root,
-                &record,
-                TrustStore::new(root),
-            ))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)),
+            true,
+            None,
+            false,
+        ));
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
                 "session": parent, "prompt": 0, "text": "work"
@@ -2951,18 +3144,7 @@ mod permissions_tests {
         let mut state = State::fresh(TrustStore::new("/work"));
         state.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
                 "session": handle, "kind": "command", "command": {
@@ -2992,18 +3174,13 @@ mod permissions_tests {
         trust.distrust("vendor");
         trust.undecide("vendor/ours");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(State::fresh(trust))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
-        });
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(trust),
+            true,
+            None,
+            false,
+        ));
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
                 .to_string(),
@@ -3029,6 +3206,55 @@ mod permissions_tests {
             ErrorCode::BadRequest
         );
         assert_eq!(bridge.dispatch(&list).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    /// SANDBOX-22: a managed `strict` pin is a floor a window cannot choose under. `strict` is
+    /// accepted, `standard` is a bad request, and the session keeps `strict`. The failure this
+    /// rejects is a window's choice that the managed file does not bind.
+    #[test]
+    fn a_managed_strict_pin_refuses_a_window_choosing_standard() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("managed.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).unwrap();
+        let managed = bravebot_config::Managed::at(&file);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(TrustStore::new("/work")),
+            true,
+            None,
+            false,
+        ));
+        let choose = |mode: &str| {
+            Request::parse(
+                &json!({"id": 1, "method": "session.sandbox", "params": {
+                    "session": handle, "mode": mode
+                }})
+                .to_string(),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            bridge
+                .set_sandbox_mode_under(&choose("strict"), &managed)
+                .unwrap(),
+            json!({"sandboxMode": "strict"})
+        );
+        let refused = bridge
+            .set_sandbox_mode_under(&choose("standard"), &managed)
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
+        assert_eq!(
+            bridge.open[&handle].sandbox,
+            Some(SandboxMode::Strict),
+            "the refused choice was kept"
+        );
     }
 }
 
@@ -3068,16 +3294,14 @@ mod watch_tests {
             .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let handle = bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         std::fs::write(
             root.join("watched"),
@@ -3131,16 +3355,14 @@ mod watch_tests {
             )
             .unwrap();
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::new(Mutex::new(watches)),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         change(&root);
         bridge.poll_watches_at(now + Duration::from_secs(6));
@@ -3218,16 +3440,15 @@ mod watch_tests {
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
-            answered_trust: true,
-            keeping: None,
             running: Some(running),
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
+            ..Open::opened(
+                project.clone(),
+                State::fresh(TrustStore::new(&project)),
+                true,
+                None,
+                false,
+            )
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -3269,16 +3490,14 @@ mod watch_tests {
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: PermissionMode::Ask,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());
@@ -3291,9 +3510,17 @@ mod watch_tests {
 mod completion_tests;
 
 #[cfg(test)]
+#[path = "closing_tests.rs"]
+mod closing_tests;
+
+#[cfg(test)]
 #[path = "targets_tests.rs"]
 mod targets_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]
 mod retention_tests;
+
+#[cfg(test)]
+#[path = "control_tests.rs"]
+mod control_tests;

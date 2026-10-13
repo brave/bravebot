@@ -3,7 +3,7 @@
 //! Process plumbing and nothing else. Every decision about whether a pipeline may run at all is
 //! taken before anything here is called: the capability, the person's approval, and the label the
 //! output will carry all belong to [`bravebot_core::policy::Policy`]. This module is what happens after
-//! those said yes, so it takes a [`Pipeline`] of plain strings and reports what came back.
+//! those said yes, so it takes a [`bravebot_core::Pipeline`] of plain strings and reports what came back.
 //!
 //! # No shell, at any point
 //!
@@ -20,7 +20,7 @@
 //! # What runs is what was resolved
 //!
 //! Each stage is spawned by the absolute path its name was found by, not by the name in the
-//! [`Pipeline`]. The name was looked up once, before the person was asked; spawning by name here
+//! [`bravebot_core::Pipeline`]. The name was looked up once, before the person was asked; spawning by name here
 //! would look it up a second time, leaving a window in which `$PATH` changed and something other
 //! than what they approved ran. Before a pipeline starts, each path is followed again, and the
 //! pipeline is refused if a step no longer reaches the file that was approved. See
@@ -41,7 +41,7 @@
 //! indication of why.
 //!
 //! Where a caller supplies bytes for it, they are the ones the policy layer resolved out of a
-//! quarantined reference and nothing else ([`run_plan`]'s `stdin`). This module writes them to the
+//! quarantined reference and nothing else ([`run_plan_observed`]'s `stdin`). This module writes them to the
 //! first step's descriptor on a thread of its own and never looks at them: they are carried into a
 //! process exactly as an argument vector is, and no branch here reads a byte of them.
 //!
@@ -57,7 +57,6 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use crate::confine::Confinement;
-use bravebot_core::Pipeline;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
@@ -325,76 +324,23 @@ impl fmt::Display for ExecError {
 
 impl std::error::Error for ExecError {}
 
-/// Run a pipeline in `directory`, and collect what it printed.
+/// Run a compiled command line and collect what it printed, with notification immediately before
+/// each destination may be opened for writing.
+///
+/// Every part of the plan shares one deadline, because the limit is on the line rather than on
+/// any one program in it, and a part reached after the time ran out is not started.
+///
+/// The notification is the whole of what a caller learns about the files a line writes. Nothing
+/// is collected afterwards: a list handed back once the line has finished cannot order a read
+/// against a write that already happened, which is what [`FileCapture::begin`] is for.
 ///
 /// `cancel` is checked while waiting, so a user who changes their mind does not have to wait out a
 /// slow program. Unlike cancellation between rounds, this one kills: a child already running is an
 /// effect in progress, and the request to stop is precisely a request to end it.
 ///
-/// `scratch` is the directory this session was given, which every stage is told the path of. A
-/// caller that has none passes nothing, and then no stage is told of one: a name set to a
-/// directory that does not exist would be worse than an absent name, which a line can test for.
-pub fn run(
-    pipeline: &Pipeline,
-    resolved: &[std::path::PathBuf],
-    directory: &std::path::Path,
-    cancel: &Cancel,
-    scratch: Option<&std::path::Path>,
-) -> Result<Ran, ExecError> {
-    run_within(pipeline, resolved, directory, cancel, LIMIT, scratch)
-}
-
-/// [`run`], with the limit named rather than taken from [`LIMIT`].
-///
-/// Exists so the stopping behaviour can be tested: a test that had to wait out the real limit to
-/// see what a killed pipeline returns would take five minutes, and one nobody runs proves nothing.
-/// A `run` call names its own deadline between [`FLOOR`] and [`CEILING`], so the limit in force is
-/// the one passed here and [`LIMIT`] is the default a call that named none falls back to.
-pub fn run_within(
-    pipeline: &Pipeline,
-    resolved: &[std::path::PathBuf],
-    directory: &std::path::Path,
-    cancel: &Cancel,
-    limit: Duration,
-    scratch: Option<&std::path::Path>,
-) -> Result<Ran, ExecError> {
-    if pipeline.is_empty() {
-        return Err(ExecError::Io("no stages to run".to_string()));
-    }
-    if resolved.len() != pipeline.len() {
-        return Err(ExecError::Io(
-            "every stage must have been resolved to a program before it runs".to_string(),
-        ));
-    }
-    let steps: Vec<Step> = pipeline
-        .stages
-        .iter()
-        .zip(resolved)
-        .map(|(stage, path)| Step {
-            program: stage.program.clone(),
-            resolved: path.clone(),
-            started_as: path.clone(),
-            args: stage.args.clone(),
-            environment: Vec::new(),
-            routes: Vec::new(),
-        })
-        .collect();
-    // A pipeline carries no redirections, so there is no destination for it to enter an effect on,
-    // and nothing to feed in: a [`Pipeline`] carries the label of what would be fed to its first
-    // stage and never the bytes, so there are none here to hand over.
-    Running::new(directory, cancel, limit, scratch, None).finish(&Steps::Pipeline(steps))
-}
-
-/// Run a compiled command line and collect what it printed.
-///
-/// Every part of the plan shares one deadline, because the limit is on the line rather than on
-/// any one program in it, and a part reached after the time ran out is not started.
-///
-/// Reports nothing about the files it wrote. A caller that has to decide what the trust map
-/// records passes [`run_plan_observed`] a notification instead, which arrives before each
-/// destination may be opened rather than after the line has finished.
-///
-/// `scratch` is the session's own directory, told to every part of the line as in [`run`].
+/// `scratch` is the directory this session was given, which every part of the line is told the
+/// path of. A caller that has none passes nothing, and then no part is told of one: a name set to
+/// a directory that does not exist would be worse than an absent name, which a line can test for.
 ///
 /// `stdin` is the bytes the policy layer resolved out of a quarantined reference, for the first
 /// step of the line and no other, and [`Plan::stdin`] is the label they carry. They are written to
@@ -403,24 +349,8 @@ pub fn run_within(
 /// only carries them. `None` where the call named no reference, and then the first step is given
 /// an empty stdin exactly as it was before.
 ///
-/// [RUN-3]: ../../../docs/specs/tools/run.md
-pub fn run_plan(
-    plan: &Plan,
-    cancel: &Cancel,
-    limit: Duration,
-    scratch: Option<&std::path::Path>,
-    stdin: Option<&str>,
-) -> Result<Ran, ExecError> {
-    Running::new(&plan.directory, cancel, limit, scratch, stdin).finish(&plan.steps)
-}
-
-/// Run with notification immediately before each destination may be opened for writing.
-///
-/// The notification is the whole of what a caller learns about the files a line writes. Nothing
-/// is collected afterwards: a list handed back once the line has finished cannot order a read
-/// against a write that already happened, which is what [`FileCapture::begin`] is for.
-///
 /// [`FileCapture::begin`]: bravebot_core::file_authority::FileCapture::begin
+/// [RUN-3]: ../../../docs/specs/tools/run.md
 pub fn run_plan_observed(
     plan: &Plan,
     cancel: &Cancel,
@@ -439,7 +369,7 @@ pub fn run_plan_observed(
 /// How a run that could be moved to the background came back.
 #[derive(Debug)]
 pub enum Waited {
-    /// It was waited for to the end, as [`run_plan`] waits.
+    /// It was waited for to the end, as [`run_plan_observed`] waits.
     Ran(Ran),
     /// A person asked for it to go on running, and it is still running.
     Moved(Moved),
@@ -454,10 +384,10 @@ pub struct Moved {
     pub after: Duration,
 }
 
-/// [`run_plan`], for a line a person may ask to go on running in the background.
+/// [`run_plan_observed`], for a line a person may ask to go on running in the background.
 ///
 /// Only a line [`Steps::unrouted_pipeline`] accepts reads `handoff`, because that is the one shape a
-/// job can hold. Any other line runs exactly as [`run_plan`] runs it and a request on the token does
+/// job can hold. Any other line runs exactly as [`run_plan_observed`] runs it and a request on the token does
 /// nothing to it.
 ///
 /// The token is read on every pass of the wait, after the cancellation token. A pass that finds
@@ -760,7 +690,8 @@ impl<'a> Running<'a> {
                 ),
                 _ => {
                     let (reader, writer) =
-                        std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+                        bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+                            .map_err(|e| ExecError::Io(e.to_string()))?;
                     (Handle::from(writer), Some(reader))
                 }
             };
@@ -907,7 +838,8 @@ fn destination(
         }
         Where::Discard => Ok((nowhere()?, None, Some(nowhere()?))),
         _ => {
-            let (reader, writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+            let (reader, writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+                .map_err(|e| ExecError::Io(e.to_string()))?;
             let duplicate = writer.try_clone().ok().map(Handle::from);
             Ok((Handle::from(writer), Some(reader), duplicate))
         }
@@ -992,8 +924,7 @@ fn launch(
                 .stdin(Stdio::from(stdin))
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
-            command
-                .spawn()
+            bravebot_sandbox::process::starting_a_program(|| command.spawn())
                 .map(Process::Plain)
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
@@ -1062,7 +993,8 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
 /// the program doing what it was asked to do rather than a failure of the run, and a run that
 /// reported it would report one for every line that filters.
 fn feed(bytes: &str) -> Result<Handle, ExecError> {
-    let (reader, mut writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+    let (reader, mut writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+        .map_err(|e| ExecError::Io(e.to_string()))?;
     let bytes = bytes.as_bytes().to_vec();
     std::thread::spawn(move || {
         let _ = writer.write_all(&bytes);
@@ -1237,7 +1169,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
 /// later, so the turn that started one could never talk to it.
 ///
 /// What is deferred is only the waiting. The argv was resolved and endorsed before anything
-/// started, exactly as for [`run`], and the label its output carries was fixed then too: a
+/// started, exactly as for [`run_plan_observed`], and the label its output carries was fixed then too: a
 /// pipeline is not made more trustworthy by being left alone. Nothing here reads a byte of what it
 /// printed.
 ///
@@ -1452,42 +1384,9 @@ impl fmt::Debug for Background {
     }
 }
 
-/// Start a pipeline and leave it running.
-///
-/// The same spawning as [`run`], stopping before the wait. Every step is started, chained the same
-/// way, and given the same scrubbed environment and empty stdin; what differs is that nothing
-/// waits for them.
-pub fn start(
-    pipeline: &Pipeline,
-    resolved: &[std::path::PathBuf],
-    directory: &std::path::Path,
-    scratch: Option<&std::path::Path>,
-) -> Result<Background, ExecError> {
-    if pipeline.is_empty() {
-        return Err(ExecError::Io("no stages to run".to_string()));
-    }
-    if resolved.len() != pipeline.len() {
-        return Err(ExecError::Io(
-            "every stage must have been resolved to a program before it runs".to_string(),
-        ));
-    }
-    let steps: Vec<Step> = pipeline
-        .stages
-        .iter()
-        .zip(resolved)
-        .map(|(stage, path)| Step {
-            program: stage.program.clone(),
-            resolved: path.clone(),
-            started_as: path.clone(),
-            args: stage.args.clone(),
-            environment: Vec::new(),
-            routes: Vec::new(),
-        })
-        .collect();
-    start_steps(&steps, directory, scratch, None)
-}
-
-/// [`start`], for the steps of a compiled plan.
+/// Start the steps of a compiled plan and leave them running. Every step is started, chained the
+/// same way, and given the same scrubbed environment and empty stdin as in the foreground; what
+/// differs is that nothing waits for them.
 ///
 /// A plan's redirections and joins are not honoured here: a background job is one pipeline, which
 /// is what [`crate::tools`] refuses anything else for. Every step's own environment is applied, as
@@ -1543,8 +1442,10 @@ pub fn start_steps(
             }
         };
 
-        let (out_reader, out_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
-        let (err_reader, err_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+        let (out_reader, out_writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+            .map_err(|e| ExecError::Io(e.to_string()))?;
+        let (err_reader, err_writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+            .map_err(|e| ExecError::Io(e.to_string()))?;
 
         let child = match from_upstream(&mut upstream).and_then(|reading_from| {
             launch(

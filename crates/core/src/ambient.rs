@@ -71,6 +71,18 @@ impl Authority {
             Self::MetadataService => "metadata-service",
         }
     }
+
+    /// The authority a [`Authority::name`] names, for a front end that was sent the name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::ContainerDaemon,
+            Self::LoggedInTool,
+            Self::AgentSocket,
+            Self::MetadataService,
+        ]
+        .into_iter()
+        .find(|authority| authority.name() == name)
+    }
 }
 
 /// One authority something reaches, and the word that named it.
@@ -491,6 +503,19 @@ mod tests {
     use super::*;
     use crate::command::{Route, Step, Steps};
     use std::path::PathBuf;
+
+    #[test]
+    fn every_authority_is_read_back_from_its_name_and_no_other_name_is() {
+        for authority in [
+            Authority::ContainerDaemon,
+            Authority::LoggedInTool,
+            Authority::AgentSocket,
+            Authority::MetadataService,
+        ] {
+            assert_eq!(Authority::from_name(authority.name()), Some(authority));
+        }
+        assert_eq!(Authority::from_name("docker"), None);
+    }
 
     fn plan(steps: Vec<Step>) -> Plan {
         Plan {

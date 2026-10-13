@@ -25,8 +25,8 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
-| Up / Down | walk back through prompts you have sent, starting with a line you cleared |
-| Ctrl-N | on a prompt recalled with Up, walk every stored prompt instead of this session's, and press it again to come back |
+| Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
+| Ctrl-N | on a prompt recalled with Up, walk only this session's prompts instead, and press it again to come back. It stays where you put it, and is not offered until this session has sent a prompt |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
@@ -86,7 +86,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
-| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
+| `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
@@ -195,8 +195,8 @@ session opens and cannot change while it runs. It is stated once at startup, and
 
 **Shift-Tab** cycles the session through asking about everything, accepting edits, plan mode, and
 bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
-and works while a turn runs. A turn in flight keeps the mode it began with, so what you press
-describes the next one. Both spellings of the chord are answered, since which one arrives is the
+and works while a turn runs. A turn in flight follows the mode you pressed last, from its next
+question or tool call; a question already on your screen is left as it is. Both spellings of the chord are answered, since which one arrives is the
 terminal's choice rather than yours.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
@@ -371,6 +371,13 @@ and sending any prompt drops it. It lasts for the session only, is not written t
 and does not appear in the Ctrl-R search. A line put away with Ctrl-S is a separate slot, which a
 clear does not touch.
 
+## Suggested next prompts
+
+With [`suggestions`](../customize/configuration.md#suggestions) set to `true`, the empty box shows the
+next prompt the model expects you to type, dimmed, after a turn that ended with a reply. **Tab** or
+**Right** moves it into the box to edit; nothing sends it. Any other key removes it. It costs a
+request per turn, and none is made in plan mode or an incognito session.
+
 ## Searching the prompts you have sent
 
 **Ctrl-R** opens a search over every prompt in your history, drawn over the transcript in place of the
@@ -447,6 +454,12 @@ lines can be moved.
 The hint is there only while a press would move something. A command joined to another with `&&`
 or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
 the hint does not appear for them.
+
+**Sending a message moves it too.** A message you send while the turn waits on a command that could
+be moved goes into the turn at its next round, and the turn reaches that round only when the command
+returns. So once the command has run for 10 seconds, the message moves it to the background as the
+key would, and the turn reads your message next. A command, such as `/clear`, or a shell line waiting
+does not move it, since those wait for the turn to end anyway.
 
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,

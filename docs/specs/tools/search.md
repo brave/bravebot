@@ -64,6 +64,9 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 `verified-by: bravebot_agent::regex::a_brace_is_an_ordinary_character`
 `verified-by: bravebot_agent::regex::a_folded_pattern_keeps_a_negated_shorthand_negated`
 `verified-by: bravebot_agent::regex::a_non_capturing_group_is_an_ordinary_group`
+`verified-by: bravebot_agent::regex::a_pattern_beginning_with_a_literal_matches_only_where_the_whole_pattern_does`
+`verified-by: bravebot_agent::regex::a_branch_that_can_begin_with_something_else_is_still_matched`
+`verified-by: bravebot_agent::regex::a_character_that_folds_across_the_ascii_boundary_still_matches`
 `verified-by: bravebot_agent::turn::a_search_for_a_regular_expression_finds_what_it_describes`
 `verified-by: bravebot_agent::glob::a_brace_group_matches_each_alternative`
 `verified-by: bravebot_agent::glob::an_oversized_expansion_falls_back_to_the_literal`
@@ -76,7 +79,14 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 Otherwise it is quarantined whole. Unlike a listing, a search returns one reference for the whole
 result rather than one per hit, so its hits are not addresses.
 
+The label comes from the paths the walk reached, before any file is opened. What a file holds does
+not change it: an unvouched file with no matching line, or one that is not valid text, taints the
+result as one full of matches does. The search still compares the pattern against such a file, so
+the file decides the counts the result reports, and [labels.md](../labels.md) records that among its
+known costs, with what an attacker who owns the file gains.
+
 `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is`
+`verified-by: bravebot_agent::workspace::what_an_unvouched_file_holds_changes_a_searchs_counts_and_not_its_label`
 `verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
 `verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
 
@@ -101,6 +111,10 @@ Which files a capped search kept must not depend on the order the filesystem han
 walk sorts each directory and takes its own files before descending, so a partial answer is the
 same partial answer on every machine and is the shallow part of the tree rather than a scattering
 through it.
+
+The time cap is the one cap this does not hold for. It stops the search at a moment, not at a
+count, so a search it stops may have read more or fewer files on a slower or busier machine, and on
+a second run of the same call. The planner is told the search is incomplete either way.
 
 `verified-by: bravebot_agent::turn::a_truncated_search_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`
@@ -264,6 +278,7 @@ file again is the cost of not keeping one.
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_offers_no_page_and_no_count`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_last_match_says_how_many_there_were`
 `verified-by: bravebot_agent::workspace::an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end`
+`verified-by: bravebot_agent::workspace::the_offset_a_cut_search_offers_does_not_depend_on_what_an_unvouched_file_holds`
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page_of_matches`
 `verified-by: bravebot_agent::turn::a_quarantined_capped_search_says_where_to_continue`
 `verified-by: bravebot_agent::turn::a_search_past_the_last_match_says_how_many_there_were`

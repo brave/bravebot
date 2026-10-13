@@ -119,6 +119,34 @@ exec "{real_git}" "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"scanning detached HEAD ({commit}) against origin/main", result.stderr)
 
+    def test_the_dependency_audit_follows_package_lock_json_and_says_when_pnpm_lock_is_skipped(self):
+        """npm-audit reads package-lock.json only, so a pnpm tree starts no audit and says so."""
+        self.config.write_text('runner:\n  opengrep:\n    cmd: "true"\n'
+                               '  npm-audit:\n    cmd: "echo npm-audit-ran"\n')
+        for full in (False, True):
+            with self.subTest(full=full, lockfile="pnpm-lock.yaml"):
+                (self.repo / "ui").mkdir(exist_ok=True)
+                (self.repo / "ui/pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+                self.git("add", ".")
+                self.git("commit", "-qm", "pnpm lock")
+                result = self.scan("clean", full, "")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("npm-audit", result.stderr.replace("security-action's npm-audit", ""))
+                self.assertNotIn("npm-audit-ran", result.stdout)
+                self.assertIn("pnpm-lock.yaml is not audited", result.stderr)
+                self.git("rm", "-q", "ui/pnpm-lock.yaml")
+                self.git("commit", "-qm", "drop pnpm lock")
+            with self.subTest(full=full, lockfile="package-lock.json"):
+                (self.repo / "ui").mkdir(exist_ok=True)
+                (self.repo / "ui/package-lock.json").write_text("{}\n")
+                self.git("add", ".")
+                self.git("commit", "-qm", "npm lock")
+                result = self.scan("clean", full, "")
+                self.assertIn("npm-audit-ran", result.stdout + result.stderr)
+                self.assertNotIn("is not audited", result.stderr)
+                self.git("rm", "-q", "ui/package-lock.json")
+                self.git("commit", "-qm", "drop npm lock")
+
     def test_unchanged_or_deleted_script_files_do_not_start_the_script_scanner(self):
         """No script input should not trigger a walk through ignored build directories."""
         page = self.repo / "page.html"

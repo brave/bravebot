@@ -8,11 +8,11 @@
 //
 // Unpackaged, the running bundle is Electron's own, in `node_modules`, and it is called
 // Electron. So this renames it. That is a real edit to a dependency: it is undone by the
-// next `npm install`, which is why it is also wired to `postinstall` rather than being a
+// next `pnpm install`, which is why it is also wired to `postinstall` rather than being a
 // thing anybody has to remember.
 //
 // The proper fix is a packaging step with a `productName`, which the README notes does not
-// exist yet. When it does, this script stops being needed for anything but `npm run dev`.
+// exist yet. When it does, this script stops being needed for anything but `pnpm run dev`.
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 

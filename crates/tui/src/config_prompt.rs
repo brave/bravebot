@@ -21,14 +21,8 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use crate::input;
-use crate::theme;
+use crate::list_picker::{self, ListPicker, Panel, PickerRow};
 use crate::vim::Editing;
 
 /// One row of the list: a style of editing to choose.
@@ -62,15 +56,22 @@ impl Row {
     }
 }
 
-/// What the picker is showing and where the cursor is.
-#[derive(Debug)]
-pub struct Picker {
-    rows: Vec<Row>,
-    /// Which row is under the cursor.
-    selected: usize,
-    /// The style in force when the picker opened, marked in the list.
-    previous: Row,
+impl PickerRow for Row {
+    fn name(&self) -> String {
+        Row::name(*self).to_string()
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        Some(Row::hint(*self))
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self == other
+    }
 }
+
+/// What the picker is showing and where the cursor is.
+pub type Picker = ListPicker<Row>;
 
 impl Picker {
     /// Open on the style in use, since that is the row a person is looking for.
@@ -78,64 +79,7 @@ impl Picker {
         let rows = Row::all();
         let previous = Row(current);
         let selected = rows.iter().position(|row| *row == previous).unwrap_or(0);
-        Self {
-            rows,
-            selected,
-            previous,
-        }
-    }
-
-    /// The row under the cursor.
-    pub fn chosen(&self) -> Option<Row> {
-        self.rows.get(self.selected).copied()
-    }
-
-    fn down(&mut self) {
-        let last = self.rows.len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
-    }
-
-    fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-
-    fn is_current(&self, row: Row) -> bool {
-        row == self.previous
-    }
-}
-
-/// What a key press did to the picker.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// Still choosing.
-    Continue,
-    /// Take the row under the cursor.
-    Select,
-    /// Leave the style that was in force alone.
-    Cancel,
-}
-
-/// Interpret one key press.
-pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        return match code {
-            KeyCode::Char('c') => Outcome::Cancel,
-            _ => Outcome::Continue,
-        };
-    }
-
-    match code {
-        KeyCode::Esc => Outcome::Cancel,
-        KeyCode::Enter => Outcome::Select,
-        KeyCode::Up | KeyCode::Char('k') => {
-            picker.up();
-            Outcome::Continue
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            picker.down();
-            Outcome::Continue
-        }
-        _ => Outcome::Continue,
+        Self::open(rows, selected, previous)
     }
 }
 
@@ -147,136 +91,17 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
 pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     current: Editing,
-    mut behind: impl FnMut(&mut Frame),
+    behind: impl FnMut(&mut Frame),
 ) -> Option<Row> {
-    let mut picker = Picker::new(current);
-
-    loop {
-        if terminal
-            .draw(|frame| {
-                behind(frame);
-                draw(frame, &picker);
-            })
-            .is_err()
-        {
-            return None;
-        }
-
-        let Ok(event) = input::read() else {
-            return None;
-        };
-        let Some(key) = input::key_of(&event) else {
-            continue;
-        };
-        if key.kind != event::KeyEventKind::Press {
-            continue;
-        }
-
-        match handle_key(&mut picker, key.code, key.modifiers) {
-            Outcome::Continue => continue,
-            Outcome::Cancel => return None,
-            Outcome::Select => return picker.chosen(),
-        }
-    }
+    list_picker::choose(terminal, Picker::new(current), &panel(), behind)
 }
 
-fn draw(frame: &mut Frame, picker: &Picker) {
-    let area = centred(frame.area(), picker.rows.len());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::brand_primary()))
-        .title(format!(" {} ", t!(config_picker_title)))
-        .style(Style::default().bg(theme::background()).fg(theme::text()));
-    let inside = block.inner(area);
-    frame.render_widget(block, area);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // what the row under the cursor means
-            Constraint::Length(1), // keys
-        ])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(list_lines(picker, layout[0])), layout[0]);
-
-    // Every row has a hint, so this line never empties and the list above it does not shift as the
-    // cursor moves.
-    let hint = picker.chosen().map(Row::hint).unwrap_or_default();
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {hint}"),
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        layout[1],
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", t!(config_picker_keys)),
-            Style::default().fg(theme::muted()),
-        ))),
-        layout[2],
-    );
-}
-
-/// A centred panel sized to the list, never larger than the terminal.
-fn centred(area: Rect, rows: usize) -> Rect {
-    let available = area.width.saturating_sub(2);
-    let width = available.min(52).max(24.min(available));
-    // Borders, hint line, key line, and one row per style that fits.
-    let list = (rows as u16)
-        .saturating_add(4)
-        .min(area.height.saturating_sub(2));
-    let height = list.max(6).min(area.height.saturating_sub(2));
-
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
+fn panel() -> Panel {
+    Panel {
+        title: t!(config_picker_title),
+        keys: t!(config_picker_keys),
+        width: 52,
     }
-}
-
-fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
-    let visible = (area.height as usize).max(1);
-    let first = picker.selected.saturating_sub(visible.saturating_sub(1));
-
-    let mut lines = Vec::new();
-    for (index, row) in picker.rows.iter().enumerate().skip(first).take(visible) {
-        let chosen = index == picker.selected;
-        let marker = if chosen { "❯ " } else { "  " };
-        let name = if chosen {
-            Style::default()
-                .fg(theme::brand_primary())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::text())
-        };
-
-        let mut spans = vec![
-            Span::styled(marker, Style::default().fg(theme::brand_primary())),
-            Span::styled(row.name(), name),
-        ];
-
-        if picker.is_current(*row) {
-            spans.push(Span::styled(
-                format!("  {}", t!(picker_current)),
-                Style::default().fg(theme::ok()),
-            ));
-        }
-
-        lines.push(Line::from(spans));
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -288,79 +113,7 @@ mod tests {
     #[test]
     fn the_picker_opens_on_the_style_in_force() {
         let picker = Picker::new(Editing::Vi);
-        assert_eq!(picker.chosen(), Some(Row(Editing::Vi)));
-    }
-
-    /// The row in force is marked, so the list says which one it is rather than only where the cursor
-    /// happens to be. Those are two different facts and the cursor moves.
-    #[test]
-    fn the_style_in_force_is_marked_wherever_the_cursor_is() {
-        let mut picker = Picker::new(Editing::Ordinary);
-        picker.down();
-
-        assert_eq!(picker.chosen(), Some(Row(Editing::Vi)));
-        assert!(picker.is_current(Row(Editing::Ordinary)));
-        assert!(!picker.is_current(Row(Editing::Vi)));
-    }
-
-    /// The cursor stops at both ends rather than wrapping, so a person holding a key does not find
-    /// themselves back where they started with no way to tell.
-    #[test]
-    fn the_cursor_stops_at_the_ends_of_the_list() {
-        let mut picker = Picker::new(Editing::Ordinary);
-        picker.up();
-        assert_eq!(picker.chosen(), Some(Row(Editing::Ordinary)));
-
-        for _ in 0..5 {
-            picker.down();
-        }
-        assert_eq!(picker.chosen(), Some(Row(Editing::Vi)));
-    }
-
-    /// Escape and Ctrl-C leave the style alone, which is what makes the panel safe to open: somebody
-    /// looking to see what is in force has a way out that changes nothing.
-    #[test]
-    fn escape_and_ctrl_c_leave_the_style_alone() {
-        let mut picker = Picker::new(Editing::Ordinary);
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
-            Outcome::Cancel
-        );
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Outcome::Cancel
-        );
-    }
-
-    /// The keys that walk a list here are the arrows and vi's own, since the list is a list whichever
-    /// style the box is in and somebody who chose vi editing will reach for `j` and `k`.
-    #[test]
-    fn the_arrows_and_vis_own_keys_walk_the_list() {
-        for down in [KeyCode::Down, KeyCode::Char('j')] {
-            let mut picker = Picker::new(Editing::Ordinary);
-            assert_eq!(
-                handle_key(&mut picker, down, KeyModifiers::NONE),
-                Outcome::Continue
-            );
-            assert_eq!(picker.chosen(), Some(Row(Editing::Vi)));
-        }
-        for up in [KeyCode::Up, KeyCode::Char('k')] {
-            let mut picker = Picker::new(Editing::Vi);
-            handle_key(&mut picker, up, KeyModifiers::NONE);
-            assert_eq!(picker.chosen(), Some(Row(Editing::Ordinary)));
-        }
-    }
-
-    /// Enter takes the row under the cursor, which is the whole of what the panel is for.
-    #[test]
-    fn enter_takes_the_row_under_the_cursor() {
-        let mut picker = Picker::new(Editing::Ordinary);
-        picker.down();
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
-            Outcome::Select
-        );
-        assert_eq!(picker.chosen(), Some(Row(Editing::Vi)));
+        assert_eq!(picker.chosen(), Some(&Row(Editing::Vi)));
     }
 
     /// Every row says what it means, so the panel is legible to somebody who does not already know
@@ -376,7 +129,7 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, picker))
+            .draw(|frame| list_picker::draw(frame, picker, &panel()))
             .expect("draw succeeds");
         terminal
             .backend()

@@ -10,11 +10,13 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 11] = [
+pub(crate) const COMMANDS: [&str; 13] = [
     "doctor",
+    "update",
     "bug-report",
     "auth",
     "mcp",
+    "permissions",
     "sessions",
     "attach",
     "reply",
@@ -32,6 +34,9 @@ const MCP: [&str; 8] = [
     "add", "get", "list", "approve", "enable", "disable", "remove", "forget",
 ];
 
+/// What follows `permissions`.
+const PERMISSIONS: [&str; 1] = ["check"];
+
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
 struct Flag {
@@ -44,7 +49,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 37] = [
+const FLAGS: [Flag; 41] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -52,7 +57,9 @@ const FLAGS: [Flag; 37] = [
     flag("fork", Some('f'), false),
     flag("from-pr", None, true),
     flag("file", None, true),
+    flag("session-ref", None, true),
     flag("add-dir", None, true),
+    flag("trust-workspace", None, false),
     flag("settings", None, true),
     flag("run-network", None, true),
     flag("sandbox-allow-read", None, true),
@@ -74,11 +81,13 @@ const FLAGS: [Flag; 37] = [
     flag("trace", None, false),
     flag("json", None, false),
     flag("json-stream", None, false),
+    flag("output-schema", None, true),
     flag("incognito", None, false),
     flag("safe", None, false),
     flag("locked", None, false),
     flag("vet", None, false),
     flag("sandbox-check", None, false),
+    flag("push-identity", None, false),
     flag("dangerously-skip-permissions", None, false),
     flag("help", Some('h'), false),
     flag("version", Some('V'), false),
@@ -129,6 +138,7 @@ fn bash() -> String {
         case "${{COMP_WORDS[1]}}" in
             auth) COMPREPLY=($(compgen -W "{auth}" -- "$cur")); return 0 ;;
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
+            permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -146,6 +156,7 @@ complete -o default -F _bravebot bravebot
 "#,
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
+        permissions = PERMISSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -160,6 +171,7 @@ _bravebot() {{
         case "$words[2]" in
             auth) compadd -- {auth}; return ;;
             mcp) compadd -- {mcp}; return ;;
+            permissions) compadd -- {permissions}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -180,6 +192,7 @@ fi
 "#,
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
+        permissions = PERMISSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -195,6 +208,7 @@ fn fish() -> String {
     for (command, words) in [
         ("auth", AUTH.join(" ")),
         ("mcp", MCP.join(" ")),
+        ("permissions", PERMISSIONS.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {

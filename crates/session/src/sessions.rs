@@ -140,6 +140,31 @@ pub struct RewindPoint {
 /// Where sessions live inside the state directory.
 const SESSIONS: &str = "sessions";
 
+/// Where this process keeps session records instead of inside the state directory, if it was told.
+static CHOSEN_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Keep every session record this process reads, lists or writes under `root`, in place of the
+/// state directory's `sessions`. Only that directory moves: settings, trust, credentials and prompt
+/// history stay where they are.
+///
+/// For a host that owns its records and must keep them apart from the ones a terminal or a window
+/// resumes. Set once, before the first record is read or written; a second call is refused with
+/// the root already in force.
+pub fn keep_in(root: PathBuf) -> Result<(), PathBuf> {
+    CHOSEN_ROOT
+        .set(root)
+        .map_err(|_| CHOSEN_ROOT.get().cloned().unwrap_or_default())
+}
+
+/// The sessions directory under `state`, or the root this process was told to keep them in.
+///
+/// `None` where there is no state directory: a process with a chosen root still has no home in an
+/// incognito session, and writers ask the same question of it.
+fn sessions_directory(state: Option<PathBuf>, chosen: Option<&Path>) -> Option<PathBuf> {
+    let state = state?;
+    Some(chosen.map_or_else(|| state.join(SESSIONS), Path::to_path_buf))
+}
+
 /// Which front end wrote a record.
 ///
 /// Two programs share `~/.bravebot` and each writes the same kind of record into it, so a
@@ -207,6 +232,11 @@ pub struct Record {
     /// The pull request the person said the session is for, with `/pr`.
     #[serde(default)]
     pub pull_request: Option<String>,
+    /// The id of the session this one was started from with `/handoff`, in the same project.
+    ///
+    /// `None` for a record written before this was kept, or one nobody handed work to.
+    #[serde(default)]
+    pub handed_off_from: Option<String>,
     /// What to call it in a list: the first thing the user asked.
     pub title: String,
     /// When it began and when it was last written, in seconds since the epoch.
@@ -1484,6 +1514,8 @@ pub struct Summary {
     pub issue: Option<String>,
     /// The pull request the person said the session is for, which the picker searches.
     pub pull_request: Option<String>,
+    /// The session this one was started from with `/handoff`, which the picker shows.
+    pub handed_off_from: Option<String>,
     pub updated: u64,
     /// What the session takes up, record and audit together.
     pub bytes: u64,
@@ -1606,6 +1638,7 @@ pub struct Handle {
     title: String,
     issue: Option<String>,
     pull_request: Option<String>,
+    handed_off_from: Option<String>,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
     /// Whether a record for this id is on disk yet.
@@ -1655,6 +1688,7 @@ impl Handle {
             title: String::new(),
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             agent: None,
             wrote: false,
             server_children_may_run: false,
@@ -1678,6 +1712,7 @@ impl Handle {
             title: record.title.clone(),
             issue: record.issue.clone(),
             pull_request: record.pull_request.clone(),
+            handed_off_from: record.handed_off_from.clone(),
             agent: record.agent.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
@@ -1753,6 +1788,20 @@ impl Handle {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The session this one was started from with `/handoff`, if it was.
+    pub fn handed_off_from(&self) -> Option<&str> {
+        self.handed_off_from.as_deref()
+    }
+
+    /// Say which session this one carries on from, so the picker can show where it came from.
+    ///
+    /// Takes the source's id from a handle the driver holds and never from text a person or the
+    /// planner wrote. Written with the first save like the rest of the record; the source's own
+    /// record is not read or touched.
+    pub fn hand_off_from(&mut self, source: &str) {
+        self.handed_off_from = Some(source.to_string());
     }
 
     /// The id to hand somebody wanting this session back, or `None` if there is nothing to hand.
@@ -1914,6 +1963,7 @@ impl Handle {
             branch: self.branch.clone(),
             issue: self.issue.clone(),
             pull_request: self.pull_request.clone(),
+            handed_off_from: self.handed_off_from.clone(),
             title: self.title.clone(),
             started: self.started,
             updated: now(),
@@ -2086,6 +2136,11 @@ impl Handle {
         if let Some(directory) = self.directory() {
             let _ = std::fs::remove_file(directory.join(format!("{}.json", self.id)));
             let _ = std::fs::remove_file(directory.join(format!("{}.audit.jsonl", self.id)));
+            let _ = std::fs::remove_file(directory.join(format!(
+                "{}.{}",
+                self.id,
+                crate::search::INDEX_EXTENSION
+            )));
         }
         self.wrote = false;
         self.title = before.to_string();
@@ -2122,6 +2177,7 @@ pub fn list(project: &Path) -> Vec<Summary> {
                 branch: listed.branch,
                 issue: listed.issue,
                 pull_request: listed.pull_request,
+                handed_off_from: listed.handed_off_from.filter(|id| is_session_id(id)),
                 updated: listed.updated,
                 bytes,
                 manifest: listed.manifest.is_some(),
@@ -2251,7 +2307,8 @@ pub fn is_a_session_name(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Remove one session from disk: its record and the trail beside it (SESSION-30).
+/// Remove one session from disk: its record, the trail beside it and the index of what it said
+/// (SESSION-30).
 ///
 /// Keyed on the directory and the id alone. The trail goes first, so a failure part way leaves a
 /// record that still opens rather than a trail with nothing to belong to. A link standing where one
@@ -2268,6 +2325,7 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
     }
     for beside in [
         directory.join(format!("{id}.audit.jsonl")),
+        directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION)),
         directory.join(format!("{id}.tmp")),
     ] {
         match std::fs::remove_file(&beside) {
@@ -2346,10 +2404,14 @@ pub fn audit_of(project: &Path, id: &str) -> BTreeMap<usize, Vec<crate::audit::T
 /// The reading answer, which is what the list and the resume picker want: an incognito session can
 /// still show and reopen the sessions that came before it. What it will not do is add to them.
 pub fn project_directory(project: &Path) -> Option<PathBuf> {
-    Some(
-        crate::store::directory()?
-            .join(SESSIONS)
-            .join(key_for(project)),
+    Some(sessions_root()?.join(key_for(project)))
+}
+
+/// The directory holding every project's sessions, for reading.
+pub fn sessions_root() -> Option<PathBuf> {
+    sessions_directory(
+        crate::store::directory(),
+        CHOSEN_ROOT.get().map(PathBuf::as_path),
     )
 }
 
@@ -2367,9 +2429,11 @@ pub fn project_directory(project: &Path) -> Option<PathBuf> {
 /// tightens on write and a writer that resolved the location for itself would satisfy the mode on
 /// the file it wrote and leave the directory holding it listable by every other account.
 pub(crate) fn writable_project_directory(project: &Path) -> Option<PathBuf> {
-    let directory = bravebot_agent::home::writable()?
-        .join(SESSIONS)
-        .join(key_for(project));
+    let directory = sessions_directory(
+        bravebot_agent::home::writable(),
+        CHOSEN_ROOT.get().map(PathBuf::as_path),
+    )?
+    .join(key_for(project));
     bravebot_agent::home::create_directory(&directory).ok()?;
     Some(directory)
 }
@@ -2532,6 +2596,8 @@ struct Listed {
     issue: Option<String>,
     #[serde(default)]
     pull_request: Option<String>,
+    #[serde(default)]
+    handed_off_from: Option<String>,
     updated: u64,
     /// Whether the record has one, which is what makes it a manifest run. What is in it is not
     /// read: the row says only that the session cannot be continued.
@@ -2553,6 +2619,12 @@ pub(crate) fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Whether `text` is shaped like an id [`new_id`] makes, which is all the picker draws from a
+/// record: a field somebody edited by hand must not put an escape on the screen.
+fn is_session_id(text: &str) -> bool {
+    text.len() <= 64 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// A session's name: a version 4 UUID.
@@ -3587,6 +3659,7 @@ mod tests {
             branch: None,
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 0,
             manifest: false,
@@ -3830,6 +3903,67 @@ mod tests {
         assert_eq!(row(plain.id()).pull_request, None);
         assert_eq!(row(older.id()).issue, None);
         assert_eq!(row(older.id()).pull_request, None);
+    }
+
+    /// The picker names where a handed-off session came from, so the list carries the id the
+    /// record holds. A record that predates the field is listed with none, and one whose field
+    /// somebody edited into something that is not an id is listed with none rather than drawn.
+    #[test]
+    fn the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-list-handoff");
+
+        let mut source = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut source);
+        let mut handed = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handed.hand_off_from(source.id());
+        save_a_turn_session(&mut handed);
+        let mut edited = Handle::begin(&root, Front::Terminal, A_BUILD);
+        edited.hand_off_from("\u{1b}[31mred");
+        save_a_turn_session(&mut edited);
+
+        let listed = list(&root);
+        let row = |id: &str| listed.iter().find(|s| s.id == id).expect("listed");
+        assert_eq!(
+            row(handed.id()).handed_off_from.as_deref(),
+            Some(source.id())
+        );
+        assert_eq!(row(source.id()).handed_off_from, None);
+        assert_eq!(row(edited.id()).handed_off_from, None);
+
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("handed_off_from")
+            .expect("the source is written");
+        let older: Record = serde_json::from_value(written).expect("an older record reads");
+        assert_eq!(older.handed_off_from, None);
+    }
+
+    /// Resuming a handed-off session keeps its source, or the next save would write the link away.
+    #[test]
+    fn a_handed_off_session_keeps_its_source_across_a_resume() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-handoff-resume");
+        let mut handed = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handed.hand_off_from("0a1b2c3d-0000-4000-8000-000000000000");
+        save_a_turn_session(&mut handed);
+
+        let record = load(&root, handed.id()).expect("written");
+        assert_eq!(
+            record.handed_off_from.as_deref(),
+            Some("0a1b2c3d-0000-4000-8000-000000000000")
+        );
+        let resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(
+            resumed.handed_off_from(),
+            Some("0a1b2c3d-0000-4000-8000-000000000000")
+        );
     }
 
     /// The panel draws a link on every frame, so a value that could end its row, start an escape
@@ -4189,6 +4323,7 @@ mod tests {
             branch: None,
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             title: "a session".to_string(),
             started: 1,
             updated: 1,
@@ -4563,6 +4698,95 @@ mod tests {
         }
     }
 
+    /// A fork is a record of its own that carries the conversation, the spend and the trail of the
+    /// session it was cut from and starts its own clock. A fork that kept the source's id would
+    /// overwrite it, one that kept the source's start time would age as the source does, and one
+    /// that left the spend or the trail behind would report a conversation that cost nothing.
+    #[test]
+    fn a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-fork-record");
+        let mut source = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        source.save(
+            "what do the specs say",
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 3,
+                tokens: 99,
+                spend: &BTreeMap::from([(1, 42), (2, 7)]),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+        source.append_audit(
+            1,
+            &[crate::audit::Stamped {
+                at: 1,
+                from: None,
+                event: bravebot_core::event::Event::GatePassed {
+                    gate: "file_read",
+                    detail: "notes.txt".to_string(),
+                },
+            }],
+        );
+        let source_id = source.id().to_string();
+        let path = project_directory(&root)
+            .expect("a directory")
+            .join(format!("{source_id}.json"));
+        let mut aged = load(&root, &source_id).expect("the source record");
+        aged.started = 1_000;
+        aged.conversation.references = 4;
+        std::fs::write(&path, serde_json::to_vec_pretty(&aged).unwrap()).expect("age the record");
+        let before = std::fs::read(&path).expect("the source record");
+
+        let forked = fork(&root, &source_id).expect("the session forks");
+
+        assert_ne!(forked.id, source_id, "the fork kept the source's id");
+        assert!(
+            forked.started > aged.started,
+            "the fork kept the source's start time: {}",
+            forked.started
+        );
+        assert_eq!(forked.title, "what do the specs say (fork)");
+        assert_eq!(forked.turns, 3, "the fork lost the turns");
+        assert_eq!(forked.tokens, 99, "the fork lost the tokens");
+        assert_eq!(
+            forked.spend,
+            BTreeMap::from([(1, 42), (2, 7)]),
+            "the fork lost the spend"
+        );
+        assert_eq!(
+            forked.conversation.references, 4,
+            "the fork lost the conversation"
+        );
+        assert_eq!(
+            audit_of(&root, &forked.id),
+            audit_of(&root, &source_id),
+            "the fork did not copy the trail"
+        );
+        assert!(
+            !audit_of(&root, &forked.id).is_empty(),
+            "the source had no trail to copy"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("the source record"),
+            before,
+            "the source record changed"
+        );
+    }
+
     #[test]
     fn forking_a_manifest_session_is_refused() {
         if !in_isolated_profile() {
@@ -4911,6 +5135,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn deleting_a_session_takes_what_the_search_index_kept_of_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-index");
+        let (gone, kept) = two_sessions_with_trails(&root);
+        crate::search::Corpus::read(&root, |_| true);
+        let directory = project_directory(&root).unwrap();
+        let entry = |id: &str| directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION));
+        assert!(entry(&gone).exists() && entry(&kept).exists());
+
+        delete(&root, &gone).expect("the session was not deleted");
+
+        assert!(!entry(&gone).exists(), "what the session said outlived it");
+        assert!(entry(&kept).exists());
+    }
+
     /// Two projects can hold a session each, and a delete is made in one of them.
     #[test]
     fn deleting_in_one_project_leaves_another_projects_session_alone() {
@@ -5227,5 +5469,32 @@ mod tests {
         let after = load(&root, handle.id()).expect("the record is still there");
         assert_eq!(after.turns, 2);
         assert!(after.history.is_none());
+    }
+
+    /// A host that owns its records puts them in a directory of its own, so a terminal or a window
+    /// resuming from the state directory cannot be handed one by naming its id.
+    #[test]
+    fn a_chosen_root_replaces_the_sessions_directory_and_only_that() {
+        let state = PathBuf::from("/home/person/.bravebot");
+        let chosen = PathBuf::from("/srv/host-sessions");
+
+        assert_eq!(
+            sessions_directory(Some(state.clone()), Some(&chosen)),
+            Some(chosen.clone()),
+            "the chosen root was not used"
+        );
+        assert_eq!(
+            sessions_directory(Some(state.clone()), None),
+            Some(state.join("sessions")),
+            "with no root chosen the sessions stay in the state directory"
+        );
+    }
+
+    /// An incognito session, or a machine with no home, writes nothing. Choosing a root must not
+    /// turn that into a place to write.
+    #[test]
+    fn a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory() {
+        let chosen = PathBuf::from("/srv/host-sessions");
+        assert_eq!(sessions_directory(None, Some(&chosen)), None);
     }
 }

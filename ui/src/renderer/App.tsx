@@ -15,6 +15,7 @@ import type {
   KeptTrust,
   OpenedSession,
   PermissionMode,
+  SandboxMode,
   RewindPoint,
   RewoundSession,
   RunRecord,
@@ -130,6 +131,8 @@ interface Live {
   autoVetting: boolean
   /** What the session's next turn asks before it acts, as the bridge last reported it. */
   permissionMode: PermissionMode
+  /** What the session's next turn holds a program to, as the bridge last reported it. */
+  sandboxMode: SandboxMode
   /** The permission rules this session opened under. Null where the bridge reported none. */
   rules?: SettingsRules | null
   /**
@@ -204,7 +207,7 @@ const METHOD: Record<Asked, string> = t.REPLY
 async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const answer = await window.bravebot.request<T>(method, params)
   if (answer.error) {
-    // `config` is `Config::from_env` failing, which for a packaged or npm-launched app
+    // `config` is `Config::from_env` failing, which for a packaged app or one launched from a checkout
     // means the credentials were not baked in at compile time. It is not recoverable
     // from here and needs saying properly.
     if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
@@ -528,6 +531,7 @@ export function App(): React.JSX.Element {
         archived: opened.archived,
         autoVetting: opened.autoVetting,
         permissionMode: opened.permissionMode,
+        sandboxMode: opened.sandboxMode,
         rules: opened.settingsRules ?? null,
         rewind: opened.rewind ?? [],
       })
@@ -555,6 +559,7 @@ export function App(): React.JSX.Element {
         model: string | null
         autoVetting: boolean
         permissionMode: PermissionMode
+        sandboxMode: SandboxMode
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -593,6 +598,7 @@ export function App(): React.JSX.Element {
         archived: 0,
         autoVetting: made.autoVetting,
         permissionMode: made.permissionMode,
+        sandboxMode: made.sandboxMode,
         rules: made.settingsRules ?? null,
       })
       setProblem(null)
@@ -938,14 +944,23 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
-  // Allowed while a turn runs: the bridge keeps the running turn in the mode it began with, and
-  // the next one runs in this (MODE-8). What the bridge answered is what is drawn.
+  // Allowed while a turn runs: the running turn follows the mode chosen last (MODE-8). What the bridge answered is what is drawn.
   const chooseMode = useCallback(async (mode: PermissionMode) => {
     const handle = handleRef.current
     if (!handle) return
     try {
       const { permissionMode } = await call<{ permissionMode: PermissionMode }>('session.mode', { session: handle, mode })
       updateSession(handle, (old) => (old ? { ...old, permissionMode } : old))
+    } catch (error) { setProblem(String(error)) }
+  }, [updateSession])
+
+  // Allowed while a turn runs: a turn holds the mode it began with, and the next one takes this. What the bridge answered is what is drawn.
+  const chooseSandbox = useCallback(async (mode: SandboxMode) => {
+    const handle = handleRef.current
+    if (!handle) return
+    try {
+      const { sandboxMode } = await call<{ sandboxMode: SandboxMode }>('session.sandbox', { session: handle, mode })
+      updateSession(handle, (old) => (old ? { ...old, sandboxMode } : old))
     } catch (error) { setProblem(String(error)) }
   }, [updateSession])
 
@@ -1257,6 +1272,7 @@ export function App(): React.JSX.Element {
         archived: 0,
         autoVetting: forked.autoVetting,
         permissionMode: forked.permissionMode,
+        sandboxMode: forked.sandboxMode,
         rules: forked.settingsRules ?? null,
         // The parent's backups stay the parent's: nothing in the child has written anything yet.
         rewind: [],
@@ -1629,6 +1645,7 @@ export function App(): React.JSX.Element {
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
         onMode={(mode) => void chooseMode(mode)}
+        onSandbox={(mode) => void chooseSandbox(mode)}
         onSubmit={submit}
         onPlan={submitPlan}
         reading={reading}
@@ -1720,6 +1737,7 @@ export function apply(
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
+          sandboxMode: message.data.sandbox ?? old.sandboxMode,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
@@ -1780,6 +1798,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedMcpCall(message.data)] }
       case 'mcp-move.request':
         return { ...old, entries: [...old.entries, t.askedMcpMove(message.data)] }
+      case 'host.request':
+        return { ...old, entries: [...old.entries, t.askedHost(message.data)] }
       // A server has up to a minute to answer its handshake, and the turn says nothing else
       // while it waits, so the wait is named where the phase is.
       case 'mcp.starting':
@@ -1788,7 +1808,8 @@ export function apply(
         return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0 }
+        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0,
+          sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
         return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',

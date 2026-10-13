@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """The decisions pr-fix.py makes without a model, against real repositories where git decides."""
 
-import contextlib
 import importlib.util
-import io
-import os
 import shutil
 import subprocess
 import sys
@@ -18,78 +15,36 @@ spec = importlib.util.spec_from_file_location("pr_fix", HERE / "pr-fix.py")
 pr_fix = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_fix)
 
-# Nothing of the caller's git config applies: no signing key, no hooks, no default branch.
-os.environ.update(
-    GIT_CONFIG_GLOBAL=os.devnull,
-    GIT_CONFIG_NOSYSTEM="1",
-    GIT_AUTHOR_NAME="selftest",
-    GIT_AUTHOR_EMAIL="selftest@example.invalid",
-    GIT_COMMITTER_NAME="selftest",
-    GIT_COMMITTER_EMAIL="selftest@example.invalid",
-)
 
-FORK_CLONE = """\
-origin\tgit@github.com:someone/bravebot.git (fetch)
-origin\tgit@github.com:someone/bravebot.git (push)
-upstream\tgit@github.com:brave/bravebot.git (fetch)
-upstream\tgit@github.com:brave/bravebot.git (push)
-"""
-DIRECT_CLONE = """\
-origin\thttps://github.com/Brave/BraveBot (fetch)
-origin\thttps://github.com/Brave/BraveBot (push)
-lookalike\thttps://notgithub.com/brave/bravebot.git (fetch)
-"""
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def git(*args, cwd):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+# The git and quietly helpers are shared with the other selftests of this pair.
+helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
+git = helpers.git
+quietly = helpers.quietly
+
+
+def sign_head(cwd):
+    """Replace HEAD with the same commit carrying a signature header; verifying one needs a key, telling one is there does not."""
+    raw = subprocess.run(
+        ["git", "cat-file", "commit", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
+    headers, message = raw.split("\n\n", 1)
+    signature = "gpgsig -----BEGIN SSH SIGNATURE-----\n selftest\n -----END SSH SIGNATURE-----"
+    forged = f"{headers}\n{signature}\n\n{message}"
+    sha = subprocess.run(
+        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+        cwd=cwd, check=True, capture_output=True, text=True, input=forged,
     ).stdout.strip()
+    git("reset", "-q", "--hard", sha, cwd=cwd)
 
 
-def quietly(step, *args):
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-        try:
-            code = step(*args)
-        except SystemExit as exit:
-            code = exit.code
-    return code, out.getvalue()
-
-
-def test_the_base_is_whichever_remote_names_brave_bravebot():
-    fork = pr_fix.github_remotes(FORK_CLONE)
-    assert fork["brave/bravebot"][0] == "upstream", fork
-    assert fork["someone/bravebot"][0] == "origin", fork
-    direct = pr_fix.github_remotes(DIRECT_CLONE)
-    assert direct["brave/bravebot"][0] == "origin", direct
-    assert len(direct) == 1, "a host that only ends in github.com is not GitHub"
-
-
-def test_a_pull_request_is_named_by_number_or_by_its_url():
-    for arg in ("806", "#806", "https://github.com/brave/bravebot/pull/806/files"):
-        assert pr_fix.pr_number(arg) == 806, arg
-    for arg in ("https://github.com/other/bravebot/pull/806", "main"):
-        code, _ = quietly(pr_fix.pr_number, arg)
-        assert code == 1, arg
-
-
-def test_a_fork_is_reached_the_way_the_base_is():
-    assert pr_fix.fork_url("a/b", "https://github.com/brave/bravebot") == "https://github.com/a/b.git"
-    assert pr_fix.fork_url("a/b", "git@github.com:brave/bravebot.git") == "git@github.com:a/b.git"
-
-
-def test_a_head_named_like_the_base_does_not_take_the_clones_own_branch():
-    assert pr_fix.local_branch("main", "main", 7) == "pr-7"
-    assert pr_fix.local_branch("fix", "main", 7) == "fix"
-
-
-def test_only_a_whole_marker_line_starts_or_ends_a_conflict():
-    text = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> 1234 (x)\nTitle\n=======\n<<<<<<<<\n"
-    assert pr_fix.marker_ranges(text) == [(2, 6)], pr_fix.marker_ranges(text)
-
-
-def world(root):
+def world(root, signed=False):
     """brave/bravebot and a fork as bare repositories, a clone of both, and a conflicting PR."""
     brave, fork, seed, clone = (root / name for name in ("brave.git", "fork.git", "seed", "bravebot"))
     git("init", "-q", "--bare", "-b", "main", str(brave), cwd=root)
@@ -106,6 +61,8 @@ def world(root):
     git("checkout", "-q", "-b", "feature", cwd=seed)
     (seed / "a.txt").write_text("from the pull request\n")
     git("commit", "-q", "-am", "the pull request", cwd=seed)
+    if signed:
+        sign_head(seed)
     git("push", "-q", str(fork), "feature", cwd=seed)
     git("checkout", "-q", "main", cwd=seed)
     (seed / "a.txt").write_text("from main\n")
@@ -209,31 +166,72 @@ def test_a_rebase_without_a_conflict_leaves_nothing_resolved_to_check():
         assert code == 0 and "CI runs the rest" in out, out
 
 
-def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_none():
+def unsignable(clone):
+    """Every commit is to be signed and the signing program fails, as when the signing key is missing."""
+    git("config", "commit.gpgsign", "true", cwd=clone)
+    git("config", "gpg.program", "false", cwd=clone)
+
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_starts():
     with tempfile.TemporaryDirectory() as tmp:
-        tree = Path(tmp)
-        for crate in ("agent", "tui"):
-            (tree / "crates" / crate).mkdir(parents=True)
-            (tree / "crates" / crate / "Cargo.toml").write_text(f'[package]\nname = "bravebot-{crate}"\n')
-        plan = lambda *files: pr_fix.plan(tree, list(files))
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "-b", "clean", "main~1", cwd=seed)
+        (seed / "b.txt").write_text("no conflict\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "clean change", cwd=seed)
+        git("push", "-q", "-f", str(fork), "clean:feature", cwd=seed)
+        unsignable(pr().here)
 
-        assert plan("ui/src/app.ts", "docs/website/docs/index.md", "README.md", "docs/development/checks.md") == []
-        assert plan("docs/specs/labels.md") == [["make", "-k", "check-spec"]]
-        assert plan("crates/i18n/locales/fr.ftl") == [["make", "-k", "check-locales"]]
-        assert plan("Cargo.lock") == [pr_fix.LOCK_RESOLVES, ["make", "-k", "check-versions"]]
-        assert plan(".github/workflows/ci.yml") == [["make", "-k", "check-security"]]
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert "stopped at 1/1: " in out and "clean change" in out, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+        assert "hint:" not in out and "edit-todo" not in out, "the hints are not the reason"
 
-        rust = plan("crates/agent/src/lib.rs", "crates/agent/tests/exec.rs", "crates/tui/src/view.rs")
-        assert rust == [
-            ["cargo", "fmt", "--all", "--", "--check"],
-            [
-                "cargo", "clippy", "-p", "bravebot-agent", "-p", "bravebot-tui",
-                "--all-targets", "--all-features", "--", "-D", "warnings",
-            ],
-            ["cargo", "test", "-p", "bravebot-agent", "--locked", "--test", "exec"],
-            ["make", "-k", "check-spec"],
-        ], rust
-        assert plan("crates/gone/src/lib.rs") == [["make", "-k", "check-spec"]], "a deleted crate is not linted"
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_continues():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "feature", cwd=seed)
+        (seed / "b.txt").write_text("second\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "second", cwd=seed)
+        git("push", "-q", str(fork), "feature", cwd=seed)
+        unsignable(pr().here)
+        quietly(pr_fix.start, pr())
+        (pr().tree / "a.txt").write_text("resolved\n")
+
+        code, out = quietly(pr_fix.resume, pr())
+        assert code == 1, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+        assert "hint:" not in out and "edit-todo" not in out, "the hints are not the reason"
+
+
+def test_a_step_counter_git_did_not_state_is_left_out_rather_than_printed_as_a_question_mark():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        quietly(pr_fix.start, pr())
+        state = pr_fix.rebase_dir(pr().tree)
+        assert (state / "msgnum").is_file() and (state / "end").is_file()
+        _, out = quietly(pr_fix.report, pr())
+        assert "stopped at 1/1: " in out, out
+
+        (state / "end").unlink()
+        _, out = quietly(pr_fix.report, pr())
+        assert "stopped: " in out and "?" not in out, out
+
+
+def test_what_git_said_is_cut_to_its_error_and_leaves_the_hints_behind():
+    said = "Rebasing (1/2)\rerror: gpg failed to sign the data:\n(no gpg output)\nerror: failed to write commit object\nhint: Could not execute\nhint:\nhint:     git rebase --continue\n"
+    assert pr_fix.stop_reason(said) == [
+        "error: gpg failed to sign the data:",
+        "(no gpg output)",
+        "error: failed to write commit object",
+    ]
+    assert pr_fix.stop_reason("") == []
+    assert pr_fix.stop_reason("plain words\nmore words\n") == ["more words"], "no error line: the last line"
 
 
 def test_the_files_changed_since_the_rebase_choose_the_checks():
@@ -263,6 +261,60 @@ def test_a_push_leaves_out_what_was_not_committed():
         code, out = quietly(pr_fix.push, pr())
         assert code == 1 and "commit them first" in out, out
         assert git("rev-parse", "feature", cwd=fork) == before
+
+
+def test_signed_commits_are_not_replaced_by_unsigned_ones():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve(), signed=True)
+        quietly(pr_fix.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        assert not pr_fix.signed("HEAD", tree), "the rebase could not sign the commit it wrote"
+        before = git("rev-parse", "feature", cwd=fork)
+
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1 and "update-branch" in out and "unsigned" in out, out
+        assert git("rev-parse", "feature", cwd=fork) == before, "nothing was pushed"
+
+        (tree / "fix.txt").write_text("a fix\n")
+        git("add", "fix.txt", cwd=tree)
+        git("commit", "-q", "-m", "a signed fix", cwd=tree)
+        sign_head(tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1, "a signed head over an unsigned rebased commit still drops the author's signature"
+        assert git("rev-parse", "feature", cwd=fork) == before
+
+        git("reset", "-q", "--hard", "HEAD~1", cwd=tree)
+        sign_head(tree)
+        (tree / "fix.txt").write_text("a fix\n")
+        git("add", "fix.txt", cwd=tree)
+        git("commit", "-q", "-m", "a signed fix", cwd=tree)
+        sign_head(tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 0, out
+        assert git("rev-parse", "feature", cwd=fork) == git("rev-parse", "HEAD", cwd=tree)
+
+        (tree / "other.txt").write_text("unsigned\n")
+        git("add", "other.txt", cwd=tree)
+        git("commit", "-q", "-m", "an unsigned fix", cwd=tree)
+        pushed = git("rev-parse", "feature", cwd=fork)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1, "an unsigned commit is not added to a signed pull request"
+        assert git("rev-parse", "feature", cwd=fork) == pushed
+
+
+def test_an_unsigned_pull_request_is_pushed_unsigned():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve())
+        quietly(pr_fix.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        assert not pr_fix.signed(pr().tip, tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 0, out
+        assert git("rev-parse", "feature", cwd=fork) == git("rev-parse", "HEAD", cwd=tree)
 
 
 def test_a_fix_committed_on_top_is_pushed_without_rewriting_the_pull_request():

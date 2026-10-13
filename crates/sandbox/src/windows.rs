@@ -20,6 +20,10 @@
 //! container rather than outside it. A policy asking for that denial is refused
 //! ([`refusal_for`]) rather than applied without it.
 //!
+//! What a process starts is in its job as well. The process is created in a job of its own, which
+//! the creation call names, so it is in the job before it runs, and killing it ends every process it
+//! started. So does closing the job, which dropping the process and this process ending both do.
+//!
 //! Compiled under test on every platform as well as on the one it confines, so what this
 //! backend decides before a process starts is pinned by every job that runs the suite:
 //! which capability the policy asks for, what each grant permits, and which policies are
@@ -135,7 +139,7 @@ fn capability_names(policy: &SandboxPolicy) -> Vec<&'static str> {
 ///
 /// Decided before anything is created, so a refusal costs no profile and writes no entry
 /// onto a directory.
-fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
+pub(crate) fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
     if !policy.is_meaningful() {
         return Some(SandboxError::PolicyTooPermissive);
     }
@@ -156,6 +160,16 @@ fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
             detail: "a container is granted the paths it is given and a write grant cannot be \
                      narrowed beneath its row, so a write refusal subtracts from nothing here; \
                      refusing rather than reporting a path held back that was still writable"
+                .into(),
+        });
+    }
+
+    if policy.egress_only_to.is_some() {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: "a container holds the internet capability or does not, so egress cannot be \
+                     limited to one port here; refusing rather than reporting confinement that \
+                     is not applied"
                 .into(),
         });
     }
@@ -260,28 +274,92 @@ fn grants_to_write(policy: &SandboxPolicy, readable_roots: &[PathBuf]) -> Vec<(P
         .collect()
 }
 
-/// Why this backend will not start `program`, where it will not.
+/// Why this backend will not start `program` with `args`, where it will not.
 ///
 /// A batch file is run by `cmd.exe`, which reads its own command line again after the one
 /// [`command_line`] wrote, and an argument that was quoted so a program gets it back unchanged
 /// can be read there as an operator. No quoting is right for both readers, so a program that is
 /// one is refused rather than started with arguments that mean something other than what a
 /// person approved.
-pub fn refusal_for_program(program: &str) -> Option<SandboxError> {
+///
+/// `cmd.exe` started directly reads its line by the same rules of its own and not by
+/// `CommandLineToArgvW`'s. After `/c`, `/k` or `/r` it drops the first and last quotation mark
+/// of what follows when that starts with one, and it reads operators, `%` and its delimiters
+/// wherever they are left unquoted. It is started only where its reading and the line
+/// [`command_line`] writes agree: no argument holds a character in [`CMD_READS`], and the first
+/// argument after the switch is written quoted only when it is the last one.
+pub fn refusal_for_program(program: &str, args: &[String]) -> Option<SandboxError> {
     let is_a_batch_file = Path::new(program)
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd")
         });
-    is_a_batch_file.then(|| SandboxError::SetupFailed {
-        mechanism: "appcontainer",
-        detail: format!(
-            "{program} is a batch file, and `cmd.exe` reads its arguments a second time, so \
-             an argument quoted for a program can be read there as a command; refusing rather \
-             than starting it"
-        ),
-    })
+    if is_a_batch_file {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: format!(
+                "{program} is a batch file, and `cmd.exe` reads its arguments a second time, so \
+                 an argument quoted for a program can be read there as a command; refusing \
+                 rather than starting it"
+            ),
+        });
+    }
+    if !is_cmd(program) {
+        return None;
+    }
+    let refused = |why: String| {
+        Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: format!(
+                "`cmd.exe` reads its command line by rules of its own, and {why}, so the \
+                 arguments it ran would not be the ones approved; refusing rather than starting \
+                 it. Run the program directly instead of through `cmd.exe`"
+            ),
+        })
+    };
+    if let Some(read) = args
+        .iter()
+        .find_map(|arg| arg.chars().find(|c| CMD_READS.contains(c)))
+    {
+        return refused(format!(
+            "it reads {read:?} in an argument as its own syntax"
+        ));
+    }
+    let after_switch = args
+        .iter()
+        .position(|arg| {
+            ["/c", "/k", "/r"]
+                .iter()
+                .any(|s| arg.eq_ignore_ascii_case(s))
+        })
+        .map_or(&[][..], |switch| &args[switch + 1..]);
+    if let [first, _, ..] = after_switch
+        && is_written_quoted(first)
+    {
+        return refused(
+            "it drops the quotation marks around the first argument after its switch when \
+             another follows"
+                .into(),
+        );
+    }
+    None
+}
+
+/// What `cmd.exe` reads as its own in a line it runs: the quotation mark, the operators, the
+/// escape, the two expansions, the line ends, and the delimiters its built-in commands split on.
+/// Quoting an argument does not keep one out of its reading: the quotation marks around the
+/// first argument after the switch can be dropped, `%` and `!` are expanded inside quotation marks,
+/// and a quotation mark is not escaped by the backslash [`quoted`] writes before it.
+const CMD_READS: [char; 15] = [
+    '"', '&', '|', '<', '>', '^', '(', ')', '%', '!', '\n', '\r', ',', ';', '=',
+];
+
+/// Whether `program` is the command interpreter, spelled with or without its extension and in
+/// any directory.
+fn is_cmd(program: &str) -> bool {
+    let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    name.eq_ignore_ascii_case("cmd") || name.eq_ignore_ascii_case("cmd.exe")
 }
 
 /// The program and arguments as the text a command line is written from, or a refusal of the
@@ -318,9 +396,16 @@ fn capabilities() -> Capabilities {
         level: ConfinementLevel::Partial,
         mechanisms: vec!["appcontainer"],
         network_denial_enforced: true,
+        egress_limited_to_a_port: false,
         // An entry is written onto an object, and there is nothing at a path that is not
         // on disk to write one onto.
         grants_paths_that_do_not_exist: false,
+        // A grant is written onto an object with everything beneath it, and nothing narrower
+        // than the grant can be taken from it, so `refusal_for` starts no stage holding a refusal.
+        subtracts_from_a_grant: false,
+        // A socket with a path is a file on disk, so a connect to one is decided by its access
+        // list like any other object the container opens.
+        governs_sockets_with_a_path: true,
     }
 }
 
@@ -360,19 +445,38 @@ const LONGEST_PROFILE_NAME: usize = 64;
 /// deciding what the program was asked to do ([SANDBOX-4]).
 ///
 /// The rules are the ones `CommandLineToArgvW` parses back, which is what the C runtime
-/// and every language runtime on this platform use: every argument is quoted, a backslash
-/// run immediately before the closing quotation mark is doubled, and a backslash run
-/// before an embedded quotation mark is doubled and the quotation mark escaped. A
-/// backslash anywhere else is literal, so a path is not rewritten by being quoted.
+/// and every language runtime on this platform use: an argument [`is_written_quoted`] is
+/// quoted, a backslash run immediately before the closing
+/// quotation mark is doubled, and a backslash run before an embedded quotation mark is doubled
+/// and the quotation mark escaped. A backslash anywhere else is literal, so a path is not
+/// rewritten by being quoted. Any other argument is written as it is, since `cmd.exe` reads its
+/// own switches from the command line and does not find `/c` once it is quoted. What `cmd.exe`
+/// does with the rest of its line is not decided by quoting, so [`refusal_for_program`] refuses
+/// the lines it would read differently.
 ///
 /// [SANDBOX-4]: ../../../docs/specs/sandboxing.md
 fn command_line(program: &str, args: &[String]) -> String {
     let mut line = quoted(program);
     for arg in args {
         line.push(' ');
-        line.push_str(&quoted(arg));
+        if is_written_quoted(arg) {
+            line.push_str(&quoted(arg));
+        } else {
+            line.push_str(arg);
+        }
     }
     line
+}
+
+/// Whether [`command_line`] writes `arg` between quotation marks: it is empty, or holds a space,
+/// a tab, a quotation mark, a character `cmd.exe` reads as its own (`& | < > ^ % ( ) !`), or a
+/// `*` or `?`, which a program built with the MinGW or MSVC wildcard runtime expands into file
+/// names where the argument is left unquoted.
+fn is_written_quoted(arg: &str) -> bool {
+    arg.is_empty()
+        || arg.contains([
+            ' ', '\t', '"', '&', '|', '<', '>', '^', '%', '(', ')', '!', '*', '?',
+        ])
 }
 
 /// One argument, written so `CommandLineToArgvW` gives it back unchanged.
@@ -622,7 +726,7 @@ mod tests {
             "npm.cmd",
             r"C:\tools\a.b.Bat",
         ] {
-            assert!(refusal_for_program(program).is_some(), "{program}");
+            assert!(refusal_for_program(program, &[]).is_some(), "{program}");
         }
         for program in [
             r"C:\tools\build.exe",
@@ -631,7 +735,101 @@ mod tests {
             r"C:\bat\build",
             "git",
         ] {
-            assert!(refusal_for_program(program).is_none(), "{program}");
+            assert!(refusal_for_program(program, &[]).is_none(), "{program}");
+        }
+    }
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    /// SANDBOX-4 for `cmd.exe`: an argument holding a character `cmd.exe` reads as its own is
+    /// refused, as the only argument after the switch and as one of several, however the program
+    /// is spelled. The same arguments to another program start, since that program reads them back
+    /// through `CommandLineToArgvW`. The regression it rejects is a `cmd.exe` started with an
+    /// argument it reads as an operator, an expansion or a delimiter.
+    #[test]
+    fn cmd_is_refused_an_argument_it_would_read_as_its_own_syntax() {
+        let read_by_cmd = [
+            "a&b",
+            "a|b",
+            "a>b",
+            "a<b",
+            "a^b",
+            "%PATH%",
+            "(a)",
+            "a!",
+            r#"say "hi""#,
+            "a;b",
+            "a,b",
+            "a=b",
+            "a\nb",
+            "a\rb",
+        ];
+        for program in [
+            "cmd.exe",
+            r"C:\Windows\System32\CMD.EXE",
+            "cmd",
+            "C:/Windows/cmd",
+        ] {
+            for argument in read_by_cmd {
+                for args in [
+                    strings(&["/c", argument]),
+                    strings(&["/c", "echo", argument]),
+                    strings(&["/K", r"C:\tools\x.exe", argument]),
+                ] {
+                    assert!(
+                        refusal_for_program(program, &args).is_some(),
+                        "{program} {args:?}"
+                    );
+                }
+            }
+        }
+        for argument in read_by_cmd {
+            let args = strings(&["/c", "echo", argument]);
+            assert!(
+                refusal_for_program(r"C:\tools\x.exe", &args).is_none(),
+                "{args:?}"
+            );
+        }
+    }
+
+    /// `cmd.exe` drops the first and last quotation mark of the line after its switch when the line
+    /// starts with one, so the first argument after the switch is refused where it is written
+    /// quoted and another argument follows it: that program would be read as the words of its
+    /// path. The regression it rejects is a refusal that looks only at the characters of each
+    /// argument, which starts this line with nothing in it `cmd.exe` acts on.
+    #[test]
+    fn cmd_is_refused_a_quoted_first_argument_after_its_switch_with_another_after_it() {
+        for args in [
+            strings(&["/c", r"C:\Program Files\x.exe", "a b"]),
+            strings(&["/d", "/C", r"C:\Program Files\x.exe", "next"]),
+            strings(&["/s", "/c", r"C:\Program Files\x.exe", "next"]),
+            strings(&["/r", "", "next"]),
+            strings(&["/c", "*.txt", "next"]),
+        ] {
+            assert!(refusal_for_program("cmd.exe", &args).is_some(), "{args:?}");
+        }
+    }
+
+    /// The lines `cmd.exe` reads as the line written: one argument after the switch, spaces and
+    /// all, since that argument is the line `cmd.exe` is asked to run; and several where none
+    /// holds a character it reads and the first after the switch is not quoted. The regression it
+    /// rejects is a refusal of every `cmd.exe` line, which leaves a confined stage no way to run
+    /// the interpreter's own commands.
+    #[test]
+    fn cmd_starts_where_it_reads_the_line_as_it_was_written() {
+        for args in [
+            strings(&["/c", "echo hello"]),
+            strings(&["/c", r"type C:\dir\note.txt"]),
+            strings(&["/c", r"C:\Program Files\x.exe"]),
+            strings(&["/d", "/c", "mkdir", r"C:\dir\made"]),
+            strings(&["/c", "set", "HTTPS_PROXY"]),
+            strings(&["/c", "type", r"C:\my dir\note.txt"]),
+            strings(&["/c", "dir", "*.txt"]),
+            strings(&[]),
+        ] {
+            assert!(refusal_for_program("cmd.exe", &args).is_none(), "{args:?}");
         }
     }
 
@@ -762,7 +960,14 @@ mod tests {
     /// policy is otherwise one this backend applies, so the refusal is the only reason.
     #[test]
     fn a_policy_refusing_a_read_is_refused_rather_than_applied() {
-        let policy = a_policy_this_backend_applies().deny_read("/workspace/credentials");
+        let workspace = std::path::PathBuf::from(if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/workspace"
+        });
+        let policy = a_policy_this_backend_applies()
+            .allow_read(&workspace)
+            .deny_read(workspace.join("credentials"));
 
         let refusal = refusal_for(&policy).expect("a read refusal is not enforceable here");
 
@@ -780,6 +985,20 @@ mod tests {
 
         assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
         assert!(refusal.to_string().contains("write refusal"));
+    }
+
+    /// A container holds the internet capability or not, so a policy limiting egress to a proxy's
+    /// port is refused rather than applied with egress to everywhere. The policy is otherwise
+    /// one this backend applies, so the limit is the only reason.
+    #[test]
+    fn a_policy_limiting_egress_to_one_port_is_refused() {
+        assert!(refusal_for(&a_policy_this_backend_applies()).is_none());
+        let policy = a_policy_this_backend_applies().allow_network_egress_only_to(8123);
+
+        let refusal = refusal_for(&policy).expect("a port limit is not enforceable here");
+
+        assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
+        assert!(refusal.to_string().contains("one port"));
     }
 
     /// A container does not stop a process creating children, so a policy asking for that
@@ -909,7 +1128,7 @@ mod tests {
     fn a_backslash_before_a_quotation_mark_does_not_escape_the_escape() {
         assert_eq!(
             command_line("s.exe", &[r#"a\"b"#.to_string(), "next".to_string()]),
-            r#""s.exe" "a\\\"b" "next""#
+            r#""s.exe" "a\\\"b" next"#
         );
         assert_eq!(
             command_line("s.exe", &[r#"a\\"b"#.to_string()]),
@@ -923,8 +1142,8 @@ mod tests {
     #[test]
     fn a_path_ending_in_a_separator_does_not_swallow_the_argument_after_it() {
         assert_eq!(
-            command_line("s.exe", &["C:\\dir\\".to_string(), "next".to_string()]),
-            r#""s.exe" "C:\dir\\" "next""#
+            command_line("s.exe", &["C:\\my dir\\".to_string(), "next".to_string()]),
+            r#""s.exe" "C:\my dir\\" next"#
         );
     }
 
@@ -934,7 +1153,41 @@ mod tests {
     fn quoting_a_path_leaves_the_path_it_names_alone() {
         assert_eq!(
             command_line("s.exe", &["C:\\dir\\file".to_string()]),
-            r#""s.exe" "C:\dir\file""#
+            r#""s.exe" C:\dir\file"#
+        );
+    }
+
+    /// The regression it rejects: every argument quoted, which hands `cmd.exe` a `"/c"` it does
+    /// not read as its switch, so it starts and runs nothing. What it is asked to run still
+    /// arrives as the one argument it is.
+    #[test]
+    fn an_argument_that_needs_no_quoting_is_written_as_it_is() {
+        assert_eq!(
+            command_line("cmd.exe", &["/c".to_string(), "echo hello".to_string()]),
+            r#""cmd.exe" /c "echo hello""#
+        );
+    }
+
+    /// The regression it rejects: the quoting dropped for every argument that holds no space,
+    /// which hands `cmd.exe` or a batch file the `&` of `a&calc` as a second command.
+    #[test]
+    fn an_argument_cmd_would_act_on_stays_quoted() {
+        for argument in ["a&calc", "a|b", "a>b", "a<b", "a^b", "%PATH%", "(a)", "a!"] {
+            assert_eq!(
+                command_line("cmd.exe", &["/c".to_string(), argument.to_string()]),
+                format!(r#""cmd.exe" /c "{argument}""#)
+            );
+        }
+    }
+
+    /// A program built with the MinGW or MSVC wildcard runtime expands an unquoted `*` or `?` into
+    /// the names of the files it matches, so an argument holding one is quoted and the program is
+    /// given the argument rather than a list of files.
+    #[test]
+    fn an_argument_holding_a_wildcard_reaches_the_program_unexpanded() {
+        assert_eq!(
+            command_line("s.exe", &["*.txt".to_string(), "a?".to_string()]),
+            r#""s.exe" "*.txt" "a?""#
         );
     }
 
@@ -944,7 +1197,7 @@ mod tests {
     fn an_empty_argument_is_still_an_argument() {
         assert_eq!(
             command_line("s.exe", &[String::new(), "after".to_string()]),
-            r#""s.exe" "" "after""#
+            r#""s.exe" "" after"#
         );
     }
 
@@ -956,7 +1209,10 @@ mod tests {
         let reported = capabilities();
         assert_eq!(reported.level, ConfinementLevel::Partial);
         assert!(reported.network_denial_enforced);
+        assert!(!reported.egress_limited_to_a_port);
         assert!(!reported.grants_paths_that_do_not_exist);
+        assert!(!reported.subtracts_from_a_grant);
+        assert!(reported.governs_sockets_with_a_path);
         assert!(reported.mechanisms.contains(&"appcontainer"));
     }
 

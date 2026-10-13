@@ -315,3 +315,65 @@ fn a_drop_before_one_that_could_not_be_read_keeps_its_rule() {
         trust.rules().collect::<Vec<_>>()
     );
 }
+
+/// DROP-11. The path goes in a text part before the bytes, because the marker in the line is
+/// `[Image #1]` and nothing else in the request says which file it stood for. Bytes alone leave a
+/// planner that was told to look at a dropped file unable to name it or read it.
+///
+/// The order is asserted, not just the presence of both: a path after the bytes is a path attached
+/// to whatever part follows, and on a line that dropped two files it would name the wrong one.
+#[test]
+fn a_dropped_picture_is_carried_with_its_path_named_before_the_bytes() {
+    use bravebot_aichat::protocol::Part;
+
+    let carried = Carried::Shown {
+        path: "shot.png".to_string(),
+        uri: "data:image/png;base64,iVA=".to_string(),
+    };
+
+    let parts = carried.parts();
+    assert_eq!(
+        parts.len(),
+        2,
+        "a shown drop is a path and its bytes: {parts:?}"
+    );
+    match &parts[0] {
+        Part::Text { text } => assert_eq!(text, "Dropped file: shot.png"),
+        other => panic!("the path did not come first: {other:?}"),
+    }
+    match &parts[1] {
+        Part::ImageUrl { image_url } => {
+            assert_eq!(image_url.url, "data:image/png;base64,iVA=")
+        }
+        other => panic!("the bytes did not follow the path: {other:?}"),
+    }
+}
+
+/// DROP-11, the other half. A file the kernel would not show is one sentence, which already names
+/// the path, so nothing adds a second mention of it and no part claims bytes that were withheld.
+#[test]
+fn a_withheld_drop_is_the_sentence_naming_it_and_no_bytes() {
+    use bravebot_aichat::protocol::Part;
+
+    let parts = Carried::Described {
+        path: "shot.png".to_string(),
+        said: "a picture, 2 bytes".to_string(),
+    }
+    .parts();
+
+    assert_eq!(parts.len(), 1, "a withheld drop carried bytes: {parts:?}");
+    match &parts[0] {
+        Part::Text { text } => {
+            assert_eq!(
+                text,
+                "shot.png could not be shown to you.\n\na picture, 2 bytes"
+            );
+            assert_eq!(
+                text.matches("shot.png").count(),
+                1,
+                "the path is named twice: {text}"
+            );
+        }
+        other => panic!("a withheld drop is a sentence: {other:?}"),
+    }
+}

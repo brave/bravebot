@@ -9,7 +9,7 @@ export function Unconfigured({ detail, onClose }: { detail: string; onClose: () 
     <Collapse className="dialog-collapse" title="Development setup" isOpen={undefined} data-test="unconfigured-setup">
       <ol>
         <li>Provide the backend credentials through the project’s approved environment configuration.</li>
-        <li>Run <code>npm run bridge</code> from the interface checkout.</li>
+        <li>Run <code>pnpm run bridge</code> from the interface checkout.</li>
         <li>Restart Brave Bot, then use <strong>Check again</strong>.</li>
       </ol>
       <p>See <code>docs/setup.md</code> for the configuration layout. Keep credentials outside the repository.</p>

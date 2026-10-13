@@ -84,9 +84,10 @@ a name that would be read as a path inside the project, where your answer at sta
 Windows that is every path there is, so opening a directory by name is unavailable there for now.
 
 **Case is folded only on a volume that folds it.** Where `Docs` and `docs` open the same file, a rule
-about one decides the other, in both directions, and where two rules differ only in case the one that
-sorts first decides. Where the volume keeps the spellings apart, or cannot be asked, a rule about
-`Docs` decides nothing about `docs`.
+about one decides the other, in both directions, and where two rules differ only in case the less
+trusting one decides. Trusting `docs` does not undo a distrust recorded for `Docs`. Where the working
+directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
+about `docs`.
 
 ## What a write does
 

@@ -71,7 +71,7 @@ test('the host is drawn on a line of its own, as the agent read it', () => {
   // goes to the second. The card draws what it was sent and works nothing out from the address.
   const { markup } = draw(asked({ url: 'https://example.com@evil.test/docs', host: 'evil.test' }))
 
-  assert.ok(markup.includes('<code class="path">https://example.com@evil.test/docs</code>'), markup)
+  assert.ok(markup.includes('<code class="path" data-deciding="first">https://example.com@evil.test/docs</code>'), markup)
   assert.match(markup, /Talking to:<\/strong> <code>evil\.test<\/code>/)
 })
 

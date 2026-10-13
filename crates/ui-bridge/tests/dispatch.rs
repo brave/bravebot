@@ -296,6 +296,29 @@ fn a_confirmation_for_no_running_turn_is_refused() {
     );
 }
 
+/// `host.reply` is a method the bridge routes. With no host question waiting it is refused as an
+/// answer to nothing, which tells it apart from a method the bridge does not know.
+#[test]
+fn a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+
+    assert_eq!(
+        call(
+            &mut bridge,
+            "host.reply",
+            json!({ "session": &handle, "request": 1, "decision": "approve" })
+        ),
+        Err(ErrorCode::NoSuchRequest)
+    );
+}
+
 /// Cancelling something that is not running is not an error: a turn can finish between
 /// the key being pressed and the request arriving.
 #[test]

@@ -5,6 +5,10 @@
 //! Not a test of anything: every assertion that matters lives in turn.rs and exec.rs. This exists
 //! to print what the planner is and is not shown, which is the part worth seeing.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{self, Task};
 use bravebot_config::Config;
@@ -146,7 +150,7 @@ fn search_finds_a_regular_expression() {
         says("done"),
     ]);
     let mut sink = RecordingSink::new();
-    turn::run_with_trust(
+    turns::run_with_trust(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         &workspace,
@@ -201,7 +205,7 @@ fn a_fetched_page_is_quarantined() {
         says("done"),
     ]);
     let mut sink = RecordingSink::new();
-    turn::run_with_trust(
+    turns::run_with_trust(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         &workspace,
@@ -302,7 +306,7 @@ fn a_picture_goes_to_a_processor() {
         says("done"),
     ]);
     let mut sink = RecordingSink::new();
-    turn::run_with_trust(
+    turns::run_with_trust(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         &workspace,
@@ -415,6 +419,21 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(

@@ -59,7 +59,7 @@ and edits from the window name a folder from that recorded set and are refused f
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
-plan, credential-exposure and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+plan, credential-exposure, allowed-hosts and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -97,6 +97,11 @@ found a credential in. The card names the file and each finding, which is a kind
 and a mask. The value is not sent to the window, so it is never drawn. An approval sends the
 file to the model and covers that file until the conversation closes. It is not saved and
 does not change whether the file is trusted. A refusal keeps the file's text from the model.
+
+An allowed-hosts approval is asked when a confined program asked the session proxy for hosts that
+`sandbox.network.allowedHosts` does not list and `onUnlisted` is `ask`. The card lists each host,
+which is checked to be a host name or an IP address before it is sent. A yes lets every later
+command in the conversation reach those hosts unless `deniedHosts` names them. It is not saved.
 
 MCP servers a project requests are started on a session's first turn, after the trust
 question, and only on a yes to a card that shows the whole declaration: what it runs or

@@ -8,9 +8,10 @@
 //! event all resolve to refusal.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, Intent,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+    WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::reach::Lasting;
@@ -93,6 +94,14 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         ask_mcp_call(self.terminal, request).decision()
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        ask_path(self.terminal, request).decision()
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        ask_host(self.terminal, request).decision()
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -325,8 +334,8 @@ fn pressed(key: KeyEvent, page: i16) -> Option<Response> {
         KeyCode::Char('y' | 'Y') => Some(Response::Answer(Answer::Approve)),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(Response::Answer(Answer::Reject)),
         // A diff longer than the box is the one most worth reading before answering.
-        KeyCode::Up => Some(Response::Scroll(-1)),
-        KeyCode::Down => Some(Response::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(Response::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(Response::Scroll(1)),
         KeyCode::PageUp => Some(Response::Scroll(-page)),
         KeyCode::PageDown => Some(Response::Scroll(page)),
         KeyCode::Home => Some(Response::Scroll(i16::MIN)),
@@ -742,12 +751,13 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('m' | 'M') if request.offers_to_keep_reach() => {
             Some(RunResponse::Answer(RunAnswer::KeepReach))
         }
-        KeyCode::Char('k' | 'K') if request.offers_to_keep_reach() => {
+        // Not `k`: that scrolls up at every prompt, and a person scrolling must not write a grant.
+        KeyCode::Char('e' | 'E') if request.offers_to_keep_reach() => {
             Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
-        KeyCode::Up => Some(RunResponse::Scroll(-1)),
-        KeyCode::Down => Some(RunResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(RunResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(RunResponse::Scroll(1)),
         KeyCode::PageUp => Some(RunResponse::Page(-1)),
         KeyCode::PageDown => Some(RunResponse::Page(1)),
         KeyCode::Home => Some(RunResponse::Scroll(i16::MIN)),
@@ -787,7 +797,7 @@ struct RunDrawn {
     record_unread: usize,
     /// Rows saying what `f` grants besides running the line, not on the screen yet.
     family_unread: usize,
-    /// Rows saying what `m` and `k` remember, not on the screen yet.
+    /// Rows saying what `m` and `e` remember, not on the screen yet.
     reach_unread: usize,
 }
 
@@ -1080,6 +1090,15 @@ fn draw_run(
             Style::default().fg(theme::running()),
         ))),
     }
+    // The planner's request, which the answer is to. Drawn in the colour of a failure, since the
+    // line is about to be given what the sandbox was holding back.
+    if request.unconfined {
+        lines.extend(indented(
+            t!(run_unconfined),
+            Style::default().fg(theme::fail()),
+            inside.width as usize,
+        ));
+    }
 
     // Which access in particular a yes hands over, where the line reaches one nothing here holds:
     // a container daemon, a tool already logged in, the ssh agent, the metadata service. The line
@@ -1206,6 +1225,9 @@ fn draw_run(
         if request.asks_for_scopes() {
             why.push(t!(run_scopes_not_remembered));
         }
+        if request.unconfined {
+            why.push(t!(run_unconfined_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -1219,7 +1241,7 @@ fn draw_run(
     // that it stops the asking without making anything readable. The place it is written down is
     // part of the grant rather than a footnote, because nobody can endorse a record they were not
     // shown, and deleting the line from that file is the way back.
-    if let Some(path) = &request.record {
+    if let Some(path) = request.record.as_ref().filter(|_| request.may_record()) {
         lines.push(Line::raw(""));
         record.start = measure(&lines);
         lines.push(Line::from(Span::styled(
@@ -1269,7 +1291,7 @@ fn draw_run(
         family.end = measure(&lines);
     }
 
-    // What `m` and `k` would remember, where they are offered: the programs by name, the scopes, and
+    // What `m` and `e` would remember, where they are offered: the programs by name, the scopes, and
     // the place the record is written. The second sentence is the half a person is most likely to
     // assume the other way round, since the plan they are looking at asked for the scope: it is
     // asked about again next time, with the scope on it, and nothing is vouched for.
@@ -1310,15 +1332,12 @@ fn draw_run(
             format!("     {}", t!(run_keep_reach_lifetimes)),
             Style::default().fg(theme::muted()),
         )));
-        let toolchains = request.requested_toolchains();
-        if !toolchains.is_empty() {
+        let asked_again = request.requested_not_remembered();
+        if !asked_again.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!(
                     "     {}",
-                    t!(
-                        run_keep_reach_toolchains,
-                        toolchains = toolchains.join(", ")
-                    )
+                    t!(run_keep_reach_asked_again, names = asked_again.join(", "))
                 ),
                 Style::default().fg(theme::muted()),
             )));
@@ -1490,7 +1509,7 @@ fn run_keys(
         for (key, answer, label) in [
             ("m", RunAnswer::KeepReach, t!(run_keep_reach)),
             (
-                "k",
+                "e",
                 RunAnswer::KeepReachEverySession,
                 t!(run_keep_reach_always),
             ),
@@ -1855,8 +1874,8 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict, drawn: &Drawn) -> Option<
             Some(VetResponse::Answer(VetAnswer::ApproveAlways))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(VetResponse::Answer(VetAnswer::Reject)),
-        KeyCode::Up => Some(VetResponse::Scroll(-1)),
-        KeyCode::Down => Some(VetResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(VetResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(VetResponse::Scroll(1)),
         KeyCode::PageUp => Some(VetResponse::Scroll(-page)),
         KeyCode::PageDown => Some(VetResponse::Scroll(page)),
         KeyCode::Home => Some(VetResponse::Scroll(i16::MIN)),
@@ -2270,32 +2289,46 @@ fn draw_server(
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(server_title));
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("{} ", t!(server_verb)),
-                Style::default()
-                    .fg(theme::ok())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                request.program.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::styled(
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("{} ", t!(server_verb)),
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            request.program.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    if !request.args.is_empty() {
+        lines.push(Line::styled(
             format!(
                 "  {}",
-                t!(server_workspace, workspace = request.workspace.as_str())
+                t!(server_arguments, arguments = request.arguments_line())
             ),
             Style::default().fg(theme::muted()),
+        ));
+    }
+    lines.push(Line::styled(
+        format!(
+            "  {}",
+            t!(server_workspace, workspace = request.workspace.as_str())
         ),
-        Line::raw(""),
-    ];
+        Style::default().fg(theme::muted()),
+    ));
+    lines.push(Line::raw(""));
 
     // The consequential half. Drawn in the warning colour where dependency code runs, since that is
     // the part of this question a person could not have inferred from the word "start".
-    let (sentence, style) = if request.runs_build_tooling {
+    let (sentence, style) = if request.declared {
+        // What a program a person named runs is not known here, so the prompt says that rather than
+        // that it runs nothing.
+        (
+            t!(server_declared_unknown),
+            Style::default().fg(theme::note()),
+        )
+    } else if request.runs_build_tooling {
         (t!(server_build_tooling), Style::default().fg(theme::note()))
     } else {
         (t!(server_reads_only), Style::default().fg(theme::muted()))
@@ -2872,6 +2905,138 @@ fn draw_move(
     pinned::draw(frame, inside, question, scroll, seen)
 }
 
+/// Ask whether programs may reach one more path for the session, blocking until answered.
+pub fn ask_path<B: Backend>(terminal: &mut Terminal<B>, request: &PathRequest) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_path(frame, request, scroll, &mut seen))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether programs may reach a path.
+///
+/// The path is what a yes grants, so every row it takes has to have been drawn before a yes is
+/// taken: a path long enough to scroll could otherwise hide the end of it. The reason is the
+/// planner's own text and sits above, pinned, where it cannot push the keys off the screen.
+fn draw_path(
+    frame: &mut ratatui::Frame,
+    request: &PathRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(path_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+    let shown = request.path.display().to_string();
+
+    let access = match request.write {
+        true => t!(path_writes, path = shown.as_str()),
+        false => t!(path_reads, path = shown.as_str()),
+    };
+    let mut body = indented(access, Style::default().add_modifier(Modifier::BOLD), width);
+    let deciding = body.len();
+    body.extend(indented(
+        t!(path_why, why = request.why.as_str()),
+        muted,
+        width,
+    ));
+    body.push(Line::raw(""));
+    body.extend(indented(t!(path_explained), muted, width));
+    body.push(Line::raw(""));
+    body.extend(indented(t!(path_not_trusted), muted, width));
+
+    let keys = |answerable| vec![answer_keys(t!(path_yes), t!(path_no), answerable)];
+    let question = Question::scrolled(body, deciding, 0, &keys);
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
+/// Ask whether programs may reach hosts the allowed-hosts list does not cover, for the session,
+/// blocking until answered.
+pub fn ask_host<B: Backend>(terminal: &mut Terminal<B>, request: &HostRequest) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_host(frame, request, scroll, &mut seen))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether programs may reach the hosts they asked for.
+///
+/// The hosts are what a yes grants, so each is drawn on a row of its own, bold, before the keys
+/// can take an answer. They are names a program chose, validated as host names before they get
+/// here, and appear nowhere the planner reads.
+fn draw_host(
+    frame: &mut ratatui::Frame,
+    request: &HostRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(host_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let mut body = indented(
+        t!(host_asked, count = request.hosts.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    );
+    for host in &request.hosts {
+        body.extend(indented(
+            t!(host_row, host = host.as_str()),
+            Style::default().add_modifier(Modifier::BOLD),
+            width,
+        ));
+    }
+    let deciding = body.len();
+    body.push(Line::raw(""));
+    body.extend(indented(t!(host_explained), muted, width));
+
+    let keys = |answerable| vec![answer_keys(t!(host_yes), t!(host_no), answerable)];
+    let question = Question::scrolled(body, deciding, 0, &keys);
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
 /// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
 ///
 /// Asked with no turn running, so ctrl-c keeps the checkout like a no, and nothing is stopped.
@@ -3309,8 +3474,8 @@ fn call_answer_for(key: KeyEvent, request: &McpCallRequest, drawn: &Drawn) -> Op
             Some(CallResponse::Answer(CallAnswer::Reject))
         }
         KeyCode::Char('e' | 'E') => Some(CallResponse::Expand),
-        KeyCode::Up => Some(CallResponse::Scroll(-1)),
-        KeyCode::Down => Some(CallResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(CallResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(CallResponse::Scroll(1)),
         KeyCode::PageUp => Some(CallResponse::Scroll(-page)),
         KeyCode::PageDown => Some(CallResponse::Scroll(page)),
         KeyCode::Home => Some(CallResponse::Scroll(i16::MIN)),
@@ -3830,6 +3995,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
@@ -3937,6 +4103,51 @@ mod tests {
         let mut drawn = Drawn::default();
         let rows = rows_of(width, height, |frame| drawn = draw(frame));
         (rows, drawn)
+    }
+
+    fn server_screen(request: &ServerRequest) -> String {
+        pinned_screen((160, 24), |frame| {
+            draw_server(frame, request, 0, &mut Seen::default())
+        })
+        .0
+        .join("\n")
+    }
+
+    /// LSP-11: the question about a server a person declared names every argument, and says what
+    /// starting it runs is not known. It must say neither that it runs the project's code nor that it
+    /// only reads, since nothing here chose the program.
+    #[test]
+    fn a_declared_server_is_asked_about_with_its_arguments_and_as_unknown() {
+        let table = ServerRequest {
+            language: "Rust".into(),
+            program: "/usr/bin/rust-analyzer".into(),
+            args: Vec::new(),
+            workspace: "/work".into(),
+            runs_build_tooling: true,
+            declared: false,
+        };
+        let declared = ServerRequest {
+            language: "clangd".into(),
+            program: "/usr/bin/clangd".into(),
+            args: vec!["--background-index".into(), "--log=error".into()],
+            declared: true,
+            ..table.clone()
+        };
+
+        let shown = server_screen(&declared);
+        assert!(shown.contains("/usr/bin/clangd"), "{shown}");
+        assert!(shown.contains("--background-index --log=error"), "{shown}");
+        assert!(shown.contains("not known"), "{shown}");
+        assert!(!shown.contains("the way building or testing"), "{shown}");
+        assert!(!shown.contains("nothing is written"), "{shown}");
+
+        // The table's server keeps its own sentence, so the unknown one is not shown for it.
+        let from_the_table = server_screen(&table);
+        assert!(
+            from_the_table.contains("the way building or testing"),
+            "{from_the_table}"
+        );
+        assert!(!from_the_table.contains("not known"), "{from_the_table}");
     }
 
     fn fetch_screen(request: &FetchRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
@@ -4074,6 +4285,111 @@ mod tests {
             authority: "elsewhere.example:443".to_string(),
             may_record,
         }
+    }
+
+    fn a_path_request(write: bool) -> PathRequest {
+        PathRequest {
+            path: std::path::PathBuf::from("/opt/toolchain/include"),
+            write,
+            why: "the build reads headers there".to_string(),
+        }
+    }
+
+    fn path_screen(request: &PathRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        pinned_screen(size, |frame| {
+            draw_path(frame, request, scroll, &mut Seen::default())
+        })
+    }
+
+    /// SANDBOX-28: the person is shown the path and whether it is read or written, the planner's
+    /// reason, how long a yes lasts and that it marks nothing trusted.
+    #[test]
+    fn a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do() {
+        let reading = path_screen(&a_path_request(false), (160, 24), 0).0.concat();
+        for shown in [
+            "programs this session starts may read /opt/toolchain/include",
+            "the planner says: the build reads headers there",
+            "Every command the planner runs from now until this session ends",
+            "The directory is not marked trusted",
+            "y Yes, for this session",
+        ] {
+            assert!(reading.contains(shown), "{shown} is not drawn in {reading}");
+        }
+        assert!(!reading.contains("read and write"), "{reading}");
+
+        let writing = path_screen(&a_path_request(true), (160, 24), 0).0.concat();
+        assert!(
+            writing.contains("may read and write /opt/toolchain/include"),
+            "{writing}"
+        );
+    }
+
+    /// SANDBOX-28: a path too long for the box is the thing a yes grants, so a yes is not taken
+    /// until every row of it has been drawn.
+    #[test]
+    fn a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn() {
+        let request = PathRequest {
+            path: std::path::PathBuf::from(format!("/opt/{}/tail", numbered('p', 200).join(" "))),
+            write: false,
+            why: "headers".to_string(),
+        };
+        let (rows, drawn) = path_screen(&request, (80, 24), 0);
+        assert!(!drawn.answerable(), "{}", rows.join("\n"));
+        assert!(
+            box_rows(&rows).iter().any(|row| row.contains("p0000")),
+            "{}",
+            rows.join("\n")
+        );
+    }
+
+    fn host_screen(hosts: &[&str], size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        let request = HostRequest {
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        };
+        pinned_screen(size, |frame| {
+            draw_host(frame, &request, scroll, &mut Seen::default())
+        })
+    }
+
+    /// SANDBOX-24: the person is shown how many hosts were asked for, each on a row of its own, how
+    /// long a yes lasts and that nothing is written, and the keys. One host is worded as one.
+    #[test]
+    fn a_host_prompt_shows_each_host_and_what_a_yes_does() {
+        let shown = host_screen(&["a.example", "b.example"], (160, 24), 0).0;
+        let rows = box_rows(&shown);
+        for row in ["a.example", "b.example"] {
+            assert!(
+                rows.iter().filter(|line| line.contains(row)).count() == 1,
+                "{row} is not on a row of its own in {rows:#?}"
+            );
+        }
+        let screen = rows.concat();
+        for text in [
+            "programs this session started asked for 2 hosts",
+            "Every command the planner runs from now until this session ends",
+            "Nothing is written to disk",
+            "y Yes, for this session",
+        ] {
+            assert!(screen.contains(text), "{text} is not drawn in {screen}");
+        }
+        let one = host_screen(&["a.example"], (160, 24), 0).0.concat();
+        assert!(
+            one.contains("a program this session started asked for a host"),
+            "{one}"
+        );
+    }
+
+    /// SANDBOX-24: the hosts are what a yes grants, so a yes is not taken until every row of them
+    /// has been drawn.
+    #[test]
+    fn a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn() {
+        let names: Vec<String> = numbered('h', 8)
+            .into_iter()
+            .map(|label| format!("{label}.example.org"))
+            .collect();
+        let hosts: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (rows, drawn) = host_screen(&hosts, (80, 12), 0);
+        assert!(!drawn.answerable(), "{}", rows.join("\n"));
     }
 
     /// SERVERS-11: the person is shown where the server is declared, where its reply points, and
@@ -4330,6 +4646,7 @@ mod tests {
                     toolchain: None,
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
                     reaches: Vec::new(),
+                    identity: Some("/home/someone/.ssh/work.pub".into()),
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4341,6 +4658,7 @@ mod tests {
                         variable: "DOCKER_CONFIG",
                         path: "/home/someone/.local/share/docker-work".into(),
                     }],
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4349,6 +4667,7 @@ mod tests {
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Cargo),
                     scope: None,
                     reaches: Vec::new(),
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4365,6 +4684,12 @@ mod tests {
             "{drawn}"
         );
         assert!(drawn.contains("never a private key"), "{drawn}");
+        assert!(
+            drawn.contains(
+                "git has ssh offer the key /home/someone/.ssh/work.pub first, which your git.identities names"
+            ),
+            "{drawn}"
+        );
         assert!(
             drawn.contains(
                 "docker also reads /home/someone/.local/share/docker-work, where your DOCKER_CONFIG points"
@@ -4395,6 +4720,7 @@ mod tests {
                 toolchain: None,
                 scope: Some(bravebot_sandbox::scope::Scope::Remote),
                 reaches: Vec::new(),
+                identity: None,
                 network: kept,
                 remembered: Vec::new(),
             }],
@@ -4761,6 +5087,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
@@ -4876,6 +5203,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
@@ -4925,6 +5253,61 @@ mod tests {
         assert_eq!(shouted, None, "the shifted spelling still answered");
     }
 
+    /// SANDBOX-29: a line the planner asked to run with no sandbox says so on the prompt, offers no
+    /// answer that lasts, and binds none of `a`, `r`, `f`, `m` or `e`, though the request carries
+    /// every path those keys write to. The control is the same request without the flag, where
+    /// `a` and `r` answer. The regression it rejects is a key that remembers the request.
+    #[test]
+    fn a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key() {
+        let recordable = || RunRequest {
+            reach_record: Some("/home/someone/.bravebot/reach.jsonl".into()),
+            ..a_recordable_run()
+        };
+        for key in ['a', 'r'] {
+            assert!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &recordable()
+                )
+                .is_some(),
+                "the control did not take `{key}`, so the rows below prove nothing"
+            );
+        }
+
+        let request = RunRequest {
+            unconfined: true,
+            ..recordable()
+        };
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("with no sandbox"),
+            "the prompt did not say the line runs with none: {drawn}"
+        );
+        assert!(
+            !drawn.contains("stop asking about this exact line"),
+            "the prompt explained a key it does not offer: {drawn}"
+        );
+        assert!(
+            drawn.contains("asked about every time"),
+            "the prompt did not say why no lasting answer is offered: {drawn}"
+        );
+        for key in ['a', 'A', 'r', 'R', 'f', 'F', 'm', 'M', 'e', 'E'] {
+            assert_eq!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &request
+                ),
+                None,
+                "`{key}` answered a request to run with no sandbox"
+            );
+        }
+        let once = run_answer_for(
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            &request,
+        );
+        assert_eq!(once, Some(RunResponse::Answer(RunAnswer::Approve)));
+    }
+
     /// A line the planner asked to carry a scope asks every time whatever is remembered, so the
     /// prompt names that reason and `a` does not answer.
     #[test]
@@ -4950,7 +5333,7 @@ mod tests {
             "the prompt offered to remember a run that will always ask: {drawn}"
         );
         assert!(
-            drawn.contains("credential scope or a toolchain list"),
+            drawn.contains("credential scope, toolchain list or loopback"),
             "the prompt did not say which of the reasons this is: {drawn}"
         );
 
@@ -4985,6 +5368,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),
@@ -5245,9 +5629,9 @@ mod tests {
         )])
     }
 
-    /// SANDBOX-27: `m` and `k` approve the line and ask for the requested reach to be remembered
+    /// SANDBOX-27: `m` and `e` approve the line and ask for the requested reach to be remembered
     /// for this session or for every one, and for nothing else. The regressions it rejects: a key
-    /// that also vouches for the programs or records the line, and `k` lasting only the session.
+    /// that also vouches for the programs or records the line, and `e` lasting only the session.
     #[test]
     fn the_keep_keys_approve_and_remember_the_reach_only() {
         let request = a_run_keeping_remote();
@@ -5256,7 +5640,7 @@ mod tests {
             Some(RunResponse::Answer(RunAnswer::KeepReach))
         );
         assert_eq!(
-            run_answer_for(press(KeyCode::Char('k')), &request),
+            run_answer_for(press(KeyCode::Char('e')), &request),
             Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
         );
         for (answer, lasting) in [
@@ -5291,12 +5675,14 @@ mod tests {
     fn the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them() {
         let no_record = RunRequest {
             reach_record: None,
+            unconfined: false,
             ..a_run_keeping_remote()
         };
         let no_request = a_run_asking_for(Vec::new());
         let toolchain_only = a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Toolchain(
             bravebot_sandbox::toolchain::Toolchain::Cargo,
         )]);
+        let loopback_only = a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Loopback]);
         let mut option_first = a_run_keeping_remote();
         option_first.plan.steps =
             bravebot_core::command::Steps::Pipeline(vec![bravebot_core::command::Step {
@@ -5312,9 +5698,10 @@ mod tests {
             no_record,
             no_request,
             toolchain_only,
+            loopback_only,
             option_first,
         ] {
-            for key in ['m', 'M', 'k', 'K'] {
+            for key in ['m', 'M', 'e', 'E'] {
                 assert_eq!(
                     run_answer_for(press(KeyCode::Char(key)), &request),
                     None,
@@ -5349,7 +5736,8 @@ mod tests {
     }
 
     /// SANDBOX-27: the prompt names the programs and the scope, says the line is still asked about,
-    /// says a toolchain list is not kept, shows where the record is, and draws both keys.
+    /// says a toolchain list and loopback are not kept, shows where the record is, and draws both
+    /// keys.
     #[test]
     fn a_prompt_offering_to_keep_a_request_names_what_would_be_kept() {
         let mut request = a_run_keeping_remote();
@@ -5364,13 +5752,22 @@ mod tests {
                     bravebot_sandbox::toolchain::Toolchain::Cargo,
                 ),
             ));
+        request
+            .confined
+            .as_mut()
+            .expect("confined")
+            .requested
+            .push((
+                "gh".to_string(),
+                bravebot_sandbox::scope::Requested::Loopback,
+            ));
         let drawn = fully_rendered_run(&request);
         for wanted in [
             "gh pr".to_string(),
             "remote, read only".to_string(),
             "/home/someone/.bravebot/reach.jsonl".to_string(),
             "still asked about every time".to_string(),
-            "cargo is not remembered".to_string(),
+            "cargo, loopback is not remembered".to_string(),
             t!(run_keep_reach).to_string(),
             t!(run_keep_reach_always).to_string(),
         ] {
@@ -8203,7 +8600,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Ask,
+        Move, Path, Host, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -8460,10 +8857,12 @@ mod tests {
                 let program = numbered('s', 100);
                 let workspace = numbered('w', 100);
                 let request = ServerRequest {
-                    language: "Rust",
+                    language: "Rust".to_string(),
                     program: format!("/{}/rust-analyzer", program.join("/")),
+                    args: Vec::new(),
                     workspace: format!("/{}", workspace.join("/")),
                     runs_build_tooling: true,
+                    declared: false,
                 };
                 let mut deciding = program;
                 deciding.extend(workspace);
@@ -8551,6 +8950,44 @@ mod tests {
             // As for the fetch prompt: the destination's host is pinned, and the move prompt's own
             // tests hold it there.
             Kind::Move => None,
+            Kind::Path => {
+                let words = numbered('p', 260);
+                let request = PathRequest {
+                    path: std::path::PathBuf::from(format!("/opt/{}", words.join(" "))),
+                    write: true,
+                    why: "to build the generated headers".to_string(),
+                };
+                let drawn = request.clone();
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_path(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: words,
+                })
+            }
+            Kind::Host => {
+                let hosts: Vec<String> = numbered('h', 24)
+                    .into_iter()
+                    .map(|label| format!("{label}.example.org"))
+                    .collect();
+                let request = HostRequest {
+                    hosts: hosts.clone(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_host(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: hosts,
+                })
+            }
             // Every answer goes to the planner as an answer, and none of them approves anything.
             Kind::Ask => None,
         }
@@ -8750,5 +9187,89 @@ mod tests {
             "{}",
             bottom.join("\n")
         );
+    }
+
+    /// PROMPT-4, SCROLL-3: `j` and `k` scroll the write, output, vetting, call and plan prompts a
+    /// line, as Down and Up do, and answer nothing. The faults it rejects: a prompt left on the
+    /// arrows alone, the two keys swapped, and a key pressed with Ctrl scrolling.
+    #[test]
+    fn j_and_k_scroll_each_prompt_a_line_as_the_arrows_do() {
+        let drawn = Drawn::taking_yes();
+        let write = request("x", None);
+        let vet = a_vetting(Verdict::Unsafe, None, "x");
+        let output = an_output("Darwin");
+        let call = call(true, None);
+        let ctrl = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL);
+
+        for (letter, arrow, by) in [('j', KeyCode::Down, 1), ('k', KeyCode::Up, -1)] {
+            let key = press(KeyCode::Char(letter));
+            let arrow = press(arrow);
+            assert_eq!(
+                write_answer_for(key, &write, &drawn),
+                Some(WriteResponse::Scroll(by)),
+                "write, {letter}"
+            );
+            assert_eq!(
+                write_answer_for(key, &write, &drawn),
+                write_answer_for(arrow, &write, &drawn)
+            );
+            assert_eq!(
+                vet_answer_for(key, &vet, &drawn),
+                Some(VetResponse::Scroll(by)),
+                "vet, {letter}"
+            );
+            assert_eq!(
+                output_answer_for(key, &output, &drawn),
+                Some(VetResponse::Scroll(by)),
+                "output, {letter}"
+            );
+            assert_eq!(
+                call_answer_for(key, &call, &drawn),
+                Some(CallResponse::Scroll(by)),
+                "call, {letter}"
+            );
+            assert_eq!(
+                call_answer_for(key, &call, &drawn),
+                call_answer_for(arrow, &call, &drawn)
+            );
+            assert_eq!(
+                answer_for(key, &drawn),
+                Some(Response::Scroll(by)),
+                "plan, {letter}"
+            );
+
+            assert_eq!(write_answer_for(ctrl(letter), &write, &drawn), None);
+            assert_eq!(vet_answer_for(ctrl(letter), &vet, &drawn), None);
+            assert_eq!(call_answer_for(ctrl(letter), &call, &drawn), None);
+        }
+    }
+
+    /// PROMPT-4, SCROLL-3, SANDBOX-27: `j` and `k` scroll the run prompt whether or not it offers
+    /// to keep reach. The fault is a prompt that scrolls only where nothing is offered: the same
+    /// key then scrolls at one prompt and writes a standing grant at the next. Neither letter in
+    /// capitals does either.
+    #[test]
+    fn j_and_k_scroll_the_run_prompt_where_keep_reach_is_offered_too() {
+        for request in [a_run(false), a_run_keeping_remote()] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char('j')), &request),
+                Some(RunResponse::Scroll(1))
+            );
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char('k')), &request),
+                Some(RunResponse::Scroll(-1))
+            );
+            for letter in ['J', 'K'] {
+                assert_eq!(
+                    run_answer_for(press(KeyCode::Char(letter)), &request),
+                    None,
+                    "{letter}"
+                );
+            }
+            for letter in ['j', 'k'] {
+                let ctrl = KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL);
+                assert_eq!(run_answer_for(ctrl, &request), None, "ctrl-{letter}");
+            }
+        }
     }
 }

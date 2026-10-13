@@ -282,8 +282,11 @@ substitution makes the prompt a lie, or it's pointless. So: refused.
 
 Globs are different, and worth understanding. We expand them **before** the prompt, against the
 actual working tree. So the human doesn't see `src/**/*.ts`: they see the twelve files it
-matched. If it matches nothing, that's an error rather than bash's behaviour of passing the
-pattern through literally, which is never what anyone meant. And the expansion is capped, because
+matched. If it matches nothing, the pattern is passed to the program as written, as bash does, so
+`find . -name *.md` works when there is no `.md` file where it runs. When there is one, the pattern
+becomes that file, so a pattern meant for the program, as in `find . -name '*.md'`, is quoted. An
+option carrying a value, such as `--include=*.md`, is the program's to match, so it is passed as
+written and never looked up. And the expansion is capped, because
 an approval prompt with a thousand paths in it is a prompt nobody reads: a word may stand for at
 most a hundred arguments, and working out one pattern may read at most four thousand directories.
 Past either, the compile fails and says the count. `**` steps over the same directories a listing

@@ -14,13 +14,29 @@ governs:
   - crates/sandbox/src/toolchain.rs
   - crates/sandbox/src/hosts.rs
   - crates/sandbox/src/proxy.rs
+  - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
+  - crates/cli/src/push_identity.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
+  - crates/config/src/git_identities.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
+  - crates/sandbox/src/rules.rs
+  - crates/sandbox/src/programs.rs
   - crates/tui/src/status.rs
+guards:
+  - symbol: find_in
+    sites:
+      - crates/agent/src/confine.rs: 1
+      - crates/agent/src/workspace.rs: 1
+      - crates/sandbox/src/programs.rs: 17
+      - crates/tui/src/clipboard.rs: 8
+      - crates/tui/src/editor.rs: 2
+  - symbol: find_in_with
+    sites:
+      - crates/sandbox/src/programs.rs: 6
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -33,7 +49,8 @@ untrusted half free. A program the user asked for is the one case of our own tha
 because the code it runs is not ours: `run` starts it under the profile its plan accounts for on
 Linux and macOS ([SANDBOX-17](#SANDBOX-17)), and the last section here is what that profile is. The inhibitor `/caffeinate` starts
 is neither: its program and arguments are fixed in our code
-([commands.md](commands.md#CMD-12)), so it is not confined.
+([commands.md](commands.md#CMD-12)), so it is not confined, and it is found as
+[SANDBOX-30](#SANDBOX-30) says.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different
@@ -126,23 +143,64 @@ where a policy asks for it, is to IP addresses. A unix socket that has a path is
 a path the policy names for writing, and not under one it names for reading. On macOS a connect to
 a socket counts as egress, so there a write row reaches a socket only while egress is granted, and
 egress also reaches the resolver's socket, which every host name lookup goes through. On Linux the
-socket rule holds on a kernel carrying Landlock ABI version 9, and a socket in the abstract
-namespace, which has no path, is reachable whatever the policy names. A backend that cannot
+socket rule holds on a kernel carrying Landlock ABI version 9, which is Linux 7.1. Below it, which
+is most Linux machines in use, every socket that has a path is reachable whatever the policy names,
+which includes the user's D-Bus (where `systemd-run --user` starts a program outside the sandbox),
+the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linux backend reports
+whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
+([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `standard`
+runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
+`/status` and the opening screen say nothing of them, since the confinement line already says
+nothing is confined. The mode does not apply to a local MCP server, which below version 9 reaches
+these sockets under every mode, as `doctor` says. A connect to a socket in the abstract namespace,
+which has no path, is refused when the socket was made outside the confined process's Landlock domain, on a kernel
+carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
+by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
+confined process signals the processes its own profile started and no other: not the session, which
+shares its process group, not another stage, and no other process of the account. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
-that is not in force. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+that is not in force. On Linux the network is denied by a new user and network namespace, in which
+the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
+network rules are not used: they filter a TCP connect by port and not by address, and leave UDP
+open. A kernel that does not let an unprivileged user make the namespace (Ubuntu 24.04 restricts
+it by default, and many containers block it) cannot deny the network, and `doctor` says so. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+
+On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
+listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
+that binds `127.0.0.1:0`, fails with `Operation not permitted`. A stage the plan lends loopback
+([SANDBOX-26](#SANDBOX-26)) may bind and accept on this machine's own addresses and connect to
+them, and reaches no other address and no resolver. That grant is separate from egress: a closed
+network stays closed for it, and to a stage that has egress, which connects anywhere, it adds only
+listening. A stage held to a proxy's port ([SANDBOX-24](#SANDBOX-24)) may listen and still connects
+to that port alone, since another local port could be a service that carries it past the host list.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
 is every file the profile withheld. Landlock counts the connect as a write, so both backends apply
-one rule to a connect.
+one rule to a connect. A program that cannot signal a child it started cannot stop it, so a test
+runner or a `timeout` that gives up on one waits until it ends by itself.
+
+**What it costs.** The temporary directory is a write row of every stage
+([SANDBOX-12](#SANDBOX-12)), and other programs of the account keep sockets there, a browser's
+single-instance socket among them. A stage reaches each of those with that server's authority, on
+macOS while it has egress and on Linux whatever its network.
 
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
+`verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
+`verified-by: bravebot_sandbox::macos::a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot`
+`verified-by: bravebot_sandbox::macos::a_process_granted_loopback_can_listen_and_one_without_it_cannot`
+`verified-by: bravebot_sandbox::macos::loopback_leaves_a_stage_held_to_a_port_with_that_port_alone`
+`verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
-`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
+`verified-by: bravebot_sandbox::macos::a_confined_process_can_signal_a_process_it_started`
+`verified-by: bravebot_sandbox::macos::a_confined_process_cannot_signal_a_process_outside_its_sandbox`
+`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
+`verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_sandbox::linux::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`
@@ -151,6 +209,13 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_truncate_a_file_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
 `verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
+`verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
+`verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
+`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
+`verified-by: bravebot_cli::main::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
+`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_standard_alone`
+`verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_standard_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
@@ -164,9 +229,17 @@ kernel parses, or the single command line a platform's process creation takes in
 Either is quoted rather than interpreted, so a confinement built from a hostile path still applies
 and a program is asked for what the caller asked for.
 
+On Windows an argument holding `*` or `?` is quoted, since a program built with a wildcard runtime
+expands one left unquoted. `cmd.exe` reads its line by rules of its own rather than the ones the
+quoting is written for, so a `cmd.exe` line is refused where the two readings differ: an argument
+holds a quotation mark, an operator, `%`, `!`, a line end or one of the delimiters `,` `;` `=`, or
+the first argument after `/c`, `/k` or `/r` is written quoted and another follows it. One argument
+after the switch is the line `cmd.exe` is asked to run, and it starts.
+
 **Why.** A grant list assembled from paths would otherwise be a place where a filename decides what
 the sandbox permits, and a command line assembled from arguments a place where one decides what the
-confined program is told to do.
+confined program is told to do. `cmd.exe` drops the outer quotation marks of a line that starts with
+one and acts on what it finds outside the rest, so no quoting holds for it.
 
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
@@ -178,6 +251,13 @@ confined program is told to do.
 `verified-by: bravebot_sandbox::windows::a_backslash_before_a_quotation_mark_does_not_escape_the_escape`
 `verified-by: bravebot_sandbox::macos::a_backslash_in_a_path_cannot_cancel_the_escape_of_the_quote_after_it`
 `verified-by: bravebot_sandbox::windows::an_empty_argument_is_still_an_argument`
+`verified-by: bravebot_sandbox::windows::an_argument_that_needs_no_quoting_is_written_as_it_is`
+`verified-by: bravebot_sandbox::windows::an_argument_cmd_would_act_on_stays_quoted`
+`verified-by: bravebot_sandbox::windows::an_argument_holding_a_wildcard_reaches_the_program_unexpanded`
+`verified-by: bravebot_sandbox::windows::cmd_is_refused_an_argument_it_would_read_as_its_own_syntax`
+`verified-by: bravebot_sandbox::windows::cmd_is_refused_a_quoted_first_argument_after_its_switch_with_another_after_it`
+`verified-by: bravebot_sandbox::windows::cmd_starts_where_it_reads_the_line_as_it_was_written`
+`verified-by: bravebot_agent::confine::a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened`
 
 <a id="SANDBOX-5"></a>
 ### SANDBOX-5: capabilities report what the kernel actually enforces, and never more
@@ -192,10 +272,10 @@ a path missing from the disk is nameable reads the platform instead, and then cr
 asked for, or names the directory holding it, on the platform where neither was necessary.
 
 `verified-by: bravebot_sandbox::macos::capabilities_report_kernel_enforcement`
-`verified-by: bravebot_sandbox::linux::capabilities_do_not_overstate_network_denial`
+`verified-by: bravebot_sandbox::linux::capabilities_report_the_network_only_where_a_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
 `verified-by: bravebot_sandbox::macos::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
-`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::lib::an_unavailable_backend_reports_no_confinement`
 `verified-by: bravebot_sandbox::policy::confinement_levels_render_for_the_audit_trail`
@@ -219,15 +299,32 @@ cannot, the refusal arrives before the process starts, and again where a path go
 that refusal and the exec. Which of the two a backend does is in its capabilities
 ([SANDBOX-5](#SANDBOX-5)).
 
+A row that is an entry of a directory the caller listed is not a path the caller named. A caller
+that grants a directory except what is refused beneath it passes the entries the directory had
+when it was listed, marked as listed. A backend that opens each row before the process starts
+leaves out a listed row whose name is no longer there, or is under something that is no longer a
+directory, and refuses one that is there and cannot be opened. The same path named by the caller is
+refused as before, in a policy that lists as in one that does not, and when a listed row names it
+too.
+
+On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
+not what a junction beneath the directory leads to.
+
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
 forbids, reached one grant at a time: the process runs, the record says the policy was applied,
 and the program is refused a path somebody granted it. Which paths a backend can name is a
 platform difference a caller can work with, and a grant that vanished without being reported is
-not.
+not. A name gone from a directory since it was listed is no longer among the entries the caller
+meant, so there is no grant to lose, and refusing the stage over it would make starting a program
+depend on whatever else was changing that directory.
 
 `verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
 `verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
+`verified-by: bravebot_sandbox::linux::a_listed_row_whose_name_went_away_is_left_out_and_the_ones_still_there_are_granted`
+`verified-by: bravebot_sandbox::linux::a_row_the_caller_named_is_refused_when_it_went_away_in_a_policy_that_lists`
+`verified-by: bravebot_sandbox::linux::a_listed_row_that_is_there_and_cannot_be_opened_is_refused`
+`verified-by: bravebot_agent::confine::the_rows_a_bypass_stage_holds_without_a_request_are_marked_as_listed`
 `verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
 `verified-by: bravebot_sandbox::windows::a_path_that_is_not_on_disk_is_named_rather_than_left_out`
 `verified-by: bravebot_sandbox::windows::a_policy_whose_paths_are_all_there_names_none`
@@ -235,6 +332,9 @@ not.
 `verified-by: bravebot_sandbox::windows::a_path_granted_for_reading_is_not_granted_writing_or_deleting`
 `verified-by: bravebot_sandbox::windows::a_path_named_for_reading_and_for_writing_is_granted_once_for_writing`
 `verified-by: bravebot_sandbox::windows::a_grant_reaches_what_is_under_the_directory_it_is_written_on`
+`verified-by: bravebot_sandbox::windows::a_program_is_refused_a_file_outside_its_grants_and_reads_one_inside`
+`verified-by: bravebot_sandbox::windows::a_program_writes_inside_its_grants_and_not_outside`
+`verified-by: bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_to_where_it_leads`
 
 <a id="SANDBOX-7"></a>
 ### SANDBOX-7: a write grant covers moving a file within it
@@ -279,11 +379,28 @@ against is the difference between a credential withheld and a credential handed 
 write. Leaving the emptying to each caller costs the same thing one step further out, since a
 caller that forgets is a program handed everything with nothing saying so.
 
+What this process was itself started with is not a stage's to read either. On Linux the terminal
+entry point marks itself non-dumpable before it reads its command line, so a program a stage starts,
+which is a process of the same user, is refused `/proc/<pid>/environ` of this one and finds no
+gateway or signing key there that a person exported. The mark is cleared by `execve`, so it does
+not touch the programs started. Where the kernel refuses to set it, the refusal is said on standard
+error and the run goes on. On macOS every Seatbelt profile refuses another process's exec-time
+arguments and environment through `sysctl(KERN_PROCARGS2)`. It allows only named machine-information
+sysctls and denies `process-info*`, with a `process-info-pidinfo` exception for the process itself
+because system tools need that query during startup. Both restrictions are required: either a broad
+`sysctl-read` grant or the default process-info access permits the environment read. CPU count,
+page size and the fields of `uname` remain readable for ordinary tools ([SANDBOX-21](#SANDBOX-21)).
+This protects against confined stages, including a child given an empty environment; it does not
+stop an unconfined same-user process reading the exec-time copy, erase that copy, or withhold a
+variable the caller deliberately hands to a child. Windows is not covered.
+
 The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
 process starts in this one's. Naming it grants nothing: a process started in a directory it may not
 read is refused its first read of it, so a caller meaning the process to work there grants the
 directory too.
 
+`verified-by: bravebot_sandbox::exec_environment::a_confined_child_cannot_read_its_parents_exec_time_environment`
+`verified-by: bravebot_sandbox::macos::process_inspection_is_refused_and_sysctls_are_named_machine_queries`
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
@@ -301,6 +418,7 @@ directory too.
 `verified-by: bravebot_sandbox::windows::a_variable_the_platform_would_misread_is_refused`
 `verified-by: bravebot_sandbox::macos::a_confined_process_starts_in_the_directory_its_policy_names`
 `verified-by: bravebot_sandbox::linux::a_confined_process_starts_in_the_directory_its_policy_names`
+`verified-by: bravebot_cli::running::a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_with`
 
 <a id="SANDBOX-9"></a>
 ### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named
@@ -365,7 +483,7 @@ whatever next gives a session such a process has to revisit.
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
-`verified-by: bravebot_cli::main::the_confinement_line_names_the_mode_unless_it_is_standard`
+`verified-by: bravebot_tui::status::the_confinement_line_names_the_mode_unless_it_is_standard`
 
 <a id="SANDBOX-11"></a>
 ### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created
@@ -374,7 +492,8 @@ A row granting a write says whether the path it names is a file, a directory, or
 policy is resolved against a backend that cannot name a path which does not exist
 ([SANDBOX-9](#SANDBOX-9)), every write row saying which of the two it is and not on disk is created:
 a file empty, with the directory holding it, and a directory empty, each reachable by the account
-that owns it and by nobody else. A row saying neither is not created. A path already there is left
+that owns it and by nobody else. A row saying neither is not created, and a row a listing produced is one of those
+([SANDBOX-6](#SANDBOX-6)). A path already there is left
 as it is, contents and all. A row that could not be created is absent still, so resolution leaves it
 out and names it. Nothing is created where the backend names an absent path, and nothing where it
 confines nothing at all, since a process that will be refused reaches no path made for it.
@@ -407,6 +526,7 @@ not built.
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_file_that_is_not_there_is_created_as_a_file`
 `verified-by: bravebot_sandbox::policy::a_file_row_is_created_with_the_directory_holding_it`
 `verified-by: bravebot_sandbox::policy::a_row_that_does_not_say_what_it_names_is_not_created`
+`verified-by: bravebot_sandbox::policy::a_row_a_listing_produced_is_not_created`
 `verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::a_backend_that_confines_nothing_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else`
@@ -424,16 +544,33 @@ except a fixed table of credential locations, and the only paths it writes are t
 directory the session resolved as it opened, where the platform has one as a file, the null
 device, and on macOS the `mds` directory in the account's per-user cache directory (below). The
 table is code, the same for every stage, and no value, argument vector, printed output
-or configuration file adds to it or removes from it. In the home directory it holds the program's own state
-directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, and then `~/.ssh`,
-`~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on macOS also
-`~/Library/Keychains`, `/Library/Keychains`, the browser profiles under
-`~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Firefox`), `~/Library/Cookies`
-and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-store`,
-`~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/chromium` and `~/.mozilla`. Three
+or configuration file adds to it or removes from it. These are its rows, each refused with
+everything beneath it:
+
+| Where | Refused |
+| --- | --- |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are; the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
+| macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
+| Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
+
+Beside the program's own directories, the cloud and container tools' directories and the private
+keys, a row is another application's data (a browser's, a mail or chat client's, a password
+manager's, an editor's, a database or API client's, a VPN client's, a CI runner's or another
+agent's), what a person typed at a shell or a client, or a desktop session's secret store or
+display cookie. A build, a test or a deploy does not read one, and a shell or client a stage starts does not read its
+history, since a stage's standard input is never a terminal; the programs that do read a row are
+named under what a row costs, below. A browser's channels keep separate directories, so a row for
+one channel holds nothing of another's. 1Password's ssh agent keeps its socket in the group
+container, and a socket is reached through a write row and never through a read
+([SANDBOX-3](#SANDBOX-3)), so a stage that is lent that socket still reaches it. JetBrains keeps
+its settings on macOS in `~/Library/Application Support/JetBrains`, beside the scripts its Toolbox
+puts on the search path, so that directory is not a row. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
-`id_ed25519_sk.pub`). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
+`id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
+scope when `config` names it, and the one `user.signingkey` names by a stage that signs
+([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
 the directory around it and every other file in it still refused, because `gh` and git's
 `osxkeychain` helper keep their tokens in that keychain and open its database file themselves.
 Opening a keychain also makes the Security framework write its framework database, which is the
@@ -441,10 +578,24 @@ Opening a keychain also makes the Security framework write its framework databas
 (`_CS_DARWIN_USER_CACHE_DIR`, resolved by the host with its links followed and handed in by the
 caller), and that directory is written by a stage that reads the machine and by no other. Without
 the read row, `gh` reports a failed login and `osxkeychain` fails with `-67674`; with only the read
-row they still do. The files a program reads by name to do what it was started for, which are
-`~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml` and
-`~/.pypirc`, are not in the table: the network is where they could leave, and the plan decides that
-([SANDBOX-3](#SANDBOX-3)). A path is refused by where it leads, so a link from a readable directory
+row they still do. The files a program reads by name to do what it was started for are not in the
+table, and neither are the files a shell reads as it starts or the person's own files: the network
+is where they could leave, and the plan decides that ([SANDBOX-3](#SANDBOX-3)). Of the stores
+[credential-protection.md](credential-protection.md) lists as already on the machine, a stage in
+the mode `standard` reads these on purpose:
+
+| What reads it | Read |
+| --- | --- |
+| `ssh` and the keychain lookup, through the lifts above | `~/.ssh/config`, `~/Library/Keychains/login.keychain-db` |
+| a shell, as it starts | `~/.bashrc`, `~/.zshrc`, `~/.zshenv`, `~/.profile`, `~/.bash_profile` |
+| `git`, `gh`, `glab` and `hub` | `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/glab-cli`, `~/.config/hub` |
+| a package manager | `~/.npmrc`, `~/.yarnrc.yml`, `~/.pypirc`, `~/.config/pip/pip.conf`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`, `~/.cache/huggingface/token` |
+| a client no scope covers, for a deploy, a cloud, a cluster or a secret | `~/.config/vercel`, `~/.config/netlify`, `~/.fly`, `~/.config/doctl`, `~/.supabase`, `~/.config/rclone`, `~/.config/containers`, `~/.config/helm`, `~/.terraformrc`, `~/.terraform.d`, `~/.pulumi`, `~/.vault-token`, `~/.config/op` |
+| a database client | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf` |
+| a build that signs | `~/.android/debug.keystore`, `~/Library/MobileDevice/Provisioning Profiles` |
+| a program handed a file of the person's own | `~/Downloads`, `~/Desktop` |
+
+A path is refused by where it leads, so a link from a readable directory
 to a refused one reaches nothing. On macOS the profile states the refusals after the grants they
 narrow and the lifts after the refusals, since the last matching rule wins. On Linux, where a
 directory is granted with everything beneath it and no subdirectory can be held back, the
@@ -495,6 +646,16 @@ system's own prompt, is the platform's and is not tested here. The `mds` write l
 the framework's cache files, which are rebuilt on demand. The read row names the file and not the
 directory so that `aws-vault.keychain-db` and every other keychain file stay refused.
 
+A row costs the program that does read the location: `claude`, `codex`, `gemini` or `opencode`
+started by a stage, `sops` decrypting with an age key kept where it looks by default, `pass`, a
+graphical program on an X display that checks the cookie, and a stage of a session opened inside
+one of the rows ([SANDBOX-18](#SANDBOX-18)). A person who wants one of those programs to work names
+the location in `allowRead`, or in `allowWrite` where the program also writes there, as the agents
+do ([SANDBOX-25](#SANDBOX-25)). The table names its locations one at a time, so a browser channel,
+an application or a history it does not name is read. The stores read on purpose cost the reverse:
+a stage that reads one can send what it holds wherever the network is open, which a session closes
+with [SANDBOX-20](#SANDBOX-20).
+
 `verified-by: bravebot_sandbox::base::the_base_reaches_no_credential`
 `verified-by: bravebot_sandbox::base::the_only_rows_under_a_home_directory_are_the_git_configuration`
 `verified-by: bravebot_sandbox::base::the_git_configuration_is_read_and_never_written`
@@ -513,16 +674,22 @@ directory so that `aws-vault.keychain-db` and every other keychain file stay ref
 `verified-by: bravebot_sandbox::linux::a_program_starts_under_the_base_this_machine_resolved`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_can_name_the_account_it_runs_as`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
+`verified-by: bravebot_sandbox::windows::cmd_and_a_compiler_start_under_the_empty_base`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_machine_and_refuses_each_credential_location`
+`verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
 `verified-by: bravebot_sandbox::base::the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those`
 `verified-by: bravebot_sandbox::base::the_run_base_leaves_the_token_files_readable`
+`verified-by: bravebot_sandbox::base::every_store_the_catalog_names_is_refused_or_read_on_purpose`
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
 `verified-by: bravebot_sandbox::base::the_run_base_on_macos_reads_the_login_keychain_file_and_no_other_keychain_file`
 `verified-by: bravebot_sandbox::base::the_security_cache_row_is_the_one_directory_under_the_user_cache`
 `verified-by: bravebot_agent::confine::the_security_cache_is_written_by_a_macos_stage_that_reads_the_machine_only`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_writes_the_security_cache_and_no_other_cache`
 `verified-by: bravebot_sandbox::macos::the_user_cache_directory_is_an_existing_path_with_its_links_followed`
+`verified-by: bravebot_sandbox::macos::a_refusal_of_a_link_is_written_where_the_link_leads_as_well`
+`verified-by: bravebot_sandbox::rules::a_request_reaching_a_linked_credential_directory_is_refused_where_it_leads`
 `verified-by: bravebot_sandbox::base::the_run_base_on_windows_is_the_keyed_base`
+`verified-by: bravebot_sandbox::base::the_windows_credential_locations_name_the_browser_profiles_and_the_platforms_stores`
 `verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_only_the_machine_wide_keychains`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
@@ -574,6 +741,17 @@ Under that profile no node program started, which is most of what a runner runs.
 shape of what is at a name a process had to know already; what it withholds is every byte a file
 holds and every name a directory lists, which is where a credential is.
 
+**What it costs.** A look reaches inside a refused location too, and a link's target is held in the
+link, so where a link there points is readable: a Chromium browser's profile directory keeps
+`SingletonLock`, `SingletonCookie` and `SingletonSocket` as links. Landlock has no right for a look,
+so on Linux nothing refuses it. On macOS a rule naming `file-read-metadata` decides a look before a
+`file-read*` rule does, wherever each stands in the profile, so the refusals do not narrow the look
+whether they come before it or after it. A refusal that named `file-read-metadata` would narrow it,
+and would also refuse a look at the refused directory itself, which `ls -la` of the home directory
+fails on unless that one path is allowed again; a search of `PATH` would then stop with
+`Operation not permitted` at a program that exists inside a refused location, such as Docker
+Desktop's `~/.docker/bin`.
+
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants`
 
 <a id="SANDBOX-14"></a>
@@ -581,13 +759,16 @@ holds and every name a directory lists, which is where a credential is.
 
 On macOS a policy that grants any write refuses a write to every path with a `.git` component, in
 any case: creating, changing, renaming into or removing a file or directory named `.git` or inside
-one, under a row the policy writes as under any other. Every other write a row grants is granted.
-A policy can lift the refusal, as the profile of a program a person asked for does so that `git`
-works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row reaches a
-`.git` as it does on Linux. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+one, under a row the policy writes as under any other. That covers a repository's hooks and
+configuration, a submodule's under `.git/modules`, a linked work tree's under `.git/worktrees`, and a
+`.git` that is a file naming a gitdir. Every other write a row grants is granted.
+A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
+`git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
+reaches a `.git` as it does on Linux. Every other stage keeps the refusal. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
-[mcp-servers.md](mcp-servers.md)'s known cost. The Windows backend withholds nothing of the kind,
-and no server is started there ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+[mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
+The Windows backend withholds nothing of the kind, and no server is started there
+([SERVERS-10](mcp-servers.md#SERVERS-10)).
 
 **Why.** git runs the commands a repository's configuration and hooks name, with nothing confining
 them, the next time anybody runs git in it. A confined process that may write a `.git` may
@@ -595,9 +776,15 @@ therefore run code outside its confinement. Seatbelt lets the last rule matching
 the refusal follows the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
 the case of the name does not matter.
 
+**What it costs.** A gitdir that is not named `.git`, such as one `--separate-git-dir` made, is
+written as any other directory, and so is a directory a process lays out as a repository itself, a
+`HEAD` file beside `objects` and `refs` directories, which git started inside it opens.
+
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
+`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 
 <a id="SANDBOX-15"></a>
 ### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it
@@ -616,13 +803,17 @@ What decides a row is the table and the platform: nothing on the machine is read
 `GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
 package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
-do not. `run` adds the list for each stage it starts
-([SANDBOX-18](#SANDBOX-18)).
+do not. `run` adds the list for each stage it starts where the machine is not read: on Windows
+and under the mode `strict` ([SANDBOX-18](#SANDBOX-18), [SANDBOX-22](#SANDBOX-22)). Where the machine is read, which is the
+default on Linux and macOS, no stage brings a list, and every stage writes the caches of every
+toolchain instead ([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** The paths a build resolves through belong to that build and not to every program that runs,
 and the file a stage resolved to is the part of the plan a person read, where a name the model wrote
-or a configuration file's contents is not. One list shared by every toolchain lets a postinstall
-script leave something in `~/.cargo/registry` for a later `cargo build` to read. A package manager
+or a configuration file's contents is not. One list shared by every toolchain would let a postinstall
+script leave something in `~/.cargo/registry` for a later `cargo build` to read. Keying the lists
+prevents that where they apply and does nothing about it where the machine is read, since every
+stage there writes every cache and a postinstall script can leave that file. A package manager
 keeps its token beside its cache, so a row naming the directory holding the cache hands the token to
 every build in that ecosystem. An install written by a confined stage is the `cargo` a later stage
 resolves to, and a configuration file written by one is a `build.rustc-wrapper` every later build
@@ -651,17 +842,133 @@ and where its program resolved to `gh` and its argv starts with one of the comma
 talk to the host: `api`, `attestation`, `auth`, `cache`, `gist`, `gpg-key`, `issue`, `label`,
 `org`, `pr`, `project`, `release`, `repo`, `ruleset`, `run`, `search`, `secret`, `ssh-key`,
 `status`, `variable` or `workflow`. It carries `~/.aws`, `~/.kube` or `~/.docker` where its
-program resolved to `aws`, `kubectl` or `docker`. It carries none where a `NAME=value` assignment is
+program resolved to `aws`, `kubectl` or `docker`. It carries the signing scope where its program
+resolved to `git` and its argv is `commit`, `merge`, `rebase`, `cherry-pick`, `revert`, `am` or
+`tag`, with nothing in front of the operation but `-C <directory>`, and the person's own git
+configuration signs with ssh. It carries none where a `NAME=value` assignment is
 written in front of it; where a `git` argv names a program for git to run, which is any abbreviation
 git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--config` or
 `--strategy`, a `-u` or `-c` to `clone`, a `-s` to `pull`, an address holding `::`, or one written
 `<scheme>://` whose scheme is not `ssh`, `git`, `file`, `http`, `https`, `ftp`, `ftps`, `git+ssh`
-or `ssh+git`, before a `--` or after one; where a `gh` argv holds `--`; and where `kubectl` is
-given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
+or `ssh+git`, before a `--` or after one; where a signing `git` argv holds any abbreviation of
+`--exec` or `--strategy`, or a `-x` or `-s` to `rebase` or a `-s` to `merge`, which run a command or
+a `git-merge-<name>` from the search path; where a `gh` argv holds `--`; and where `kubectl` is
+given `--kubeconfig` or `docker` is given `--config`. None is carried by a program whose resolved
+file is under a directory the plan may write to (the session's directories, the scratch directory
+and the temporary directory), which could have been named `aws` or `git` by the plan itself, as
+[SANDBOX-20](#SANDBOX-20) holds for the network. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
-`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
-`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
-`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written.
+`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
+each `IdentityFile` line of `~/.ssh/config` names, `~/.gitconfig`, `~/.git-credentials`,
+`~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes `~/.ssh/known_hosts` alone,
+as a file. A tool's directory is read and never written.
+
+A line `IdentityFile <name>` in the user's own `~/.ssh/config` adds the file `<name>.pub`, and one
+whose name already ends in `.pub` adds that file. The keyword is matched without regard to case
+and its value may follow `=`. A name is absolute or begins `~/` or `%d/`. A name holding another `%`
+token or a `$`, or a relative one, adds nothing, and neither does a line that is not valid UTF-8,
+which is skipped whole and never rewritten into a name it did not spell. A file is added only where it exists as a regular
+file, where the file a link leads to is named `*.pub`, and where that file is not in a credential
+location other than `~/.ssh` ([SANDBOX-12](#SANDBOX-12)), and the row is the file a link leads to.
+The `.pub` name is the only thing added, so a line that names a private key adds the public file
+beside it and never the key. `Include`, `Match` and a repository's `core.sshCommand` are not
+followed, `~/.ssh/config` is read up to 1 MiB, and at most 32 files are added. A file that cannot
+be read adds nothing. Only the remote scope reads the configuration. A key that `-i` names in a
+`core.sshCommand` is read only if the configuration also lists it as an `IdentityFile`.
+
+A person chooses the key a push offers the host for one owner's repositories with `git.identities`
+in their settings, an object whose names are `<host>/<owner>` and whose values name a key file:
+`{"git": {"identities": {"github.com/netzenbot": "~/.ssh/netzenbot.pub"}}}`. It applies to a stage
+whose program resolved to `git` and that carries the remote scope by its argv. An argument after the
+operation that does not start with `-` is an ssh address where it is written
+`ssh://[user@]host[:port]/<owner>/...`, the same with `git+ssh://` or `ssh+git://`, or
+`user@host:<owner>/...` with no `/` before the first `:`; a scp-like address needs the user, so a
+refspec such as `HEAD:refs/heads/main` is not one. Where the argv names one such address, or names
+the same host and owner more than once, the entry for that host and owner decides, both compared
+without regard to ASCII case. The stage then starts with `GIT_SSH_COMMAND` set to
+`ssh -i '<key>' -o IdentitiesOnly=yes` and reads that one file. ssh then offers that key first and
+after it only the keys an `IdentityFile` line of the person's ssh configuration names for the host,
+and no other key the agent holds. The value is judged as an `IdentityFile` name is: absolute or
+beginning `~/`, `.pub` added to a name that does not end in it, a regular file named `*.pub` once a
+link is followed, and outside every credential location other than `~/.ssh`. It must also lie
+outside every directory the plan may write (the session's directories, the scratch directory and the
+temporary directory). A path holding `'` is refused, since git hands the variable to a shell, and so
+is one holding `%` or `$`, which ssh expands in a key's name, and one that is not valid UTF-8. A
+refused key, an address with no entry, an argv naming two different addresses and an argv naming
+none leave the stage as it was. The address is read from the argv and nothing else: a remote given
+by name, such as `origin`, has its URL in the repository's configuration, which is workspace content
+a clone or an earlier stage may have written, so it selects no entry. The run prompt names the key
+on the stage it applies to. Only the person's own settings file and a `--settings` file outside the
+workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
+local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
+file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string, a
+`git` block or an `identities` value that is not an object, and an entry whose key the rules above
+refuse, all but the one about the directories the plan may write, which it has no session to know.
+A key beside `identities` in the block is reported as unread.
+
+`bravebot doctor --push-identity [<host>/<owner>]` asks which account each key pushes as. It takes
+every public key a stage with the remote scope could be offered, the ones at ssh's default names and
+the ones an `IdentityFile` line of the person's ssh configuration names, and runs `ssh -T -i <key>
+-o IdentitiesOnly=yes git@<host>` once for each, so the host answers for that key alone. Each key
+is printed with its fingerprint and the login the greeting names, or that no account on the host
+has it (`Permission denied (publickey)`), or that the host did not answer, and a login is compared
+with the owner, which is the argument or the address of `origin` in the directory it ran in. It
+runs only when asked, since a hardware key waits for a touch, and the host is `github.com` where
+neither names another. The greeting is bytes from a remote host: it is read for a login spelled as
+GitHub spells one, letters, digits and `-` up to 39, and nothing else of it is kept. The login and
+the comparison are shown on the person's screen and nowhere else. They never choose a key, never
+reach a stage, a prompt, the planner or the trace, and the key marked as chosen is the one
+`git.identities` names, whatever any host said.
+
+A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
+public key and asks the agent for the signature, so a stage that signs needs the one file and the
+agent's socket, and never the private key. The signing scope reads that file and the stage may write
+the socket `SSH_AUTH_SOCK` names, as the remote scope may. It is carried only where the person's own
+`~/.gitconfig` or `~/.config/git/config` sets `gpg.format` to `ssh`, so an account that does not sign
+with ssh sees no difference, the network under a closed setting included. The later file and the last
+assignment win, section and variable names are matched without regard to case, a quoted value is
+unquoted and an unquoted `#` or `;` starts a comment. A `[gpg "ssh"]` or `[user "name"]` section is
+another section, a value holding a backslash is not read, and a repository's configuration, an
+`[include]`, an `[includeIf]` of any condition but `gitdir:` and `gitdir/i:`, and `GIT_CONFIG_GLOBAL` are
+not followed. The key is read where `user.signingkey` is a
+key written out (`ssh-` or `key::`), which needs no file, where it is unset, which signs with the
+agent's first key and needs no file, or where it is an absolute path or one beginning `~/` that
+resolves to an existing regular file named `*.pub` inside the home directory and outside every
+credential location other than `~/.ssh`. A private key, a name nothing is at, a relative path, a path
+holding `..`, a file outside the home and a link that leads out of those places are refused, and
+the stage is told so in the profile line without the value, since the signature then fails. `git
+pull` merges or rebases and signs the commit it makes, so the remote scope reads the same file. The
+scope is also on the menu of [SANDBOX-26](#SANDBOX-26), for a script that runs `git commit` or `git
+rebase` inside it and so shows no operation of its own: a request for `signing` reads the same file
+and lends the same agent socket, to a person whose git signs with ssh only, and it is the only scope `/reach` does not name and
+[SANDBOX-27](#SANDBOX-27) does not remember. The configuration limits are these: `-S<key>` and `--gpg-sign=<key>` in the argv do
+not move the key that is read, and a hook or a `gpg.ssh.program` the plan wrote into `.git` runs
+with the scope, as one runs with the remote scope.
+
+An `[includeIf "gitdir:<pattern>"]` or `[includeIf "gitdir/i:<pattern>"]` in either of those two files
+is followed, in the place of the file where it stands, so that a person who signs with one key for the
+work under `~/work/` and another elsewhere is lent the key git signs with there. The condition is
+matched as git matches it, against the `.git` inside the first directory of the session: `~/` is the
+home, `./` is the directory of the file that holds the line, a pattern with none of `/`, `~/` and `./`
+before it is preceded by `**/`, a trailing `/` adds `**`, `*` and `?` stay inside one part of a path,
+`**` is any number of parts, and `gitdir/i` ignores case. A pattern holding `[` or `\` matches
+nothing, and so does a condition when the home, the directory of the file that holds the line or
+the session's first directory is not valid UTF-8. A `hasconfig:` and an `onbranch:` condition are
+not followed, because the first reads the repository's configuration and the second its state, and
+a linked worktree is matched by its own
+`.git` and not by the directory it links to. The file the `path` names, beside the including file
+where it is relative, is read only where it resolves to a regular file inside the home, outside every
+credential location other than `~/.ssh`, and outside every directory the session may write, which
+are its directories and its scratch directory, since the plan can write those and the key would then
+be one the plan chose. A directory the person lets the session write later, by approving a path or a
+grant, is not counted. An included file's own `[includeIf]` is not followed. The repository's own
+configuration is still not read, whatever it holds: a plan can write it, and the file it names is
+read on the strength of it. The profile line of a stage that carries the signing scope, or was asked
+to carry it, always says, whether or not the person's git signs with ssh, that the key comes from
+`~/.gitconfig` or `~/.config/git/config` or a file an `[includeIf]` of theirs includes for the
+directory, and that a `user.signingkey` set in a repository's own configuration is not read. The text is fixed: it holds no value from any
+configuration and does not change with the repository, so that a signature which fails with "Couldn't
+load public key" is traced to the setting by the planner without reading anything it was not lent.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -710,8 +1017,73 @@ shown in the prompt because a credential scope is what the prompt says it is, an
 is not one anybody approved. Only the environment the stage starts with counts: an assignment
 written in front of the line removes the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 A file is judged where it is rather than where its directory is: what is granted is the one file the
-person named, and `~/.ssh` is where a key would be. `~/.bravebot` is refused the same way, since a
+person named, and `~/.ssh` is where a key would be. ssh reads the `.pub` file of an identity to choose
+the key the agent offers, so a key the person's configuration pins by name needs the same read as one
+at a default name; with `IdentitiesOnly yes` and no such read, ssh offers nothing and the host answers
+`Permission denied (publickey)`. The configuration is the person's own file, which a stage in
+standard mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
+private key. A repository's `core.sshCommand` is not read because it decides what runs. Signing is a scope of its
+own so that the agent and the network are not lent to a `git commit` of an account that does not sign
+with ssh, and so that a commit does not read `~/.git-credentials`; the key it needs is one file in
+the person's home that their configuration names, and is read for the same reason `IdentityFile`
+keys are. A configuration of the person's is read for it and a repository's is not, because the
+repository's is a file the plan may write. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
+ssh offers an agent's keys in order and GitHub accepts the first one registered to any account, so a
+person whose agent holds two accounts' keys pushes every repository as one account unless a key is
+chosen. Nothing else on a stage chooses it, since an assignment in front of the line removes the
+scope and a key a repository's `core.sshCommand` names is read only where the person's configuration
+names it too. `git.identities` is the person's choice, for an
+owner they named, selected by an address the planner wrote and the person approved, so no byte a
+program or a repository wrote picks the credential. `IdentitiesOnly=yes` stops ssh offering the
+agent's keys the configuration does not name, and the agent still signs, so the private key is not
+read.
+
+A repository can set `user.signingkey` to a key the person's own configuration does not name, and
+the repository's configuration is not read, so a stage that signs with it cannot load that public key
+even though the agent it is lent holds the key. A stage that signs, and a stage with the remote scope
+for a person whose git signs with ssh, is therefore also lent every `*.pub` file directly inside
+`~/.ssh` whose key the agent holds. The agent named by the `SSH_AUTH_SOCK` the process started with, which a step that carries the scope
+cannot assign, is asked for
+its keys with the identities request of the agent protocol, and a file is lent where its first line
+holds one of them. The agent already signs with any key it holds for a stage that reaches its socket,
+so a file that only names one lends nothing the socket does not. What is lent does not depend on the
+repository's configuration, which stays unread. Each file gets the checks a file named by an
+`IdentityFile` gets: a regular file named `*.pub` once a link is followed, outside every credential
+location other than `~/.ssh`, never a private key, and at most 32 files. Where there is no
+`SSH_AUTH_SOCK`, nothing answers there in full within two seconds, or the answer is not an identities
+list,
+only the configured key is lent. Where `gpg.format` is not `ssh` in the person's own configuration
+nothing is lent. This adds no dependency and is not done on Windows. The prompt says so in the fixed
+sentence about the signing key, so that a signature that fails for a key the agent does not hold can
+be told from one the scope never reached.
+
+**What it costs.** git takes `GIT_SSH_COMMAND` over `GIT_SSH` and every `core.sshCommand`, so on
+the stages an entry applies to it replaces those of the person's environment and their own git
+configuration, and the ssh options they carried are not passed there. The variable is the stage's,
+so every ssh connection the stage makes offers the key first, a submodule of another owner's
+included. git rewrites the argv's address by the repository's `url.<base>.insteadOf` and
+`pushInsteadOf`, so a repository can send the push, with the key chosen for the owner the argv
+named, to another address; a repository's configuration already acts within the remote scope, as
+its hooks do. A path a person lent with `request_path`, an `allowWrite` row and the rows a bypass
+stage holds without a request are not counted among the directories a key must lie outside, as
+they are not for a program's file below; a stage lent the agent can sign with any key it holds
+whatever file names one. A push to a remote given by name gets no entry, so the planner writes the
+ssh address in the argv for the person's choice to apply.
+
+The directories counted against a program's file are the plan's own. A path a
+person lent with `request_path` ([SANDBOX-28](#SANDBOX-28)), an `allowWrite` row
+([SANDBOX-25](#SANDBOX-25)) and the rows a bypass stage holds without a request are not counted, so a
+program an earlier stage wrote into one of them carries the scope its name has. A session opened on
+the home directory carries no scope for a program installed under it, such as `~/.local/bin/aws`.
+
+The one row a scope writes, `~/.ssh/known_hosts`, is a file the person's own ssh trusts, so a stage
+that carries the remote scope can add a line to it that makes every later ssh of theirs accept a
+host it would have refused: a host key of the stage's choosing, or a `@cert-authority` line naming
+a key of the stage's, after which ssh accepts any host whose certificate that key signed. The row is there because ssh records a host
+the first time it meets one. Without it, under `StrictHostKeyChecking accept-new`, a host met first
+inside a stage is never recorded, so each later connection to it accepts whatever key it is offered,
+and under the default `ask` a person at a terminal is asked again on every push.
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
@@ -722,6 +1094,7 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::scope::an_option_that_runs_nothing_keeps_the_scope`
 `verified-by: bravebot_sandbox::scope::a_tool_pointed_at_another_configuration_file_carries_none`
 `verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
+`verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_carries_no_scope_by_its_name`
 `verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
 `verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_is_refused_whatever_spells_it`
@@ -747,7 +1120,86 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_agent::confine::a_requested_scope_reads_the_configuration_its_variable_moves`
 `verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved_for_a_requested_scope`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_in_the_ssh_configuration_adds_its_public_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_that_is_not_a_public_key_adds_nothing`
+`verified-by: bravebot_sandbox::scope::a_named_public_key_behind_a_link_is_read_where_it_leads`
+`verified-by: bravebot_sandbox::scope::an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read`
+`verified-by: bravebot_sandbox::scope::an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike`
+`verified-by: bravebot_sandbox::scope::an_operation_that_signs_carries_the_signing_scope`
+`verified-by: bravebot_sandbox::scope::a_signing_operation_that_names_a_program_carries_nothing`
+`verified-by: bravebot_sandbox::scope::signing_does_not_change_the_other_scopes`
+`verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
+`verified-by: bravebot_sandbox::scope::the_signing_scope_reads_the_public_key_and_nothing_else`
+`verified-by: bravebot_sandbox::scope::the_signing_scope_reads_nothing_where_the_key_is_refused_or_signing_is_off`
+`verified-by: bravebot_sandbox::scope::the_remote_scope_reads_the_signing_key_as_well`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_the_home_is_the_file_a_stage_that_signs_reads`
+`verified-by: bravebot_sandbox::signing::a_format_other_than_ssh_reads_no_key`
+`verified-by: bravebot_sandbox::signing::a_literal_key_and_no_key_read_no_file`
+`verified-by: bravebot_sandbox::signing::a_value_that_is_not_a_public_key_in_the_home_is_refused`
+`verified-by: bravebot_sandbox::signing::the_last_value_of_the_right_section_is_the_one_read`
+`verified-by: bravebot_sandbox::signing::a_value_with_a_backslash_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_if_that_matches_the_runs_directory_supplies_the_key`
+`verified-by: bravebot_sandbox::signing::an_include_if_is_read_where_it_stands_in_the_file`
+`verified-by: bravebot_sandbox::signing::a_gitdir_condition_matches_as_git_matches_it`
+`verified-by: bravebot_sandbox::signing::a_gitdir_pattern_with_a_class_or_an_escape_matches_no_directory`
+`verified-by: bravebot_sandbox::signing::a_relative_include_path_is_beside_the_file_that_holds_it`
+`verified-by: bravebot_sandbox::signing::a_directory_that_is_not_utf8_matches_no_gitdir_pattern`
+`verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_inside_the_workspace_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_not_a_plain_file_in_the_home_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_inside_an_included_file_and_a_plain_include_are_not_followed`
+`verified-by: bravebot_sandbox::signing::a_repository_key_is_not_read_when_a_global_key_overrides_it`
+`verified-by: bravebot_sandbox::agent::an_agent_that_holds_two_keys_lists_both`
+`verified-by: bravebot_sandbox::agent::an_agent_that_cannot_be_asked_holds_nothing`
+`verified-by: bravebot_sandbox::agent::an_agent_that_never_answers_holds_nothing_after_the_wait`
+`verified-by: bravebot_sandbox::agent::an_answer_cut_short_holds_no_key`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_holds_is_lent_beside_the_configured_key`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_does_not_hold_is_not_lent`
+`verified-by: bravebot_sandbox::signing::with_no_agent_that_answers_only_the_configured_key_is_lent`
+`verified-by: bravebot_sandbox::signing::the_repositorys_signing_key_does_not_change_which_files_are_lent`
+`verified-by: bravebot_sandbox::signing::a_private_key_beside_a_matching_public_key_is_never_lent`
+`verified-by: bravebot_sandbox::signing::nothing_is_lent_where_git_does_not_sign_with_ssh`
+`verified-by: bravebot_sandbox::signing::a_link_into_another_credential_location_and_a_nested_file_are_not_lent`
+`verified-by: bravebot_sandbox::signing::no_more_than_thirty_two_files_are_lent_for_held_keys`
+`verified-by: bravebot_sandbox::signing::base64_pads_the_way_a_public_key_file_does`
+`verified-by: bravebot_sandbox::scope::the_scopes_that_sign_read_a_public_key_in_ssh_that_the_agent_holds`
+`verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_a_public_key_the_agent_holds_and_no_other`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds`
+`verified-by: bravebot_agent::confine::every_way_to_carry_the_signing_scope_lends_the_public_key_the_agent_holds`
+`verified-by: bravebot_sandbox::signing::a_glob_matches_by_path_part`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh`
+`verified-by: bravebot_agent::confine::a_stage_that_does_not_sign_is_not_lent_the_agent`
+`verified-by: bravebot_agent::confine::a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_always_told_where_the_key_comes_from`
+`verified-by: bravebot_agent::confine::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_an_include_if_supplies_for_its_directory`
+`verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key`
+`verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
+`verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
+`verified-by: bravebot_sandbox::scope::an_ssh_address_in_the_argv_names_its_host_and_owner`
+`verified-by: bravebot_sandbox::scope::a_remote_name_a_refspec_or_another_transport_names_no_address`
+`verified-by: bravebot_sandbox::scope::an_identity_key_is_a_public_key_file_and_never_a_private_one`
+`verified-by: bravebot_sandbox::scope::the_ssh_command_offers_one_key_and_refuses_a_path_it_cannot_quote`
+`verified-by: bravebot_sandbox::scope::the_ssh_command_refuses_a_key_whose_path_is_not_text`
+`verified-by: bravebot_config::git_identities::an_entry_is_read_by_host_and_owner_and_found_without_regard_to_case`
+`verified-by: bravebot_config::git_identities::a_misshapen_entry_is_reported_and_the_rest_are_read`
+`verified-by: bravebot_config::git_identities::a_key_beside_identities_is_reported_as_unread`
+`verified-by: bravebot_config::settings::only_the_persons_own_files_choose_a_key_for_an_owner`
+`verified-by: bravebot_cli::running::doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read`
+`verified-by: bravebot_sandbox::scope::candidate_keys_are_the_default_names_and_the_named_ones_once_each`
+`verified-by: bravebot_cli::push_identity::a_greeting_and_a_refusal_are_told_apart`
+`verified-by: bravebot_cli::push_identity::a_login_that_is_not_spelled_as_one_is_not_shown`
+`verified-by: bravebot_cli::push_identity::each_key_reports_the_login_its_own_connection_got`
+`verified-by: bravebot_cli::push_identity::a_key_no_account_has_is_shown_as_not_recognised`
+`verified-by: bravebot_cli::push_identity::the_chosen_key_is_the_one_the_settings_named_not_the_one_that_greeted`
+`verified-by: bravebot_cli::running::doctor_push_identity_reports_the_login_each_key_gets`
+`verified-by: bravebot_cli::running::doctor_push_identity_refuses_an_argument_that_is_not_a_host_and_owner`
+`verified-by: bravebot_cli::running::a_configured_git_identity_reaches_only_the_matching_run_stage`
+`verified-by: bravebot_agent::confine::an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other`
+`verified-by: bravebot_agent::confine::no_entry_leaves_a_remote_stage_as_it_was`
+`verified-by: bravebot_agent::confine::a_key_the_plan_could_have_written_or_that_is_not_a_public_key_is_not_offered`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_what_a_confined_run_is_held_to`
 
 <a id="SANDBOX-17"></a>
 ### SANDBOX-17: a program `run` starts is started under its plan's profile, or not started
@@ -762,6 +1214,12 @@ stopped, and the turn is told the program was not started since it could not be 
 program is started with no profile is the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person
 chose by name in their own settings or on the command line, and which a window never reads.
 
+On Linux every program the backend starts, a stage among them, is made the leader of a session of
+its own before the policy is applied, and is not started if that fails. A process with no controlling
+terminal is refused `TIOCSTI` on the terminal the session runs in, and Landlock governs an ioctl on a
+device only from ABI 5 (kernel 6.10), so on an older kernel the session is what keeps a program from
+typing into the terminal. A terminal's interrupt and hangup do not reach such a program.
+
 Confinement is a property of the session and not of the plan: the terminal, desktop, plain and
 one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
 test driving the executor directly, starts stages as the user's own shell would.
@@ -772,7 +1230,17 @@ backend the three standard streams it has made and keeps the sandbox alive for a
 process, because the entries the backend wrote are removed as it is dropped. A batch file (`.bat`
 or `.cmd`) is refused there, because the command interpreter reads its argument line by its own
 rules and a quoting that is safe for every other program is not safe for it. Any other program the
-platform cannot confine is refused as it is elsewhere.
+platform cannot confine is refused as it is elsewhere. The stage is created in a job of its own,
+which the creation call names, so it is in the job before it runs and every program it starts is in
+that job too. Killing the stage
+ends the job, and the job also ends when its one handle is closed, which the backend does when the
+process is let go of and the platform does when this process ends, a crash included. The executor
+kills each stage of a line when the line is done, so a program a stage started and left running
+ends then too, which is when the grants it ran under are taken off. A stage the platform will not
+put in a job is not started. The stage is given a console of its own with no
+window rather than the one this process runs in, since any process attached to a console can write
+input into it, which on the terminal's console is typing an answer to a prompt. The programs it
+starts share that console, so none of them opens a window.
 
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
@@ -786,12 +1254,16 @@ are unchanged.
 **What it costs.** On Windows a program argument that names a path outside the directories the
 session was opened on is refused by the kernel, since only redirections are opened by this process
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
-([trust-map.md](trust-map.md)). On Linux and macOS a stage reads the machine except the credential
+([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
+that asks its question on the console rather than on its input waits until the line is cancelled
+or runs out of time, and the console's code page is the system's rather than one a person set with
+`chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
 stage start lists every directory above a refused location, and the time that takes grows with the
-number of entries in those directories, the home directory among them. On macOS the refusal of a `.git` write is lifted for these stages
-([SANDBOX-14](#SANDBOX-14)), which gives them the reach Linux gives.
+number of entries in those directories, the home directory among them. On macOS the refusal of a `.git` write is lifted only for a stage
+whose program is git ([SANDBOX-14](#SANDBOX-14), [SANDBOX-18](#SANDBOX-18)), which gives that
+stage the reach Linux gives every stage.
 
 `verified-by: bravebot_agent::confine::a_confined_program_cannot_read_a_file_outside_the_session`
 `verified-by: bravebot_agent::confine::a_confined_program_reads_the_machine_and_not_a_credential_location`
@@ -805,15 +1277,20 @@ number of entries in those directories, the home directory among them. On macOS 
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
+`verified-by: bravebot_sandbox::linux::a_confined_process_leads_a_session_of_its_own`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
+`verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
+`verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
+`verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
 <a id="SANDBOX-18"></a>
 ### SANDBOX-18: the profile a stage runs under is composed from the plan and the session's directories
 
 On Linux and macOS a stage of a session that names a home directory has as its policy the run base
-([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed, plus: the cache rows of every toolchain, written, since the machine is already read and a
+([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed where the stage's program is git (below),
+plus: the cache rows of every toolchain, written, since the machine is already read and a
 cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential scope its argv names
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
@@ -826,7 +1303,7 @@ the remote scope.
 On Windows, and on Linux and macOS in a session that names no home directory, since the credential
 rows are rows under it and a read of the whole machine with none to subtract is the one grant that
 must not be made, a stage's policy is the keyed base ([SANDBOX-12](#SANDBOX-12)), with `.git`
-writes allowed, plus:
+writes allowed where the stage's program is git, plus:
 the toolchain list its resolved binary brings ([SANDBOX-15](#SANDBOX-15)); the credential scope its
 argv names ([SANDBOX-16](#SANDBOX-16)); the directories its program is read from, which are the
 directories on the `PATH` it starts with and the directory it resolved into, each with its links
@@ -845,32 +1322,143 @@ since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing els
 credential directory, no directory above a session directory, and no socket for a stage without the
 remote scope.
 
+On Windows a stage is also refused when a directory the session was opened on is, holds or lies
+inside one of the credential locations under the home directory ([SANDBOX-12](#SANDBOX-12)): the
+state directory `~/.bravebot`, which holds `settings.json`, `~/.ssh`, `~/.aws` and the rest of the
+table, which on Windows also holds `gcloud`, `gpg`, the browser profiles and the platform's own
+stores under `~/AppData`, so a session opened on `~/AppData/Local` is refused. The row would be a
+read and write grant, and a Windows container cannot be refused a
+path inside a grant, so the refusal is made before the policy is built and no grant is written. The
+paths are compared by component without regard to case, and a credential location is compared in
+the form it is named and in its resolved form. A session opened on a project directory is not
+affected.
+
+On Linux and macOS a stage is refused when a directory the session was opened on is or lies inside a
+credential location, and not when it holds one. On macOS a row at a refused path lifts the refusal,
+because an allow follows a deny at the same depth, so the directory `~/.ssh` as a session directory
+would let every program the stage starts read and write the keys. The refusal on those platforms
+covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains`. Names are
+compared without regard to case on macOS and exactly on Linux. A directory above a location, the
+home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
+refusal of a read is not a refusal of a write, so each location the stage is refused reading that
+lies inside a directory it may write is refused writing too, as is each place under the home
+directory where a write becomes code that runs later outside the profile: the shell startup and
+logout files `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`,
+`~/.bash_login`, `~/.bashrc`, `~/.bash_aliases` (which Debian's `~/.bashrc` reads),
+`~/.bash_logout` and `~/.profile`, the directory `~/.config/fish`, the files an X session reads as
+it starts, `~/.xprofile` and `~/.xsessionrc`, the per-user job directories `~/Library/LaunchAgents`,
+`~/.config/systemd/user` and `~/.config/autostart`, the directory `~/.config/environment.d` whose
+variables systemd sets for every program of the account, and git's own configuration `~/.gitconfig`
+and `~/.config/git/config`. These persistence locations are named at those fixed paths, so a
+`ZDOTDIR` or an `XDG_CONFIG_HOME` that moves one leaves the file it moved it to unrefused. They
+are refused for writing only and are read as the rest of the home directory is. A session
+opened on the home directory or on a directory above it therefore writes beneath it except the
+credential locations and the persistence locations, and a session opened on a directory that holds
+none of them has nothing to refuse. `/add-dir`,
+`--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
+person is not shown a session directory the stage would be refused for.
+
+A stage's program is git where the file it resolved to, with its links followed, is named `git` and
+lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
+([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
+would leave no git anywhere. A script, `make`, `npm`, `gh` or any other program is not git, and git
+started by one runs under that stage's profile. The lift changes a profile only on macOS, the one
+platform that holds a `.git` back ([SANDBOX-14](#SANDBOX-14)).
+
 Every input is the compiled step a person read, the session's own directories or the process's own
 environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
 row. Rows that name an absent path are created or left out as [SANDBOX-9](#SANDBOX-9) and
 [SANDBOX-11](#SANDBOX-11) say, by what the backend can grant.
 
 **Why.** The grant is the plan, so a line nobody is asked about gets the same profile as one
-somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted because a stage
-started in a directory it may write is where a person runs `git commit`, and a profile that refused
-it would be one somebody turns off; it is the same reach Linux gives. A program installed inside the
+somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted for a stage whose
+program is git because a stage started in a directory it may write is where a person runs `git
+commit`, and a profile that refused it would be one somebody turns off. It is kept for every other
+stage because an install script, a `make` target or a test runs code the person did not read, and
+a hook it writes, or a `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, `!` alias or
+`credential.helper` it sets in `.git/config`, runs with the person's whole access the next time
+they run git there, in a terminal, an editor, or a later stage that carries the remote scope and
+the agent socket ([SANDBOX-16](#SANDBOX-16)). It is kept beneath every write row and not only the
+session's directories, because a repository made in the temporary directory or a cache can be moved
+into a session directory whole. The program is judged by the file it resolved to and by whether a
+stage could have put it there, so a `git` a stage wrote earns nothing by its name. A git stage keeps
+the hooks and the configuration too: `git init` and `git clone` write both from the templates, and
+`git remote add`, `git push -u` and a checkout that tracks a remote branch write the configuration,
+so a refusal there is a git that does not work. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
-open the home.
+open the home. The persistence locations are refused for writing on macOS because a program started
+later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
+`core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
+write there reaches past the stage that made it. The cost is that a stage of a session opened on the
+home directory cannot run `git config --global`.
+
+Every cache is written by every stage on Linux and macOS in the mode `standard` because a stage is as often a script or a
+wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
+build it drives. The cost is that the separation between ecosystems that
+[SANDBOX-15](#SANDBOX-15) describes does not hold there: a stage that runs `npm ci` can write
+`~/.cargo/registry`, and a later `cargo build` reads what it left. The token files and the installs
+stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
+to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
+
+**What the `.git` rule costs.** What git starts runs under the git stage's profile: a hook, a
+filter, the command `git bisect run` is given, an editor, a pager and a credential helper may each
+write the repository's hooks and configuration, so a pre-commit hook that runs the project's own
+linters reaches them, and so does a program the line's own arguments or assignments name for git to
+start (`GIT_EDITOR`, `--exec-path`, `rebase -x`). A program that makes or changes a repository
+itself is refused the write on macOS: `gh pr checkout`, `gh repo clone`, `npm version`, a `make`
+target or a script that commits, `cargo new` outside a repository, a `cargo` fetch of a `git`
+dependency, an npm `github:` package, a pip `git+` requirement, SwiftPM's checkouts and a test that
+makes a fixture repository fail there. So does git reached through another program, `timeout`, `env` or a version manager's
+shim that resolves to that manager. The planner is told to run git as a step of its own
+([SANDBOX-19](#SANDBOX-19)), and a person can let one line start with no sandbox
+([SANDBOX-29](#SANDBOX-29)). A redirection on the line is opened by this process rather than by the
+stage, so `> .git/config` written on the line itself is not refused. A `core.hooksPath` that points into the work tree makes files every stage writes into hooks,
+and a bare repository in a toolchain cache, cargo's under `~/.cargo/git/db` and Go's under its module
+cache, has a configuration every stage writes and a later fetch reads. On Linux and Windows nothing holds a `.git` back, so every stage there may
+write a repository's hooks and configuration, and the confirmation does not say so. Landlock holds
+a path back from a write row only by listing the directory above it entry by entry, which leaves
+that directory without the right to make an entry directly in it: held back from a session
+directory, that is every new file at the top of the project, the lockfile `npm install` renames
+into place among them, and held back from git's own files it is the `index.lock` every commit
+makes. A Windows container refuses a policy that carries a refusal at all.
 
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
+`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
 `verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
+`verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
+`verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_every_toolchains_cache`
 `verified-by: bravebot_agent::confine::a_session_with_no_home_is_not_granted_the_machine`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
-`verified-by: bravebot_agent::confine::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
+`verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_on_local_application_data_or_a_browser_profile_is_refused`
+`verified-by: bravebot_agent::confine::a_session_inside_the_browser_relays_directory_is_refused_on_every_platform`
+`verified-by: bravebot_agent::confine::a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case`
+`verified-by: bravebot_agent::confine::a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
+`verified-by: bravebot_agent::confine::a_windows_session_beside_the_credential_locations_is_not_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_with_one_root_on_the_home_directory_is_refused_whatever_the_others_are`
+`verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
+`verified-by: bravebot_agent::confine::a_session_inside_a_credential_location_is_refused_on_every_platform`
+`verified-by: bravebot_agent::confine::a_session_beside_or_above_the_credential_locations_is_not_refused_outside_windows`
+`verified-by: bravebot_agent::confine::a_macos_session_inside_the_system_keychains_is_refused`
+`verified-by: bravebot_agent::confine::a_macos_session_at_or_above_home_cannot_write_where_it_cannot_read`
+`verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
+`verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
+`verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`
+`verified-by: bravebot_sandbox::rules::a_credential_location_is_compared_where_it_and_the_home_lead`
+`verified-by: bravebot_sandbox::rules::a_credential_location_under_a_home_that_is_not_text_is_not_matched_by_its_lookalike`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -886,7 +1474,10 @@ directory and the temporary directory, the system and program directories and gi
 files for reading, the caches of the toolchain a program belongs to and the credential scope its
 command names. It says that a path outside those is refused by the operating system as `Operation
 not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
-`--add-dir`). On a platform with no base the description says programs are not confined. Under the mode `strict`
+`--add-dir`). On macOS, in both modes that confine, the description and the sentence after a failed
+step also say that a step whose program is not git cannot write any `.git`, so a program that runs
+git to commit, check out or clone is refused that write and git is run as a step of its own
+([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
@@ -898,12 +1489,36 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). Under the mode `strict`, where the session has a profile directory, the description and this
-sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); in every other
-mode they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
+([SANDBOX-20](#SANDBOX-20)). Under the modes `strict` and `standard`, where the session has a profile directory, the description
+and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
+`off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
 A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
+
+The sentence ends with fixed text, in every mode that produces it, saying that a credential
+location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
+and that where the mode accepts a request, a credential scope is how a line reaches one. It then
+says that any other path a command needs is asked for with the `request_path` tool
+([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. A planner
+that meets a refusal on such a location otherwise has no other account of it, and asks the person
+for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
+exit 2. The menu sentence ends the same way, and the `run` description's
+confinement statement names the tool.
+
+Where a step of the line is `git` carrying the remote scope by its argv, the sentence also says,
+before that fixed text, which key such a step offered over ssh ([SANDBOX-16](#SANDBOX-16)): first
+the one the person's `git.identities` names for the owner of the ssh address its argv named, then
+only keys their ssh configuration names; whichever key ssh tried first, since no entry names a
+readable public key for that owner; or no key from `git.identities`, since the step named its
+remote by name or by an address that is not ssh, and over ssh whichever key ssh tried first. Each
+case present in the line is said once. It then says that where GitHub refused a push for permission
+the key offered may belong to an account that cannot write to the repository, and where it refused
+the login no key offered is registered, that a retry offers the same key, and that only the person
+chooses the key, with the entry shape and the file it goes in, so in either case the planner asks
+them rather than retrying. The text names no host, owner, address or key path and reads nothing a
+program printed, so the same words follow a rejected push and a typo, which is why each part of it
+says the case it is about. A line with no such step says none of it.
 
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
@@ -923,16 +1538,23 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::a_step_with_no_list_and_no_scope_says_none_for_both`
 `verified-by: bravebot_agent::confine::the_profile_line_is_the_same_whatever_paths_the_step_was_given`
 `verified-by: bravebot_agent::confine::the_profile_line_agrees_with_the_policy_on_the_lists_and_the_scope`
+`verified-by: bravebot_agent::confine::the_profile_line_ends_with_the_fixed_sentence_about_credential_locations`
+`verified-by: bravebot_agent::turn::a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit`
+`verified-by: bravebot_agent::turn::a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added`
 `verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
-`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_only_where_a_request_is_accepted`
-`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_only_in_strict`
+`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
+`verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
+`verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
+`verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -941,7 +1563,9 @@ A session carries a network setting, `open` or `closed`, and `open` is the defau
 every stage keeps the egress the base leaves it ([SANDBOX-12](#SANDBOX-12)). Under `closed` a stage
 has none unless it carries one of three reasons: its toolchain list fetches ([SANDBOX-15](#SANDBOX-15)),
 it carries a credential scope ([SANDBOX-16](#SANDBOX-16): the remote, cloud, cluster and container
-scopes alike, since each lends a credential to something reached over a socket or the network), or
+scopes alike, since each lends a credential to something reached over a socket or the network, and
+the signing scope for an account that signs with ssh, since the agent socket is reached through the
+same egress), or
 its program resolved to the file `curl` or `ssh`. Each is read from the compiled step, never from
 what a program printed, and none is granted to a file under a directory the plan may write to, which
 it could have named `curl` itself. A stage that carries one is also granted the resolver ([SANDBOX-3](#SANDBOX-3)) and keeps the unix socket rule
@@ -959,8 +1583,8 @@ when it starts, from the person's home layer, the file `--settings` named, when 
 directory it started in and the managed pin, and every window's turns read that answer. A project a
 window opens later does not close it, and neither does a settings file a window selects afterwards.
 
-Where the backend cannot deny the network (Landlock, [SANDBOX-5](#SANDBOX-5)) a stage that would
-lose egress is not started, and the result says that the network is closed and the platform cannot
+Where the backend cannot deny the network ([SANDBOX-5](#SANDBOX-5): Linux on a kernel that refuses
+the namespace [SANDBOX-3](#SANDBOX-3) describes) a stage that would lose egress is not started, and the result says that the network is closed and the platform cannot
 deny it, the refusal [SANDBOX-17](#SANDBOX-17) already gives. The planner is told once, in the `run`
 description, that the network is closed and which kinds of stage keep it. The failure sentence
 ([SANDBOX-19](#SANDBOX-19)) names the setting beside the directories. A closed network is named on
@@ -985,6 +1609,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_agent::confine::a_closed_network_is_not_reopened_by_what_a_stage_is_started_with`
 `verified-by: bravebot_agent::confine::a_closed_network_is_told_to_the_planner_and_an_open_one_is_not`
 `verified-by: bravebot_agent::confine::a_backend_that_cannot_deny_the_network_refuses_a_closed_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_agent::confine::the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
 `verified-by: bravebot_agent::confirm::a_closed_network_is_said_once_and_each_stage_that_keeps_it_is_named`
@@ -1014,14 +1639,15 @@ against a local remote), `gh`, a wrapper script that starts `git` and `make`, `m
 `sed`, `awk`, `diff` and `patch`, and `vim` and `less`. A workflow works when every stage exits zero.
 The home holds a credential of each kind and has the cache directories of an account that has used
 each toolchain, so a first run on an account that never ran the tool is not what is measured
-([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the process
-environment overlaid by the stage's own and the withheld names removed, and a host variable that
+([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the withheld
+names removed from the process environment, and a host variable that
 moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARGO_HOME`) or names
 an agent socket removed.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
-`~/.aws/credentials`, writing to a directory the session was not opened on, and writing to the
-home directory. Such a row passes when its last stage is refused and the same workflow, run again
+`~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
+home directory, and on macOS a script writing a hook into a repository's `.git`
+([SANDBOX-14](#SANDBOX-14)). Such a row passes when its last stage is refused and the same workflow, run again
 without the sandbox, works, so a path that was never there is not counted as a refusal. A row that
 is let through fails, and so does one whose earlier stage is refused.
 
@@ -1083,7 +1709,9 @@ program printed goes to a log file under the suite's directory, and neither the 
 There are three sandbox modes. `strict` starts every stage under the deny-by-default profile
 [SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
 binary brings, the credential scope its argv names and the session's directories, so a program reads
-nothing else on the machine. `standard` is what [SANDBOX-17](#SANDBOX-17) and
+nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a stage reaches every
+unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `standard` is
+what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
 stage with no profile. The network is not part of a mode: whether a stage keeps egress is the setting
 [SANDBOX-20](#SANDBOX-20) describes, and `strict` and `standard` honour it the same way. `off` starts
@@ -1112,14 +1740,50 @@ The desktop and the bridge have no flag, and read the mode from the settings and
 read there as `standard`, because a window has no line that shows its programs are unconfined. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
-saved under. The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
-and from `--dangerously-skip-permissions`: neither widens it.
+saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
+uses. `/sandbox strict`, `/sandbox standard` and `/sandbox off` set the mode for the rest of the
+process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
+`AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
+The word waits while a turn runs ([CMD-8](commands.md#CMD-8)), so a turn's `run` description, its
+failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
+all come from one mode, and the change applies from the next turn; a delegate spawned after it runs
+under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
+a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
+pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
+file, before anything is asked. Otherwise the command ranks as `--sandbox` does, so
+`/sandbox standard` replaces a checkout's `strict`. The mode is not in the session record, so a
+resumed session takes the mode its start-up chose, and the command's choice lasts until the process
+ends, across `/clear` and `/resume`. `/bg` is refused while the command's choice differs from the mode
+start-up chose, since the background process chooses again ([BG-2](background-sessions.md#BG-2)).
+The opening screen, `/status` and the trace's `sandbox` gate
+name the mode in force after the command.
+
+The desktop window has a control of its own in the composer, beside the permission mode. It shows
+the mode in force and offers `strict` and `standard`. It offers no `off`, and the bridge refuses a
+request for `off`, or for any word that is not one of the two, whatever the window sends. A choice is
+the session's own and applies from the next turn or manifest run; the one running keeps the mode it
+started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
+file, and a choice is met with the floor again when a turn starts. A session that is opened, resumed
+or forked starts from the settings and the pin, not from the choice of the session it came from, and
+the settings' `off` is still read there as `standard`.
+
+The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
+and from `--dangerously-skip-permissions`. Neither changes which mode is in force, and neither
+widens a mode, with one exception. Under bypass ([MODE-4](permission-modes.md#MODE-4)) and
+`standard`, on macOS and Linux, the stages of the lead session's `run` may write every path a
+`request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) without the planner asking.
+This widens `standard`'s writes and nothing else: no read, no network access, nothing under
+`strict`, nothing for a delegate, and nothing on Windows. One line may start with no profile where a
+person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
 Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
 a program to it.
 
 Each `run` on a session that confines records a gate, `sandbox`, whose detail names the mode
-the programs ran in ([TRACE-1](trace.md#TRACE-1)).
+the programs ran in ([TRACE-1](trace.md#TRACE-1)), or `unconfined` for a line that asked to start
+with no profile ([SANDBOX-29](#SANDBOX-29)). A run whose stages were given
+what a `request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) records a second
+`sandbox` entry saying so.
 
 **Why.** A program that is refused a read or a write is a program the person wanted to run, and
 having no way to say "not under this" sends them to a wrapper script outside the tool that confines
@@ -1130,12 +1794,17 @@ stricter mode, which takes nothing from them, on the footing the `permissions` k
 refuse already have ([PERM-18](permissions.md#PERM-18)). The pin is a floor because it is the
 administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
 the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
-stricter than the machine requires.
+stricter than the machine requires. Bypass may widen `standard`'s writes because under bypass every
+`request_path` is already granted without asking, so a stage starts with what the planner could
+get with one request instead of failing first. `strict` is not widened, since a person who chose it
+asked for less than the default.
 
 **What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `standard` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
-the command line prints it on its opening line.
+the command line prints it on its opening line. Under bypass, a `standard` stage of the lead
+session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
+shell start-up files and other repositories on the machine.
 
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::strict_is_the_tightest_and_off_the_loosest`
@@ -1149,6 +1818,7 @@ the command line prints it on its opening line.
 `verified-by: bravebot_config::settings::a_closed_network_pin_refuses_off_and_leaves_the_rest`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
 `verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
+`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_three_words_and_the_last_wins`
@@ -1162,7 +1832,27 @@ the command line prints it on its opening line.
 `verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
+`verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
+`verified-by: bravebot_config::settings::a_windows_choice_outranks_the_settings_and_meets_the_pin`
+`verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_or_standard_and_no_other_sandbox_mode`
+`verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
+`verified-by: bravebot_ui_bridge::sandbox_mode::another_session_opens_under_the_settings_and_not_the_choice`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_choice_made_in_one_session_does_not_reach_another_open_beside_it`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_chosen_mode_is_what_the_next_turns_program_is_held_to`
+`verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
+`verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode`
+`verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`
+`verified-by: bravebot_tui::sandbox_command::the_row_the_cursor_starts_on_keeps_the_mode`
+`verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing`
+`verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
+`verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
+`verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
+`verified-by: bravebot_tui::app::the_sandbox_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::ask::a_question_the_driver_puts_is_not_titled_as_the_agents`
 
 <a id="SANDBOX-23"></a>
 ### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it
@@ -1182,11 +1872,12 @@ in the stage's profile, the plan the person endorses names it with the day it wa
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
 The inputs to a grant are a person's typed words, the compiled step, the closed table and the
-process environment, and nothing else. In particular:
+process environment, and nothing else, except that the remote scope also reads the `IdentityFile`
+lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular:
 
 - A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
-  absolute, no `..`, existing, not the home or above it, not `~/.ssh` or `~/.bravebot` or inside either, and a link by
-  where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
+  absolute, no `..`, existing, not the home or above it, not a credential location of the table
+  ([SANDBOX-12](#SANDBOX-12)) or inside one, and a link by where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
   from the plan.
 - Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
 - A stage with an assignment in front of it is covered by no grant, and a line with one is refused,
@@ -1281,10 +1972,25 @@ toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.
 `registry.npmjs.org` for node, `pypi.org` and `files.pythonhosted.org` for python,
 `proxy.golang.org` for go).
 
-The proxy decides from the destination in the `CONNECT` request line and from nothing else: not a
-header, not a reply, not a byte the tunnel carries. TLS is not terminated, so an allowed tunnel is
-two byte streams copied into each other unread, and a request that is not a `CONNECT` is refused.
-A tunnel is opened only to port 443 or 80. A refused request is answered with the same bytes for
+The proxy decides from the destination in the `CONNECT` request line and the addresses that name
+resolves to, and from nothing else: not a header, not a reply, not a byte the tunnel carries. TLS
+is not terminated, so an allowed tunnel is two byte streams copied into each other unread, and a
+request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80.
+
+A name the list allows is resolved once, and the tunnel is opened to an address that lookup gave
+and to no other, so an answer that differs the next time is never connected to. If any address in
+the answer is not public, in the classes [FETCH-8](tools/fetch-url.md#FETCH-8) names, with an IPv4
+address inside an IPv6 one classified as the IPv4 address, the request is refused unless an exact
+entry of the allowed list is that address, an IPv4-mapped one compared as its IPv4 address, and no
+denied entry covers it. A wildcard names no address, so a server under `*.github.io` cannot answer
+with loopback, a private network or the metadata address and be tunnelled to, and `*.0.0.1` does
+not list `127.0.0.1`. A request that names an address that is not public, read as the list reads a
+name so a trailing dot changes nothing, and that no entry covers, is refused as not public rather
+than as not listed. An address written another way, such as `2130706433`, is a name to that check;
+a yes to it reaches nothing that is not public, since what it resolves to is checked like any
+answer.
+
+A refused request is answered with the same bytes for
 every host and every reason, which name neither the host the program asked for nor the rule, so the
 program learns nothing from it and nothing a program chose reaches the planner. Every decision is
 recorded with the host and the rule that decided it, for the trace, and never the traffic. The
@@ -1299,8 +2005,11 @@ that is dropped.
 **Why.** With the network open, a stage that can read a credential can send it anywhere, and
 closing the network wholesale ([SANDBOX-20](#SANDBOX-20)) takes the registries from a build.
 Letting a person name the hosts a program may reach keeps the build and removes the exfiltration
-path to the rest. Deciding from the request line alone keeps the proxy from being a second reader
-of content, and a fixed refusal keeps a name the program chose out of a sentence the planner reads.
+path to the rest. A name resolves to whatever its server answers, so without the address check a
+listed name, or one under a wildcard whose server another person runs, reaches the services on
+this machine's loopback, the network it sits inside and the metadata address. Deciding from the
+request line alone keeps the proxy from being a second reader of content, and a fixed refusal
+keeps a name the program chose out of a sentence the planner reads.
 
 The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
 `refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
@@ -1315,15 +2024,112 @@ The managed layer pins the keys it writes. Its `allowedHosts` is the whole allow
 person wrote is added to it, so a person's entry cannot widen it and `doctor` lists the pinned keys.
 An empty one pins a list that refuses every host, and filters a session that set none. Its
 `deniedHosts` is added to the person's and nothing lifts it. Its `onUnlisted` is the answer whatever
-a person said. A managed value that is not a list of strings, or an `onUnlisted` that is neither
-word, pins nothing and `doctor` names it.
+a person said. A managed `allowedHosts` also drops the person's `onUnlisted: ask` unless the managed
+file sets `onUnlisted` itself, since a yes to the prompt below adds to the allowed set, which is the
+widening the pin exists to prevent. A managed value that is not a list of strings, or an
+`onUnlisted` that is neither word, pins nothing and `doctor` names it.
 
-Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers and the managed pin are written and tested, and nothing starts a proxy for a session. Unbuilt:
-policy rows that allow only the proxy's port, the environment injection in
-`confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
-the stage with the SANDBOX-19 sentence naming the setting.
+A stage with egress under a set list is started with those variables, and a stage with no egress
+is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
+own reasons bring, the remote scope's hosts and its toolchain's registries, so two stages can hold
+different lists. One proxy is started for each distinct list the first time a stage needs it, and
+is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
+dropping it would let the host through, and so does a proxy that cannot be started: a stage is
+never started without the filter its list asks for. An `accept` that fails, as one does with no
+descriptor left, is retried after a pause that doubles from 5 milliseconds up to a second and starts
+again at the next connection accepted, so the proxy does not hold a core while the descriptors stay
+spent. A connection its client abandoned before it was accepted is passed over with no pause, so a
+stage that resets connections cannot slow the proxy for the other stages sharing it.
 
+A stage held to a proxy has a policy that allows outbound TCP to that proxy's loopback port and to
+no other address, and reaches no name resolver, since the proxy resolves the name it tunnels to. A
+program that ignores the variables and connects to a host, or to another loopback port, is refused
+by the operating system, and so is one whose line asked for loopback ([SANDBOX-3](#SANDBOX-3)),
+which lets it listen and adds no port to connect to. That costs a stage the loopback services of its own, a local database or
+a test server, and a program that does not send its connections through the variables: `ssh`
+reads none of them, so a remote reached over ssh cannot connect while a list is set; an HTTPS
+remote can. A unix socket a write row already names is still reached. macOS applies
+this in the profile. Linux applies it with a network namespace ([SANDBOX-3](#SANDBOX-3)): the
+proxy listens on a unix socket as well as its loopback port, in a directory only the account can
+enter, and a forwarder started in the namespace listens on the proxy's port on the namespace's
+loopback and relays each connection to that socket. The stage reaches no other address and no
+other protocol, and holds the loopback services it starts itself, since they live in the
+namespace. The forwarder is started before the stage's filesystem rules are installed, so the
+stage needs no grant to the socket, cannot attach to it, and it ends with the stage. Where the
+kernel will not make the namespace, a stage is refused while a list is set, with
+`sandbox.network.allowedHosts` named, as a stage is refused where the network cannot be closed
+([SANDBOX-20](#SANDBOX-20)), and `doctor` says why. Windows keeps that refusal: letting an
+AppContainer reach loopback takes a loopback exemption, which is machine-wide and needs
+administrator rights, and so do the filtering rules of the Windows Filtering Platform, and a
+sandbox that changes the machine's network policy is a worse trade than refusing the stage. The
+stage is not started with the variables alone. The sentence the
+planner reads under SANDBOX-19 says the network is limited by that setting and names no host.
+
+After a foreground `run` has stopped, the trail records what the list decided for the hosts its
+programs asked each proxy for, under `hosts`: the host, `allowed` or `refused`, the entry that
+decided it or `not listed`, `port not carried` or `not public`, and the stages that proxy serves
+in that line.
+Repeats are counted. A program chooses the name it asks for, so the record carries a name only
+where it is a host name or an IP address, and a request for anything else is recorded as a name
+that is not a host name, with none of its bytes. A proxy keeps at most 256 decisions until they are
+taken and counts the rest, which the record states. A proxy is shared by every stage with the same
+list, so a decision taken for a job left running is recorded with the next foreground line that
+shares its proxy, and a decision taken after a line was moved to the background is recorded the
+same way. `/status` shows a line with how many entries the allowed and denied lists hold and the
+files that wrote them, and no entry, for a session with an `allowedHosts` list that is not run
+with the sandbox off.
+
+Under `onUnlisted: ask`, the hosts a foreground run was refused for want of an entry are put to the
+person once that run has stopped. Nothing waits on the answer: the program was refused already, and
+a yes lets the lines that follow reach the hosts, so the person runs it again. The question names
+each host on a row of its own, up to eight at a time, and says that a yes holds until the session
+ends and writes nothing to disk. A yes adds the hosts to the allowed set of every stage from the
+next line on, which starts another proxy because the list is another list. A host the denied list
+names stays refused, and a granted name is held to the addresses it resolves to as a listed one
+is. A no is kept for the session, so the same host is not asked about again. The hosts asked about
+are those the proxy refused as not listed and that are host names or addresses; a host refused for
+its port, by a denied entry or as not public, or a name that is not a host name, is not put to
+anyone. A delegate's lines are not asked about, and the mode that asks nothing refuses, so
+`ask` behaves as `refuse` under bypass and for a session nobody is at. Bypass does not keep the
+refusal, so a session that leaves it asks about the same host. The answer is recorded under
+`host_grant` with the hosts. The hosts are a program's own bytes: they go to the person's screen
+and the trail, the planner is told nothing about them, and nothing branches on one.
+
+**What it costs.** A proxy holds no secret: it serves whatever connects to its port or its socket,
+so a process that reaches one is held to that proxy's list and not to its own. That is any process
+of another user that can reach the loopback port; on Linux a stage of any list, or one with no
+network, since the socket's directory is under the temporary directory every stage writes and a
+write row reaches a socket beneath it; and on macOS a stage lent loopback and held to no proxy,
+which connects to every loopback port. A proxy starts a thread for each connection with no limit on
+how many it holds, and keeps a tunnel open until one side closes it, so a stage can open connections
+until the session process has no thread or descriptor left to give. No entry can spell an IPv6
+address, so a name whose answer holds one that is not public is refused whatever the list holds:
+`localhost` resolves to `::1` as well as `127.0.0.1` on most machines, so a program reaches a
+loopback service through the proxy as `127.0.0.1`, with that address listed.
+
+The tests that hold a stage to the proxy through the namespace need a kernel that lets an
+unprivileged user make one. They say so and do not run where it does not, so a green run there
+says nothing about them.
+
+`verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
+`verified-by: bravebot_sandbox::proxy::a_failing_accept_is_retried_after_a_pause_that_doubles`
+`verified-by: bravebot_sandbox::proxy::a_connection_abandoned_before_it_was_accepted_is_passed_over_at_once`
+`verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
+`verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
+`verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
+`verified-by: bravebot_sandbox::windows::a_policy_limiting_egress_to_one_port_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_limiting_egress_to_one_port_without_the_proxys_socket_is_refused`
+`verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_reaches_it_through_the_forwarder`
+`verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_cannot_connect_around_it`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
+`verified-by: bravebot_cli::main::doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs`
+`verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_the_proxy_and_ends_with_the_process_that_started_it`
+`verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
+`verified-by: bravebot_agent::confine::a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port`
+`verified-by: bravebot_agent::confine::the_profile_line_names_the_host_list_setting_and_no_host`
+`verified-by: bravebot_agent::confine::a_stage_under_a_host_list_cannot_connect_around_the_proxy`
+`verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it`
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
 `verified-by: bravebot_sandbox::hosts::a_denied_entry_wins_over_an_allowed_one_in_either_order`
@@ -1338,8 +2144,58 @@ the stage with the SANDBOX-19 sentence naming the setting.
 `verified-by: bravebot_sandbox::proxy::the_host_is_read_from_the_request_line_and_not_from_a_header`
 `verified-by: bravebot_sandbox::proxy::a_request_that_is_not_a_connect_is_refused_without_a_decision`
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
+`verified-by: bravebot_sandbox::hosts::only_a_host_name_or_an_address_may_be_recorded`
+`verified-by: bravebot_sandbox::proxy::a_decision_is_handed_over_once`
+`verified-by: bravebot_sandbox::proxy::decisions_beyond_the_cap_are_counted_and_not_kept`
+`verified-by: bravebot_sandbox::proxy::a_request_for_something_that_is_not_a_host_name_is_recorded_without_it`
+`verified-by: bravebot_sandbox::proxy::a_listed_name_that_resolves_to_loopback_is_refused`
+`verified-by: bravebot_sandbox::proxy::a_name_the_list_allows_is_refused_when_it_resolves_to_an_address_that_is_not_public`
+`verified-by: bravebot_sandbox::proxy::one_address_that_is_not_public_among_public_ones_refuses_the_name`
+`verified-by: bravebot_sandbox::proxy::an_address_an_exact_entry_names_is_reached_although_it_is_not_public`
+`verified-by: bravebot_sandbox::proxy::a_request_naming_an_address_that_is_not_public_is_refused_as_not_public`
+`verified-by: bravebot_sandbox::proxy::the_tunnel_is_opened_to_the_address_that_was_checked`
+`verified-by: bravebot_sandbox::hosts::an_address_is_named_only_by_an_exact_entry_no_denied_one_covers`
+`verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
+`verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
+`verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`
+`verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
+`verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`
+`verified-by: bravebot_cli::running::a_host_a_run_asked_for_is_recorded_with_what_the_list_decided`
+`verified-by: bravebot_tui::status::host_lists_are_reported_by_count_and_file_and_never_by_host`
+`verified-by: bravebot_config::sandbox_network::a_pinned_allowed_list_is_not_widened_by_the_persons_ask`
+`verified-by: bravebot_agent::workspace::host_answers_are_shared_remembered_and_lifted_by_a_yes`
+`verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_host_answers`
+`verified-by: bravebot_agent::confine::only_a_host_refused_for_want_of_an_entry_is_put_to_the_person`
+`verified-by: bravebot_agent::confine::only_on_unlisted_ask_under_a_list_asks_about_hosts`
+`verified-by: bravebot_agent::confine::a_granted_host_changes_the_list_the_next_line_is_held_to`
+`verified-by: bravebot_agent::confine::a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not`
+`verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept`
+`verified-by: bravebot_agent::tools::a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse`
+`verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
+`verified-by: bravebot_core::policy::a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no`
+`verified-by: bravebot_tui::confirm::a_host_prompt_shows_each_host_and_what_a_yes_does`
+`verified-by: bravebot_tui::confirm::a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::remote_confirm::hosts_cross_with_every_name_and_only_their_own_yes_comes_back`
+`verified-by: bravebot_cli::plain::hosts_are_asked_in_lines_and_only_a_yes_lets_programs_reach_them`
+`verified-by: bravebot_ui_bridge::refusal::a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own`
+`verified-by: bravebot_ui_bridge::refusal::a_host_answer_answers_no_other_question`
+`verified-by: bravebot_ui_bridge::refusal::an_unanswerable_host_request_refuses`
+`verified-by: bravebot_ui_bridge::dispatch::a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned instead by ui/scripts/host-card.test.mjs, which asserts that it lists every host as text, says how long a yes lasts and what deniedHosts still refuses, offers no standing answer, takes only a host answer, and that the main process lets host.reply through; ui/scripts/shown.test.mjs asserts that an approval waits on the hosts being on screen; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::wire::a_host_prompt_carries_the_hosts_and_nothing_else`
+`verified-by: bravebot_ui_bridge::acp::a_host_request_is_shown_with_each_host_on_a_row_and_its_escapes_pictured`
+`verified-by: bravebot_ui_bridge::acp::a_host_request_offers_the_session_not_a_single_use`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
+`verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
+`verified-by: bravebot_agent::host_proxy::a_denied_host_is_refused_although_a_default_covers_it`
+`verified-by: bravebot_agent::host_proxy::a_denied_entry_that_is_no_rule_fails_and_an_allowed_one_is_dropped`
+`verified-by: bravebot_agent::host_proxy::a_list_is_served_by_one_proxy_and_another_list_by_another`
+`verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
+`verified-by: bravebot_agent::confine::a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it`
+`verified-by: bravebot_agent::confine::an_assignment_in_the_line_cannot_point_a_stage_elsewhere`
+`verified-by: bravebot_agent::confine::no_allowed_list_means_no_proxy`
+`verified-by: bravebot_agent::confine::a_stage_with_no_egress_is_given_no_proxy`
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
@@ -1368,7 +2224,10 @@ A narrower path beats a wider one, so an `allowWrite` beneath a `denyWrite` is a
 a `denyRead` beneath an `allowRead` is a refusal that holds. At one path a refusal wins over the
 person's own allowance. A refusal also wins over the rows a stage brings for itself at or beneath it,
 a credential scope's and a toolchain cache's among them: the person said no program reads `~/.config/gh`,
-and a program that is given its scope is still a program. A refusal with no grant above it holds back
+and a program that is given its scope is still a program. It wins over the rows of the run base and
+the mode `standard` as well, so a `denyRead` of `~/Library/Keychains/login.keychain-db` refuses the
+file the base reads on macOS ([SANDBOX-12](#SANDBOX-12)), and a `denyWrite` of a cache refuses a row
+every stage is given ([SANDBOX-18](#SANDBOX-18)). A refusal with no grant above it holds back
 nothing and is not added.
 
 `denyRead` and `denyWrite` are read from every layer, since they only take reach away. `allowRead`
@@ -1380,14 +2239,21 @@ tried names the file in `doctor`. The managed file may pin each list: a pinned `
 added to the person's and cannot be lifted by an entry at or beneath it.
 
 A path is absolute, `~/`-prefixed or relative to the first directory the session was opened on. An
-entry that climbs out of the directory it is read from, holds `..` where it is absolute, or starts
-with `~` in a session that names no home directory is refused. Each path is judged where it leads: the
+entry is resolved to, and compared with a row in, one spelling, so that a Windows drive path with
+the `\\?\` prefix the file system returns is the same path as the one without it. An entry that
+climbs out of the directory it is read from, holds `..` where it is absolute, or starts with `~` in
+a session that names no home directory is refused. Each path is judged where it leads: the
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
 which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
 where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), and no list can set the `.git` writes
-[SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. A write row of the
+[SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. On Windows, where a
+grant cannot be narrowed, an `allowRead` or `allowWrite` entry that is a directory holding one of
+the locations of [SANDBOX-12](#SANDBOX-12) beneath it (the home directory, a directory above it, or
+`~/.config`, which holds `~/.config/gcloud`) is refused too, since a stage given that directory
+would reach `~/.ssh`, `~/.aws` and `~/.bravebot` with it; a wildcard drops those matches and keeps the
+rest. An entry at or inside such a location other than `~/.ssh` and `~/.bravebot` is not affected. A write row of the
 person's above a location of the table does not write it, since Seatbelt's refusal of a read is not
 a refusal of a write. `*` and `?` in an entry of `allowRead` or `denyRead` are expanded when a call's
 confinement is built, by listing each directory once without following a link, within a bound of
@@ -1398,7 +2264,10 @@ wildcard in a write list is refused.
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
 is, and the result names the key and the entry. Where the backend cannot subtract from a grant
-(Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires. Where it
+(Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires, and a
+`denyRead` or `denyWrite` inside the directory the session was opened on, or inside an `allowRead` or
+`allowWrite` entry, is reported as not in force, with why, by `doctor` and by the window, since a stage there is refused and none runs with the path
+held back. Where it
 grants a directory with everything beneath it (Landlock) a directory above a refused write is listed
 and granted entry by entry as [SANDBOX-12](#SANDBOX-12) does for a read, which leaves that directory
 without the right to make an entry directly in it: a program cannot create a new file beside a file
@@ -1418,7 +2287,9 @@ in force with the sentence `doctor` gives; the notice above a conversation count
 not in force and an allowance a project file wrote, as it does a permission rule. It names paths
 where the terminal's `/status` does not, since it is the person's own settings it is showing back
 and `doctor` does the same. The person edits the settings file, and a change applies to the next
-conversation. A command that adds an allowance from a session is not built.
+conversation. A command that adds an allowance from a session is not built; a planner's way to ask
+for reach to one path for the session is `request_path` ([SANDBOX-28](#SANDBOX-28)), which adds no
+entry to a list.
 
 **Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
 only other way to move that reach, which also marks the directory trusted
@@ -1436,6 +2307,9 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_the_state_directory_is_refused`
+`verified-by: bravebot_sandbox::rules::a_row_over_a_directory_holding_a_credential_location_is_refused_on_windows_only`
+`verified-by: bravebot_sandbox::rules::a_pattern_on_windows_leaves_out_the_matches_that_hold_a_credential_location`
+`verified-by: bravebot_agent::confine::an_allow_read_over_the_home_directory_is_not_a_row_on_windows`
 `verified-by: bravebot_sandbox::rules::a_glob_is_expanded_by_listing_and_applies_to_reads`
 `verified-by: bravebot_sandbox::rules::a_glob_over_a_tree_deeper_than_the_walk_goes_is_refused_and_not_cut_short`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
@@ -1443,11 +2317,26 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
 `verified-by: bravebot_sandbox::rules::a_write_row_above_a_credential_location_does_not_write_it`
+`verified-by: bravebot_sandbox::rules::a_denial_inside_a_grant_is_added_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_outside_every_grant_is_not_added_in_either_spelling`
+`verified-by: bravebot_sandbox::rules::a_row_at_or_under_a_refusal_is_dropped_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::an_entry_the_file_system_resolves_to_a_verbatim_path_is_kept_in_the_ordinary_spelling`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_path_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
+`verified-by: bravebot_sandbox::rules::a_stage_with_a_denial_inside_its_grant_is_refused_by_the_windows_backend`
 `verified-by: bravebot_sandbox::policy::a_write_row_above_a_write_refusal_is_spread_around_it`
 `verified-by: bravebot_sandbox::linux::a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest`
 `verified-by: bravebot_sandbox::macos::the_profile_orders_every_row_from_the_widest_path_to_the_narrowest`
 `verified-by: bravebot_sandbox::windows::a_policy_refusing_a_write_is_refused_rather_than_applied`
+`verified-by: bravebot_sandbox::windows::a_policy_that_refuses_a_read_or_a_write_starts_no_program`
+`verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
+`verified-by: bravebot_sandbox::rules::a_denial_beneath_a_grant_is_found_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_beneath_a_persons_allowance_is_found_for_the_kind_of_row_it_cuts`
+`verified-by: bravebot_agent::permissions::a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes`
+`verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
+`verified-by: bravebot_cli::main::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
+`verified-by: bravebot_agent::confine::what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
 `verified-by: bravebot_agent::confine::the_counts_reach_the_description_and_the_profile_and_no_path_does`
 `verified-by: bravebot_agent::confine::a_refusal_spelled_with_a_home_the_session_lacks_is_unapplied`
@@ -1478,14 +2367,18 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
 
 <a id="SANDBOX-26"></a>
-### SANDBOX-26: a `run` call may ask for a credential scope or a toolchain list by name, and the person is asked every time
+### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
-`run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven` and `gradle`. It is for the line
-whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script that runs
-`gh` or `cargo` inside it. Each name is the scope or toolchain list of the same name, with the rows,
-the egress under a closed network ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope
-has when a stage's argv names it, and the places the environment moves its tool's configuration to
+`run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle` and `loopback`. It is
+for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
+that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
+that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
+bind one or a build through `sccache`. `loopback` is the loopback grant and nothing else: it reads
+no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. Every other name is
+the scope or toolchain list of the same name, with the rows, the egress under a closed network
+([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
+(`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
 ([SANDBOX-16](#SANDBOX-16)), each named in the prompt with its variable. It is added to every stage
 of the line that has no `NAME=value` in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
 `Remote` and the empty string are not requests for less.
@@ -1497,9 +2390,12 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
+- Accepted in `strict` and `standard` ([SANDBOX-22](#SANDBOX-22)). `standard` reads the machine
+  except the credential table ([SANDBOX-12](#SANDBOX-12)), so a scope there lifts the part of that table
+  it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
-  not `strict` ([SANDBOX-22](#SANDBOX-22)), which already reads the machine or has no profile, with
-  no profile directory, and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  `off`, which has no profile to add to, with no profile directory, and in a workspace the person
+  has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
@@ -1518,6 +2414,7 @@ for a different line.
 
 `verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
 `verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
+`verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
@@ -1525,13 +2422,19 @@ for a different line.
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
 `verified-by: bravebot_agent::confine::a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage`
+`verified-by: bravebot_agent::confine::a_requested_loopback_lends_loopback_and_no_network`
+`verified-by: bravebot_agent::confine::a_requested_loopback_sorts_last_and_the_prompt_names_its_stage`
+`verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
 `verified-by: bravebot_agent::confine::a_request_is_kept_once_in_the_menus_order`
 `verified-by: bravebot_agent::confine::the_description_names_each_requested_scope_and_the_stage_it_is_for`
 `verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`
+`verified-by: bravebot_agent::confine::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
+`verified-by: bravebot_agent::confine::a_request_for_signing_over_a_key_no_scope_reads_is_explained`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
-`verified-by: bravebot_agent::turn::scopes_are_refused_under_standard_and_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_standard`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
@@ -1541,7 +2444,7 @@ for a different line.
 ### SANDBOX-27: a person may answer a request for a credential scope by remembering it as reach for the programs it was added to
 
 At the confirmation for a line that asked for a credential scope ([SANDBOX-26](#SANDBOX-26)), `m`
-runs the line and remembers each requested scope, read only, for the session, and `k` does the same
+runs the line and remembers each requested scope, read only, for the session, and `e` does the same
 for every session started in this checkout. What is remembered is what `/reach` writes
 ([SANDBOX-23](#SANDBOX-23)): one grant for each distinct program and operation word among the line's
 stages and each requested scope, so the next plan for those programs carries the scope as a row the
@@ -1553,8 +2456,8 @@ person reads, and a session that asks for nothing is not asked about it.
   starts with an option has no operation to key on, so the line is offered neither key. The keys are
   unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
   the closed scope table rather than from what was drawn.
-- A toolchain list is never remembered, whether it was asked for alone or beside a scope. The prompt
-  says so.
+- A toolchain list and loopback are never remembered, whether asked for alone or beside a scope,
+  and nor is the `signing` scope, which `/reach` has no name for. The prompt says so.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
   quarantined as it was ([SANDBOX-26](#SANDBOX-26)).
@@ -1576,11 +2479,286 @@ more than the person read.
 `verified-by: bravebot_agent::turn::keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only`
 `verified-by: bravebot_agent::turn::keeping_a_request_for_every_session_is_read_by_another_session`
 `verified-by: bravebot_agent::turn::keeping_a_request_leaves_a_toolchain_out`
+`verified-by: bravebot_agent::turn::a_request_for_signing_is_asked_about_and_never_remembered`
 `verified-by: bravebot_agent::turn::keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused`
 `verified-by: bravebot_tui::confirm::the_keep_keys_approve_and_remember_the_reach_only`
 `verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
 `verified-by: bravebot_tui::confirm::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+
+<a id="SANDBOX-28"></a>
+### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new
+
+`request_path` ([tools/request-path.md](tools/request-path.md)) is how a planner whose stage fails
+for want of a path outside the session's directories asks for it. It takes the `path`, a `write`
+flag (write implies read) and the `why` every tool takes. The person is shown the path as it
+resolves, whether it is to be read or written, and the reason, and answers. A yes lets every program
+a later `run` starts read the path, or read and write it, for the rest of the session. A no, an
+interrupt and a run with nobody to ask grant nothing. The mode that answers every permission
+question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX-26)).
+
+- **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
+  write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
+  `~/.bravebot` and anything inside either, a credential location of the table
+  ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
+  `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. A
+  request for writing is also refused at, inside or above a persistence location
+  ([SANDBOX-18](#SANDBOX-18)); a request to read one is not. The path is judged where it leads,
+  through its links. A refused request is not put to the person, and the result says that no answer
+  would change it. A path that does not exist is not asked about either.
+- **The person's own refusals still hold.** A `denyRead` or `denyWrite` entry covering the path
+  refuses the request, and one narrower than a granted path takes its part of the grant back, since
+  the person's rows are applied after the session's.
+- **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
+  file is written; the grant is held by the session and gone with it. Asking again for a path
+  already held is asked like the first request, and a yes only ever widens the grant held: a read
+  answered beside a write held leaves the write. The person may end a grant with
+  `/reach paths remove <number>`.
+- **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
+  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). The result says so and nothing is asked. No
+  settings layer, project file or permission rule grants one in advance, because none names it.
+- **Shown and recorded.** `/status` lists each path held, with its access, and the
+  trace carries one `path_reach` record for each yes, naming the path and the access.
+- **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
+  as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
+  a sub-task is reach the person never set up.
+- The desktop shows no card for it and refuses, which grants nothing.
+- **Under bypass, nothing needs asking for.** Where the permission mode answers every question
+  ([MODE-4](permission-modes.md#MODE-4)), the mode is `standard`, and the platform is macOS or
+  Linux, the stages of the lead session's `run` are given at the start what a request for writing
+  would be granted: every path the account can write, except `/`, a drive root, the home
+  directory and any directory above it as a whole (the entries already in them stay writable, and
+  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
+  credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
+  each persistence location ([SANDBOX-18](#SANDBOX-18)) and any directory that holds one, and every
+  path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
+  through links. It is for programs only: the file tools keep the reach
+  [TRUST-10](trust-map.md#TRUST-10) gives them, and a `request_path` under bypass still opens a
+  directory for them ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). Under `strict` each path is
+  still requested, under `off` there is no profile, in a delegate's `run` nothing is added
+  ([DELEGATE-12](delegation.md#DELEGATE-12)), and on Windows, where a grant is an
+  access-control entry written onto each directory, each path is still requested. Nothing a
+  program wrote or printed decides which rows exist. The trace's `sandbox` gate says the stages
+  were given what a request would be granted, `/status` says it in its `Programs write` line, and
+  the profile line a failed step carries names it.
+
+**Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
+the planner has no way to say which path it needed. Without a per-path request, the only way to let
+a build write one file is `/add-dir`, which marks the whole directory trusted. A request for one
+path, with the same refusals as the rows a person can write, lets them say yes to that path for a
+single session. What the planner supplies decides nothing: the path is routing and is judged by the
+rules, and the reason is drawn for the person and recorded.
+
+Under bypass nobody is there to answer, and a run that fails with `Operation not permitted` on a
+sibling directory costs the planner a turn to learn what the profile already knows it will be
+granted. Giving those stages the rows a yes would have given them removes the failed run and gives
+them nothing a request would not: the same refusals hold, and the permission mode already answers
+the request with a yes. It is the one way the permission mode widens a sandbox mode
+([SANDBOX-22](#SANDBOX-22)).
+
+**What it costs.** A program that writes anywhere the account can reaches more than the session's
+directories, including a unix socket under such a row on macOS, where a network-outbound row
+follows a write row. A program directory the account can write, such as a Homebrew prefix, is
+left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)) once a stage's
+policy holds it, and stays left out for the life of the process, after the permission mode
+changes. The rows are read from the directories as they are when a stage's policy is built, so a
+directory made inside a directory spread around a refusal by an earlier stage of the same run is
+not covered until the next. A program directory on the account's search path, such as
+`~/.local/bin`, `~/.cargo/bin` or a Homebrew prefix, is written like any other, so a program a stage
+leaves there runs unconfined when the person's shell finds it before the one they meant; refusing
+them would refuse `pip install --user`, `cargo install` and `brew` under bypass. A stage cannot run
+`git config --global`, since git's configuration is a persistence location. The refusals above are
+the whole of what is held back.
+
+`verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
+`verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
+`verified-by: bravebot_sandbox::rules::a_request_for_an_existing_path_is_kept_and_a_link_is_judged_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_request_for_a_name_that_is_not_utf8_is_kept_as_those_bytes`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::granted_rules_add_rows_and_a_denial_of_the_person_still_wins`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
+`verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended`
+`verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
+`verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
+`verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
+`verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`
+`verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
+`verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
+`verified-by: bravebot_agent::tools::only_the_lead_session_in_bypass_is_given_what_a_request_would_be`
+`verified-by: bravebot_agent::confine::a_bypass_stage_writes_beside_the_working_directory_without_a_request`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
+`verified-by: bravebot_agent::confine::a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
+`verified-by: bravebot_core::policy::the_trail_says_the_programs_were_given_what_a_request_would_be`
+`verified-by: bravebot_tui::status::the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
+`verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
+`verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
+`verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
+`verified-by: bravebot_agent::turn::the_tool_is_offered_where_runs_are_confined`
+`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
+`verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
+
+<a id="SANDBOX-29"></a>
+### SANDBOX-29: a `run` call may ask for one line to start with no sandbox, and the person is asked every time
+
+`run` takes an optional `unconfined`, a boolean. With `true`, the stages of that one line start with
+no profile, as under the mode `off` ([SANDBOX-22](#SANDBOX-22)), and the next line is built from the
+session's mode again. It is for the line that has to write where a credential scope reads and never
+writes ([SANDBOX-16](#SANDBOX-16)), such as `docker login` into `~/.docker/config.json` or
+`aws sso login` into `~/.aws/sso/cache`, which `request_path` and `allowWrite` refuse for the same
+reason ([SANDBOX-28](#SANDBOX-28), [SANDBOX-25](#SANDBOX-25)). A value that is not a boolean is an
+error and nothing runs. `unconfined` with `scopes` is an error, since a line with no profile has
+none to add to.
+
+- **Asked every time.** The line is put to a person before any vouched entry, remembered line or
+  rule is read ([RUN-5](tools/run.md#RUN-5)). The prompt says the line runs with no sandbox and
+  offers no answer that lasts: not `a`, `r` or `f`, and not `m` or `e` ([SANDBOX-27](#SANDBOX-27)).
+  An answer that names one anyway is not acted on, so the line is not vouched for and not recorded.
+- **Not approved by the mode that asks nothing.** `--dangerously-skip-permissions` approves a
+  `scopes` request ([SANDBOX-26](#SANDBOX-26)) and does not approve this one, since the permission
+  mode never widens the sandbox mode ([SANDBOX-22](#SANDBOX-22)) and an approved request is `off`
+  for its line. It goes to the confirmer in that mode as in every other, and a run with nobody to
+  ask refuses it.
+- **Refused, with one sentence that does not say which setting withheld it,** in `strict`, under
+  `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
+  managed `run.network` of `closed`, for the reason the managed file floors `off` there
+  ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
+  is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
+  The sentence does not suggest the argument: the planner learns it from the `run` description.
+- **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
+- **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
+  session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
+- The desktop draws no card for it and refuses, since a window reads `off` as `standard` and has
+  no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
+
+**Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
+it with `--sandbox off`, which removes the profile from every program for the whole session. The
+routing field is the boolean beside the command line the person already reads, and "run this line
+with no sandbox" is a sentence a person can approve on its own. Asking every time and remembering
+nothing keeps the request from becoming a standing allowance approved for a different line.
+
+`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
+`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
+`verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
+`verified-by: bravebot_tui::confirm::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
+`verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
+
+<a id="SANDBOX-30"></a>
+### SANDBOX-30: a program bravebot starts itself is never one a confined stage could have written
+
+The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
+`~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, the
+inhibitor `/caffeinate` starts, a hook's program, a language server, and the editor Ctrl-G opens.
+Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
+lie outside every directory a confined stage may write.
+
+- **Those directories are the session's.** Each directory the session was opened on, added, or
+  moved to, its scratch directory, the system temporary directory, and every row a stage's policy
+  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
+  whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
+  can write the directory or the program, so `/usr/bin` stays searched. A directory is added to the
+  set when it is opened or first granted, and is never removed from it, because closing a
+  directory does not remove a file already written there.
+- **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
+  and so is a file in another directory that links into one.
+- **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
+  reads as the current directory. A name carrying a separator is not looked up, and an absolute
+  path is started as given. A hook's relative path is the person's own and runs from the directory
+  the hook runs in ([HOOK-4](hooks.md#HOOK-4)).
+- **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
+  activated virtualenv's `bin` among them, is told it is not installed
+  (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
+  tried.
+- **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
+  would stop `pip install` in an activated environment, which is what the grants are for.
+
+**Why.** A stage can write `.venv/bin/aws`, and an activated environment puts that directory first
+on `PATH`. The name `aws` then resolves to the stage's file, which bravebot starts outside any
+confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen what runs with
+the person's access, which the confinement exists to deny it.
+
+`verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
+`verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
+`verified-by: bravebot_sandbox::programs::a_relative_path_entry_is_never_searched`
+`verified-by: bravebot_sandbox::programs::an_empty_path_entry_is_never_searched`
+`verified-by: bravebot_sandbox::programs::the_system_temp_directory_counts_as_writable`
+`verified-by: bravebot_sandbox::programs::a_link_in_a_safe_directory_to_a_writable_file_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_link_inside_a_writable_directory_to_a_safe_program_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_path_entry_that_links_into_a_writable_directory_is_not_searched`
+`verified-by: bravebot_sandbox::programs::a_sibling_directory_sharing_a_name_prefix_is_not_writable`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_can_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_cannot_write_is_still_found`
+`verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
+`verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
+`verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
+`verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
+`verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
+`verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
+`verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::editor::an_editor_named_only_by_a_planted_file_is_not_found`
+`verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
+`verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_installed_outside_every_writable_directory_is_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
+`verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
+
+<a id="SANDBOX-31"></a>
+### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others
+
+A Seatbelt profile allows a Mach lookup of the services in a fixed list and of nothing else: the
+account and group lookups a program makes as it starts (`opendirectoryd`), the notification and log
+services of libSystem, the per-user directory helper, the network configuration services, and the
+keychain service `SecurityServer` ([SANDBOX-12](#SANDBOX-12)) for every policy, and certificate
+trust (`trustd`, `trustd.agent`) only for a policy that allows network egress, to every host or to
+a proxy's port. A stage whose network is closed ([SANDBOX-20](#SANDBOX-20)) is refused both. The
+list is code. No value, argument vector, printed
+output or configuration file adds to it, and it is not written as a pattern. A lookup of any other
+service is refused, which includes LaunchServices (`com.apple.coreservices.launchservicesd` and
+`com.apple.lsd.*`), the pasteboard (`com.apple.pasteboard.1`) and the other services that open a
+file or URL, read or write the clipboard, or start a program for the caller.
+
+**Why.** A Mach service acts with the account's access whatever the filesystem rows say, so a
+profile that allows every lookup lets a confined program read the clipboard, ask LaunchServices to
+open a file or URL in another application, and use any other service the session registers.
+Neither a read row nor the absence of network egress limits them. The list is the services the
+everyday programs need: `gh` fails to verify a certificate without `trustd.agent`, and
+`osxkeychain` fails with `-50` without `SecurityServer`. A program that looks up another service
+is refused the lookup.
+
+The trust services are the exception to "answers a question about the machine": evaluating a
+certificate chain makes them fetch the issuer from the certificate's Authority Information Access
+URL, from their own process and outside the profile, so a stage that held them with no network
+could make a request to any URL it names, with data in it. A program with no network has no
+certificate to verify, so it loses nothing. A stage held to a proxy's port
+([SANDBOX-24](#SANDBOX-24)) does need verification, and for it the host list does not stop that
+fetch on macOS.
+
+`verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
+`verified-by: bravebot_sandbox::macos::the_trust_services_are_looked_up_only_where_the_network_is_allowed`
+`verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
 
 ## Programs a person asked for
 
@@ -1600,8 +2778,31 @@ not built is marked where it appears.
 network is unchanged, so a token a program can read is a token it can send to any host the plan
 lets it reach, which is why the files a tool reads by name to do its job (`~/.config/gh`,
 `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are
-readable and the table is what the account would not want a script to read at all. The rest of this
-section describes the keyed lists, which are what a stage on Windows and an MCP server start from.
+readable and the table is what the account would not want a script to read at all.
+
+**The default keeps four things in reach of every stage on Linux and macOS:** those token files
+and any other a tool keeps outside the table, such as `~/.m2/settings.xml` and
+`~/.gradle/gradle.properties`; the environment, less this agent's own credentials
+([RUN-12](tools/run.md#RUN-12)), so `GITHUB_TOKEN`, `NPM_TOKEN` and `AWS_*` reach a stage; on macOS
+the login keychain file, through which a lookup of the keychain service reaches the items in it
+([SANDBOX-12](#SANDBOX-12), [SANDBOX-31](#SANDBOX-31)); and in the mode `standard` the write rows
+of every toolchain's cache, which a build started later outside the sandbox runs code from
+([SANDBOX-18](#SANDBOX-18)). With the network `open`, the default ([SANDBOX-20](#SANDBOX-20)), a
+stage can send what it read to any host. Each stays because `git`, `gh`, `npm` and `cargo` need it
+when a script starts them (`make`, a `just` recipe), and the binary that script's stage resolves to
+does not name the program it starts, so reach keyed on the program is withheld from the script.
+Keying would not cover the install script either: an `npm install` runs a package's scripts inside
+its own stage, so a lift of `~/.npmrc` keyed on `npm` reaches each of them. A person withholds each
+with a setting: a list of hosts bounds where a stage can send what it read
+([SANDBOX-24](#SANDBOX-24)), `denyRead` refuses a token file or the keychain file and `denyWrite` a
+cache ([SANDBOX-25](#SANDBOX-25)), `run.scrubEnv` withholds a variable
+([RUN-12](tools/run.md#RUN-12)), and the mode `strict` reads a credential only where a stage's
+credential scope names it, reads no keychain file, and writes only the cache of a toolchain the
+stage resolved to or asked for ([SANDBOX-22](#SANDBOX-22)). None of them closes the sockets a Linux
+kernel below Landlock ABI version 9 leaves reachable ([SANDBOX-3](#SANDBOX-3)).
+
+The rest of this section describes the keyed lists, which are what a stage on Windows and an MCP
+server start from.
 
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
 its write set and each stage's resolved binary, and that plan is what a person is shown and what an
@@ -1663,13 +2864,20 @@ plan never named it, and the mode that directory is created with does not separa
 running as the same account. The row is a write row, so it also reaches a unix socket another
 program keeps in that directory ([SANDBOX-3](#SANDBOX-3)).
 
-**A toolchain and its caches are the list a program brings.** The paths a build resolves through
-belong to that build rather than to every program that runs, so they are keyed on the resolved
-binary a stage of the plan names and are shown in the prompt with the rest of the plan. An `npm ci`
-is held to the npm rows and a `cargo build` in the same session to the cargo rows, so a postinstall
-script cannot leave something in `~/.cargo/registry` for a later `cargo build` to read. The key is
-the binary the plan already resolved and a person already read, never a name the model supplied and
-never a value a configuration file holds.
+**A toolchain and its caches are the list a program brings, where the machine is not read.** The
+paths a build resolves through belong to that build rather than to every program that runs, so on
+Windows and under the mode `strict` they are keyed on the resolved binary a stage of the plan names
+and are shown in the prompt with the rest of the plan.
+There an `npm ci` is held to the npm rows and a `cargo build` in the same session to the cargo rows,
+so a postinstall script cannot leave something in `~/.cargo/registry` for a later `cargo build` to
+read. The key is the binary the plan already resolved and a person already read, never a name the
+model supplied and never a value a configuration file holds.
+
+On Linux and macOS in the mode `standard` no list is keyed. The machine is read, so the installs and
+the cargo configuration need no row, and every stage writes the caches in the table below, since a
+stage is often a script that starts a build and not the build's own binary. A postinstall script can
+therefore leave something in `~/.cargo/registry` for a later `cargo build` to read, and the keying
+that follows does not prevent it. The token files and the installs are in no write row either way.
 
 | The list for | Read | Read and write |
 |---|---|---|
@@ -1686,11 +2894,12 @@ and an `npm` a version manager installed resolves to `npm-cli.js`.
 
 A cache is writable because a build that cannot write one fetches everything again or fails
 outright, and the price is a write no plan accounted for: a program can leave something in its own
-ecosystem's cache for a later build in that ecosystem to read. Holding that to one ecosystem is what
-keying on the binary buys, since the write a `cargo build` is trusted with is one an `npm ci` never
-receives. An install is read-only for the opposite reason. A build that would install a toolchain
-fails, and a line somebody then runs unconfined costs less than letting a confined stage replace the
-`cargo` or the `node` a later stage in the same pipeline resolves to. `npx` meets that rule: a
+ecosystem's cache for a later build in that ecosystem to read. Where the lists are keyed, keying on
+the binary holds that to one ecosystem, since the write a `cargo build` is trusted with is one an
+`npm ci` never receives. Where the machine is read it holds nothing, and a program can leave
+something in any ecosystem's cache. An install is read-only for the opposite reason. A build that
+would install a toolchain fails, and a line somebody then runs unconfined costs less than letting a
+confined stage replace the `cargo` or the `node` a later stage in the same pipeline resolves to. `npx` meets that rule: a
 package the project does not hold is installed under `~/.npm/_npx`, which is an install and not a
 cache, so an `npx` that would fetch one fails.
 
@@ -1709,12 +2918,14 @@ a subdirectory, that file is named on its own, which is why the cargo lock `~/.c
 is in a row beside the registry and the token file next to it is not. The same rule keeps
 `~/.config` and `~/Library/Caches` out, since `~/.config/gh` is a credential store the remote scope
 below grants, so the XDG git configuration and a cache on macOS are named one directory at a time
-rather than through the directory they sit in. `$HOME` itself is in no row, so a file in it that no
-row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable. What this costs is what those
-files say: npm passes over a configuration file it cannot read, so a registry or a proxy set in
-`~/.npmrc` is not in force for a confined stage, and naming the file is a person's to do. The same
-holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which hold a credential of their
-own. Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
+rather than through the directory they sit in. Where the lists are keyed, `$HOME` itself is in no
+row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable. What
+this costs is what those files say: npm passes over a configuration file it cannot read, so a
+registry or a proxy set in `~/.npmrc` is not in force for a confined stage, and naming the file is a
+person's to do. The same holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which
+hold a credential of their own. On Linux and macOS in the mode `standard` a stage reads all four,
+since they are not in the table ([SANDBOX-12](#SANDBOX-12)).
+Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
 already running, and a build handed to one the person's own shell started runs unconfined. Cargo's
 configuration is the one a list names, because cargo fails every invocation on a configuration file
 it cannot open, and it is read and never written, since a `build.rustc-wrapper` written there is a
@@ -1727,9 +2938,11 @@ is never the terminal ([tools/run.md](tools/run.md)), so a terminal editor has n
 confined or not. A graphical one such as `code --wait` needs no terminal, and it is a program the
 plan never showed, so no list is keyed on it.
 
-**A command no list knows is asked about, and the answer lasts the session.** Partly built: a
-stage no list knows runs under the base and its plan, and a person who knows what it needs types
-`/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or
+**A command no list knows is asked about, and the answer lasts the session.** Partly built. This
+applies where the lists are keyed; on Linux and macOS in the mode `standard` a wrapper already
+writes every cache, though under a closed network it still has no egress, since that is decided by
+its own binary ([SANDBOX-20](#SANDBOX-20)). A stage no list knows runs under the base and its plan, and a person who knows
+what it needs types `/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or
 for good. Nothing asks about it at the prompt yet, so a build inside it that needs a cache and was
 not given one fails and stays failed. The rest of this paragraph is the decision. A wrapper is the
 common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
@@ -1772,7 +2985,8 @@ A stage reaches its own row and no other: a `docker` stage reaches neither the r
 reached only as the one login file the base reads ([SANDBOX-12](#SANDBOX-12)). The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
 to write, that write row naming a file rather than a directory so that an account with no
 `known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
-each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
+each name ssh looks for by default and each `IdentityFile` of `~/.ssh/config` names, `~/.gitconfig`,
+and the stores an https helper reads:
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The login keychain
 file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
 system service that holds it is reached whatever scope a stage carries (the last section's list of
@@ -1782,9 +2996,10 @@ names is a write row for a stage that carries the remote scope and for no other
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
 private key, and the public half is in the scope because that is what ssh reads to name an identity
-to the agent where a configuration file pins one. What that costs is a key kept at a name of a
-person's own: ssh without `IdentitiesOnly` offers every key the agent holds and signs anyway, and a
-host pinned with `IdentitiesOnly` to such a key leaves ssh neither half to name it by. A push does
+to the agent where a configuration file pins one, and a key pinned at a name of the person's own is
+read through the `IdentityFile` line that pins it. A key named only by a repository's
+`core.sshCommand` is not read: ssh without `IdentitiesOnly` offers every key the agent holds and
+signs anyway, and one with it needs the key listed as an `IdentityFile`. A push does
 need `known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one
 scope because which one a remote uses is written in a configuration file, and no file's contents
 decide a scope.
@@ -1886,11 +3101,17 @@ reported as what it is.
   policy row for a connect alone would narrow it. The row has not been exercised against a running
   agent.
 - The Windows base is empty, on the ground that a container reads the system directories through
-  an entry the platform already wrote. That is not exercised: no job runs the suite on Windows, so
-  whether a program such as `cmd.exe /c`, `git` or a compiler starts under it, and whether a
-  `PATH` or session directory the account cannot change refuses the whole program, is argued
-  and not shown. A program that needs a file outside those directories is refused by the kernel
-  until its plan names the file.
+  an entry the platform already wrote. The Windows job starts `cmd.exe /c` and the compiler on
+  its `PATH` under it, and `git`. `git` opens `/dev/null`, which is `NUL`, before it reads its
+  arguments, so it starts only where the device lets a container open it. On Windows Server 2025
+  (build 26100, the runner image) the device's access list names no ALL APPLICATION PACKAGES
+  entry, a container is denied it, and every stage that runs `git` ends with "could not open
+  '/dev/null'" until an administrator adds the entry. No grant of this backend can add it, since
+  the device is not a path under a directory the account owns, so the job adds it before the tests
+  and a machine that runs `git` confined needs the same. Whether another build of Windows names
+  the entry is not shown. No other program is started, and whether a `PATH` or session directory
+  the account cannot change refuses the whole program is argued and not shown. A program that needs
+  a file outside those directories is refused by the kernel until its plan names the file.
 - A grant on a single file is written without inheritance, which is the entry a file takes. The
   program started is granted as a file this way, and that is also unexercised.
 - Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
@@ -1907,15 +3128,30 @@ reported as what it is.
   ([SANDBOX-18](#SANDBOX-18)), so a program installed under `/opt/homebrew` or `/usr/local` starts.
   That makes every directory on a person's `PATH` outside the home readable to every stage, which is
   wider than the stage's own program needs and is the price of a runner finding the interpreter it
-  names.
+  names. On Windows each of those rows outside the system and Program Files directories is an
+  entry the platform writes onto every file and directory beneath it as a stage starts and
+  removes as the stage ends, so the time a stage takes to start grows with what those directories
+  hold, and the parent of a `bin` directory is a whole installation. With the `PATH` of the Windows
+  CI runner a stage takes minutes to start, so the agent's tests that start a program there keep
+  only the `PATH` directories under the system and Program Files directories.
 - A `run` argument that names a path outside the directories the session was opened on is refused
   ([SANDBOX-17](#SANDBOX-17)). Whether the compiler should read such an argument as a path and put
   it in the plan is not settled.
-- Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
+- The keychain service is in the list of [SANDBOX-31](#SANDBOX-31), so it is reachable from every
   stage and not only from one carrying the remote scope. A profile holding the keychain to that
-  scope has to name the service instead, the same step the socket above needs. Since the base reads
-  the login keychain file, a lookup through that service from any stage can reach the login
-  keychain's database.
+  scope has to leave the service out of the list for the stages without it, the same step the
+  socket above needs. Since the base reads the login keychain file, a lookup through that service
+  from any stage can reach the login keychain's database.
+- A stage held to a proxy's port has the certificate trust services of [SANDBOX-31](#SANDBOX-31),
+  and trustd fetches a certificate's issuer from its own process, so the host list of
+  [SANDBOX-24](#SANDBOX-24) does not bound that request on macOS. No way to keep verification
+  without the fetch is known. The seatbelt test of the closed case runs on macOS only; the AIA
+  fetch itself was observed with a hand-built profile and not through `SeatbeltSandbox::profile`.
+- A program that looks up a Mach service outside the list of [SANDBOX-31](#SANDBOX-31) has the
+  lookup refused. The usability suite ([SANDBOX-21](#SANDBOX-21)) passes with the list; a program
+  that needs another service (a file watcher through `com.apple.FSEvents`, Spotlight through
+  `com.apple.metadata.mds`) loses that feature. Whether any program fails outright for it is not
+  shown.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
@@ -1924,9 +3160,13 @@ reported as what it is.
   the kernel tests start `true`, `id` and `cat` under the base, and no TLS program or compiler.
 - No Maven or Gradle build has been run under its list. Each reads a settings file no list names,
   and whether a build on a machine that holds one runs without it or stops is not settled.
-- The suite does not run on Windows. The decisions this backend makes before a process starts are
-  pure and are run by every job that runs the suite: which capability a policy asks for, what each
-  grant permits, which policies are refused, and how an argument is written onto a command line.
-  The Win32 calls that apply them, and the call that starts a process on streams the caller made,
-  are compiled and linted by the `x86_64-pc-windows-gnu` clippy job and run by nothing, so [SANDBOX-3](#SANDBOX-3)'s guarantee
-  there is argued rather than exercised.
+- Only part of the suite runs on Windows. The decisions this backend makes before a process starts
+  are pure and are run by every job that runs the suite: which capability a policy asks for, what
+  each grant permits, which policies are refused, and how an argument is written onto a command
+  line. The Windows job also runs the tests of the backend module, `crates/sandbox/tests/windows.rs`
+  and `crates/agent/tests/confine.rs`, which start real processes in a container. The rest of the
+  sandbox crate's tests are written against Unix paths and are not run on Windows, and neither are
+  the agent's other tests that start a confined process. The two tests that watch a loopback
+  listener run on Unix only, so whether a container reaches a loopback listener, and with it the
+  denial of egress on Windows, is shown by the capability the token is built with and not by a
+  connection.

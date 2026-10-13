@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 188
+      - crates/agent/src/tools.rs: 234
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -32,10 +32,11 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
 | [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | matching lines, files or counts, or a reference |
+| [`repo_map`](repo-map.md) | `directory`, `budget` | none | the map text, from files a person vouched for |
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
-| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | confirmation |
+| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | confirmation |
 | [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
@@ -44,12 +45,15 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
+| [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
+| [`load_tool`](../mcp-servers.md#SERVERS-16) | `name` | none | confirmation that the tool is offered from the next request |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`advisor`](advisor.md) | none | `question` | the advisor's reply |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
+| [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.

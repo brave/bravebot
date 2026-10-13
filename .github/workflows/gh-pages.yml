@@ -31,16 +31,29 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: docs/website/package-lock.json
+          package-manager-cache: false
+
+      # Corepack provides the pnpm version docs/website/package.json pins.
+      - name: Enable pnpm
+        id: pnpm
+        run: |
+          corepack enable
+          echo "store=$(cd docs/website && pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-store-docs-${{ runner.os }}-${{ hashFiles('docs/website/pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-docs-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm --prefix docs/website ci --ignore-scripts
+        run: pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
 
       # docusaurus.config.js throws on a broken link or anchor, so this step is the whole
       # of the site's correctness check as well as its build.
       - name: Build website
-        run: npm --prefix docs/website run build
+        run: pnpm --dir docs/website run build
 
       # include-hidden-files is off by default from v4 on, and static/.nojekyll is a
       # dotfile: without this the artifact ships without it and Pages goes back to hiding

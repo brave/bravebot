@@ -439,8 +439,9 @@ Nothing else about a delegate's policy survives it.
 <a id="DELEGATE-12"></a>
 ### DELEGATE-12: a delegate puts no question of its own to a person
 
-It is offered no way to ask one and no task list to write to, and a call to either anyway is
-answered the way any other unknown name is. Its task came from a planner rather than from the
+It is offered no way to ask one, no way to ask for reach to a path
+([SANDBOX-28](sandboxing.md#SANDBOX-28)) and no task list to write to, and a call to any of them
+anyway is answered the way any other unknown name is. Its task came from a planner rather than from the
 person, so a question about it asks somebody to arbitrate something they never set up, and the
 list on the screen belongs to the turn they are actually watching.
 
@@ -551,6 +552,14 @@ A turn does not answer while something it started is still working. Where the pl
 first, the reports are waited for, put in front of it, and it answers again knowing what came
 back. A turn that has run out of tool calls waits too, and answers without being asked again.
 
+Answering is how a planner waits when a delegate is all that is left, so the result of
+`spawn_agent` and the refusal `job_output` gives for a delegate's number both say so: end the round
+with one line naming what is outstanding, and the turn waits and asks again. The answer given
+while a delegate works is reported to the interface as text between calls, as the text that comes
+with a tool call is, so it stays in the transcript when the next round starts. Only the answer that
+ends the turn is the reply. While the turn joins a delegate the interface is told which one, and
+the terminal client names it beside the spinner.
+
 [background-sessions.md](background-sessions.md) proposes a session whose process outlives the
 terminal, which nothing yet builds. It changes nothing here: the turn in such a session still does
 not answer while a delegate is working, and what outlives the terminal is the session, not a
@@ -562,6 +571,8 @@ front of them for a turn they were told had finished.
 
 `verified-by: bravebot_agent::turn::a_turn_does_not_answer_while_a_delegate_is_still_working`
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
+`verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
+`verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
 
 <a id="DELEGATE-18"></a>
 ### DELEGATE-18: inference wait counts elapsed time once

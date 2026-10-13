@@ -59,6 +59,12 @@ pub fn is_ignored_directory(name: &str) -> bool {
     IGNORED_DIRECTORIES.contains(&name)
 }
 
+/// The names `is_ignored_directory` matches, so a description of what a walk skips is written from
+/// the list the walk uses and cannot drift from it.
+pub fn ignored_directories() -> &'static [&'static str] {
+    IGNORED_DIRECTORIES
+}
+
 const IGNORED_DIRECTORIES: &[&str] = &[
     // Version control.
     ".git",

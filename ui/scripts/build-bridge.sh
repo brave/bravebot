@@ -7,7 +7,7 @@
 #
 # It matters more for a GUI than for the CLI. `bravebot` is run from a terminal, and that
 # terminal usually has direnv loaded, so an unconfigured binary still finds what it needs
-# in the environment. An app launched from Finder or `npm run dev` has no such
+# in the environment. An app launched from Finder or `pnpm run dev` has no such
 # environment, so an unconfigured build fails at the first inference request with
 # "SERVICES_KEY_AICHAT is not set and was not built in".
 #

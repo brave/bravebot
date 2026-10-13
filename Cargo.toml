@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
+members = ["crates/agent", "crates/approval", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
 version = "0.14.0"
@@ -70,3 +70,10 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# Dependencies are built optimised in a debug build too. Decoding and scaling a picture and drawing
+# every prompt at every scroll position took tens of seconds a test unoptimised and a few seconds
+# optimised, and the dependencies are rebuilt only when the lockfile moves. The workspace's own
+# crates stay unoptimised, so an edit to them rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2

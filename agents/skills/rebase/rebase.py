@@ -12,248 +12,68 @@ act on: the line ranges of each conflict. <pr> is a number or a pull request URL
 """
 
 import argparse
-import json
+import importlib.util
 import os
 import re
-import shutil
-import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
-BASE_REPO = "brave/bravebot"
 SCRIPT = "python3 agents/skills/rebase/rebase.py"
-GITHUB_URL = re.compile(r"(?:^|[@/])github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
-PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
-OURS = re.compile(r"^<{7}(?: |$)")
-THEIRS = re.compile(r"^>{7}(?: |$)")
-PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
-MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
-SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
-LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
 
 
-def die(message):
-    print(message, file=sys.stderr)
-    sys.exit(1)
+def _load_shared():
+    path = Path(__file__).resolve().parents[2] / "pr_worktree.py"
+    spec = importlib.util.spec_from_file_location("pr_worktree", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def run(*args, cwd=None, check=True, env=None):
-    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=env)
-    if check and done.returncode:
-        die(f"{' '.join(map(str, args))} failed:\n{(done.stderr or done.stdout).strip()}")
-    return done
+# The skill scripts are not an importable package, so the module they share is loaded by path.
+pr_worktree = _load_shared()
+
+BASE_REPO = pr_worktree.BASE_REPO
+GITHUB_URL = pr_worktree.GITHUB_URL
+PULL_URL = pr_worktree.PULL_URL
+OURS = pr_worktree.OURS
+THEIRS = pr_worktree.THEIRS
+MAKE_FAILED = pr_worktree.MAKE_FAILED
+SPEC_RECORDS = pr_worktree.SPEC_RECORDS
+LOCK_RESOLVES = pr_worktree.LOCK_RESOLVES
+die = pr_worktree.die
+run = pr_worktree.run
+git = pr_worktree.git
+succeeds = pr_worktree.succeeds
+pr_number = pr_worktree.pr_number
+github_remotes = pr_worktree.github_remotes
+fork_url = pr_worktree.fork_url
+local_branch = pr_worktree.local_branch
+marker_ranges = pr_worktree.marker_ranges
+worktrees = pr_worktree.worktrees
+fetch = pr_worktree.fetch
+rev = pr_worktree.rev
+rebase_dir = pr_worktree.rebase_dir
+unmerged = pr_worktree.unmerged
+resolved_log = pr_worktree.resolved_log
+resolved = pr_worktree.resolved
+remember_resolved = pr_worktree.remember_resolved
+package_of = pr_worktree.package_of
+plan = pr_worktree.plan
+describe = pr_worktree.describe
 
 
-def git(*args, cwd):
-    return run("git", *args, cwd=cwd).stdout.strip()
-
-
-def succeeds(*args, cwd):
-    return run("git", *args, cwd=cwd, check=False).returncode == 0
-
-
-def pr_number(arg):
-    url = PULL_URL.search(arg)
-    if url:
-        if f"{url[1]}/{url[2]}".lower() != BASE_REPO:
-            die(f"{arg} is not a {BASE_REPO} pull request")
-        return int(url[3])
-    bare = re.fullmatch(r"#?(\d+)", arg.strip())
-    if bare is None:
-        die(f"{arg} is neither a pull request number nor a {BASE_REPO} pull request URL")
-    return int(bare[1])
-
-
-def github_remotes(listing):
-    """`git remote -v` as {owner/repo: (remote, url)}, the first remote naming a repo winning."""
-    found = {}
-    for line in listing.splitlines():
-        parts = line.split()
-        if len(parts) == 3 and parts[2] == "(fetch)":
-            match = GITHUB_URL.search(parts[1])
-            if match:
-                found.setdefault(f"{match[1]}/{match[2]}".lower(), (parts[0], parts[1]))
-    return found
-
-
-def fork_url(repo, like):
-    if like.startswith("https://"):
-        return f"https://github.com/{repo}.git"
-    return f"git@github.com:{repo}.git"
-
-
-def local_branch(head, base, number):
-    # A fork's `main` would otherwise land on, and fast-forward, this clone's own.
-    return f"pr-{number}" if head == base else head
-
-
-def marker_ranges(text):
-    ranges, start = [], None
-    for number, line in enumerate(text.split("\n"), 1):
-        if OURS.match(line):
-            start = number
-        elif THEIRS.match(line) and start is not None:
-            ranges.append((start, number))
-            start = None
-    return ranges
-
-
-def worktrees(here):
-    """{branch: path} for every worktree on a branch, and the main worktree's path."""
-    found, path, main = {}, None, None
-    for line in git("worktree", "list", "--porcelain", cwd=here).splitlines():
-        if line.startswith("worktree "):
-            path = Path(line[len("worktree "):])
-            main = main or path
-        elif line.startswith("branch refs/heads/"):
-            found[line[len("branch refs/heads/"):]] = path
-    return found, main
+# What `gh pr view` is asked for differs by script.
+FIELDS = "url,state,baseRefName,headRefName,headRepository,headRepositoryOwner"
 
 
 def pull(number, view, here, remotes, create=False):
-    """What every step needs, from the pull request and this clone's remotes."""
-    if view["state"] != "OPEN":
-        die(f"{view['url']} is {view['state'].lower()}")
-    if not view.get("headRepository"):
-        die(f"{view['url']} has no head repository any more")
-    if BASE_REPO not in remotes:
-        die(f"no remote of {here} points at {BASE_REPO}")
-    base_remote, base_url = remotes[BASE_REPO]
-    owner = view["headRepositoryOwner"]["login"]
-    head_repo = f"{owner}/{view['headRepository']['name']}".lower()
-    if head_repo in remotes:
-        head_remote = remotes[head_repo][0]
-    elif create:
-        head_remote = owner.lower()
-        git("remote", "add", head_remote, fork_url(head_repo, base_url), cwd=here)
-        print(f"added remote {head_remote} for {head_repo}")
-    else:
-        die(f"no remote points at {head_repo}; `{SCRIPT} start {number}` adds one")
-    base, head = view["baseRefName"], view["headRefName"]
-    branch = local_branch(head, base, number)
-    checked_out, main = worktrees(here)
-    return SimpleNamespace(
-        number=number,
-        url=view["url"],
-        here=here,
-        base=base,
-        head=head,
-        branch=branch,
-        base_remote=base_remote,
-        head_remote=head_remote,
-        onto=f"{base_remote}/{base}",
-        tip=f"{head_remote}/{head}",
-        tree=checked_out.get(branch) or main.parent / f"{main.name}-{number}",
-        checked_out=branch in checked_out,
-    )
+    return pr_worktree.pull(number, view, here, remotes, create, SCRIPT)
 
 
 def lookup(number, create):
-    here = Path(git("rev-parse", "--show-toplevel", cwd=None))
-    fields = "url,state,baseRefName,headRefName,headRepository,headRepositoryOwner"
-    view = json.loads(
-        run("gh", "pr", "view", str(number), "--repo", BASE_REPO, "--json", fields).stdout
-    )
-    return pull(number, view, here, github_remotes(git("remote", "-v", cwd=here)), create)
-
-
-def fetch(here, remote, branch):
-    git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}", cwd=here)
-
-
-def rev(ref, cwd):
-    return git("rev-parse", "--verify", f"{ref}^{{commit}}", cwd=cwd)
-
-
-def rebase_dir(tree):
-    for name in ("rebase-merge", "rebase-apply"):
-        path = Path(tree, git("rev-parse", "--git-path", name, cwd=tree))
-        if path.is_dir():
-            return path
-    return None
-
-
-def unmerged(tree):
-    listing = git("diff", "--name-only", "--diff-filter=U", "-z", cwd=tree)
-    return [one for one in listing.split("\0") if one]
-
-
-def resolved_log(tree):
-    return Path(git("rev-parse", "--absolute-git-dir", cwd=tree)) / "rebase-resolved"
-
-
-def resolved(tree):
-    """The files a person resolved during the rebase in `tree`, which is all a check is chosen from."""
-    log = resolved_log(tree)
-    return [one for one in log.read_text(encoding="utf-8").split("\0") if one] if log.is_file() else []
-
-
-def remember_resolved(tree, files):
-    joined = "\0".join(sorted({*resolved(tree), *files}))
-    resolved_log(tree).write_text(joined, encoding="utf-8")
-
-
-def package_of(tree, directory):
-    manifest = Path(tree, "crates", directory, "Cargo.toml")
-    if not manifest.is_file():
-        return None
-    return tomllib.loads(manifest.read_text(encoding="utf-8")).get("package", {}).get("name")
-
-
-def plan(tree, files):
-    """The commands the resolved files call for, each the cheapest that could catch what they break.
-
-    A file no rule names gets no local command: CI runs on the pull request anyway, and it is the
-    only place the desktop app, the website and the dependency policy are built.
-    """
-    crates, tests, targets, commands = set(), [], set(), []
-    for name in files:
-        path = Path(name)
-        parts = path.parts
-        if len(parts) > 2 and parts[0] == "crates":
-            if path.suffix == ".rs" or path.name == "Cargo.toml":
-                crates.add(parts[1])
-            if len(parts) == 4 and parts[2] == "tests" and path.suffix == ".rs":
-                tests.append((parts[1], path.stem))
-            if parts[1:3] == ("i18n", "locales"):
-                targets.add("check-locales")
-        if name == "contrib/untranslated-messages.txt":
-            targets.add("check-locales")
-        if path.suffix == ".rs" or parts[:2] == ("docs", "specs") or name in SPEC_RECORDS:
-            targets.add("check-spec")
-        if parts[:2] == (".github", "workflows") or name == "contrib/required-checks.txt":
-            targets.add("check-security")
-        if path.name in ("Cargo.toml", "Makefile") or path.name.startswith("Dockerfile"):
-            targets.add("check-security")
-        if path.name in ("Cargo.toml", "Cargo.lock", "package.json", "package-lock.json"):
-            targets.add("check-versions")
-        if path.name in ("Cargo.toml", "Cargo.lock") and LOCK_RESOLVES not in commands:
-            commands.append(LOCK_RESOLVES)
-    packages = sorted(filter(None, (package_of(tree, one) for one in crates)))
-    if packages:
-        flags = [flag for one in packages for flag in ("-p", one)]
-        commands.append(["cargo", "fmt", "--all", "--", "--check"])
-        commands.append(["cargo", "clippy", *flags, "--all-targets", "--all-features", "--", "-D", "warnings"])
-        for directory, test in sorted(tests):
-            package = package_of(tree, directory)
-            if package:
-                commands.append(["cargo", "test", "-p", package, "--locked", "--test", test])
-    if targets:
-        commands.append(["make", "-k", *sorted(targets)])
-    return commands
-
-
-def describe(tree, name):
-    path = Path(tree, name)
-    if not path.is_file():
-        return f"{name}: deleted on one side; `git rm` it or restore it"
-    ranges = marker_ranges(path.read_text(encoding="utf-8", errors="replace"))
-    if not ranges:
-        return f"{name}: no markers (binary, mode or modify/delete); see `git -C {tree} status`"
-    return f"{name}:" + ",".join(f"{start}-{end}" for start, end in ranges)
+    return pr_worktree.lookup(number, create, SCRIPT, FIELDS)
+PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
 
 
 def report(pr):
@@ -298,6 +118,7 @@ def report(pr):
 
 
 def start(pr):
+    git("worktree", "prune", cwd=pr.here)
     fetch(pr.here, pr.base_remote, pr.base)
     fetch(pr.here, pr.head_remote, pr.head)
     tree = pr.tree
@@ -365,28 +186,7 @@ def check(pr, targets):
     if not commands:
         print("nothing resolved needs a local check; CI runs the rest")
         return 0
-    # The worktree's .envrc holds what the build reads, and a subprocess never loads it.
-    wrap = ["direnv", "exec", str(tree)] if shutil.which("direnv") and Path(tree, ".envrc").is_file() else []
-    log = Path(git("rev-parse", "--absolute-git-dir", cwd=tree)) / "rebase-check.log"
-    failed = False
-    with open(log, "wb") as out:
-        for command in commands:
-            shown = " ".join(command)
-            out.write(f"$ {shown}\n".encode())
-            out.flush()
-            begin = out.tell()
-            done = subprocess.run([*wrap, *command], cwd=tree, stdout=out, stderr=subprocess.STDOUT)
-            if done.returncode == 0:
-                print(f"passed: {shown}")
-                continue
-            failed = True
-            out.flush()
-            with open(log, "rb") as back:
-                back.seek(begin)
-                lines = back.read().decode(errors="replace").splitlines()
-            print(f"failed: {shown} (full log {log})")
-            print("\n".join([one for one in lines if MAKE_FAILED.match(one)] + ["..."] + lines[-30:]))
-    return 1 if failed else 0
+    return pr_worktree.run_commands(tree, commands, "rebase-check.log")
 
 
 def push(pr):

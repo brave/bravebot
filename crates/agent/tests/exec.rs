@@ -10,6 +10,21 @@ use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[allow(dead_code)]
+#[path = "../test-support/pipelines.rs"]
+mod pipelines;
+
+/// [`exec::run_plan_observed`] with no confinement and no notification.
+fn run_plan(
+    plan: &bravebot_core::command::Plan,
+    cancel: &Cancel,
+    limit: Duration,
+    scratch: Option<&std::path::Path>,
+    stdin: Option<&str>,
+) -> Result<exec::Ran, ExecError> {
+    exec::run_plan_observed(plan, cancel, limit, scratch, stdin, None, &mut |_| Ok(()))
+}
+
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
     path: PathBuf,
@@ -136,32 +151,34 @@ fn past_text_file_busy<T>(
     }
 }
 
-/// [`exec::run`] for a pipeline already resolved, waiting out a busy program.
+/// [`pipelines::run`] for a pipeline already resolved, waiting out a busy program.
 fn run_resolved(
     pipeline: &Pipeline,
     resolved: &[PathBuf],
     at: &std::path::Path,
 ) -> Result<exec::Ran, ExecError> {
-    past_text_file_busy(|| exec::run(pipeline, resolved, at, &Cancel::new(), None))
+    past_text_file_busy(|| pipelines::run(pipeline, resolved, at, &Cancel::new(), None))
 }
 
-/// [`exec::run_within`], waiting out a busy program.
+/// [`pipelines::run_within`], waiting out a busy program.
 fn run_within(
     pipeline: &Pipeline,
     resolved: &[PathBuf],
     at: &std::path::Path,
     limit: std::time::Duration,
 ) -> Result<exec::Ran, ExecError> {
-    past_text_file_busy(|| exec::run_within(pipeline, resolved, at, &Cancel::new(), limit, None))
+    past_text_file_busy(|| {
+        pipelines::run_within(pipeline, resolved, at, &Cancel::new(), limit, None)
+    })
 }
 
-/// [`exec::start`], waiting out a busy program.
+/// [`pipelines::start`], waiting out a busy program.
 fn start(
     pipeline: &Pipeline,
     resolved: &[PathBuf],
     at: &std::path::Path,
 ) -> Result<exec::Background, ExecError> {
-    past_text_file_busy(|| exec::start(pipeline, resolved, at, None))
+    past_text_file_busy(|| pipelines::start(pipeline, resolved, at, None))
 }
 
 #[test]
@@ -738,7 +755,7 @@ fn cancelling_stops_a_running_pipeline() {
     let resolved = resolve_all(&pipeline, &scratch.path).expect("sleep is installed");
     let started = std::time::Instant::now();
     let error =
-        exec::run(&pipeline, &resolved, &scratch.path, &cancel, None).expect_err("cancelled");
+        pipelines::run(&pipeline, &resolved, &scratch.path, &cancel, None).expect_err("cancelled");
     assert!(matches!(error, ExecError::Cancelled));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
@@ -786,7 +803,7 @@ fn a_pipeline_with_missing_resolutions_does_not_run() {
         Stage::new("echo", vec!["a".into()]),
         Stage::new("wc", vec!["-l".into()]),
     ]);
-    let error = exec::run(&pipeline, &[], &scratch.path, &Cancel::new(), None)
+    let error = pipelines::run(&pipeline, &[], &scratch.path, &Cancel::new(), None)
         .expect_err("nothing runs without a resolution per stage");
     assert!(matches!(error, ExecError::Io(_)));
 }
@@ -904,7 +921,7 @@ fn line(text: &str, at: &std::path::Path) -> exec::Ran {
 /// of it instead of failing.
 fn line_fed(text: &str, at: &std::path::Path, stdin: &str, within: Duration) -> exec::Ran {
     let plan = fed_plan(text, at);
-    exec::run_plan(&plan, &Cancel::new(), within, None, Some(stdin))
+    run_plan(&plan, &Cancel::new(), within, None, Some(stdin))
         .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
 }
 
@@ -923,7 +940,7 @@ fn fed_plan(text: &str, at: &std::path::Path) -> bravebot_core::command::Plan {
 fn line_given(text: &str, at: &std::path::Path, given: &std::path::Path) -> exec::Ran {
     let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
-    exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, Some(given), None)
+    run_plan(&plan, &Cancel::new(), exec::LIMIT, Some(given), None)
         .unwrap_or_else(|e| panic!("`{text}` should run: {e}"))
 }
 
@@ -1187,7 +1204,7 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_be_fed_bytes() {
     let scratch = Scratch::new("fed-stdin-and-file");
     std::fs::write(scratch.path.join("from.txt"), "from the file\n").expect("write");
     let plan = fed_plan("cat < from.txt", &scratch.path);
-    let outcome = exec::run_plan(
+    let outcome = run_plan(
         &plan,
         &Cancel::new(),
         Duration::from_secs(30),
@@ -1716,7 +1733,7 @@ fn a_background_stage_is_told_where_the_sessions_own_directory_is() {
     let pipeline = Pipeline::new(vec![Stage::new("env", Vec::new())]);
     let resolved = resolve_all(&pipeline, &scratch.path).expect("env resolves");
     let mut job =
-        past_text_file_busy(|| exec::start(&pipeline, &resolved, &scratch.path, Some(&given)))
+        past_text_file_busy(|| pipelines::start(&pipeline, &resolved, &scratch.path, Some(&given)))
             .expect("it starts");
     for _ in 0..100 {
         if job.ended() {
@@ -2323,9 +2340,8 @@ fn a_program_named_through_a_link_is_started_by_the_link() {
 
     let plan = bravebot_agent::cmdline::compile("./link", &scratch.path, None, &mut |_, _| Ok(()))
         .expect("the line compiles");
-    let ran =
-        past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
-            .expect("the link runs");
+    let ran = past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
+        .expect("the link runs");
 
     assert_eq!(
         ran.stdout.trim(),
@@ -2353,8 +2369,7 @@ fn a_link_pointed_elsewhere_after_approval_is_refused() {
         .expect("the line compiles");
     link(&scratch.path, "tool", &other);
 
-    let refused =
-        past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None));
+    let refused = past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None));
     assert!(
         matches!(&refused, Err(ExecError::NotStarted { program, .. }) if program == "./tool"),
         "a repointed link was not refused: {refused:?}"
@@ -2369,7 +2384,7 @@ fn a_link_pointed_elsewhere_after_approval_is_refused() {
     );
 
     link(&scratch.path, "tool", &approved);
-    past_text_file_busy(|| exec::run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
+    past_text_file_busy(|| run_plan(&plan, &Cancel::new(), exec::LIMIT, None, None))
         .expect("pointed back, the link runs");
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),

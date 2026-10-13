@@ -100,7 +100,7 @@ test('a project is labelled with its own folder on either spelling', () => {
 
 test('a helper binary is named with an extension on Windows wherever it is looked for', () => {
   // The fault is the suffix reaching one of the two places. Neither failure is visible from a
-  // POSIX host: a checkout that finds no helper says to run `npm run bridge`, and a packaged app
+  // POSIX host: a checkout that finds no helper says to run `pnpm run bridge`, and a packaged app
   // that finds none falls back to a workspace path that is not in the bundle, so file previews,
   // attachment checks and every bot memory read fail with the helper sitting beside the app.
   const windows = helperPaths('bravebot-rpc', '/app', '/resources', 'win32')

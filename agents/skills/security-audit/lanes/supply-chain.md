@@ -11,7 +11,7 @@ every gate in `crates/core` without touching one, because it runs before or besi
 Most of this is already enforced. `make check-deps` runs the dependency policy in `deny.toml` over
 advisories, licences, sources and duplicate versions. `make check-security` holds every workflow step
 to a commit and every container image this tree runs to a digest, and faults a job that installs or
-runs an npm dependency while holding `id-token: write` or a secret. Do not report what those already
+runs a dependency named in `pnpm-lock.yaml` (through npm, pnpm or yarn) while holding `id-token: write` or a secret. Do not report what those already
 fail on, and do not report a rule as a review habit when it could be a check: where you find one, the
 finding is a request for the check.
 

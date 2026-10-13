@@ -533,6 +533,31 @@ fn answering(running: Running, reply: Reply) -> std::thread::JoinHandle<bool> {
     })
 }
 
+/// SANDBOX-28: the desktop has no card for a request for a path, so the request is refused and
+/// nothing is put to the window, even when answers that would approve are waiting in the channel.
+#[test]
+fn a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say() {
+    let mut h = harness();
+    for reply in [
+        Reply::Server(Decision::Approve),
+        Reply::McpMove(Decision::Approve),
+        Reply::Fetch(Decision::Approve),
+    ] {
+        h.running.answers.send(reply).expect("connected");
+    }
+
+    let request = bravebot_agent::confirm::PathRequest {
+        path: "/data/out".into(),
+        write: true,
+        why: "the build writes its output there".to_string(),
+    };
+    assert_eq!(h.confirmer.confirm_path(&request), Decision::Reject);
+    assert!(
+        h.events.lock().expect("not poisoned").is_empty(),
+        "a question was put to the window"
+    );
+}
+
 /// The MCP questions are put to the window, each under its own event, and with nobody left to
 /// answer every one of them is a no (SERVERS-4, SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
@@ -864,6 +889,7 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
         Kind::Server,
         Kind::Manifest,
         Kind::Exposure,
+        Kind::Host,
         Kind::Ask,
     ] {
         let refusal = kind.refusal();
@@ -881,10 +907,12 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
 
 fn a_server() -> bravebot_agent::confirm::ServerRequest {
     bravebot_agent::confirm::ServerRequest {
-        language: "Rust",
+        language: "Rust".into(),
         program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        args: Vec::new(),
         workspace: "/home/someone/project".into(),
         runs_build_tooling: true,
+        declared: false,
     }
 }
 
@@ -1326,4 +1354,139 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
         events.lock().expect("not poisoned").is_empty(),
         "a question went out with no number"
     );
+}
+
+/// What a run confirmed under a person who approves whatever is put to them comes back as, and
+/// whether any question was put to them at all.
+fn confirm_run_with_an_approving_window(request: RunRequest) -> (RunDecision, bool) {
+    let harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+    let mut confirmer = harness.confirmer;
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&done);
+    let handle = std::thread::spawn(move || {
+        let decision = confirmer.confirm_run(&request);
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        decision
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut asked = false;
+    while !done.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        let waiting = *pending.lock().expect("not poisoned");
+        if let Some(question) = waiting {
+            asked = true;
+            running.answer(question.id, Reply::Run(RunDecision::approve()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    (handle.join().expect("confirmer"), asked)
+}
+
+/// SANDBOX-29: the window draws no card for a request to run a line with no sandbox and refuses it,
+/// where an approving window would have said yes. The control is the same line without the request,
+/// which the window is asked about and approves. The regression it rejects is a bridge that
+/// forwards the request, since the window reads `off` as `standard` and has no line showing a
+/// program is unconfined.
+#[test]
+fn the_window_refuses_an_unconfined_run_without_asking() {
+    let (decision, asked) = confirm_run_with_an_approving_window(a_run());
+    assert!(asked, "the control was not put to the window");
+    assert!(decision.approved());
+
+    let (decision, asked) = confirm_run_with_an_approving_window(RunRequest {
+        unconfined: true,
+        ..a_run()
+    });
+    assert!(!asked, "a card was drawn for it");
+    assert_eq!(decision.decision, Decision::Reject);
+    assert!(!decision.remember);
+}
+
+fn some_hosts() -> bravebot_agent::confirm::HostRequest {
+    bravebot_agent::confirm::HostRequest {
+        hosts: vec!["registry.example.com".into(), "10.0.0.1".into()],
+    }
+}
+
+/// Nobody to ask means the hosts stay refused (SANDBOX-24). The desktop app once refused every
+/// such request without asking.
+#[test]
+fn an_unanswerable_host_request_refuses() {
+    let mut harness = harness();
+    drop(harness.running);
+
+    assert_eq!(
+        harness.confirmer.confirm_host(&some_hosts()),
+        Decision::Reject,
+        "hosts were allowed on nobody's word"
+    );
+}
+
+/// The question goes out as `host.request` carrying the hosts, and a yes to one is an answer to a
+/// host request and to nothing else. Every other approval waiting is a yes about something
+/// narrower, so one read as this would allow hosts on a person's word about one write or URL.
+#[test]
+fn a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own() {
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Run(RunDecision::approve_always()),
+        Reply::Fetch(Decision::Approve),
+        Reply::Server(Decision::Approve),
+        Reply::Exposure(Decision::Approve),
+        Reply::McpMove(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_host(&some_hosts()),
+            Decision::Reject,
+            "{other:?} allowed hosts"
+        );
+        assert!(h.running.pending.lock().unwrap().is_none());
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Host(Decision::Approve))
+        .unwrap();
+    assert_eq!(h.confirmer.confirm_host(&some_hosts()), Decision::Approve);
+
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "host.request");
+    assert_eq!(
+        asked.data["hosts"],
+        serde_json::json!(["registry.example.com", "10.0.0.1"])
+    );
+}
+
+/// A host answer settles a waiting host request and no other question.
+#[test]
+fn a_host_answer_answers_no_other_question() {
+    let harness = harness();
+    let running = harness.running;
+
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Fetch,
+        Kind::Server,
+        Kind::Exposure,
+        Kind::McpMove,
+    ] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Host(Decision::Approve)),
+            "a host approval answered a waiting {kind:?}"
+        );
+    }
+    *running.pending.lock().expect("not poisoned") = Some(Question {
+        id: 1,
+        kind: Kind::Host,
+    });
+    assert!(running.answer(1, Reply::Host(Decision::Approve)));
 }

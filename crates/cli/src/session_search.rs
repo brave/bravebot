@@ -26,28 +26,27 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
     let Some(request) = read(args) else {
         return fail(Ending::Argument, t!(sessions_search_usage));
     };
-    let directory = match request.workspace {
-        Some(path) => path,
-        None => match std::env::current_dir() {
-            Ok(here) => here,
-            Err(_) => return fail(Ending::Failed, t!(cli_directory_unknown)),
-        },
-    };
-    let Ok(project) = directory.canonicalize().and_then(|resolved| {
-        resolved
-            .is_dir()
-            .then_some(resolved)
-            .ok_or(std::io::ErrorKind::NotADirectory.into())
-    }) else {
-        return fail(
-            Ending::Argument,
-            t!(sessions_import_no_project, path = directory.display()),
-        );
+    let project = match crate::background::project_directory(request.workspace) {
+        Ok(path) => path,
+        Err(code) => return code,
     };
 
     let listed = sessions::list(&project);
     let corpus = if request.query.has_phrase() {
-        Corpus::read(&project)
+        // A session outside the window, or one whose title already holds the phrase, is not read.
+        let now = sessions_now();
+        let wanted: std::collections::HashSet<&str> = listed
+            .iter()
+            .filter(|session| request.query.admits(session.updated, now))
+            .filter(|session| {
+                !session
+                    .title
+                    .to_lowercase()
+                    .contains(request.query.phrase())
+            })
+            .map(|session| session.id.as_str())
+            .collect();
+        Corpus::read(&project, |id| wanted.contains(id))
     } else {
         Corpus::default()
     };
@@ -131,6 +130,7 @@ mod tests {
             branch: None,
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 0,
             manifest: false,

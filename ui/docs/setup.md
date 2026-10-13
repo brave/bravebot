@@ -10,7 +10,7 @@
 - **Current stable Rust**, preferably installed with rustup. `rust-toolchain.toml`
   selects stable and Clippy; `rustup update stable` updates an existing installation.
   The workspace declares Rust 1.90 as its minimum.
-- **Node 22.12+ and npm**. CI uses Node 24. The app uses Electron 44 and React 19.
+- **Node 22.12+ and pnpm** (`corepack enable`). CI uses Node 24. The app uses Electron 44 and React 19.
 - **Git**.
 - **Optional: direnv**, for loading backend credentials. It is unnecessary for
   builds without credentials or when the required variables are already exported.
@@ -20,12 +20,12 @@
 ```bash
 git clone https://github.com/brave/bravebot.git
 cd bravebot/ui
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
-`npm ci` installs the locked dependency versions and runs Electron runtime setup.
-`npm run dev` builds both Rust executables and starts Electron with hot reload.
+`pnpm install --frozen-lockfile` installs the locked dependency versions and runs Electron runtime setup.
+`pnpm run dev` builds both Rust executables and starts Electron with hot reload.
 To build and preview without hot reload, see [development](development.md).
 
 ## Credentials
@@ -57,11 +57,11 @@ After reviewing that file, allow it and explicitly run the build through it:
 
 ```bash
 direnv allow .
-direnv exec . npm run build
-npm start
+direnv exec . pnpm run build
+pnpm start
 ```
 
-For hot reload with the same environment, use `direnv exec . npm run dev`.
+For hot reload with the same environment, use `direnv exec . pnpm run dev`.
 A shell with direnv integration can load these variables automatically; `direnv allow`
 alone does not export them into a shell without that integration.
 
@@ -86,7 +86,7 @@ fail; they prevent inference at runtime. The app offers backend diagnostics and 
 For a Brave-backend build that must fail if required values are missing, run:
 
 ```bash
-direnv exec . env BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=0 npm run build
+direnv exec . env BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=0 pnpm run build
 ```
 
 An app started from a configured shell inherits its environment; Finder does not
@@ -100,7 +100,7 @@ are not baked into the binary by this build script.
 
 ```bash
 git pull --ff-only
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 There is no pin to move. The agent crates are members of this workspace, so the revision
@@ -116,9 +116,9 @@ Development and preview commands also run setup and reuse an installed runtime.
 If you see `Error: Electron uninstall`, or installed with `--ignore-scripts`, run:
 
 ```bash
-npm run setup:electron
-npm run build
-npm start
+pnpm run setup:electron
+pnpm run build
+pnpm start
 ```
 
 Unset `ELECTRON_SKIP_BINARY_DOWNLOAD` before launching. CI sets it to `1` because

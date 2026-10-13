@@ -20,9 +20,9 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
+    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
+    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -114,6 +114,11 @@ pub enum ToMain {
     /// A remote MCP server's reply pointed somewhere it is not declared. The main thread must
     /// reply.
     Move(MoveRequest),
+    /// The planner is asking for programs to reach one more path. The main thread must reply.
+    Path(PathRequest),
+    /// Programs a line started asked for hosts the allowed-hosts list does not cover. The main
+    /// thread must reply.
+    Host(HostRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -160,6 +165,8 @@ pub enum ToMain {
     Landed(Landing),
     /// A prompt the person typed mid-turn has reached the planner. No reply.
     Interjected(String),
+    /// The turn is about to wait on this delegate's report. No reply.
+    DelegateWaiting(DelegateId),
     /// A delegate has begun. No reply.
     DelegateStarted(Delegation),
     /// One delegate has finished, with what the turn was told and what it reported. No reply.
@@ -191,6 +198,8 @@ pub enum Reply {
     ToolList(Decision),
     McpCall(CallDecision),
     Move(Decision),
+    Path(Decision),
+    Host(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -313,6 +322,20 @@ impl Confirmer for RemoteConfirmer {
         match self.exchange(ToMain::McpCall(request.clone())) {
             Some(Reply::McpCall(decision)) => decision,
             _ => CallDecision::reject(),
+        }
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        match self.exchange(ToMain::Path(request.clone())) {
+            Some(Reply::Path(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        match self.exchange(ToMain::Host(request.clone())) {
+            Some(Reply::Host(decision)) => decision,
+            _ => Decision::Reject,
         }
     }
 
@@ -457,6 +480,10 @@ impl Reporter for RemoteReporter {
         let _ = self.outbound.send(ToMain::ReportingFor(delegate));
     }
 
+    fn delegate_waiting(&mut self, delegate: DelegateId) {
+        let _ = self.outbound.send(ToMain::DelegateWaiting(delegate));
+    }
+
     fn delegate_started(&mut self, delegation: Delegation) {
         let _ = self.outbound.send(ToMain::DelegateStarted(delegation));
     }
@@ -594,6 +621,32 @@ mod tests {
             "consent to a write was taken as consent to a whole plan"
         );
         responder.join().expect("responder finished");
+    }
+
+    /// SANDBOX-24: the hosts cross to the terminal and the answer comes back, and a yes to a path is
+    /// not a yes to the hosts, since a path and a host widen different things.
+    #[test]
+    fn hosts_cross_with_every_name_and_only_their_own_yes_comes_back() {
+        for (reply, expected) in [
+            (Reply::Host(Decision::Approve), Decision::Approve),
+            (Reply::Path(Decision::Approve), Decision::Reject),
+        ] {
+            let (outbound, inbound) = channel::<ToMain>();
+            let (answer_tx, answer_rx) = channel();
+            let responder = thread::spawn(move || {
+                match inbound.recv().expect("a message arrived") {
+                    ToMain::Host(asked) => assert_eq!(asked.hosts, ["a.example", "b.example"]),
+                    other => panic!("expected a host question, got {other:?}"),
+                }
+                answer_tx.send(reply).expect("answered");
+            });
+            let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+            let request = HostRequest {
+                hosts: vec!["a.example".to_string(), "b.example".to_string()],
+            };
+            assert_eq!(confirmer.confirm_host(&request), expected);
+            responder.join().expect("responder finished");
+        }
     }
 
     fn a_list() -> ToolListRequest {
@@ -1032,6 +1085,8 @@ mod tests {
                     ToMain::ToolList(_) => seen.push("tool list"),
                     ToMain::McpCall(_) => seen.push("mcp call"),
                     ToMain::Move(_) => seen.push("move"),
+                    ToMain::Path(_) => seen.push("path"),
+                    ToMain::Host(_) => seen.push("host"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),
@@ -1055,6 +1110,7 @@ mod tests {
                     ToMain::Returned(_) => seen.push("returned"),
                     ToMain::Landed(_) => seen.push("landed"),
                     ToMain::Interjected(_) => seen.push("interjected"),
+                    ToMain::DelegateWaiting(_) => seen.push("delegate waiting"),
                     ToMain::DelegateStarted(_) => seen.push("delegate started"),
                     ToMain::DelegateFinished { .. } => seen.push("delegate finished"),
                     ToMain::ReportingFor(_) => seen.push("reporting for"),
@@ -1077,6 +1133,7 @@ mod tests {
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
         reporter.composing(Some("Write"));
+        reporter.delegate_waiting(DelegateId::nth(1));
         reporter.tool_started(Activity::running("Write", "notes.md"));
         reporter.tool_finished(Activity::running("Write", "notes.md").done("1 line"));
         assert_eq!(
@@ -1093,6 +1150,7 @@ mod tests {
                 "notice",
                 "streaming",
                 "composing",
+                "delegate waiting",
                 "started",
                 "finished",
                 "write"

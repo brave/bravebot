@@ -69,7 +69,7 @@ impl Subject {
     }
 
     /// The name in a rule, or `None` for anything this agent has no family for.
-    fn parse(name: &str) -> Option<Self> {
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "Read" => Some(Self::Read),
             "Edit" => Some(Self::Edit),
@@ -201,6 +201,8 @@ pub struct Rule {
     /// it are followed ([`Permissions::follow_links`]). Part of this rule rather than rules of
     /// their own, since they are one rule about one file and a report counts what was written.
     landed: Vec<Pattern>,
+    /// The rule as the list spelled it, trimmed, for a report that names which rule decided.
+    written: String,
 }
 
 impl Rule {
@@ -213,10 +215,20 @@ impl Rule {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
         // find in their file, and a report that trimmed them names neither.
-        Self::parse_trimmed(text.trim(), anchors).map_err(|rejected| Rejected {
-            text: text.to_string(),
-            ..rejected
-        })
+        Self::parse_trimmed(text.trim(), anchors)
+            .map(|rule| Self {
+                written: text.trim().to_string(),
+                ..rule
+            })
+            .map_err(|rejected| Rejected {
+                text: text.to_string(),
+                ..rejected
+            })
+    }
+
+    /// The rule as the list spelled it.
+    pub fn written(&self) -> &str {
+        &self.written
     }
 
     /// [`Rule::parse`] on text with its surrounding space already removed.
@@ -267,6 +279,7 @@ impl Rule {
             subject,
             pattern,
             landed: Vec::new(),
+            written: String::new(),
         })
     }
 
@@ -685,8 +698,13 @@ impl Permissions {
     /// rather than at each gate, so a path reaches the rules one way whichever gate it came through
     /// and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
+        decision_of(self.rule_for_path(subject, path))
+    }
+
+    /// The rule that decides [`Permissions::for_path`], and which list it is in.
+    pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
         let path = key_of(path, self.backslash_separates, self.folds_case);
-        self.decide(|rule, restricting| {
+        self.deciding(|rule, restricting| {
             rule.subject == subject && rule.covers_path(&path, restricting)
         })
     }
@@ -697,8 +715,13 @@ impl Permissions {
     /// The words and not a line, because a line loses where one word ends. `"ls /x"`, one program
     /// word naming a script at `ls /x`, would read as `ls` given `/x` (PERM-5).
     pub fn for_command<S: AsRef<str>>(&self, argv: &[S]) -> Decision {
+        decision_of(self.rule_for_command(argv))
+    }
+
+    /// The rule that decides [`Permissions::for_command`] for one stage.
+    pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
         let argv = places(argv);
-        self.decide(|rule, restricting| {
+        self.deciding(|rule, restricting| {
             rule.subject == Subject::Bash && rule.covers_command(&argv, restricting)
         })
     }
@@ -708,11 +731,16 @@ impl Permissions {
     /// The host alone, never the path or the query: those are where a URL carries what somebody
     /// asked for, and a rule matching on them would be answering a different question each time.
     pub fn for_host(&self, host: &str) -> Decision {
+        decision_of(self.rule_for_host(host))
+    }
+
+    /// The rule that decides [`Permissions::for_host`].
+    pub fn rule_for_host(&self, host: &str) -> Option<(Ruling, &Rule)> {
         // A URL may spell a fully-qualified name with a trailing dot; that dot is spelling, not a
         // label, and a rule about `example.com` is about the same host either way.
         let host = host.to_ascii_lowercase();
         let host = host.strip_suffix('.').unwrap_or(&host);
-        self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
+        self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -722,7 +750,12 @@ impl Permissions {
     /// in part from what it read, so a rule matching them would be the driver branching on
     /// content. SERVERS-7.
     pub fn for_mcp(&self, alias: &str, tool: &str) -> Decision {
-        self.decide(|rule, _| rule.subject == Subject::Mcp && rule.covers_tool(alias, tool))
+        decision_of(self.rule_for_mcp(alias, tool))
+    }
+
+    /// The rule that decides [`Permissions::for_mcp`].
+    pub fn rule_for_mcp(&self, alias: &str, tool: &str) -> Option<(Ruling, &Rule)> {
+        self.deciding(|rule, _| rule.subject == Subject::Mcp && rule.covers_tool(alias, tool))
     }
 
     /// What the rules say about running a whole pipeline.
@@ -760,17 +793,27 @@ impl Permissions {
     /// The order is the whole of the precedence, and specificity does not enter into it: a broad
     /// deny beats a narrow allow, so a deny rule cannot carry exceptions. That is what makes a
     /// deny rule readable as a statement about what will not happen.
-    fn decide(&self, matches: impl Fn(&Rule, bool) -> bool) -> Decision {
-        for (rules, ruling, restricting) in [
+    fn deciding(&self, matches: impl Fn(&Rule, bool) -> bool) -> Option<(Ruling, &Rule)> {
+        [
             (&self.deny, Ruling::Deny, true),
             (&self.ask, Ruling::Ask, true),
             (&self.allow, Ruling::Allow, false),
-        ] {
-            if rules.iter().any(|rule| matches(rule, restricting)) {
-                return Decision::Ruled(ruling);
-            }
-        }
-        Decision::Unmatched
+        ]
+        .into_iter()
+        .find_map(|(rules, ruling, restricting)| {
+            rules
+                .iter()
+                .find(|rule| matches(rule, restricting))
+                .map(|rule| (ruling, rule))
+        })
+    }
+}
+
+/// What a deciding rule, or the lack of one, comes to.
+fn decision_of(deciding: Option<(Ruling, &Rule)>) -> Decision {
+    match deciding {
+        Some((ruling, _)) => Decision::Ruled(ruling),
+        None => Decision::Unmatched,
     }
 }
 
@@ -1274,6 +1317,63 @@ mod tests {
             permissions.for_command(&words("git push origin main")),
             Decision::Ruled(Ruling::Ask)
         );
+    }
+
+    /// The rule a report names is the one PERM-2 picks: a broad deny over a narrow allow, and the
+    /// first of two matching rules in one list. An implementation that named the most specific
+    /// match, or the last, would name another rule while the decision stayed the same.
+    #[test]
+    fn the_deciding_rule_is_the_one_the_order_picks() {
+        let permissions = rules(
+            &["Bash(git *)", "Bash(git push *)"],
+            &[],
+            &["Bash(git push origin main)"],
+        );
+        let (ruling, rule) = permissions
+            .rule_for_command(&words("git push origin main"))
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Deny, "Bash(git *)"));
+
+        let permissions = rules(&[], &["Read(src/**)"], &["Read(src/lib.rs)"]);
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "src/lib.rs")
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Ask, "Read(src/**)"));
+
+        assert!(
+            permissions
+                .rule_for_path(Subject::Read, "docs/a.md")
+                .is_none()
+        );
+        assert!(
+            permissions
+                .rule_for_path(Subject::Edit, "src/lib.rs")
+                .is_none()
+        );
+    }
+
+    /// The host and the server's tool are what the other two families are decided on, so the rule
+    /// named for them is the one whose name matches whole.
+    #[test]
+    fn the_deciding_rule_is_named_for_a_host_and_for_a_tool() {
+        let permissions = rules(
+            &["WebFetch(domain:example.com)"],
+            &["Mcp(weather:get)"],
+            &[],
+        );
+        let (ruling, rule) = permissions
+            .rule_for_host("API.example.com.")
+            .expect("a rule decides");
+        assert_eq!(
+            (ruling, rule.written()),
+            (Ruling::Deny, "WebFetch(domain:example.com)")
+        );
+        assert!(permissions.rule_for_host("notexample.com").is_none());
+        let (ruling, rule) = permissions
+            .rule_for_mcp("weather", "get")
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Ask, "Mcp(weather:get)"));
+        assert!(permissions.rule_for_mcp("weather", "set").is_none());
     }
 
     /// The deny-over-ask order needs one subject in both lists, the ask rule narrower in the first

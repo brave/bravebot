@@ -18,9 +18,12 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod git_identities;
 pub mod hooks;
+pub mod install;
 pub mod keys;
 pub mod limit;
+pub mod lsp;
 mod managed;
 pub mod mcp;
 mod obfuscate;
@@ -1026,6 +1029,10 @@ pub struct Config {
     ///
     /// `None` offers no advisor. [`Config::advisor`] resolves a tier word in it.
     pub advisor_model: Option<String>,
+    /// The size in tokens above which a server's tools are offered by name only, from the
+    /// `deferMcpToolsAbove` setting. `None` offers every tool in full (`mcp-servers.md`
+    /// SERVERS-16).
+    pub defer_mcp_tools_above: Option<u64>,
     /// The model the settings in force name for a turn to move to when its own keeps failing, as
     /// the file spelled it.
     ///
@@ -1277,6 +1284,7 @@ impl Config {
         // (BACKEND-48).
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
+        config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
@@ -1405,6 +1413,7 @@ impl Config {
             premium_endpoint,
             default_model,
             advisor_model: None,
+            defer_mcp_tools_above: None,
             fallback_model: None,
             summary_model: None,
             prompt_cache_ttl: None,
@@ -1505,6 +1514,24 @@ impl Config {
             .iter()
             .filter_map(|provider| provider.bedrock.as_ref())
             .find(|bedrock| bedrock.offers(model))
+    }
+
+    /// Every Bedrock model any configured account offers: the tier variables' account first, then
+    /// each `provider` block's, in the order the file listed them.
+    pub fn bedrock_entries(&self) -> impl Iterator<Item = &bedrock::Entry> {
+        self.bedrock
+            .iter()
+            .chain(self.bedrock_providers().map(|(_, bedrock)| bedrock))
+            .flat_map(|bedrock| bedrock.models())
+    }
+
+    /// The Bedrock entry a request name refers to, where some configured account offers it.
+    ///
+    /// The one lookup from the name a session holds (an inference-profile ARN, for a tier) to the
+    /// name the configuration gave it, [`bedrock::Entry::display_name`], which the `/model` picker
+    /// draws for the same model.
+    pub fn bedrock_entry(&self, model: &str) -> Option<&bedrock::Entry> {
+        self.bedrock_entries().find(|entry| entry.id == model)
     }
 
     /// Every AWS account a `provider` block named, in the order the file listed them.
@@ -2626,6 +2653,41 @@ mod tests {
         // The gateway beside it is untouched by any of this.
         assert!(config.provider_for("z-ai/glm-4.6").is_some());
         assert!(config.bedrock_for("z-ai/glm-4.6").is_none());
+    }
+
+    /// A request name is an ARN or a bare id and nobody reads either, so the lookup has to reach the
+    /// entry whichever account offers it: the tier variables' or a `provider` block's.
+    #[test]
+    fn a_request_name_finds_its_entry_in_either_kind_of_account() {
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"openai.gpt-5.6-sol": {"name": "GPT-5.6 Sol"}}
+            }}}"#,
+        );
+        let config = Config::from_lookup_with_providers(
+            |key| match key {
+                env_var::USE_BEDROCK => Some("1".into()),
+                env_var::AWS_REGION => Some("us-west-2".into()),
+                env_var::BEDROCK_SONNET_MODEL => {
+                    Some("arn:aws:bedrock:us-west-2:1:application-inference-profile/abc".into())
+                }
+                other => complete_env(other),
+            },
+            settings.providers().to_vec(),
+        )
+        .expect("configured");
+
+        let tier = config
+            .bedrock_entry("arn:aws:bedrock:us-west-2:1:application-inference-profile/abc")
+            .expect("the tier's entry");
+        assert_eq!(tier.display_name(), "Sonnet");
+        let named = config
+            .bedrock_entry("openai.gpt-5.6-sol")
+            .expect("the block's entry");
+        assert_eq!(named.display_name(), "GPT-5.6 Sol");
+        assert!(config.bedrock_entry("claude-3-sonnet").is_none());
+        assert!(config.bedrock_entry("abc").is_none());
     }
 
     /// A qualified name says which service is meant, and the AWS entry is not one a gateway request

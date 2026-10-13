@@ -231,8 +231,6 @@ pub enum Reason {
     Unclosed(char),
     /// A `NAME=` whose value is not literal text.
     AssignmentValue,
-    /// A pattern that matched no file.
-    NoMatch,
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
     /// A walk that read more directories than the ceiling allows.
@@ -300,9 +298,6 @@ impl fmt::Display for Reason {
             Self::Unclosed(c) => write!(f, "`{c}` is never closed"),
             Self::AssignmentValue => f.write_str(
                 "an assignment's value must be literal text, so that the plan shows what the program will see",
-            ),
-            Self::NoMatch => f.write_str(
-                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show",
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -1368,17 +1363,20 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
     let mut out = Vec::new();
     for candidate in alternatives(&word.pieces) {
         let candidate = resolve_home(&candidate, home).ok_or_else(|| refused(Reason::NoHome))?;
-        if !candidate.iter().any(is_pattern) {
+        if !candidate.iter().any(is_pattern) || is_option_value(&candidate) {
             // Nothing to work out, so nothing is read. `> out.txt` names a file that does not
             // exist yet, and a pattern-free word must not be judged against what is on disk.
+            // An option's value is the program's to match, so `--include=*.md` is no more a list
+            // of files than `--include=foo` is.
             out.push(render(&candidate));
             continue;
         }
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
-            // Never the pattern itself. A shell passes an unmatched pattern through as an
-            // argument, which is the one thing nobody ever means by writing it.
-            return Err(refused(Reason::NoMatch));
+            // As a shell without failglob does, so `find . -name *.md` reaches `find` as written
+            // when no file here matches. The plan shows the word the program receives.
+            out.push(render(&candidate));
+            continue;
         }
         out.extend(matched);
     }
@@ -1390,6 +1388,24 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         }));
     }
     Ok(out)
+}
+
+/// Whether a word is an option carrying its value, such as `--include=*.md`.
+///
+/// It starts with a dash and names the option before an `=` that comes ahead of any pattern. The
+/// whole word then stands for itself and is never looked up, so a file in the working directory
+/// cannot change what the program receives. `-*.md` and `*=x` have no such name and stay patterns.
+fn is_option_value(pieces: &[Piece]) -> bool {
+    let Some(Piece::Text(first)) = pieces.first() else {
+        return false;
+    };
+    let Some(name) = first
+        .strip_prefix('-')
+        .and_then(|rest| rest.split_once('='))
+    else {
+        return false;
+    };
+    name.0.trim_start_matches('-').chars().next().is_some()
 }
 
 /// Whether a piece stands for something that has to be looked up on disk.
@@ -2758,16 +2774,99 @@ mod tests {
         );
     }
 
-    /// A pattern standing for nothing is not an argument. A shell hands the pattern through as
-    /// text, which is never what anybody writing one meant, and would put a plan in front of a
-    /// person that reads as a list of files and is not one.
+    /// A pattern matching no file is passed to the program as written, as a shell without
+    /// failglob does. The wrong implementation refuses it, or passes nothing at all.
     #[test]
-    fn a_pattern_matching_nothing_is_refused_rather_than_passed_through() {
+    fn a_pattern_matching_nothing_is_passed_through_as_written() {
         let tree = Tree::new("nothing");
         tree.file("a.rs");
-        let refusal = expansion_refused("ls *.zzz", 1, &tree.root);
-        assert_eq!(refusal.reason, Reason::NoMatch);
-        assert_eq!(refusal.text, "*.zzz");
+        assert_eq!(expanded("ls *.zzz", 1, &tree.root), ["*.zzz"]);
+        assert_eq!(
+            expanded("ls {*.rs,*.zzz}", 1, &tree.root),
+            ["a.rs", "*.zzz"]
+        );
+    }
+
+    /// `grep -r x . --include=*.md` is what a model writes and what a shell runs. The value
+    /// belongs to the program, so the word is the argument whether or not anything matches it.
+    /// The wrong implementation refuses it, which costs the planner a round on every pattern
+    /// option.
+    #[test]
+    fn an_option_value_pattern_is_passed_through_as_written() {
+        let tree = Tree::new("option-value");
+        tree.file("a.rs");
+        assert_eq!(
+            expanded("grep -r x . --include=*.md", 4, &tree.root),
+            ["--include=*.md"]
+        );
+        assert_eq!(
+            expanded("rsync -a --exclude=target/** a b", 2, &tree.root),
+            ["--exclude=target/**"]
+        );
+        assert_eq!(expanded("grep x . -e=[ab]?", 3, &tree.root), ["-e=[ab]?"]);
+    }
+
+    /// The word is never looked up, so a file named like the option cannot change what the
+    /// program receives. The wrong implementation looks it up first and passes through only when
+    /// that finds nothing.
+    #[test]
+    fn an_option_value_pattern_is_not_replaced_by_a_file_named_like_it() {
+        let tree = Tree::new("option-value-file");
+        tree.file("--include=x.md");
+        assert_eq!(
+            expanded("grep -r x . --include=*.md", 4, &tree.root),
+            ["--include=*.md"]
+        );
+    }
+
+    /// A braced option value still stands for each spelling, written as the program is to see it.
+    #[test]
+    fn an_option_value_with_braces_is_passed_through_for_each_spelling() {
+        let tree = Tree::new("option-value-braces");
+        assert_eq!(
+            expanded("grep -r x . --include={*.md,*.rs}", 4, &tree.root),
+            ["--include=*.md", "--include=*.rs"]
+        );
+    }
+
+    /// Only an option carrying a value is the program's. A dash with no name before the `=`, a
+    /// dash with no `=`, a pattern ahead of the `=` and a pattern naming a file are all still
+    /// looked up, so a file matching one replaces it. The wrong implementation passes through any
+    /// word that starts with a dash.
+    #[test]
+    fn only_an_option_carrying_a_value_is_passed_through() {
+        for (i, (line, file)) in [
+            ("ls -*.md", "-a.md"),
+            ("ls -=*.md", "-=a.md"),
+            ("ls --=*.md", "--=a.md"),
+            ("ls *=x", "a=x"),
+            ("ls --in*=x", "--include=x"),
+            ("ls *.md", "a.md"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tree = Tree::new(&format!("option-value-bounds-{i}"));
+            tree.file(file);
+            assert_eq!(expanded(line, 1, &tree.root), [file], "{line}");
+        }
+    }
+
+    /// `find . -name *.md` is what a model writes for `find`'s own pattern. With no `.md` file
+    /// where it runs, `find` receives the pattern. With one, the word becomes that file, as it
+    /// would in a shell, which is why a pattern meant for the program is quoted.
+    #[test]
+    fn a_pattern_for_find_matching_nothing_here_reaches_find_as_written() {
+        let tree = Tree::new("find-pattern");
+        tree.file("a.rs").file("sub/b.md");
+        let plan = compiled("find . -name *.md", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "*.md"]);
+
+        tree.file("a.md");
+        let plan = compiled("find . -name *.md", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "a.md"]);
+        let plan = compiled("find . -name '*.md'", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "*.md"]);
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and
@@ -3085,8 +3184,8 @@ mod tests {
             Reason::NotOneProgram
         );
         // Nested in braces as well, where the word carries no pattern at the top level. This one
-        // is refused by the rule rather than by whatever the expansion of the branches happened to
-        // say, which for a branch matching nothing would be that the pattern found no file.
+        // is refused by the rule rather than by what the branches happen to expand to, which here
+        // is one file and one pattern matching nothing.
         assert_eq!(
             compile_refused("./{scr*.sh,other*.sh} --flag", &tree.root).reason,
             Reason::NotOneProgram

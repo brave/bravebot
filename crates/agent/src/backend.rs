@@ -313,7 +313,9 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
     match error {
         // Both are this process refusing to let the request leave. A downgraded hop is not the
         // configuration being wrong: the endpoint a person named is reachable and answered.
-        EgressError::Denied(_) | EgressError::InsecureRedirect { .. } => {
+        EgressError::Denied(_)
+        | EgressError::InsecureRedirect { .. }
+        | EgressError::AddressRefused { .. } => {
             Diagnosis::of(Category::Blocked)
         }
         EgressError::InvalidUrl { .. } => Diagnosis::of(Category::Unconfigured),

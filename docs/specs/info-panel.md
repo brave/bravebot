@@ -130,8 +130,11 @@ open, or on a terminal too narrow for it, the line has no such part.
 While the panel is drawn it holds the context reading, in whichever of the three states of
 [INPUT-22](terminal-input.md#INPUT-22) it is in, and the cache hit rate
 ([BACKEND-31](backends.md#BACKEND-31)), and the hint line drops both. Below them the panel gives the
-last turn's cache figures as two rows, what was read and what was written, never summed, and
-neither row before a turn has reported one. When the panel is not drawn, or the terminal is too
+cache figures as two rows, what was read and what was written, never summed. A turn in flight
+gives its running totals once one of its rounds has reported a completed request, and the last
+turn's figures until then, so a first turn shows them after its first round rather than at its
+end. The hit rate reads the same figures, on the hint line as well. Neither row is drawn before
+any turn or round has reported one. When the panel is not drawn, or the terminal is too
 short for the panel to show its Context section whole, the hint line has the reading and the hit
 rate. The loop, the job count, the mode and the keys stay on the hint line in every case, because a
 loop and a job spend while nobody is watching, and the panel can be closed or the terminal too
@@ -139,6 +142,9 @@ narrow for it.
 
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
+`verified-by: bravebot_tui::app::a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round`
+`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals`
+`verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
 `verified-by: bravebot_tui::panel::the_loop_stays_on_the_hint_line_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::panel::the_context_reading_stays_on_the_hint_line_where_the_panel_is_too_short_for_it`
 
@@ -146,13 +152,28 @@ narrow for it.
 ### PANEL-9: the sections, in order, each left out when it has nothing
 
 1. **Session.** The session's name, wrapped to at most three rows, the third cut with an ellipsis
-   where more was left. Below it the directory, written from `~` as `/status` writes it, and the
+   where more was left. A word of the name that is a whole GitHub pull request or issue address,
+   `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}`, with only the characters
+   GitHub allows in the owner and repository and only digits in the number, is drawn as
+   `{owner}/{repo}#{n}`. Its cells are a terminal link (OSC 8) to the address, and a selection
+   over them copies the shorthand. An address of any other shape is drawn as written. Below it the
+   directory, written from `~` as `/status` writes it, and the
    branch, as the resume list shows it: read when the session starts, resumes or moves to another
    directory, so a checkout made during a turn shows from the next of those. Each is one row, cut
-   from the left with an ellipsis where it is longer, since the end is what tells two apart. A new
+   from the left with an ellipsis where it is longer, since the end is what tells two apart. Last
+   comes the session's id, the one `--resume`, `--fork` and `/resume` take, drawn whole over two
+   rows split after its last hyphen, since a lookup reads the whole id and a fragment finds
+   nothing. It is there once the session has a record on disk, as the line printed when the
+   session ends is ([SESSION-8](sessions.md#SESSION-8)), and follows a resume, `/branch` and
+   `/clear`. A new
    name reaches an open panel on the next frame, not at the next key.
 2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
-   longer, and the effort level in force below it, as `effort high`. The model is the person's
+   longer, and the effort level in force below it, as `effort high`. A model the configuration
+   names is drawn by the name the `/model` picker gives its row, with the service after a tier's
+   name, as `Sonnet (Bedrock)`, and not by the request name, which for a tier is an inference-profile
+   ARN. `/status` draws it the same way and keeps the request name on the line beneath, since an
+   error from the service quotes that. A model the configuration does not name is drawn by its
+   request name. The model is the person's
    choice, never the name an endpoint replied with, so a reply
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
@@ -161,7 +182,8 @@ narrow for it.
 4. **Links.** PANEL-12.
 5. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
    has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
-   the turn in flight has spent so far, and left out until a token has been spent.
+   the turn in flight has spent so far, the requests its delegates have completed included as
+   they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
 8. **Plan.** PANEL-10.
@@ -172,10 +194,22 @@ whatever whoever made it chose.
 
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
+`verified-by: bravebot_tui::panel::a_github_address_in_the_name_is_drawn_as_its_shorthand`
+`verified-by: bravebot_tui::panel::an_address_of_any_other_shape_is_drawn_as_written`
+`verified-by: bravebot_tui::panel::the_shorthand_links_to_the_address_and_nothing_else_does`
+`verified-by: bravebot_tui::select::a_link_is_copied_as_the_text_it_shows`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
+`verified-by: bravebot_tui::panel::the_session_id_is_drawn_whole_over_two_rows`
+`verified-by: bravebot_tui::panel::the_id_row_follows_whether_the_session_has_a_record`
+`verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
+`verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
+`verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
+`verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
+`verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
+`verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 
 <a id="PANEL-10"></a>
@@ -201,7 +235,8 @@ Every row the panel draws comes from text the person typed (the session's name, 
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
-session runs in, the programs of the language servers it started (PANEL-13), the aliases of its MCP
+session runs in, the session's id (made by the driver from the operating system's random source, so
+no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
 servers (PANEL-14), or the model the person chose and the effort level in force. No row comes from a
 reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
@@ -225,8 +260,11 @@ Typed while a turn runs, they are carried out as `/rename` is ([CMD-8](commands.
 
 The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
 set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
-since the number at its end is what tells two apart. A new link reaches an open panel on the next
-frame.
+since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
+address of the shape [PANEL-9](#PANEL-9) gives is drawn as `{owner}/{repo}#{n}` instead, cut from
+the left in the same way. The cells drawn are a terminal link (OSC 8) to the address, and a
+selection over them copies the shorthand. An address of any other shape is drawn as written and is
+not a link. A new link reaches an open panel on the next frame.
 
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
@@ -234,6 +272,11 @@ frame.
 `verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
 `verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
+`verified-by: bravebot_tui::panel::a_github_address_in_a_link_row_is_drawn_as_its_shorthand`
+`verified-by: bravebot_tui::panel::a_link_row_of_any_other_shape_is_drawn_as_written_and_not_linked`
+`verified-by: bravebot_tui::panel::a_link_row_shorthand_links_to_its_own_address_and_nothing_else_does`
+`verified-by: bravebot_tui::panel::a_long_shorthand_keeps_its_end_and_is_linked_as_drawn`
+`verified-by: bravebot_tui::panel::a_link_row_below_the_panels_height_is_not_linked`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 
 <a id="PANEL-13"></a>

@@ -12,6 +12,7 @@ governs:
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/auth.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -158,6 +159,7 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 `verified-by: bravebot_cli::main::asking_for_incognito_twice_is_asking_once`
 `verified-by: bravebot_cli::main::incognito_alone_leaves_the_interactive_session`
 `verified-by: bravebot_cli::main::an_invocation_without_the_flag_is_left_alone`
+`verified-by: bravebot_cli::running::the_mode_is_engaged_by_the_flag_wherever_it_stands_and_by_nothing_else`
 
 <a id="INCOG-7"></a>
 ### INCOG-7: importing a subscription is refused rather than silently skipped

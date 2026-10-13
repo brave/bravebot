@@ -19,8 +19,6 @@
 //! three signed headers, so there is no query-parameter canonicalisation and no multi-value header
 //! folding here. A caller signing something else would need both.
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use hmac::{Hmac, Mac};
 use sha2::{Digest as _, Sha256};
 
@@ -208,14 +206,6 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A base64 body hash, for the one place AWS wants it that way.
-///
-/// Unused by the signature itself, and here because the event-stream framing a streamed reply
-/// arrives in describes payloads this way.
-pub fn base64_digest(body: &[u8]) -> String {
-    BASE64.encode(Sha256::digest(body))
 }
 
 /// `YYYYMMDDTHHMMSSZ`, the only timestamp format the signature accepts.

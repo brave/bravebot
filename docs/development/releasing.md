@@ -20,10 +20,25 @@ make github-release
 # later: make publish-npm TAG=v<version>
 ```
 
+Before it changes anything, `bump-version` warns and asks whether to go on when any of these hold:
+
+- open issues carry the `release-blocking` label, which it lists with their links;
+- a translation is missing messages, counted per locale from `contrib/untranslated-messages.txt`;
+- the peer-advisories skill last ran more than seven days ago. The date is the newest run the
+  skill recorded in a comment on [#1901](https://github.com/brave/bravebot/issues/1901), written by
+  a person with write access, and the warning says it came from there. Where there is no such
+  comment yet or `gh` cannot read it, the date is the last commit to `docs/peer-advisories-vetted`
+  and the warning says so.
+
+The checks are in `contrib/release-preflight.py` and use no model. Answering `n`, or running without a
+terminal, stops the bump, and `make bump-version BUMP=bugfix YES=1` goes on without asking. The
+ledger's commit date is only a lower bound on when the advisory check last ran, because a run that
+finds nothing new commits nothing, which is why the comment is preferred.
+
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
-`package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as
+and `ui/package.json`, commits exactly those four as
 `Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
-if any of the six is already modified, rather than committing changes it did not write, and it
+if any of the four is already modified, rather than committing changes it did not write, and it
 runs `make check-versions` before committing, so a bump that misses one fails there rather than
 at the tag. `github-release` refuses to tag unless the tree is clean, every file that states the
 version agrees, and HEAD is `main` at the release remote's `main`, then pushes `v<version>` there.
@@ -124,7 +139,7 @@ consumes it.
 
 `make app-bundle` is the same app for the machine it runs on, from this checkout's own release
 build rather than from `dist/`, left in `ui/dist/` with no image. It refuses a build with no
-backend credentials in it, which the front end's own `npm run bridge` allows on purpose: a bundle
+backend credentials in it, which the front end's own `pnpm run bridge` allows on purpose: a bundle
 built from an unconfigured shell starts, lists sessions, opens them, and fails at the first
 inference request, and Finder loads no shell configuration for the person who would then report
 that. So the credentials have to be in the environment `make` runs in, as they are for the
@@ -255,7 +270,7 @@ cannot sign it afterwards the way it signs the installer. electron-builder signs
 build when given a certificate there, and setting that up is
 [#770](https://github.com/brave/bravebot/issues/770).
 
-**What CI checks.** CI's `Windows installers` job builds both installers with
+**What CI checks.** CI's `Windows installer` jobs build one installer each, per architecture, with
 `make app-release-windows` from the cross-built helpers, and `Install on Windows` installs each on a
 hosted runner of its own architecture, `windows-latest` and `windows-11-arm`, with
 `ui/scripts/check-windows-install.mjs`. The install is silent, its Apps list entry is the per-user

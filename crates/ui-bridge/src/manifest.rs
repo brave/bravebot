@@ -5,7 +5,8 @@
 //!
 //! - The conversation is not sent to the planner and nothing is added to it.
 //! - The run is saved as its own record, by the function the terminal and the command line use.
-//! - The session's record is not written. Only its trust map changes, on a run that finished.
+//! - The session's record is not written. Its trust map keeps current decisions on every ordinary
+//!   ending.
 //!
 //! The worker reports through the same events a turn uses for progress and questions. It ends
 //! with `manifest.done` or `manifest.error`, and both carry what the run produced (MANIFEST-3).
@@ -17,7 +18,7 @@ use crate::running::State;
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink};
 use bravebot_agent::manifest::Attempt;
 use bravebot_agent::turn::{Task, TurnError};
-use bravebot_agent::{Confining, PermissionMode, Workspace};
+use bravebot_agent::{Confining, LiveMode, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_net::Egress;
@@ -37,14 +38,15 @@ pub(crate) struct Walk {
     pub deadlines: bravebot_agent::exec::Deadlines,
     pub sandbox: bravebot_sandbox::SandboxMode,
     pub model: Option<String>,
-    /// The session's as it stood when the run was accepted. Plan mode refuses a plan that writes
-    /// (MODE-3).
-    pub permission_mode: PermissionMode,
+    /// The session's own handle. Plan mode refuses a plan that writes (MODE-3), and a change made
+    /// while the run walks applies to the rest of it (MODE-8).
+    pub permission_mode: LiveMode,
     pub workspace: Workspace,
     pub task: String,
     pub run: usize,
     pub cancel: Cancel,
     pub pending: crate::turn::Pending,
+    pub answerers: crate::answerers::Answerers,
     pub answers: mpsc::Receiver<crate::turn::Reply>,
     pub finished: Arc<AtomicBool>,
 }
@@ -81,6 +83,7 @@ pub(crate) fn walk(walk: Walk) {
         run,
         cancel,
         pending,
+        answerers,
         answers,
         finished,
     } = walk;
@@ -107,7 +110,7 @@ pub(crate) fn walk(walk: Walk) {
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.
         .with_permissions(state.rules.permissions.clone())
-        .with_permission_mode(permission_mode);
+        .with_permission_mode(permission_mode.clone());
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
     let mut asking = BridgeConfirmer::new(
@@ -117,14 +120,15 @@ pub(crate) fn walk(walk: Walk) {
         answers,
         Arc::clone(&state.question_ids),
         cancel.clone(),
-    );
+    )
+    .answerable_by(answerers);
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
     let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);
     let mut sink = BridgeSink::for_run(emitter.clone(), &session, run);
     let egress = Egress::new();
 
-    let outcome = bravebot_agent::manifest::run(
+    let outcome = bravebot_agent::manifest::run_recording(
         &config,
         &egress,
         &workspace,
@@ -132,7 +136,7 @@ pub(crate) fn walk(walk: Walk) {
         &mut confirmer,
         &mut reporter,
         &mut sink,
-        state.trust.clone(),
+        &mut state.trust,
         &cancel,
     );
 
@@ -140,11 +144,6 @@ pub(crate) fn walk(walk: Walk) {
     // a declined plan, and one pressed a step later arrives as a cancellation. Both are the
     // person stopping the run (MANIFEST-11).
     let stopped = outcome.is_err() && cancel.is_cancelled();
-
-    // A rule a finished run recorded is about the same tree the next turn reads.
-    if let Ok(done) = &outcome {
-        state.trust = done.trust.clone();
-    }
 
     // A run the person stopped is not written, as the terminal does not write one.
     let recorded = match stopped {
@@ -203,6 +202,7 @@ pub(crate) fn walk(walk: Walk) {
                     "attempt": attempt.map(attempt_json),
                     "record": recorded,
                     "notices": reporter.notices(),
+                    "trust": { "rules": rules_json(&state.trust) },
                 }),
             );
             Event::new("manifest.error", &session, data)

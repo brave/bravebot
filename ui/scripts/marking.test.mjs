@@ -183,11 +183,12 @@ const CARDS = {
     why: 'the address the planner wrote and the host the agent read out of it, asked about before any reply exists',
   },
   server: {
-    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, summary: 'start a language server' }),
+    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, args: [FORGED_CHROME], argumentsLine: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, declared: false, summary: 'start a language server' }),
     marks: null,
-    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent, the
-    // path is what `$PATH` resolved that name to, and the workspace is the session's own root.
-    why: 'a language and a program out of the agent’s own table, the path that name resolved to, and the project’s root, asked about before any server has answered',
+    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent or from
+    // a declaration the person wrote in their own directory (LSP-11), the path is what `$PATH`
+    // resolved that name to, and the workspace is the session's own root.
+    why: 'a language, a program and its arguments out of the agent’s own table or the person’s own declaration, the path that name resolved to, and the project’s root, asked about before any server has answered',
   },
   manifest: {
     entry: () => t.askedManifest({ request: 1, task: FORGED_CHROME, steps: [FORGED_CHROME] }),
@@ -222,6 +223,13 @@ const CARDS = {
     entry: () => t.askedMcpMove({ request: 1, alias: 'weather', declared: 'https://weather.example/mcp', destination: FORGED_CHROME, authority: 'elsewhere.example:443', mayRecord: true }),
     marks: 'class="mcp-destination"',
   },
+  host: {
+    entry: () => t.askedHost({ request: 1, hosts: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/sandboxing.md SANDBOX-24: a host is kept only where it is a host name or an IP
+    // address, so what a program chose to ask for cannot hold markup or a control character.
+    why: 'host names and addresses a program asked for, each checked to be one before it was put to a person',
+  },
   'mcp-started': {
     entry: () => t.mcpStarted({ servers: [FORGED_CHROME], confined: false, notes: [FORGED_CHROME] }),
     marks: null,
@@ -249,15 +257,15 @@ const CARDS = {
   confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
   output: {
     entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vet: {
     entry: () => t.askedVet({ request: 1, origin: 'notes.md', expects: 'a note', content: FORGED_CHROME, lines: 1, vetting: { verdict: 'safe' } }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vouch: {
     entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
 }
 

@@ -200,7 +200,7 @@ test('a write the agent refused is listed as refused, and one that broke as fail
   const { written } = load('src/renderer/components/Context.tsx')
   const tool = (note) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', note, failed: true, changes: [] } })
   const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts' }, decision: 'approve' }
-  assert.equal(written([tool('refused: this turn is in plan mode, so writing is refused')])[0].state, 'refused')
+  assert.equal(written([tool('refused: the session is in plan mode, so writing is refused')])[0].state, 'refused')
   assert.equal(written([tool('refused: a deny rule in the user\'s settings covers a.ts')])[0].state, 'refused')
   assert.equal(written([tool('refused: writing a.ts would put a credential in the tree'), approval])[0].state, 'refused')
   assert.equal(written([tool('error: disk full, nothing was refused')])[0].state, 'failed')

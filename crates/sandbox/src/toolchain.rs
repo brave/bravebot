@@ -622,7 +622,10 @@ mod tests {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         });
 
         assert!(home.join(".cargo").join("registry").is_dir());

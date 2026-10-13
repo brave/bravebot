@@ -3,9 +3,8 @@
 
 import contextlib
 import importlib.util
-import io
 import os
-import subprocess
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,75 +15,18 @@ spec = importlib.util.spec_from_file_location("rebase", HERE / "rebase.py")
 rebase = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rebase)
 
-# Nothing of the caller's git config applies: no signing key, no hooks, no default branch.
-os.environ.update(
-    GIT_CONFIG_GLOBAL=os.devnull,
-    GIT_CONFIG_NOSYSTEM="1",
-    GIT_AUTHOR_NAME="selftest",
-    GIT_AUTHOR_EMAIL="selftest@example.invalid",
-    GIT_COMMITTER_NAME="selftest",
-    GIT_COMMITTER_EMAIL="selftest@example.invalid",
-)
 
-FORK_CLONE = """\
-origin\tgit@github.com:someone/bravebot.git (fetch)
-origin\tgit@github.com:someone/bravebot.git (push)
-upstream\tgit@github.com:brave/bravebot.git (fetch)
-upstream\tgit@github.com:brave/bravebot.git (push)
-"""
-DIRECT_CLONE = """\
-origin\thttps://github.com/Brave/BraveBot (fetch)
-origin\thttps://github.com/Brave/BraveBot (push)
-lookalike\thttps://notgithub.com/brave/bravebot.git (fetch)
-"""
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def git(*args, cwd):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def quietly(step, *args):
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-        try:
-            code = step(*args)
-        except SystemExit as exit:
-            code = exit.code
-    return code, out.getvalue()
-
-
-def test_the_base_is_whichever_remote_names_brave_bravebot():
-    fork = rebase.github_remotes(FORK_CLONE)
-    assert fork["brave/bravebot"][0] == "upstream", fork
-    assert fork["someone/bravebot"][0] == "origin", fork
-    direct = rebase.github_remotes(DIRECT_CLONE)
-    assert direct["brave/bravebot"][0] == "origin", direct
-    assert len(direct) == 1, "a host that only ends in github.com is not GitHub"
-
-
-def test_a_pull_request_is_named_by_number_or_by_its_url():
-    for arg in ("806", "#806", "https://github.com/brave/bravebot/pull/806/files"):
-        assert rebase.pr_number(arg) == 806, arg
-    for arg in ("https://github.com/other/bravebot/pull/806", "main"):
-        code, _ = quietly(rebase.pr_number, arg)
-        assert code == 1, arg
-
-
-def test_a_fork_is_reached_the_way_the_base_is():
-    assert rebase.fork_url("a/b", "https://github.com/brave/bravebot") == "https://github.com/a/b.git"
-    assert rebase.fork_url("a/b", "git@github.com:brave/bravebot.git") == "git@github.com:a/b.git"
-
-
-def test_a_head_named_like_the_base_does_not_take_the_clones_own_branch():
-    assert rebase.local_branch("main", "main", 7) == "pr-7"
-    assert rebase.local_branch("fix", "main", 7) == "fix"
-
-
-def test_only_a_whole_marker_line_starts_or_ends_a_conflict():
-    text = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> 1234 (x)\nTitle\n=======\n<<<<<<<<\n"
-    assert rebase.marker_ranges(text) == [(2, 6)], rebase.marker_ranges(text)
+# The git and quietly helpers are shared with the other selftests of this pair.
+helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
+git = helpers.git
+quietly = helpers.quietly
 
 
 def world(root):
@@ -276,31 +218,29 @@ def test_a_rebase_without_a_conflict_leaves_nothing_resolved_to_check():
         assert code == 0 and "CI runs the rest" in out, out
 
 
-def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_none():
+def test_a_worktree_deleted_by_hand_mid_rebase_is_checked_out_again():
     with tempfile.TemporaryDirectory() as tmp:
-        tree = Path(tmp)
-        for crate in ("agent", "tui"):
-            (tree / "crates" / crate).mkdir(parents=True)
-            (tree / "crates" / crate / "Cargo.toml").write_text(f'[package]\nname = "bravebot-{crate}"\n')
-        plan = lambda *files: rebase.plan(tree, list(files))
+        pr, _, _ = world(Path(tmp).resolve())
+        quietly(rebase.start, pr())
+        tree = pr().tree
+        shutil.rmtree(tree)
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and "a.txt" in out, out
+        assert tree.is_dir()
 
-        assert plan("ui/src/app.ts", "docs/website/docs/index.md", "README.md", "docs/development/checks.md") == []
-        assert plan("docs/specs/labels.md") == [["make", "-k", "check-spec"]]
-        assert plan("crates/i18n/locales/fr.ftl") == [["make", "-k", "check-locales"]]
-        assert plan("Cargo.lock") == [rebase.LOCK_RESOLVES, ["make", "-k", "check-versions"]]
-        assert plan(".github/workflows/ci.yml") == [["make", "-k", "check-security"]]
 
-        rust = plan("crates/agent/src/lib.rs", "crates/agent/tests/exec.rs", "crates/tui/src/view.rs")
-        assert rust == [
-            ["cargo", "fmt", "--all", "--", "--check"],
-            [
-                "cargo", "clippy", "-p", "bravebot-agent", "-p", "bravebot-tui",
-                "--all-targets", "--all-features", "--", "-D", "warnings",
-            ],
-            ["cargo", "test", "-p", "bravebot-agent", "--locked", "--test", "exec"],
-            ["make", "-k", "check-spec"],
-        ], rust
-        assert plan("crates/gone/src/lib.rs") == [["make", "-k", "check-spec"]], "a deleted crate is not linted"
+def test_a_worktree_deleted_by_hand_after_the_rebase_finished_is_checked_out_again():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        quietly(rebase.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("from main and the pull request\n")
+        code, out = quietly(rebase.resume, pr())
+        assert code == 0 and "push 9" in out, out
+        shutil.rmtree(tree)
+        code, out = quietly(rebase.start, pr())
+        assert code == 0 and "push 9" in out, out
+        assert tree.is_dir()
 
 
 def main():

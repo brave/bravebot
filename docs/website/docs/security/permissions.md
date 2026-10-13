@@ -61,7 +61,11 @@ thing on the screen that is not.
 
 A review stays legible or says it could not: a long body keeps the question on screen and offers the
 rest to scroll to, a small edit in a large file shows only the change, an empty output says so, and a
-diff that cannot be computed says so rather than showing nothing.
+diff that cannot be computed says so rather than showing nothing. In the full-screen interface, and
+on the decision cards of a desktop conversation, no approval is taken until the lines it rests on have
+been on screen:
+until then the question says how many are left to read, a refusal is taken at any time, and a change
+of width starts the count again.
 
 ## One answer is never taken for another
 
@@ -293,8 +297,8 @@ box. A mode is a standing answer to the questions above, given once instead of o
 
 **Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round
 to the first again, so no mode is one you cannot press your way out of, and it works while a turn
-runs: the turn in flight keeps the mode it began with, so a diff already on your screen does not have
-the question withdrawn from under you.
+runs: the turn in flight follows it from its next question or tool call, and a diff already on your
+screen does not have its question withdrawn from under you.
 
 **A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
 under the input box and `/status` name asking there, where a session started without the flag draws
@@ -415,8 +419,8 @@ invented on your behalf is reported to the planner as your own words.
 The control beside the model in the composer offers asking, accepting edits and plan mode, and
 `⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
 desktop has no command line for the flag to be given on. The mode belongs to the open session and
-every session opens asking, a resumed one and a fork included. A turn keeps the mode it began with,
-so a change made while one runs applies from the next.
+every session opens asking, a resumed one and a fork included. A change made while a turn
+runs applies to the rest of that turn.
 
 ### A mode belongs to the sitting it was chosen in
 
@@ -456,8 +460,9 @@ spelling you approved.
   other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
   `Docs` says nothing about `docs`.
 - **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
-  device, a trailing dot or space, or an 8.3 short name, is refused outright, since no rule can be
-  matched against it. A path on a drive is a full path: `Read(//D:/added/**)` covers `d:\added\secret`.
+  device, a trailing dot or space, or an 8.3 short name, is refused outright, in a call's path or a
+  redirection's target, since no rule can be matched against it. A path on a drive is a full path:
+  `Read(//D:/added/**)` covers `d:\added\secret`.
 - **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
   a `WebFetch(domain:evil.example)` rule covers both.
 - **Commands.** A command rule is matched against the program and each argument as the line was split,

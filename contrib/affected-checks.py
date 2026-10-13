@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "build", "docs", "npm", "deps")
+AREAS = ("rust", "ui", "build", "installers", "docs", "npm", "deps")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -38,7 +38,9 @@ DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("docs/specs/layering.md",)
+READ_BY_RUST = (
+    "docs/specs/layering.md", "docs/specs/credential-protection.md", "docs/specs/sandboxing.md",
+)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
@@ -47,9 +49,12 @@ READ_BY_INSTALLER_TESTS = {
     "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
 }
 
-# The scripts that build, fuse and check the Windows installers. CI runs them only in the job
+# The scripts that build, fuse and check the Windows installers. CI runs them only in the jobs
 # after the cross-build, so a change to one needs the cross-build too, or the job that installs
-# the result is skipped and reports success.
+# the result is skipped and reports success. Nothing else on a pull request needs the installers:
+# a change to the lockfile, a manifest or a build script runs the cross-build, which links every
+# target, and is packaged and installed on Windows once it lands, since main and every tag build
+# and install them whatever changed.
 WINDOWS_INSTALLER_SCRIPTS = (
     "ui/scripts/windows-installer.mjs", "ui/scripts/check-windows-install.mjs",
     "ui/scripts/package.mjs", "ui/scripts/fuses.mjs",
@@ -65,9 +70,15 @@ NAMED_NOT_READ = {
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
 }
 
+# What a project directory holds for the package manager. The npm names stay so that deleting a
+# leftover lockfile still counts as a change to the install.
+PACKAGE_FILES = (
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
+)
+
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example",
+    "README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -99,6 +110,8 @@ def classify(path, desktop):
         return frozenset({"rust", "ui", "build", "deps"})
     if path in ("deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
+    if path == "contrib/check-pnpm-lockfiles.py":
+        return frozenset({"npm"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -116,7 +129,7 @@ def classify(path, desktop):
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
     if path in WINDOWS_INSTALLER_SCRIPTS:
-        return frozenset({"ui", "build"})
+        return frozenset({"ui", "build", "installers"})
     if path.startswith("extension/"):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
@@ -127,14 +140,14 @@ def classify(path, desktop):
         found = {"ui"}
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
-        if name in ("package.json", "package-lock.json"):
+        if name in PACKAGE_FILES:
             found.add("npm")
         return frozenset(found)
     for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
         if path.startswith(under):
-            lockfile = path[len(under):] in ("package.json", "package-lock.json")
+            lockfile = path[len(under):] in PACKAGE_FILES
             return frozenset({area, "npm"} if lockfile else {area})
-    if path in ("package.json", "package-lock.json") or path.startswith("npm/"):
+    if path in PACKAGE_FILES or path.startswith("npm/"):
         return frozenset({"npm"})
     if path in QUIET or path.startswith(QUIET_UNDER):
         return NOTHING
@@ -296,27 +309,39 @@ CASES = (
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
     ("crates/config/build.rs", {"rust", "build"}),
     ("docs/specs/layering.md", {"rust"}),
+    ("docs/specs/credential-protection.md", {"rust"}),
+    ("docs/specs/sandboxing.md", {"rust"}),
     ("docs/specs/routing.md", NOTHING),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
+    ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
+    ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
-    ("ui/scripts/windows-installer.mjs", {"ui", "build"}),
-    ("ui/scripts/check-windows-install.mjs", {"ui", "build"}),
-    ("ui/scripts/package.mjs", {"ui", "build"}),
-    ("ui/scripts/fuses.mjs", {"ui", "build"}),
+    ("ui/pnpm-lock.yaml", {"ui", "npm"}),
+    ("ui/pnpm-workspace.yaml", {"ui", "npm"}),
+    ("ui/scripts/windows-installer.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/check-windows-install.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
     ("packages/agent-client/src/common/client.ts", {"ui"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
     ("packages/agent-client/package-lock.json", {"ui", "npm"}),
+    ("packages/agent-client/pnpm-lock.yaml", {"ui", "npm"}),
+    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "npm"}),
+    ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
     ("package-lock.json", {"npm"}),
+    ("pnpm-lock.yaml", {"npm"}),
+    ("pnpm-workspace.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
+    ("SECURITY.md", NOTHING),
 )
 
 # One crate reached each way a manifest can name another, one reached only through another, and
@@ -459,7 +484,7 @@ def selftest():
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
 
-    for area in set(AREAS) - {"build"}:
+    for area in set(AREAS) - {"build", "installers"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
         checks.append((f"a local run needing {area} runs a gate for it", bool(runs), runs))
     containers = targets({"rust"}, CONTAINERS)

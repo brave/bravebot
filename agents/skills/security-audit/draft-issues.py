@@ -502,11 +502,9 @@ def main():
     collect = importlib.util.module_from_spec(collector)
     collector.loader.exec_module(collect)
 
-    manifest_path = Path(args.work_dir) / "manifest.json"
-    if not manifest_path.exists():
-        print(f"no manifest at {manifest_path}", file=sys.stderr)
+    manifest = collect.read_manifest(args.work_dir)
+    if manifest is None:
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     findings = list(manifest.get("mechanical_findings", []))
     confirmed, _, _, _ = collect.load_verdicts(manifest)

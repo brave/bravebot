@@ -7,6 +7,8 @@ governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
   - crates/agent/src/programs.rs
   - crates/core/src/command.rs
   - crates/core/src/pure.rs
@@ -213,8 +215,16 @@ approval covers without the text changing at all.
 ### CMDLINE-4: globs are expanded by the harness, before the prompt, and bounded
 
 Expansion happens against the workspace at compile time, so the person sees the file list rather
-than the pattern. A pattern matching nothing is a compile error and not an argument passed through
-literally, which is what a shell would do and is never what anyone meant.
+than the pattern. A pattern matching no file is passed to the program as written, as a shell
+without `failglob` does, so `find . -name *.md` gives `find` the pattern `*.md` when no `.md` file
+is where it runs, and the plan shows `*.md`. A pattern that matches is replaced by the files it
+matches, so a pattern meant for the program is written quoted, as in `find . -name '*.md'`.
+
+**An option carrying a value is not a file pattern.** A word that starts with a dash and names the
+option before an `=` that comes ahead of any pattern, such as `--include=*.md`, stands for itself.
+It is never looked up, so it is passed as written whether or not anything matches it, and a file
+named like it cannot change what the program receives. A dash with no name before the `=`, a
+pattern ahead of the `=`, and a dash with no `=` are still patterns.
 
 Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
 thousand paths in front of a reader who will approve them unread.
@@ -236,7 +246,13 @@ everything and asks nothing.
 
 `verified-by: bravebot_agent::cmdline::a_pattern_becomes_the_files_it_matches`
 `verified-by: bravebot_agent::cmdline::a_pattern_matches_within_one_segment_and_a_tree_across_them`
-`verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_refused_rather_than_passed_through`
+`verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_passed_through_as_written`
+`verified-by: bravebot_agent::cmdline::a_pattern_for_find_matching_nothing_here_reaches_find_as_written`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_passed_through_as_written`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_not_replaced_by_a_file_named_like_it`
+`verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
+`verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
+`verified-by: bravebot_agent::tools::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
@@ -261,6 +277,18 @@ everything and asks nothing.
 set, it is shown at the prompt, and it is subject to every rule that governs writing a file: the
 permission rules, the trust map's answer for that path, and the confinement that keeps a write
 inside the workspace.
+
+That confinement is applied when the line is compiled and again immediately before each destination
+is opened, including one the line has already opened once. The parts of the line before it have run
+by then, and a program in one of them can have left a link at the name the person approved. A
+destination that lands outside the workspace and every opened directory at that moment is not
+opened, and the line stops there. The window between that check and the open is the one the known
+costs of [trust-map.md](../trust-map.md) accept for every write.
+
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
+`verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
 
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
@@ -684,7 +712,9 @@ A call may say it should not be waited for. It is endorsed the same way, starts 
 answers immediately with a handle. The turn carries on.
 
 When it exits, the turn is told: the handle, the status, and the output under the label the plan
-earned. A background run that is still going when the session ends is killed.
+earned. A background run that is still going when the turn ends is killed, except in an interactive
+session, where it is left running and is killed when the session ends ([RUN-15](run.md#RUN-15)). A
+job that ended between two turns is told at the next turn's first round.
 
 The output of a background run obeys every other clause here. Backgrounding changes when the planner
 is told, never what it is allowed to read.

@@ -22,16 +22,19 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
-| `/limit` | `[tokens \| off]` | Show the session's spend limit, set it in tokens, or remove it |
+| `/limit` | `[tokens \| credits \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/handoff` | `<next goal>` | Start a new session from a brief you can edit, written for the next goal |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
+| `/bg` | | Hand this session to a background process that keeps running after the terminal closes |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
+| `/sandbox` | `[strict \| standard \| off]` | Show the sandbox mode, or change it from the next turn |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
@@ -198,19 +201,23 @@ advisor's tokens and is counted in the turn's.
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
 
-## `/limit [tokens | off]`
+## `/limit [tokens | credits | off]`
 
-Sets the most tokens this session may spend. `/limit 500k` or `/limit 2m` sets it, with `k` for
-thousands and `m` for millions, `/limit off` removes it, and `/limit` alone says what it is and what
+Sets the most tokens, or Leo Premium credits, this session may spend. `/limit 500k` or `/limit 2m`
+sets it in tokens, with `k` for thousands and `m` for millions, `/limit 200 credits` sets it in
+credits, `/limit off` removes it, and `/limit` alone says what it is and what
 has been spent. The `limit` key in [the settings file](../customize/configuration.md#limit) starts a
 session under one.
 
-When the session has spent as many tokens as the limit, the next request is not sent. You are asked
+When the session has spent as many tokens or credits as the limit, the next request is not sent. You are asked
 whether to stop, to go on without a limit, or to go on under a new one: choose the last by answering
-in your own words with a figure above what is spent, such as `2m`. Nothing else answers for you, so
+in your own words with a figure in the same unit above what is spent, such as `2m` or `300`. Nothing else answers for you, so
 the question appears in every permission mode, including the one that asks about nothing. A
-`/loop` or `/goal` run ends there. The figure is the usage the model service reports, in tokens. It
-is not money, and a service that reports no usage is never stopped by it. The round that reaches the
+`/loop` or `/goal` run ends there. Tokens are the usage the model service reports, so a limit in
+tokens is not money, and a service that reports no usage is never stopped by it. Credits are the
+credentials this session presented, one per premium request, delegates included. A session with no
+subscription spends none and is never stopped by a limit in credits, and `/compact`, `/aside` and
+goal checks are not counted. `/clear` starts the count again, and a resumed session starts at zero. The round that reaches the
 limit has already been paid for, so the total can end a little above it.
 
 Typed while a turn runs it is taken at once, and the running turn's next request is held to it.
@@ -226,14 +233,18 @@ clears the pick.
 A style stands where [`--system-prompt`](cli.md#--system-prompt-prompt-and---append-system-prompt-prompt) stands: it replaces the
 opening of the system prompt and nothing after it. If you also gave `--system-prompt`, that is used
 and the style is not. A style grants nothing: writes are still put to you where they would have been,
-and plan mode still refuses them. The pick lasts for the session and is not written down. Styles
-cannot yet be read from files.
+and plan mode still refuses them. The pick lasts for the session and is not written down.
+
+Your own styles are files in `~/.bravebot/styles`: `terse.md` there is the style `terse`, and its
+words replace the opening in the same way. A name is lowercase letters and digits joined by hyphens.
+A file that is empty, longer than 4096 bytes or a symbolic link is not offered, and a file named
+after a built-in style is ignored. Styles are not read from a project.
 
 ## `/effort [level]`
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
-directly, and a word that names no level changes nothing and says so rather than reaching a request
+directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
 is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
 for the turn to end.
@@ -348,12 +359,28 @@ there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot
 
 When the planner asks a `run` for a credential scope by name and the question is drawn, `m` runs the
 line and remembers each scope it asked for, read only, for the programs of the line, for this
-session. `k` does the same until it is removed, in this checkout or, for a program the scope belongs to such as `git` for remote, in every checkout. It is the row `/reach` would
+session. `e` does the same until it is removed, in this checkout or, for a program the scope belongs to such as `git` for remote, in every checkout. It is the row `/reach` would
 have made, listed by `/reach` and taken away by `/reach remove`. The line is still asked about every
 time, with the scope shown on it, and neither key trusts what it prints. A toolchain list the
 planner asked for is not remembered, and a line with a `NAME=value` in front of a program, or a
 program started with an option such as `git -C dir push`, is not offered either key. The desktop app
 does not offer them.
+
+## `/sandbox [strict | standard | off]`
+
+Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
+settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
+for the rest of the session, starting with the next turn. Typed while a turn runs it waits for the
+turn to end, so one turn's `run` description, refusals and profile all come from one mode. The mode is
+not written to the session, so a resumed session takes the mode the process started with, and `/resume`
+inside a session keeps the one you set.
+
+Moving to `off` asks first, because programs then start with no profile at all; answering no keeps the
+mode. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
+`closed`, is refused with a sentence naming that file. Otherwise the command ranks as `--sandbox`
+does, so `/sandbox standard` replaces a checkout's `strict`. Only you can set it: no tool, skill, hook
+or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
+no such command yet.
 
 ## `/loop [interval] <prompt>`
 
@@ -587,8 +614,8 @@ Lists the turn's [background jobs](run-tool.md#leaving-a-pipeline-running), and 
 /jobs stop 1 d2       # stop job:1 of delegate d2
 ```
 
-The list is the jobs of the turn running, or of the last turn when none is, so it is empty once the
-next turn starts. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
+The list is the jobs of the turn running, or of the last turn when none is, with any job an earlier
+turn left running, since a terminal session keeps its jobs until it ends. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
 number after the name, and a name alone is the turn's own job. The list names a delegate's job the
 same way, as `job:1 d2`, and says which delegate started it.
 
@@ -600,8 +627,9 @@ says `being stopped` until then. The model is told you stopped it and after how 
 had printed by then, and is told not to start it again unless you ask.
 The rest of the turn goes on. The stop is recorded in the session's trail as yours.
 
-`/jobs` is carried out as you type it while a turn runs, since a job ends with its turn and a stop
-that waited would find nothing left to stop.
+`/jobs` is carried out as you type it while a turn runs, since a stop that waited would find nothing
+left to stop. Between turns nothing reads the flag, so a stop kills the job at once and the model is
+told at the next turn's first round that you stopped it.
 
 ## `/panel`
 
@@ -671,7 +699,7 @@ reaches planning. With a task it also starts a turn on that task, which runs in 
 
 The turn is sent the task and not the line, so it never sees `/plan`. Bare `/plan` sets the mode and
 sends nothing. There is no command for bypassing every check. Typed while a turn runs it waits for
-the turn to end, and the turn in flight keeps the mode it began with.
+the turn to end, and then sets the mode.
 
 ## `/manifest <task>`
 
@@ -852,6 +880,11 @@ conversation goes out, no tools are offered, and neither the question nor the an
 conversation. The answer is cut to 400 characters if the model writes more, and it opens in the same
 mode as a `/btw` answer. `/recap` takes no argument: a line with words after it is a prompt.
 
+A session also recaps itself once when you come back to it: the terminal has been unfocused for five
+minutes since the last turn finished, and the session has had three turns. It does not recap again until
+another turn finishes. The [`awaySummaryEnabled`](../customize/configuration.md#awaysummaryenabled)
+setting turns that off.
+
 ## `/btw <question>`
 
 Asks something beside the work. A copy of the conversation goes out with your question on the end of
@@ -902,6 +935,21 @@ is refused in an incognito session, which writes none, and while the session kee
 a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
 for the turn to end.
 
+## `/handoff <next goal>`
+
+Starts a new session for the next piece of work, from a short brief instead of the whole
+conversation. The planner writes the brief from this session, and it appears in the input box
+followed by a sentence saying what did not come across, and the goal. Read it and change what you
+like. Enter starts a new session whose first prompt is the box as it stands. Escape drops it.
+
+Only the brief crosses. The files and folders you trusted, the programs you vouched for and the
+other permissions you gave do not, so the new session asks again. The old session is left as it
+was, and the new one's row in the `bravebot --resume` list says which session it came from.
+
+It needs a record to link back to, so it says there is nothing to hand off until the first turn has
+ended. A conversation that has met something untrusted offers no brief. Typed while a turn runs it
+waits for the turn to end.
+
 ## `/resume [id]`
 
 Leaves this session for another one recorded in this directory, and carries on from it. With no id
@@ -919,6 +967,25 @@ session already open, for a [manifest run](../using/sessions.md#a-manifest-run-i
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
+
+## `/bg`
+
+Hands this session to a background process and leaves the screen. The process resumes the record
+the session has written, opens idle in the same directory and in the permission mode this session
+was in (asking, accepting edits or planning), and keeps running after the terminal closes. The
+terminal prints the id to join it with: `bravebot attach <id>` draws the session as this screen
+does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessions` lists it.
+
+A background session holds a question it would ask until someone attaches, and a rule in a settings
+file that allows something does not answer for you there. Stopping it, or leaving it idle for an
+hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again in the
+mode every session opens in.
+
+It is refused, with a line saying why and the session carrying on, in bypass, in an incognito
+session, before the session has a record to hand over (send a prompt first), in a session started
+with an option `--bg` also refuses (such as `--no-shell` or `--settings`), and while a loop, a goal
+or a watch is running, which the background session does not run. Typed while a turn runs it
+waits for the turn to end. The word takes nothing after it: `/bg now` is sent as a prompt.
 
 ## `/export [path]`
 

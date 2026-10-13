@@ -128,7 +128,7 @@ pub fn shell_named(variable: Option<String>) -> String {
 /// Run `line` through the user's shell in `directory`, and collect what it printed.
 ///
 /// `cancel` is checked while waiting, so a slow command can be stopped. Like
-/// [`crate::exec::run`] this kills rather than detaching: a command still running is an effect in
+/// [`crate::exec::run_plan_observed`] this kills rather than detaching: a command still running is an effect in
 /// progress, and asking it to stop is asking for it to end.
 ///
 /// The line is passed as a single argument after `-c`, so the shell parses it and nothing here
@@ -140,17 +140,18 @@ pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<R
     }
 
     let shell = shell();
-    let mut child = match Command::new(&shell)
-        .arg("-c")
-        .arg(line)
-        .current_dir(directory)
-        // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
-        // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let mut child = match bravebot_sandbox::process::starting_a_program(|| {
+        Command::new(&shell)
+            .arg("-c")
+            .arg(line)
+            .current_dir(directory)
+            // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
+            // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }) {
         Ok(child) => child,
         Err(e) => {
             return Err(ShellError::NotStarted {
@@ -235,6 +236,44 @@ pub fn record<S: Sink>(
     conversation: &mut Conversation,
     sink: &mut S,
 ) -> Result<Recorded, ShellError> {
+    let released = released(line, ran, sink)?;
+
+    // Said in the driver's own words, from the exit code, which is structure rather than content.
+    let outcome = outcome(ran);
+
+    let said = if released.trim().is_empty() {
+        format!("I ran `{line}` in the shell myself{outcome}. It printed nothing.")
+    } else {
+        format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
+    };
+    conversation.push_from(
+        Message::user(said),
+        crate::request_view::Provenance::Trusted("shell output"),
+    );
+
+    Ok(Recorded {
+        text: released,
+        succeeded: ran.succeeded(),
+    })
+}
+
+/// What a command the user ran printed, for the screen alone: nothing is put into the conversation.
+///
+/// The private form of [`record`], for a person who wants to read a log or an `.env` in their own
+/// shell without it going to the model service. It takes no `Conversation`, so there is nothing for
+/// it to push into, and the output still passes the gate [`record`] passes it through, so what is
+/// drawn is what the gate released.
+///
+/// Under the same call-site rule as [`record`]: `line` is only ever a line a person typed.
+pub fn show<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<Recorded, ShellError> {
+    Ok(Recorded {
+        text: released(line, ran, sink)?,
+        succeeded: ran.succeeded(),
+    })
+}
+
+/// What a command printed, labelled and released by the gate, with the line as its routing.
+fn released<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<String, ShellError> {
     // Under the same label a run's output carries, since the planner reads this the same way and a
     // diagnostic run together with the output reads as something the command produced.
     let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
@@ -258,34 +297,21 @@ pub fn record<S: Sink>(
     // decides whether these bytes go anywhere at all. Were a later change to label a command's
     // output untrusted, this refuses and neither the planner nor the screen sees it. Reading the
     // label and then using a copy taken beforehand would make the check decorative.
-    let released = policy
+    policy
         .read_trusted_content("shell", &labelled)
-        .map_err(|denial| ShellError::Io(denial.to_string()))?;
+        .map_err(|denial| ShellError::Io(denial.to_string()))
+}
 
-    // Said in the driver's own words, from the exit code, which is structure rather than content.
-    let outcome = if ran.succeeded() {
+/// The exit status in the driver's own words, empty for a command that succeeded.
+fn outcome(ran: &Ran) -> String {
+    if ran.succeeded() {
         String::new()
     } else {
         match ran.code {
             Some(code) => format!(" (exited {code})"),
             None => " (killed)".to_string(),
         }
-    };
-
-    let said = if released.trim().is_empty() {
-        format!("I ran `{line}` in the shell myself{outcome}. It printed nothing.")
-    } else {
-        format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
-    };
-    conversation.push_from(
-        Message::user(said),
-        crate::request_view::Provenance::Trusted("shell output"),
-    );
-
-    Ok(Recorded {
-        text: released,
-        succeeded: ran.succeeded(),
-    })
+    }
 }
 
 /// Read a pipe on a thread, lossily, so output that is not UTF-8 does not fail the run.

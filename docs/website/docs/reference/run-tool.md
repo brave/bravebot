@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes and toolchain lists to add to every stage, by name; `strict` mode only, asked about every time and never remembered |
+| `scopes` | credential scopes and toolchain lists to add to every stage, by name; not in `off` mode, and asked about every time |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -230,8 +230,9 @@ rule you wrote down. Private input still asks.
 ## Patterns become the files they match
 
 Expansion happens against the tree at approval time, so what you read at the prompt is the file list
-rather than the pattern. A pattern matching nothing is an error rather than an argument passed
-through unchanged. `**` steps over the directories a listing steps over, so it does not descend into
+rather than the pattern. A pattern matching nothing is passed to the program as written, as a shell
+does, so a pattern meant for the program, as in `find . -name '*.md'`, is quoted in case a file
+matches it. `**` steps over the directories a listing steps over, so it does not descend into
 `.git` or `node_modules`.
 
 Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with
@@ -443,10 +444,14 @@ lists the jobs a turn has started and stops one.
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
 Both are refused rather than half-honoured.
 
-**A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
-kills it. A background program still running afterwards would be an effect nobody is watching,
-nobody is being asked about, and nobody can stop. The terminal shows each job while it runs and says
-when the turn stopped one ([Moving a command to the
+**In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
+started in one turn is still running when you ask the next question, and the model is told at the
+start of each turn which jobs are still going and under which names. A job ends when it exits, when
+you or the model stops it, when you `/clear` the conversation, or when the session ends. A job that
+finishes between turns is reported at the next turn's first round. `/jobs stop` between turns stops
+the job at once, since no turn is there to read it. A one-shot run (`-p`), an incognito session and
+a delegate keep the older rule: the turn owns the pipeline and ending the turn kills it. The terminal
+shows each job while it runs ([Moving a command to the
 background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 
 ## Moving a running command to the background
@@ -454,6 +459,8 @@ background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 A line the turn is waiting on can be moved to the background by the person at the terminal, with the
 key the hint line names (`ctrl-b` unless you [moved it](../using/interactive-mode.md#moving-a-key)).
 Only the interactive terminal client has the key: one-shot mode and the desktop app wait as before.
+In the terminal client, a message sent while the line runs also moves it once the line has run for
+10 seconds, so the turn reads the message without waiting for the line to end.
 The command is not stopped or started again. It becomes a job exactly as if it had been started with
 `background: true`, and the agent's result for the call says the user moved it, after how many
 seconds, and under which job name. Nothing it printed is in that result, including what it printed

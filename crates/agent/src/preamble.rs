@@ -145,6 +145,9 @@ pub fn compose_in<S: Sink>(
     preamble
         .for_a_person
         .push_str(github_cli_guidance(github_cli));
+    preamble
+        .for_a_person
+        .push_str(missing_module_guidance(workspace.scratch().is_some()));
 
     let mut standing = Prompt::default();
     // Neither file is read in a safe session. What the command line named is the person's words for
@@ -174,6 +177,19 @@ pub fn compose_in<S: Sink>(
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
+    }
+    if !safe {
+        for relative in nested_agents_files(sources) {
+            match read_nested_agents(policy, sources, &relative) {
+                Ok(Some(text)) => {
+                    standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
+                    standing.push(Provenance::TrustedFile(relative), text.trim());
+                    standing.push(Provenance::Driver, "\n\n");
+                }
+                Ok(None) => {}
+                Err(notice) => preamble.notices.push(notice),
+            }
+        }
     }
     if let Some(appended) = appended {
         standing.push(Provenance::Driver, "From the command line:\n\n");
@@ -483,6 +499,36 @@ fn github_cli_guidance(present: bool) -> &'static str {
      without asking the network: where it fails for that reason, fetch_url is the way.\n"
 }
 
+/// What to do when a Python program fails for a module its interpreter lacks, said only where the
+/// session has a directory of its own to write the stand-in in.
+///
+/// A planner not told of this road looks for a newer interpreter, finds none, and asks the person
+/// to install one or edit the program. For the person's own turn and not for a delegate: the road
+/// is two `run`s, and a reader is offered none.
+///
+/// A new directory inside the session's, and only that on `PYTHONPATH`, because a directory there
+/// is imported from ahead of the standard library and the session's own holds whatever else the
+/// work put in it. In single quotes, because the line compiler reads an unquoted backslash as an
+/// escape and a Windows path is made of them.
+fn missing_module_guidance(scratch: bool) -> &'static str {
+    if !scratch {
+        return "";
+    }
+    "\nWhen a Python program fails because a module is missing, such as `tomllib` on a Python older \
+     than 3.11, check whether an installed package provides the same module under another name, \
+     with a line that only reads and whose exit status is the answer, such as `python3 -c 'import \
+     tomli'` run with the interpreter the program uses. Where one does, write a module of the \
+     missing name in a new directory inside the scratch directory that re-exports the package, \
+     such as `tomllib.py` holding `from tomli import *`, and run the program again with \
+     `PYTHONPATH=` and that directory's path in front of it on that one line. Write the path out \
+     in full and in single quotes, since a line expands no variable and reads an unquoted \
+     backslash as an escape. Name only that directory, since whatever else the scratch directory \
+     holds would be imported ahead of the standard library. That leaves the program, the machine \
+     and the person's settings as they were, so try it before asking the person to install \
+     something or edit the program. Where nothing installed provides the module, say which module \
+     is missing and what provides it.\n"
+}
+
 /// Whether this tree is under version control, walking up the way git itself does.
 ///
 /// A worktree and a submodule keep a `.git` file pointing at the real directory rather than a
@@ -614,6 +660,34 @@ fn read_home_agents<S: Sink>(policy: &mut Policy<'_, S>, home: &Path) -> Option<
     let origin = format!("~/.bravebot/{AGENTS_FILE}");
     let labelled = policy.label_user_configuration(&origin, text);
     policy.read_trusted_content("preamble", &labelled).ok()
+}
+
+/// The `AGENTS.md` files in the directories below the root that the session has read from or
+/// written to, workspace-relative and shallowest first (INSTR-14).
+///
+/// Which directories is the driver's record of the paths the planner named, and only the existence
+/// of a file is asked here, so nothing a file holds decides which file is looked for.
+fn nested_agents_files(workspace: &Workspace) -> Vec<String> {
+    workspace
+        .touched_directories()
+        .into_iter()
+        .map(|directory| format!("{directory}/{AGENTS_FILE}"))
+        .filter(|relative| workspace.root().join(relative).is_file())
+        .collect()
+}
+
+/// A nested `AGENTS.md`, read through the trust gate as the root one is.
+///
+/// Neither a pointer nor an `@path` import is followed: the file is taken as it stands.
+fn read_nested_agents<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    relative: &str,
+) -> Result<Option<String>, Notice> {
+    if workspace.rule_denies_reading(policy, relative) {
+        return Err(Notice::denied_by_rule(relative));
+    }
+    read_instructions(policy, workspace, relative)
 }
 
 /// Standing instructions found in the workspace, and which file they came from.

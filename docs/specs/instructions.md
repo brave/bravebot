@@ -22,7 +22,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: eight sources kept as files, and no others
+### INSTR-1: ten sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
@@ -34,6 +34,8 @@ It does not cover what a skill file looks like or what any source is trusted for
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/<directory>/AGENTS.md` | this project, once the session has worked in that directory |
+| `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once the session has worked in that directory |
 
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
 so its skills and definitions sit directly beneath it, while a project keeps its own out of the
@@ -60,8 +62,8 @@ of instructions under two names, and reading both would state everything twice.
 **Why more than one name.** More than one is in use, and a project that wrote its conventions down
 should not have them ignored over the spelling. This is still one source, resolved by name.
 
-There is no search of parent directories and no nested instructions file. A file at any other path
-is an ordinary file, read only when something asks for it by name, or when the source names it,
+There is no search of parent directories. A nested file is a source only under
+[INSTR-14](#INSTR-14). A file at any other path is an ordinary file, read only when something asks for it by name, or when the source names it,
 which is [INSTR-8](#INSTR-8).
 
 A definition's memory, `<workspace>/.bravebot/memory/<name>.md`, is one of those ordinary files.
@@ -98,7 +100,7 @@ than a reason to refuse to start.
 `verified-by: bravebot_agent::skills::no_home_directory_is_not_an_error`
 
 <a id="INSTR-3"></a>
-### INSTR-3: only the project root is a source, never a directory opened alongside it
+### INSTR-3: only the project's own tree is a source, never a directory opened alongside it
 
 A directory opened by name during a session widens where files may be read from. It adds no
 standing instructions and no skills, whatever it contains.
@@ -221,6 +223,15 @@ and is offered neither road, no `fetch_url` at all and no `run` without the capa
 ([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
 those tools are.
 
+What to do when a Python program fails because a module is missing is said on the same terms, to
+the turn a person is watching and only where the session has a directory of its own. Check, with a
+line that only reads and whose exit status is the answer, whether an installed package provides the
+same module under another name. Where one does, write a module of the missing name that re-exports
+the package in a new directory inside the session's own, and run the program again with
+`PYTHONPATH` set to that directory's path, written out in full and in single quotes, in front of it
+on that one line. Where nothing installed provides it, say which module is missing and what
+provides it. A session with no directory of its own is told none of this, and neither is a delegate.
+
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
 and the rest comes from the kernel and this process's own environment, which is the provenance
@@ -258,12 +269,29 @@ whoever is asking, and a delegate that may run one can use it. What is withheld 
 sentence choosing between two tools, one of which a delegate never has: a delegate told to fall back
 to `fetch_url` spends a round on a name that resolves to nothing.
 
+The stand-in for a missing module is stated because a planner not told of it looks for a newer
+interpreter, finds none, and asks the person to install one or edit the program. Both change the
+machine or the program to supply what an installed package often already provides, such as `tomli`
+for the `tomllib` a Python older than 3.11 lacks. A module of the missing name in the session's own
+directory changes neither, and goes when the session does. It goes in a directory of its own there,
+and only that directory goes on the path, because a directory on `PYTHONPATH` is imported from ahead
+of the standard library, and the session's directory also holds whatever else the work put in it,
+such as an archive unpacked to look inside. The assignment is on the one line because nothing
+carries over between lines. The path is written out because a line expands no variable, and quoted
+because a line reads an unquoted backslash as an escape and a Windows path is made of them. It is
+gated on the directory because without one the only place to write the module is the project. It is
+withheld from a delegate because the road is two `run`s and a reader is offered none. Nothing here
+is a decision the driver takes on a program's output: the check is answered by an exit status
+([RUN-13](tools/run.md#RUN-13)), and what the planner does with it is the planner's.
+
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`
 `verified-by: bravebot_agent::preamble::whether_the_tree_is_a_git_repository_is_said_either_way`
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
+`verified-by: bravebot_agent::preamble::a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory`
+`verified-by: bravebot_agent::confine::a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 `verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`
 `verified-by: bravebot_agent::preamble::a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one`
@@ -345,13 +373,22 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
 <a id="INSTR-12"></a>
-### INSTR-12: a built-in output style stands where `--system-prompt` stands, and yields to it
+### INSTR-12: an output style stands where `--system-prompt` stands, and yields to it
 
-`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
-`/style off` clears the pick and `/style` alone says which is in force and lists the names. The
-pick lasts for the session and is not recorded, so a resumed session starts with none. A name is
-compared whole against the built-in list: nothing a person types after `/style` reaches the prompt,
-and no style is read from a file.
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
+or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+pick lasts for the session and is not stored, so a resumed session starts with none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
+compared whole against the built-in list and the person's own files, and nothing a person types after
+`/style` reaches the prompt.
+
+A person's own style is a file `~/.bravebot/styles/<name>.md`. Its name is a slug (lowercase letters
+and digits in runs joined by hyphens, as in [MEMORY-3](definition-memory.md#MEMORY-3)) and a name is
+never joined to a path before it has been checked as one, so nothing typed can name a file outside
+that directory. A file is a style only where it is a regular file, not a symbolic link, of at most
+4096 bytes of UTF-8 with some words in it. A file called by a built-in name is ignored, so a file
+cannot take the place of one this build ships. Its words are the person's own configuration and
+trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is. A style a project holds is
+not read: nothing under the workspace is looked at for one.
 
 A style's words stand in for the opening of the system prompt, as `--system-prompt` does
 ([CLI-19](cli.md#CLI-19), [INSTR-10](#INSTR-10)), and for nothing after it. Where both are present
@@ -367,17 +404,26 @@ refuses it, and the guidance on reading a tool's output is not in the opening, s
 remove it. `proactive` says so in its own words and does not change the mode.
 
 **Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
-`--system-prompt` can only be given when the program starts. Fixing the set at build time keeps the
-rule INSTR-10 relies on: the words in the opening are written by this program or typed by the person,
-and nothing read from a project reaches that place.
+`--system-prompt` can only be given when the program starts. Taking a style only from this build or
+from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the opening are written by
+this program or by the person, typed or kept in the person's own configuration, and that nothing
+read from a project reaches that place.
 
-**Known costs.** Only the terminal interface has `/style`. Styles are not read from `~/.bravebot/styles` or from a project, there is no
-`style` setting, and the choice is not written to the trace. Each needs the trust map or the
+**Known costs.** Only the terminal interface has `/style`. Styles are not read from a project, there
+and there is no `style` setting. Each needs the trust map or the
 settings layers to say who may name a style, and none is built.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
 `verified-by: bravebot_agent::styles::no_style_takes_the_quarantine_guidance_with_it`
+`verified-by: bravebot_agent::styles::a_file_in_the_home_directory_is_a_style_by_its_name`
+`verified-by: bravebot_agent::styles::a_file_cannot_stand_in_for_a_built_in_name`
+`verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`
+`verified-by: bravebot_agent::styles::a_link_an_empty_file_and_a_long_file_are_not_styles`
+`verified-by: bravebot_agent::styles::the_offered_names_are_the_built_ins_then_the_accepted_files_in_order`
+`verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
+`verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
+`verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
@@ -391,7 +437,7 @@ shadows one of the same name under either of the others, by the shadowing of
 [INSTR-4](#INSTR-4). A project that ships its own version of a ported skill means it.
 
 The project root only. A `.claude/skills` or `.agents/skills` inside a subdirectory is an ordinary
-directory and no source, which is [INSTR-1](#INSTR-1)'s refusal to walk upward read downward as
+directory and no source, whatever the session has worked in, which is [INSTR-1](#INSTR-1)'s refusal to walk upward read downward as
 well: what a turn is advertised would otherwise depend on how deep the checkout is.
 
 Each is read through the trust map like `.bravebot/skills`, so an untrusted project offers none of
@@ -413,10 +459,58 @@ here.
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
 
+<a id="INSTR-14"></a>
+### INSTR-14: a directory the session has worked in adds its own `AGENTS.md` and `.bravebot/skills`
+
+For each directory below the project root that a file tool has read from or written to in this
+session, and each directory above it down to the root's own children, the `AGENTS.md` in it is a
+source after the project's, and so is `.bravebot/skills` in it. Shallower directories come first and
+a deeper one last, so the most specific has the last word ([INSTR-4](#INSTR-4)). A skill of the
+same name replaces the project's, and a shallower directory's.
+
+Which directories is the driver's record of the names the planner typed to `read_file` and to the
+writing tools, placed by spelling alone, so a link is not followed to where it lands and nothing a
+file holds is consulted. A name outside the root records nothing, and the record keeps at most 64
+directories. What is recorded is the planner's choice of paths and is never read out of a file.
+
+Each file is read through the trust map and the `deny` rules as the project's `AGENTS.md` and
+`.bravebot/skills` are, so a distrusted one never reaches the prompt and the person is told which
+file, or which skills directory with a count, and never what it holds ([SKILL-4](skills.md#SKILL-4),
+[SKILL-6](skills.md#SKILL-6)). A nested `AGENTS.md` is taken as it stands: a pointer
+([INSTR-8](#INSTR-8)) and an `@path` import ([INSTR-11](#INSTR-11)) in it are ordinary text. Only
+`.bravebot/skills` is read below the root, as [INSTR-13](#INSTR-13) says. A safe session reads none.
+
+Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
+from the next turn, and the turn that read it keeps the instructions it started with. The record is
+the session's, so it is empty again in a resumed session and after `/cd`.
+
+**Why.** A package in a monorepo has conventions the project's root file cannot state without
+every turn carrying every package's. Reading downward only into directories the planner chose, and
+only through the trust map, keeps what [INSTR-1](#INSTR-1) refused when it refused to walk upward:
+what a turn is told does not depend on what sits above the project, and nothing untrusted decides
+which file is read.
+
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_is_in_the_prompt_only_after_a_path_under_it_is_touched`
+`verified-by: bravebot_agent::preamble::nested_agents_files_follow_the_root_one_and_the_deeper_is_last`
+`verified-by: bravebot_agent::preamble::a_distrusted_nested_agents_file_never_reaches_the_prompt`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt`
+`verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
+`verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
+`verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
+`verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
+`verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
+`verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
+`verified-by: bravebot_agent::safe::a_safe_session_offers_no_nested_skill`
+`verified-by: bravebot_agent::safe::a_safe_session_reads_no_nested_agents_file`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
+- **Each recorded directory costs one existence check and one directory listing every turn**, up
+  to the 64 the record keeps. There is no cache, because one would have to be invalidated when a
+  file appears or changes mid-session. A directory only listed, searched or named in a shell
+  command is not recorded: only a read or a write is.
 - **Resolution costs up to three directory listings and up to three file reads every turn.** Cheap
   next to the model call it precedes, and the alternative is a cache that has to be invalidated by
   something, which is a second thing to be wrong about how the filesystem looks. A project keeping

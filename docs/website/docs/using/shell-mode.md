@@ -51,6 +51,14 @@ The label is a first label from provenance, exactly like the label on a program'
 own configuration. It is admissible for the reason a vouched-for command's output is: a person took
 responsibility, and nothing inspected anything.
 
+## Keeping the output to yourself
+
+Type `!!` to run one command whose output is shown and never sent to the model: `!!cat .env`. The
+prompt shows `!!`, the hint says the output stays on the screen, and a line under the output says it
+was not sent. The next request carries neither the command nor what it printed. Nothing else changes:
+the line runs through `$SHELL -c`, nothing asks, and the mode lasts one command. Backspace on the
+empty line removes the second `!` first. A paste cannot make a line private.
+
 ## Only a line a human typed
 
 Shell mode is reachable from one place, a key press in the input box, and nowhere else. Never argv

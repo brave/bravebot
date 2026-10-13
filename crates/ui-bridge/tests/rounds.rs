@@ -55,6 +55,9 @@ impl Drop for Scratch {
 
 /// A model service that asks for a listing until it has been given [`ROUNDS`] of them.
 ///
+/// The listing alternates between two spellings of the directory, because the same call three
+/// times in a row is held and put to a person (TURN-9).
+///
 /// The planner is what keeps a turn going, so a turn that runs long needs one that keeps asking.
 /// How many it has already been given is read off the conversation the request carries, so the
 /// service holds no state of its own and answers the same way however the rounds are spread
@@ -107,13 +110,14 @@ fn answer(mut stream: std::net::TcpStream) {
             .map(|messages| messages.iter().filter(|m| m["role"] == "tool").count())
             .unwrap_or(0);
         let enough = given >= ROUNDS;
+        let directory = if given.is_multiple_of(2) { "." } else { "./" };
         let delta = if enough {
             json!({"role": "assistant", "content": "done"})
         } else {
             json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "t1",
                 "type": "function",
                 "function": {"name": "list_files",
-                             "arguments": r#"{"directory":"."}"#}}]})
+                             "arguments": json!({"directory": directory}).to_string()}}]})
         };
         let finish = if enough { "stop" } else { "tool_calls" };
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",

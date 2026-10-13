@@ -5,8 +5,8 @@
 // itself. Nothing is paid for and nothing leaves the machine, and the website is the witness:
 // whether a request went out is read off the server it would have reached, not off the window.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:fetch` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:fetch` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'

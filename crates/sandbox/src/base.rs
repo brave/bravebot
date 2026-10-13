@@ -72,8 +72,9 @@ impl Prelude {
 
     /// The device a program discards output to, where this platform has one a profile can name.
     ///
-    /// `NUL` is not a path under any directory, so there is no row to write for it, and a
-    /// program opens it whatever it is granted.
+    /// `NUL` is not a path under any directory, so there is no row to write for it. A container
+    /// opens it only where the device's access list names ALL APPLICATION PACKAGES, which no
+    /// grant of this backend can add.
     fn null_device(self) -> Option<&'static str> {
         match self {
             Self::Linux | Self::MacOs => Some(THE_NULL_DEVICE),
@@ -254,16 +255,28 @@ pub fn base(
 /// two different directories.
 pub const STATE_DIRECTORY: &str = ".bravebot";
 
-/// Directories under the home directory that hold a credential on every unix platform, each
-/// refused with everything beneath it.
+/// The name of the directory under the home directory that holds the browser relay's socket and
+/// the secret a peer presents to it, so a program that reads the secret can drive the browser.
+///
+/// `bravebot-browser` links no workspace crate and so carries its own spelling of this name
+/// (`DIRECTORY_NAME` in its `paths` module), which a person can move with `BRAVEBOT_BROWSER_DIR`.
+/// The table refuses the default location.
+const BROWSER_DIRECTORY: &str = ".bravebot-browser";
+
+/// Locations under the home directory that hold a credential on every unix platform, each refused
+/// with everything beneath it.
 ///
 /// `~/.ssh` is here as a whole and [`SSH_READABLE`] lifts the three kinds of file in it that hold
 /// no secret. Token files that a program reads by name (`~/.config/gh`, `~/.git-credentials`,
-/// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are not here: they are what
-/// `gh`, `git`, `npm`, `cargo` and `pip` read to do what a person asked, and the network is where
-/// they could leave, which is decided by the plan.
-const CREDENTIAL_DIRECTORIES: &[&str] = &[
+/// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc` and the rest SANDBOX-12 names
+/// as read) are not here: they are what `gh`, `git`, `npm`, `cargo` and `pip` read to do what a
+/// person asked, and the network is where they could leave, which is decided by the plan.
+///
+/// Most histories are files rather than directories. No program a stage starts reads one, since a
+/// stage's standard input is never a terminal and so no shell or client it starts is interactive.
+pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     STATE_DIRECTORY,
+    BROWSER_DIRECTORY,
     ".ssh",
     ".aws",
     ".kube",
@@ -271,30 +284,137 @@ const CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".azure",
     ".config/gcloud",
     ".gnupg",
+    ".config/sops/age",
+    ".password-store",
+    ".bash_history",
+    ".zsh_history",
+    ".zsh_sessions",
+    ".bash_sessions",
+    ".local/share/fish/fish_history",
+    ".psql_history",
+    ".mysql_history",
+    ".node_repl_history",
+    ".python_history",
+    ".rediscli_history",
+    ".sqlite_history",
+    ".dbshell",
+    ".mongodb/mongosh/mongosh_repl_history",
+    ".claude",
+    ".claude.json",
+    ".codex",
+    ".gemini",
+    ".local/share/opencode",
+    ".config/github-copilot",
+    ".config/openconnect",
+    ".gitlab-runner",
+    ".pgadmin",
+    "Postman",
+];
+
+/// The same, where only Windows keeps them, under the home directory.
+///
+/// `gcloud` and `gpg` keep their directories under `%APPDATA%` there, which is
+/// `AppData\Roaming` unless the account's profile moves it. The browsers the other two tables name
+/// keep their profiles under `%LOCALAPPDATA%` (`AppData\Local`), apart from Firefox, which keeps
+/// them under `%APPDATA%`. The last six are the platform's own stores, which stand where the
+/// keychains and keyrings stand elsewhere: Credential Manager's files, the keys the data protection
+/// API encrypts with, the account's private keys, and the vault.
+pub(crate) const WINDOWS_CREDENTIAL_DIRECTORIES: &[&str] = &[
+    "AppData/Roaming/gcloud",
+    "AppData/Roaming/gnupg",
+    "AppData/Local/BraveSoftware",
+    "AppData/Local/Google/Chrome",
+    "AppData/Local/Chromium",
+    "AppData/Local/Microsoft/Edge",
+    "AppData/Roaming/Mozilla",
+    "AppData/Local/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Protect",
+    "AppData/Roaming/Microsoft/Crypto",
+    "AppData/Local/Microsoft/Vault",
+    "AppData/Roaming/Microsoft/Vault",
 ];
 
 /// The same, where only macOS keeps them, under the home directory.
-const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
+///
+/// A browser's channels keep separate directories, so `Google/Chrome` holds nothing of
+/// `Google/Chrome Beta`. JetBrains has no row here: its Toolbox puts the scripts that start each
+/// IDE in `Library/Application Support/JetBrains/Toolbox/scripts`, on the search path.
+pub(crate) const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
     "Library/Keychains",
     "Library/Application Support/BraveSoftware",
     "Library/Application Support/Google/Chrome",
     "Library/Application Support/Firefox",
     "Library/Cookies",
     "Library/Safari",
+    "Library/Application Support/Google/Chrome Beta",
+    "Library/Application Support/Google/Chrome Canary",
+    "Library/Application Support/Google/Chrome Dev",
+    "Library/Application Support/Chromium",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Microsoft Edge Beta",
+    "Library/Application Support/Microsoft Edge Dev",
+    "Library/Application Support/Microsoft Edge Canary",
+    "Library/Application Support/Arc",
+    "Library/Application Support/Vivaldi",
+    "Library/Messages",
+    "Library/Mail",
+    "Library/Thunderbird",
+    "Library/Application Support/Slack",
+    "Library/Application Support/discord",
+    "Library/Application Support/Signal",
+    "Library/Group Containers/2BUA8C4S2C.com.1password",
+    "Library/Application Support/Code",
+    "Library/Application Support/Code - Insiders",
+    "Library/Application Support/VSCodium",
+    "Library/Application Support/Cursor",
+    "Library/Application Support/Claude",
+    "Library/Application Support/Insomnia",
+    "Library/Application Support/Bruno",
+    "Library/Application Support/Postman",
+    "Library/DBeaverData",
+    "Library/Application Support/sops/age",
 ];
 
 /// The same, where only Linux keeps them, under the home directory.
-const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
+///
+/// `~/.var/app` is every Flatpak application's data, its browsers' profiles among them.
+pub(crate) const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".local/share/keyrings",
-    ".password-store",
     ".config/BraveSoftware",
     ".config/google-chrome",
     ".config/chromium",
     ".mozilla",
+    ".config/google-chrome-beta",
+    ".config/google-chrome-unstable",
+    ".config/microsoft-edge",
+    ".config/microsoft-edge-beta",
+    ".config/microsoft-edge-dev",
+    ".config/vivaldi",
+    "snap/firefox/common/.mozilla",
+    "snap/chromium",
+    "snap/brave",
+    ".var/app",
+    ".thunderbird",
+    ".local/share/kwalletd",
+    ".Xauthority",
+    ".config/Slack",
+    ".config/discord",
+    ".config/Signal",
+    ".config/1Password",
+    ".config/Code",
+    ".config/Code - Insiders",
+    ".config/VSCodium",
+    ".config/Cursor",
+    ".config/JetBrains",
+    ".config/Insomnia",
+    ".config/Bruno",
+    ".config/Postman",
+    ".local/share/DBeaverData",
 ];
 
 /// The machine-wide keychain directory on macOS.
-const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
+pub const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
 
 /// The one file in `~/Library/Keychains` that is read, under the home directory.
 ///
@@ -323,6 +443,33 @@ const SSH_READABLE: &[&str] = &[
     ".ssh/id_ed25519.pub",
     ".ssh/id_ed25519_sk.pub",
 ];
+
+/// Every row of the four tables, whatever platform keeps it.
+pub(crate) fn every_credential_directory() -> impl Iterator<Item = &'static &'static str> {
+    CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(MACOS_CREDENTIAL_DIRECTORIES)
+        .chain(LINUX_CREDENTIAL_DIRECTORIES)
+        .chain(WINDOWS_CREDENTIAL_DIRECTORIES)
+}
+
+/// The locations under `home` that hold credentials or the state directory, which a stage of a
+/// `run` command is refused on `prelude` (SANDBOX-12).
+///
+/// A Windows container cannot be refused a location inside a directory it is granted, so the
+/// caller checks the directories it would grant against this list instead.
+pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
+    let platform = match prelude {
+        Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
+        Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
+        Prelude::Windows => WINDOWS_CREDENTIAL_DIRECTORIES,
+    };
+    CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(platform)
+        .map(|row| under(home, row))
+        .collect()
+}
 
 /// The rows a stage of a `run` command gets before its plan is read.
 ///
@@ -358,13 +505,8 @@ pub fn run_base(
         policy = policy.deny_read(MACOS_SYSTEM_KEYCHAINS);
     }
     if let Some(home) = home {
-        let platform = match prelude {
-            Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
-            Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
-            Prelude::Windows => &[],
-        };
-        for row in CREDENTIAL_DIRECTORIES.iter().chain(platform) {
-            policy = policy.deny_read(under(home, row));
+        for location in credential_locations(prelude, home) {
+            policy = policy.deny_read(location);
         }
         for row in SSH_READABLE {
             policy = policy.allow_read(under(home, row));
@@ -476,12 +618,15 @@ mod tests {
     /// The regression it rejects: a run base that lists what a stage reaches, which refuses a
     /// script for starting a program the list never heard of, or one that reads the machine with
     /// no refusals, which hands the first program that asks a credential; or one whose table leaves out
-    /// the program's own state directory, where the gateway keys are. Spelled out here and
+    /// the program's own state directory, where the gateway keys are, or the browser relay's, where
+    /// the secret that drives the browser is, or a history, another agent's directory or another
+    /// application's data, which no stage needs. Spelled out here and
     /// not read from the tables, so a row dropped from them fails this.
     #[test]
     fn the_run_base_reads_the_machine_and_refuses_each_credential_location() {
         let expected_everywhere = [
             ".bravebot",
+            ".bravebot-browser",
             ".ssh",
             ".aws",
             ".kube",
@@ -489,6 +634,31 @@ mod tests {
             ".azure",
             ".config/gcloud",
             ".gnupg",
+            ".config/sops/age",
+            ".password-store",
+            ".bash_history",
+            ".zsh_history",
+            ".zsh_sessions",
+            ".bash_sessions",
+            ".local/share/fish/fish_history",
+            ".psql_history",
+            ".mysql_history",
+            ".node_repl_history",
+            ".python_history",
+            ".rediscli_history",
+            ".sqlite_history",
+            ".dbshell",
+            ".mongodb/mongosh/mongosh_repl_history",
+            ".claude",
+            ".claude.json",
+            ".codex",
+            ".gemini",
+            ".local/share/opencode",
+            ".config/github-copilot",
+            ".config/openconnect",
+            ".gitlab-runner",
+            ".pgadmin",
+            "Postman",
         ];
         let expected_on_macos = [
             "Library/Keychains",
@@ -497,14 +667,66 @@ mod tests {
             "Library/Application Support/Firefox",
             "Library/Cookies",
             "Library/Safari",
+            "Library/Application Support/Google/Chrome Beta",
+            "Library/Application Support/Google/Chrome Canary",
+            "Library/Application Support/Google/Chrome Dev",
+            "Library/Application Support/Chromium",
+            "Library/Application Support/Microsoft Edge",
+            "Library/Application Support/Microsoft Edge Beta",
+            "Library/Application Support/Microsoft Edge Dev",
+            "Library/Application Support/Microsoft Edge Canary",
+            "Library/Application Support/Arc",
+            "Library/Application Support/Vivaldi",
+            "Library/Messages",
+            "Library/Mail",
+            "Library/Thunderbird",
+            "Library/Application Support/Slack",
+            "Library/Application Support/discord",
+            "Library/Application Support/Signal",
+            "Library/Group Containers/2BUA8C4S2C.com.1password",
+            "Library/Application Support/Code",
+            "Library/Application Support/Code - Insiders",
+            "Library/Application Support/VSCodium",
+            "Library/Application Support/Cursor",
+            "Library/Application Support/Claude",
+            "Library/Application Support/Insomnia",
+            "Library/Application Support/Bruno",
+            "Library/Application Support/Postman",
+            "Library/DBeaverData",
+            "Library/Application Support/sops/age",
         ];
         let expected_on_linux = [
             ".local/share/keyrings",
-            ".password-store",
             ".config/BraveSoftware",
             ".config/google-chrome",
             ".config/chromium",
             ".mozilla",
+            ".config/google-chrome-beta",
+            ".config/google-chrome-unstable",
+            ".config/microsoft-edge",
+            ".config/microsoft-edge-beta",
+            ".config/microsoft-edge-dev",
+            ".config/vivaldi",
+            "snap/firefox/common/.mozilla",
+            "snap/chromium",
+            "snap/brave",
+            ".var/app",
+            ".thunderbird",
+            ".local/share/kwalletd",
+            ".Xauthority",
+            ".config/Slack",
+            ".config/discord",
+            ".config/Signal",
+            ".config/1Password",
+            ".config/Code",
+            ".config/Code - Insiders",
+            ".config/VSCodium",
+            ".config/Cursor",
+            ".config/JetBrains",
+            ".config/Insomnia",
+            ".config/Bruno",
+            ".config/Postman",
+            ".local/share/DBeaverData",
         ];
 
         for (prelude, own) in [
@@ -635,6 +857,124 @@ mod tests {
         }
     }
 
+    /// The `~/` paths in the code spans of the rows of the first table at or after `marker` in the
+    /// spec `name`, its header and separator left out, without the `~/`. A path holding a wildcard
+    /// is cut back to the directory above the first part that holds one, and a trailing `/` is
+    /// dropped.
+    fn home_paths_in_a_table(name: &str, marker: &str) -> Vec<String> {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let spec = std::fs::read_to_string(workspace.join(name))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let at = spec
+            .find(marker)
+            .unwrap_or_else(|| panic!("{name} no longer holds `{marker}`"));
+        let rows = spec[at..]
+            .lines()
+            .skip_while(|line| !line.starts_with('|'))
+            .take_while(|line| line.starts_with('|'))
+            .skip(2);
+
+        let mut paths = Vec::new();
+        for row in rows {
+            for code in row.split('`').skip(1).step_by(2) {
+                let Some(path) = code.strip_prefix("~/") else {
+                    continue;
+                };
+                let kept: Vec<&str> = path
+                    .split('/')
+                    .take_while(|part| !part.contains(['*', '?']))
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                paths.push(kept.join("/"));
+            }
+        }
+        paths
+    }
+
+    /// Whether `policy` holds `path` back: a refusal covers it and no row granted beneath that
+    /// refusal lifts it again.
+    fn holds_back(policy: &SandboxPolicy, path: &Path) -> bool {
+        policy.unreadable.iter().any(|refused| {
+            path.starts_with(refused)
+                && !policy
+                    .readable
+                    .iter()
+                    .any(|lift| lift.starts_with(refused) && path.starts_with(lift))
+        })
+    }
+
+    /// The catalog's stores at a path only Linux keeps them at: the desktop's secret stores and
+    /// display cookie, and applications that keep their data under `~/Library` on macOS instead.
+    /// Every other store the catalog names outside `~/Library` is at the same path on both.
+    const ONLY_LINUX_KEEPS_THERE: &[&str] = &[
+        ".local/share/keyrings",
+        ".local/share/kwalletd",
+        ".Xauthority",
+        ".config/Code",
+        ".config/JetBrains",
+        ".config/Insomnia",
+        ".config/Bruno",
+        ".config/Postman",
+        ".local/share/DBeaverData",
+    ];
+
+    /// A store the catalog lists that no row refuses and SANDBOX-12 does not name as read is a
+    /// store every stage under the mode `standard` reads and, with the network open, can send,
+    /// while the specs read as though it were held back. The regression it rejects is a row
+    /// missing from the table on a platform that keeps the store at that path, a path named as
+    /// read that the table refuses, or one named as read that the catalog lists nothing under.
+    /// Both lists are read from the specs, so a `~/` path added to either fails this until the
+    /// table and the other list agree with it.
+    #[test]
+    fn every_store_the_catalog_names_is_refused_or_read_on_purpose() {
+        let home = Path::new(A_HOME);
+        let catalog = home_paths_in_a_table(
+            "docs/specs/credential-protection.md",
+            "### Already on the machine, outside the working tree",
+        );
+        let read = home_paths_in_a_table("docs/specs/sandboxing.md", "| What reads it | Read |");
+        let refuses =
+            |prelude: Prelude, path: &str| holds_back(&a_run_base(prelude), &under(home, path));
+        let beneath =
+            |path: &str, list: &[&str]| list.iter().any(|row| Path::new(path).starts_with(row));
+        let read_rows: Vec<&str> = read.iter().map(String::as_str).collect();
+
+        for path in &catalog {
+            if beneath(path, &read_rows) {
+                for prelude in [Prelude::Linux, Prelude::MacOs] {
+                    assert!(
+                        !refuses(prelude, path),
+                        "~/{path} is named as read on purpose and the {prelude:?} run base \
+                         refuses it"
+                    );
+                }
+                continue;
+            }
+            let kept_on: &[Prelude] = if path.starts_with("Library/") {
+                &[Prelude::MacOs]
+            } else if beneath(path, ONLY_LINUX_KEEPS_THERE) {
+                &[Prelude::Linux]
+            } else {
+                &[Prelude::Linux, Prelude::MacOs]
+            };
+            for prelude in kept_on {
+                assert!(
+                    refuses(*prelude, path),
+                    "~/{path} is in the catalog, in no {prelude:?} row of the table and not named \
+                     as read on purpose"
+                );
+            }
+        }
+        for named in &read {
+            assert!(
+                catalog
+                    .iter()
+                    .any(|path| Path::new(path).starts_with(named)),
+                "~/{named} is named as read on purpose and the catalog lists nothing there"
+            );
+        }
+    }
+
     /// The regression it rejects: the run base widening a stage's writes past the temporary
     /// directory and the null device.
     #[test]
@@ -666,6 +1006,73 @@ mod tests {
 
         assert_eq!(run.readable, keyed.readable);
         assert!(run.unreadable.is_empty());
+    }
+
+    /// The credential table the Windows caller checks its grants against names the state
+    /// directory and the same shared rows the other platforms refuse, and the run base refuses
+    /// exactly the table on the platforms that refuse anything.
+    #[test]
+    fn the_credential_locations_are_the_rows_the_run_base_refuses() {
+        let home = Path::new(A_HOME);
+        let windows = credential_locations(Prelude::Windows, home);
+
+        for row in [
+            ".bravebot",
+            ".bravebot-browser",
+            ".ssh",
+            ".aws",
+            ".config/gcloud",
+            "AppData/Roaming/gcloud",
+            "AppData/Roaming/gnupg",
+        ] {
+            assert!(windows.contains(&under(home, row)), "{row}");
+        }
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let refused = a_run_base(prelude).unreadable;
+            for location in credential_locations(prelude, home) {
+                assert!(refused.contains(&location), "{prelude:?} {location:?}");
+            }
+        }
+    }
+
+    /// The regression it rejects: a Windows table holding only `gcloud` and `gpg` beyond the rows
+    /// every platform shares, which lets a person's yes grant `AppData\Local` or a browser
+    /// profile, or the files of Credential Manager, the data protection keys, the account's private
+    /// keys and the vault, to a container that cannot be refused a path inside a grant. The rows
+    /// are spelled out here and not read from the table, so a row dropped from it fails this.
+    #[test]
+    fn the_windows_credential_locations_name_the_browser_profiles_and_the_platforms_stores() {
+        let home = Path::new(A_HOME);
+        let shared: Vec<PathBuf> = CREDENTIAL_DIRECTORIES
+            .iter()
+            .map(|row| under(home, row))
+            .collect();
+        let mut only_windows: Vec<PathBuf> = credential_locations(Prelude::Windows, home)
+            .into_iter()
+            .filter(|location| !shared.contains(location))
+            .collect();
+        only_windows.sort();
+        let mut expected: Vec<PathBuf> = [
+            "AppData/Roaming/gcloud",
+            "AppData/Roaming/gnupg",
+            "AppData/Local/BraveSoftware",
+            "AppData/Local/Google/Chrome",
+            "AppData/Local/Chromium",
+            "AppData/Local/Microsoft/Edge",
+            "AppData/Roaming/Mozilla",
+            "AppData/Local/Microsoft/Credentials",
+            "AppData/Roaming/Microsoft/Credentials",
+            "AppData/Roaming/Microsoft/Protect",
+            "AppData/Roaming/Microsoft/Crypto",
+            "AppData/Local/Microsoft/Vault",
+            "AppData/Roaming/Microsoft/Vault",
+        ]
+        .iter()
+        .map(|row| under(home, row))
+        .collect();
+        expected.sort();
+
+        assert_eq!(only_windows, expected);
     }
 
     /// Without a home directory only the absolute refusal can apply, and the policy still means
@@ -710,7 +1117,10 @@ mod tests {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }
     }
 

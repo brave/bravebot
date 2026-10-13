@@ -34,6 +34,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         attribution: Default::default(),
         prompts: Default::default(),
         output_cap: None,
+        download_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
         agent: None,
         model: None,

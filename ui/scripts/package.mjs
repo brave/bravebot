@@ -10,7 +10,7 @@
 //
 // The bundle is named here, which is also the only way the menu bar gets the right word in
 // a release: AppKit reads it from `CFBundleName` before any of our code runs.
-// `scripts/name-dev-app.mjs` does the same job for `npm run dev` by renaming Electron's own
+// `scripts/name-dev-app.mjs` does the same job for `pnpm run dev` by renaming Electron's own
 // bundle; this does it properly, by building one of our own.
 //
 // Credentials: a bundle built from a development checkout carries a `bravebot-rpc` that reads
@@ -29,7 +29,7 @@ import { RELEASE_FUSES, setFuses } from './fuses.mjs'
 
 // Which Rust build profile the bundle carries, and where the two executables it copies in come
 // from. The default is the debug build, because that is what a development checkout has already
-// built and what every `npm run` path here produces. A bundle for anyone else carries the release
+// built and what every `pnpm run` path here produces. A bundle for anyone else carries the release
 // build, and nothing in a finished bundle says which one it got, so this is asked for rather than
 // guessed at: `--release`, as `make app-bundle` passes it, or `--executables=<dir>`, a directory
 // holding the pair under the names they ship as, which is how `make app-release` hands over the
@@ -64,10 +64,10 @@ export function buildProfile(argv) {
     name: release ? 'release' : 'debug',
     agent: `${dir}/bravebot-rpc${exe}`,
     files: `${dir}/bravebot-ui-files${exe}`,
-    // What to run when one of the two is missing. `npm run bridge` builds the debug pair and
+    // What to run when one of the two is missing. `pnpm run bridge` builds the debug pair and
     // only that pair, so naming it for a release profile sends whoever hit this around the
     // same loop again with the same result.
-    build: release ? 'make app-bundle' : 'npm run bridge',
+    build: release ? 'make app-bundle' : 'pnpm run bridge',
     fused: release,
   }
 }
@@ -174,7 +174,7 @@ async function main() {
   // A cross-packaged bundle carries executables built for it somewhere else, and this checkout's
   // own `target/` holds this host's. Without this the refusal below would be about a path under
   // `../target/` that nothing on this machine could ever put a Windows executable at, and would
-  // name `npm run bridge` as the way to fix it.
+  // name `pnpm run bridge` as the way to fix it.
   if (platform !== process.platform && profile.name !== 'prebuilt') {
     console.error(`a ${platform} bundle built on ${process.platform} takes --executables=<dir>: this checkout builds for ${process.platform}`)
     process.exit(1)

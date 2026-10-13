@@ -5,8 +5,8 @@
 // supplies. Nothing is paid for. The server is the witness: it writes its process id as it comes
 // up, so how many started, and whether one is still running, is read off the processes themselves.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:language-server` does first. Not for Windows: the server is a shell script.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:language-server` does first. Not for Windows: the server is a shell script.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync, realpathSync } from 'node:fs'

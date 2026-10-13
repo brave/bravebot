@@ -145,7 +145,7 @@ library does not change. Two rules preserve that, and reviewers should enforce t
 
 Honest limits. Two things could eventually want an upstream change, and neither blocks v1:
 
-- **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
+- **Structured `doctor` output.** The checks live in `crates/cli/src/doctor.rs`, in a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
 - **New approval types.** Command, fetch, language-server, plan, credential-exposure and MCP
@@ -747,7 +747,7 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 
 `run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply`,
 `manifest.reply`, `exposure.reply`, `mcp-server.reply`, `mcp-tools.reply`, `mcp-call.reply`,
-`mcp-move.reply` and `ask.reply` all require `session` and `request`, and
+`mcp-move.reply`, `host.reply` and `ask.reply` all require `session` and `request`, and
 must match the pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
 `remember: true` records a command grant. Output, vouch, fetch, server, manifest and
 exposure replies accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
@@ -825,7 +825,7 @@ was asked to be kept.
 The app will otherwise fail opaquely on a machine with no credentials, which is the first
 machine anyone will try it on.
 
-**v1 shells out.** The checks live in `crates/cli/src/main.rs`, a binary, so they cannot
+**v1 shells out.** The checks live in `crates/cli/src/doctor.rs`, in a binary, so they cannot
 be called as a library without an upstream change (§2.3). The bridge runs `bravebot doctor`,
 captures stdout and stderr, and returns their combined text:
 
@@ -858,6 +858,7 @@ version; `home` and `defaultModel` may be null. Sent as the
 | `no_such_request` | unknown or already-answered confirmation id, or a repeated `trust.reply` |
 | `turn_in_flight` | a turn is already running on that session |
 | `not_a_directory` | the path given to `session.new` is not a directory |
+| `not_allowed` | the local host does not offer this method, parameter or session to this client ([local host](#local-host)) |
 | `no_home` | `~/.bravebot` could not be located or created |
 | `config` | `Config::from_env` failed; `message` carries the detail |
 | `internal` | a bug; `message` is for a report, not for a user |
@@ -885,7 +886,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, vouches, summary }` | command approval |
+| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, confinement, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
@@ -901,6 +902,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
 | `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand }` | call a server's tool (SERVERS-7) |
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
+| `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -1288,7 +1290,10 @@ Still open:
 
 ## 0.9 desktop extensions
 
-- `vet.request` carries `request`, `origin`, `expects`, full `content`, `lines`, `picture` and
+- `run.request` stages carry `binary`, the file the step runs, and the request carries
+  `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
+  sentences }` as the agent worded them.
+- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
   is answered, and `content` is empty. `vet.reply` carries the session, request and
@@ -1388,6 +1393,11 @@ Still open:
   one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
   No part of a value and no text of the file is sent. `exposure.reply` carries the session,
   request and explicit decision, and its kind is distinct from every other reply's.
+- `host.request` carries `request` and `hosts`, each a host name or IP address a confined program
+  asked the session proxy for and the allowed-hosts list did not cover. `host.reply` carries the
+  session, request and explicit decision. A yes allows the hosts for the rest of the session and
+  writes nothing, so a reopened or new session asks again. It is refused without a card in
+  bypass mode, as in the terminal.
 - An approval covers the file for the session, as the agent keeps it. It is not written to the
   record, so a reopened or new session asks again.
 - A session's first turn starts the MCP servers its settings request, after the trust question,
@@ -1400,7 +1410,8 @@ Still open:
   server and `url` the address of a remote one; `program` is where a local server's program
   resolved, sent only where that is not its first word. `variables` holds `{ name, stored }`,
   and a stored value is never sent. `fetching` is the agent's lines about a runner that fetches
-  what it runs. `digest` is what an approval binds to.
+  what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
+  words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
   `arguments` (one line each) and `description`, which is the server's own text. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
@@ -1418,12 +1429,20 @@ Still open:
 - A manifest run is passed the session's rules, and the agent's runner does not read them.
 - `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
-  only through the command-line flag (MODE-5). It is accepted while a turn runs and changes the
-  next turn, not the running one (MODE-8).
+  only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
+  of that turn (MODE-8).
 - `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
   A mode is not written to the record and a fork does not take its parent's (MODE-10).
-- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run reads once and
-  keeps to its end.
+- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
+- `session.sandbox` takes `session` and `mode`, one of `strict` or `standard`, and answers
+  `{ sandboxMode }`. `off`, and any other word, is `bad_request`: a window has no line that shows
+  its programs are unconfined (SANDBOX-22). A mode looser than the managed file's `sandbox.mode` pin
+  is `bad_request` with a sentence naming the file. The choice applies from the session's next turn
+  or manifest run, and the one in flight keeps the mode it started in.
+- `session.new`, `session.open` and `session.fork` carry `sandboxMode`, the mode a turn would run
+  under now: the settings and the pin, and `standard` where the settings say `off`. A choice is not
+  written to the record and a resume or fork does not take it.
+- `turn.started` and `manifest.started` also carry `sandbox`, the mode the turn or run started in.
 
 ## Shared session view, version 1
 
@@ -1474,3 +1493,23 @@ within its session, across turns. Keep drafts and optimistic UI separate until a
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
 approval transitions, label preservation and limits. This is the Rust part of the first mobile
 block. The stdio TypeScript client for it is `packages/agent-client`, which answers the four supported question kinds; no native renderer is supplied yet.
+
+## Local host
+
+`bravebot-host` serves the methods below to one client at a time over an anonymous channel that it makes when it starts the client (see [HOST-1](../../docs/specs/local-host.md#HOST-1)). Its behaviour is specified in [local-host.md](../../docs/specs/local-host.md). The host answers a subset of the methods above, each with the parameters in `crates/ui-bridge/src/allowlist.rs` and no others, and refuses everything else with `not_allowed`.
+
+| Method | Parameters | Result |
+|---|---|---|
+| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
+| `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
+| `session.close` | `session` | `{ "state": "closing" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
+
+`instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
+
+A session has one controller, the connection that opened it or took it over, and `controlled` says whether that connection is the one being served. Another connection is refused with `not_allowed`, except that once the controller's connection has ended any later connection may close the session or take it over with `session.attach`. A connection that controls a session is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
+
+A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
+
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+

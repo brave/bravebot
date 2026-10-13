@@ -483,6 +483,9 @@ pub struct Returned {
     pub total: usize,
     /// The last lines rather than the first, because how a command went is at the end of it.
     pub from_the_end: bool,
+    /// The same lines as far as the agent kept them, for a key that expands the glimpse. Never
+    /// shorter than `lines`, and shorter than `total` where the cap on what is kept cut it.
+    pub whole: Vec<String>,
 }
 
 /// The command a result came from, and how it ended.
@@ -590,7 +593,8 @@ pub trait Reporter {
     /// Context may precede it, and a context read can fail before it is appended.
     fn prompt_recorded(&mut self, _at: usize) {}
 
-    /// Cumulative usage from completed requests. Each report replaces the previous total.
+    /// Cumulative usage from completed requests, the delegates' included as each of theirs
+    /// completes. Each report replaces the previous total.
     fn spent(&mut self, _spent: crate::outcome::Spent) {}
 
     /// The task list changed. Rows are already shaped for display and released.
@@ -980,6 +984,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "list_files" => t!(verb_list_files),
         "search" => t!(verb_search),
         "read_git" => t!(verb_read_git),
+        "repo_map" => t!(verb_repo_map),
         "lsp" => t!(verb_lsp),
         "write_file" => t!(verb_write_file),
         "edit_file" => t!(verb_edit_file),
@@ -990,11 +995,14 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         // have to remember which of the verbs meant that.
         "spawn_processor" => t!(verb_spawn_processor),
         "load_skill" => t!(verb_load_skill),
+        "load_tool" => t!(verb_load_tool),
         "ask_user" => t!(verb_ask_user),
+        "request_path" => t!(verb_request_path),
         "run" => t!(verb_run),
         "read_output" => t!(verb_read_output),
         "vet_content" => t!(verb_vet_content),
         "fetch_url" => t!(verb_fetch_url),
+        "download_url" => t!(verb_download_url),
         "job_output" => t!(verb_job_output),
         // Named for what it is rather than for what it does, exactly as a processor is: a person
         // watching a line go by should be able to see that the work moved somewhere else.

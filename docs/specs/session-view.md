@@ -10,6 +10,8 @@ governs:
   - crates/ui-bridge/src/turn.rs
   - crates/ui-bridge/src/wire.rs
   - crates/ui-bridge/src/manifest.rs
+  - crates/ui-bridge/src/control_link.rs
+  - crates/sandbox/src/inspection.rs
   - packages/agent-client/src/common/wire.ts
   - packages/agent-client/src/common/interface.ts
   - packages/agent-client/src/common/view.ts
@@ -22,7 +24,8 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
 that applies it over stdio. The view has no listener, native binding, recovery, or controller
 model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
-the bridge. A client that names no turn in a cancel stops whatever is running.
+the bridge, and RPCVIEW-8 states what the local channel they arrive on is. A client that names no
+turn in a cancel stops whatever is running.
 
 ## Clauses
 
@@ -74,9 +77,7 @@ eligibility share the emitter lock, so the next turn cannot publish ahead of the
 Closing a session detaches and removes its view; `detached` says nothing about worker termination,
 save success, or rollback. EOF retains the existing process-ending behavior.
 
-The bridge retains only current view metadata and the pending payload. Clients retain transcript
-rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation.
-Connection loss or a sequence gap ends the view; a client must not claim recovered history.
+The bridge retains only current view metadata and the pending payload. Clients retain transcript rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation on the stdio transports. Connection loss or a sequence gap ends the view; a client must not claim recovered history. The local host's `session.attach` ([HOST-11](local-host.md#HOST-11)) gives a client that takes a session over its current status with no rows and says the history is omitted.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
@@ -207,3 +208,36 @@ whatever is running instead. The result is `cancelled: true` or `false` as the b
 named, and `null` when none was.
 
 `verified-by: by-construction (packages/agent-client/test-fixtures/scenarios/cancel-names-the-target-on-screen.json, cancel-names-the-target-it-is-given.json, cancel-names-the-new-target-when-turn-numbers-go-back.json, cancel-while-a-send-is-unanswered-names-no-target.json and cancel-without-action-targets-names-no-target.json and send-with-a-target-that-is-not-a-count-is-refused.json run under four chunkings, and tests/real-rpc.test.ts drives a real bravebot-rpc through a delayed cancel for an earlier turn, a cancel after a rewind that numbers a turn again, and a cancel of the turn just sent)`
+
+<a id="RPCVIEW-8"></a>
+### RPCVIEW-8: the control channel has no name a tool could use
+
+On Unix, a program that speaks to the bridge, or that a host launches to speak for a person, is started over an anonymous socket pair that the launcher creates (`control_link::launch`; Node's child processes make the same kind of pair for the existing clients). The launched program receives one end as its standard input and output, and the launcher keeps the other and closes its own copy of the first. No socket path, port, token or file names the channel. A program running as the same user, such as an approved command, a hook, or a process either of them left running after its parent exited, therefore has nothing to connect to, and nothing here tells a client from a tool by its user, its parent or its directory, because none of those differ.
+
+The launcher takes the program and its arguments from the person's own configuration, never from a tool result, a workspace file or a program a tool can replace. A client that exits ends its channel, and a replacement is a new launch with a new pair chosen by the host. A program that was not launched this way cannot attach to a running host. `control_link::launch` is the Rust launcher for the persistent host, and its module is hidden from the crate's documentation. The Electron and TypeScript clients start the bridge through Node's child processes, which make the same kind of pair.
+
+The bridge starts hooks, the `run` tool, shell-mode commands, language servers, the AWS CLI and its probes with null, piped or file standard streams, so none hands a program it starts the channel. A descriptor of the channel that reached a tool would let it read what the person sends or put lines into what the person reads, and is a defect.
+
+Three limits belong to the launcher and the bridge. First, creating a socket pair is not one atomic step on every system: macOS marks the descriptors close-on-exec in a second step, so a process another thread starts in between inherits them and the bridge hands them on to its tools. The creation of a channel (`bravebot_sandbox::process::creating_a_channel`) and every start of a program by a crate the bridge links (`starting_a_program`) therefore take one gate, one at a time: a start creates the pipes of its own standard streams inside `spawn`, so two starts overlapping could leave one holding the other's pipe ends. The gate is held until the program has started, because the standard library offers no narrower point. It is not reentrant, and entering it again panics. The pipes the agent makes for a stage's standard streams are made under the same gate. A host that starts programs another way takes it too. A descriptor the process was started with and that is not close-on-exec, such as a socket a CI runner leaves open, reaches every program it starts. Descriptors made in two steps outside the gate, such as the TCP and TLS sockets to a model endpoint, are not covered: a program started in the window can inherit one, and because the non-dumpable mark does not survive `execve`, a tool holding a leaked descriptor can be inspected. Second, on Linux a pipe can be reopened by path through `/proc/<pid>/fd` by the same user and a socket cannot, so a launcher uses a socket pair, as the child processes of Node do. Third, on Linux a process of the same user can copy a descriptor out of the bridge with `pidfd_getfd`, or attach with `ptrace`, when the kernel's ptrace policy allows it, so each binary that speaks over its own standard input and output (`bravebot-rpc` and `bravebot-acp`) marks itself non-dumpable at startup (`inspection::refuse_same_user_inspection`) and says on standard error when that fails. The protection takes effect when `main` begins, so a process already positioned to act before that is outside the claim. A host that enables control of real sessions reads that outcome and treats a failure to set the mark on Linux as the channel not being safe. The mark also stops the developer who started the bridge from attaching `strace` or `gdb` to it and makes its `/proc/<pid>` entries belong to root; a debugger has to be started with the bridge, or run with `CAP_SYS_PTRACE`. A debugger on macOS, or a process with the same user's rights to read another process's memory by other means, is outside this clause. Windows is not covered. The `pidfd_getfd` attack counts only where it also works against a process of the same user that did not refuse it and that, like the bridge, is not a descendant of the attacker. Elsewhere the test says the attack was not exercised, and passes.
+
+`verified-by: bravebot_ui_bridge::control_boundary::a_program_a_hook_leaves_running_cannot_reach_the_channel`
+`verified-by: bravebot_ui_bridge::control_boundary::a_program_an_approved_command_leaves_running_cannot_reach_the_channel`
+`verified-by: bravebot_ui_bridge::control_boundary::the_channel_has_no_name_and_each_launch_gets_its_own`
+`verified-by: bravebot_ui_bridge::control_boundary::the_channel_ends_when_the_client_exits_and_a_replacement_gets_a_new_one`
+`verified-by: bravebot_ui_bridge::control_boundary::a_program_started_afterwards_inherits_no_part_of_the_channel`
+`verified-by: bravebot_ui_bridge::control_boundary::a_launch_waits_for_a_program_being_started`
+`verified-by: bravebot_ui_bridge::control_boundary::programs_started_while_channels_are_created_hold_no_socket`
+`verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
+`verified-by: bravebot_agent::spawn_gate::a_hook_waits_for_a_channel_being_created`
+`verified-by: bravebot_agent::spawn_gate::a_run_stage_waits_for_a_channel_being_created`
+`verified-by: bravebot_agent::spawn_gate::a_shell_mode_command_waits_for_a_channel_being_created`
+`verified-by: bravebot_sandbox::process::a_start_waits_for_a_channel_being_created`
+`verified-by: bravebot_bedrock::credentials::a_start_of_the_cli_waits_for_a_channel_being_created`
+`verified-by: bravebot_lsp::server::a_server_start_waits_for_a_channel_being_created`
+`verified-by: bravebot_sandbox::inspection::the_kernel_marks_the_process_non_dumpable`
+`verified-by: bravebot_ui_bridge::layering::every_binary_that_speaks_over_its_own_stdio_marks_itself_non_dumpable`
+`verified-by: bravebot_ui_bridge::layering::every_program_the_bridge_process_starts_goes_through_the_spawn_gate`
+`verified-by: bravebot_agent::spawn_gate::a_usability_stage_waits_for_a_channel_being_created`
+`verified-by: bravebot_agent::spawn_gate::the_login_probe_waits_for_a_channel_being_created`
+`verified-by: bravebot_ui_bridge::control_boundary::copying_nothing_out_of_the_bridge_proves_nothing_where_the_attack_never_worked`
+`verified-by: bravebot_sandbox::inspection::a_failed_remedy_is_said_with_its_error`

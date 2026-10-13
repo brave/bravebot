@@ -10,10 +10,10 @@ governs:
   - npm/tests/postinstall.test.mjs
   - install.sh
   - package.json
-  - package-lock.json
   - ui/package.json
-  - ui/package-lock.json
   - contrib/check-versions.py
+  - contrib/release-preflight.py
+  - contrib/check-pnpm-lockfiles.py
 documented-by: docs/website/docs/quickstart.md
 ---
 
@@ -67,7 +67,12 @@ nothing anywhere saying so.
 
 Choosing a version rewrites every file that states it, commits exactly those files under a
 message naming the version, and stops. It pushes nothing and tags nothing. Where any of those
-files is already modified, it refuses rather than committing work it did not write.
+files is already modified, it refuses rather than committing work it did not write. Before it
+changes anything it warns, and asks whether to go on, about open `release-blocking` issues,
+untranslated messages, and a peer advisory check that has not run in the last seven days. The
+date of the last run is the newest one recorded in a comment on issue #1901 by a person with
+write access, and the last commit to the vetted-advisories ledger where there is no such comment
+or it cannot be read. The warning says which of the two it used.
 
 **Why.** The files that state a version are only correct together, so a bump left uncommitted is
 one a lockfile can be dropped from, which is the disagreement [RELEASE-1](#RELEASE-1) exists to
@@ -76,7 +81,7 @@ adds a way to get it wrong without adding a decision. The review still happens: 
 read before it lands, and [RELEASE-4](#RELEASE-4) refuses to tag anything that is not on the
 trunk at the remote.
 
-`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified)`
+`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified; it runs contrib/release-preflight.py before changing any file, and make check-scripts runs that script's selftest, which pins each warning, that the advisory date comes from the issue comment when there is one and from the ledger otherwise, that a comment from someone without write access is ignored, that a declined prompt or no terminal without YES=1 stops the bump, and that YES=1 goes on)`
 
 <a id="RELEASE-3"></a>
 ### RELEASE-3: GitHub Actions does not publish a GitHub release
@@ -198,32 +203,36 @@ an unreviewed version on the registry.
 The publish job proves itself with a short-lived OIDC identity for this workflow in this
 repository, and sets no long-lived npm credential. The package it publishes carries provenance
 for that run. No dependency of this repository is installed or run in the job that holds the grant:
-the grant is declared on that job rather than for the whole workflow, and the lockfile install and
-the lint it feeds are a job of their own that holds only `contents: read`.
+the grant is declared on that job rather than for the whole workflow, and the lockfile lint is a
+job of its own that holds only `contents: read`.
 
 **Why.** A token in GitHub secrets is a credential that publishes if it leaks, and it outlives
 the run that needed it. OIDC binds the publish to this file on this repository, so a different
 workflow, or the same workflow in a fork, cannot use it. The grant is a permission to request a
 token, and every step of the job holding it can exercise that permission, so a job is the smallest
-boundary it has: the lint runs lockfile-lint and the packages beneath it by design, and in the
-publishing job those bytes could mint the credential and publish a tarball with this repository's
-provenance on it. Under `contents: read` the identical compromise reaches a green check and nothing
-else. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
+boundary it has: a dependency installed or run in the publishing job could mint the credential and
+publish a tarball with this repository's provenance on it, while under `contents: read` the
+identical compromise reaches a green check and nothing else. The wrapper declares no dependency
+today, so the job that lints holds the lower grant to keep that true of whatever is added. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
 than a job name, so which job publishes is this repository's to choose.
 
 `verified-by: by-construction (the publish job grants id-token: write, sets no NPM_TOKEN or NODE_AUTH_TOKEN, and calls npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant)`
 
 <a id="RELEASE-12"></a>
-### RELEASE-12: the npm lockfile is committed, CI installs from it, and it is linted
+### RELEASE-12: the published package has no dependency, and the pnpm lockfiles are committed and linted
 
-An install in CI uses the committed lockfile rather than resolving anew, and a lockfile that
-pulls from somewhere other than the npm registry, or over http, fails that job.
+The wrapper that is published declares no dependency, so installing it fetches nothing but the
+wrapper. The three JavaScript projects that are not published (`ui`, `docs/website` and
+`packages/agent-client`) each commit a `pnpm-lock.yaml`, CI installs from it with
+`--frozen-lockfile`, and a lockfile that pulls from anywhere but the npm registry, or from a
+GitHub repository other than the one its `package.json` names, fails that job.
 
-**Why.** The published tarball is this repository's wrapper scripts. A dependency that appeared
-only at install time would be bytes nobody reviewed, and the first place that would show up is
-the pipeline that publishes.
+**Why.** A dependency that appeared only at install time would be bytes nobody reviewed, and the
+first place that would show up is the pipeline that publishes. The lockfile is the whole of what
+an install fetches, so an entry edited to point at another host changes what runs in CI without
+touching `package.json`.
 
-`verified-by: by-construction (package-lock.json is in the tree, both workflows run npm ci --ignore-scripts, and lockfile-lint refuses hosts other than npm and non-https URLs)`
+`verified-by: by-construction (package.json declares no dependency and publish-npm.yml refuses a tag whose package.json declares one; each project's pnpm-lock.yaml is in the tree, CI installs with pnpm install --frozen-lockfile, and contrib/check-pnpm-lockfiles.py refuses a registry entry that is not an sha512 integrity alone, a git source the project's package.json does not name, and a link, file or URL version)`
 
 <a id="RELEASE-13"></a>
 ### RELEASE-13: each installer's release origin is composed from nothing
@@ -395,8 +404,7 @@ install may be refused.
 - **Two third party actions still run in the job holding the grant.** Checking out the tag and
   pointing npm at the registry is what that job is, so `actions/checkout` and `actions/setup-node`
   cannot be moved out of it. Both are pinned to a commit, which is the whole of what is held
-  against them, so what remains is whoever owns those two commits rather than whoever owns any of
-  the packages under `lockfile-lint`.
+  against them, so what remains is whoever owns those two commits.
 
 - **A second npm publish of the same version fails at the registry.** Dispatching before Jenkins
   has created the GitHub release fails the asset check instead. A delayed Jenkins run does not

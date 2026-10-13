@@ -143,11 +143,29 @@ A write, a run, a command's output and vouching for a file nobody vouched for ar
 without being put to anybody, and the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
-asked for is opened and vouched for without being put either. So are the three questions about a
+asked for is opened and vouched for without being put either, and so is a directory a
+`request_path` is granted for, which is opened for the file tools as `/add-dir` would open it
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
 server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
+Whether programs may reach a host the allowed-hosts list does not cover is not answered either: the
+host is a name a program chose and a yes would open the network to it for every later command, so
+`onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
+
+**A program's write is answered in advance.** Under the sandbox mode `standard` on macOS and Linux,
+the stages of the lead session's `run` are given at the start every path a `request_path` for
+writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does not fail on a
+sibling directory before the planner can ask. The refusals of that request hold: the home directory
+and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations, the
+places where a write becomes code that runs later (a shell's startup files, a per-user job, git's own
+configuration) and the person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which
+is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
+The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
+bypass does not approve a line that asks to start with no profile
+([SANDBOX-29](sandboxing.md#SANDBOX-29)), nor the start of a language server, which runs with no
+profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it.
 
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
@@ -204,6 +222,10 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
@@ -222,9 +244,11 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
@@ -317,25 +341,37 @@ session. That a mode stops prompts is not a reason to think they wanted this one
 `verified-by: bravebot_agent::permission_mode::no_mode_answers_for_a_line_the_person_typed`
 
 <a id="MODE-8"></a>
-### MODE-8: a turn keeps the mode it began with, and both halves read one value
+### MODE-8: a mode chosen while a turn runs applies to the rest of that turn
 
-The mode is read once, when the prompt is sent. The planner is told that mode and the prompts are
-answered against that mode, so the two cannot disagree about a turn in flight. A press while a turn
-runs describes the next turn.
+The mode is the session's, and a turn reads it again at each decision rather than once when the
+prompt is sent. A mode chosen while a turn runs governs every question and every refusal the turn
+reaches after that, and the planner is told when the change matters to it: a change into plan mode
+repeats the plan-mode instruction, and a change out of it says the refusal has ended. A change
+between the other modes says nothing, as MODE-1 says nothing of them. An answer is credited in the
+trail to the mode the question was put in, so a mode chosen over a prompt already on screen does not
+take credit for the answer given to it.
 
-**Why.** A write already on screen being reviewed must not have the question withdrawn from under
-the person answering it. Reading the mode in two places at two moments is how the planner comes to
-be told one thing while the prompts do another, and the half that would be wrong is the half nobody
-can see.
+**Why.** A person who presses the key while a turn runs is telling the session what they want from
+then on. A turn that kept the mode it began with would go on writing after the person pressed the
+key to stop it, and nothing on screen would say the key had not applied yet. A question already on
+screen is left as it is: the answer to it is the person's, and the mode they chose over it does not
+withdraw it.
 
+`verified-by: bravebot_agent::turn::a_mode_chosen_during_a_turn_applies_to_the_rest_of_it`
+`verified-by: bravebot_agent::turn::leaving_plan_mode_during_a_turn_lets_the_rest_of_it_write`
+`verified-by: bravebot_agent::turn::an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode`
+`verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
+`verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`
+`verified-by: bravebot_ui_bridge::permission_mode::planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn`
 
 <a id="MODE-9"></a>
 ### MODE-9: a delegate inherits the mode of the turn that spawned it
 
 Both halves: the prompts a delegate's work raises are answered against that mode, and the delegate's
-own planner is told it.
+own planner is told it. A delegate holds the same handle on the mode as the turn that spawned it, so
+a mode chosen while it runs applies to it too (MODE-8).
 
 **Why.** A delegate is the spawning turn's work done somewhere else, so a session that is planning
 must not write through one. The enforcing half holds because a delegate's prompts travel back to the
@@ -349,6 +385,7 @@ made and whose filled-in verdict is read anyway: every release inside it refused
 said.
 
 `verified-by: bravebot_agent::turn::a_delegate_inherits_the_mode_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work`
 `verified-by: bravebot_agent::turn::screening_reaches_a_delegate_of_an_unattended_run`
 `verified-by: bravebot_agent::turn::a_delegate_inherits_no_always_for_a_credential_write`
 
@@ -379,8 +416,8 @@ to be given on, so a request naming bypass is refused rather than read as anothe
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
 watch starts a turn that no request asked for, and that turn runs in the mode the window shows. A
-turn or a manifest run reads the mode once, when it is accepted, and keeps it to its end (MODE-8).
-A change while one runs is accepted and describes the next.
+turn or a manifest run holds the session's own handle on the mode, so a change while one runs is
+accepted and applies to the rest of it (MODE-8).
 
 **Why.** Refusing bypass rather than reading it as asking keeps a window from drawing a mode its
 session is not in. A fork opens asking rather than taking its parent's mode for MODE-10's reason: a
@@ -391,13 +428,13 @@ again.
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
-`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`
 
 <a id="MODE-12"></a>
 ### MODE-12: `/plan` sets plan mode, with the same standing as the key, and sends only its task
 
 `/plan` sets the session to plan mode from whichever mode it is in, and `/plan <task>` also starts a
-turn on the task. The turn reads plan mode when it begins (MODE-8), and what it is sent is the task
+turn on the task. The turn begins in plan mode, and what it is sent is the task
 after the word, never the typed line. Typed while a turn runs it waits for that turn to end. No command sets bypassing, which stays reachable only as MODE-5 says.
 
 **Why.** Plan mode only narrows what is permitted, so a typed word carries the same endorsement as

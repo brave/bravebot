@@ -12,8 +12,9 @@
 //! assignment in front of it, gets no scope: what would run with the credential is not what the
 //! plan says would run.
 
-use crate::base::{STATE_DIRECTORY, under};
+use crate::base::{STATE_DIRECTORY, every_credential_directory, under};
 use crate::policy::SandboxPolicy;
+use crate::signing::Place;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
 
@@ -28,20 +29,28 @@ pub enum Scope {
     Kubernetes,
     /// `~/.docker`.
     Docker,
+    /// The public key a signed commit is made with, and the agent that signs with the private
+    /// half. A stage carries it by its argv or by a `run` call's request. `/reach` does not name
+    /// it, so it is never remembered.
+    Signing,
 }
 
 /// What the planner may ask a `run` to add to every stage of one line: a name from a fixed menu of
-/// the credential scopes and the toolchain lists, and never a path.
+/// the credential scopes, the toolchain lists and the loopback interface, and never a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requested {
     Scope(Scope),
     Toolchain(Toolchain),
+    /// Listening on, and connecting to, a port of this machine's own loopback interface. It
+    /// reaches no other host and no file.
+    Loopback,
 }
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 10] = [
+    pub const MENU: [&'static str; 12] = [
         "remote",
+        "signing",
         "aws",
         "kubernetes",
         "docker",
@@ -51,13 +60,20 @@ impl Requested {
         "go",
         "maven",
         "gradle",
+        Self::LOOPBACK,
     ];
+
+    const LOOPBACK: &'static str = "loopback";
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
-        Scope::named(word)
-            .map(Self::Scope)
-            .or_else(|| Toolchain::named(word).map(Self::Toolchain))
+        match word {
+            "signing" => Some(Self::Scope(Scope::Signing)),
+            Self::LOOPBACK => Some(Self::Loopback),
+            _ => Scope::named(word)
+                .map(Self::Scope)
+                .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
+        }
     }
 
     /// The word the menu, the prompt and the trail know it by.
@@ -65,6 +81,7 @@ impl Requested {
         match self {
             Self::Scope(scope) => scope.name(),
             Self::Toolchain(toolchain) => toolchain.name(),
+            Self::Loopback => Self::LOOPBACK,
         }
     }
 }
@@ -77,10 +94,13 @@ impl Scope {
             Self::Aws => "aws",
             Self::Kubernetes => "kubernetes",
             Self::Docker => "docker",
+            Self::Signing => "signing",
         }
     }
 
-    /// The scope a person names by the word the prompt and the planner know it by.
+    /// The scope `/reach` and a remembered grant name by the word the prompt knows it by. `Signing`
+    /// is not named here: an argv that signs carries it and a `run` call may request it
+    /// ([`Requested::named`]), and neither is remembered.
     pub fn named(word: &str) -> Option<Self> {
         [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
             .into_iter()
@@ -101,6 +121,7 @@ impl Scope {
         let name = resolved.file_name()?.to_str()?;
         match name {
             "git" if a_remote_operation(args) => Some(Self::Remote),
+            "git" if a_signing_operation(args) => Some(Self::Signing),
             "gh" if a_command_of_ghs_own(args) => Some(Self::Remote),
             "aws" => Some(Self::Aws),
             "kubectl" if !names_an_option(args, "--kubeconfig") => Some(Self::Kubernetes),
@@ -109,23 +130,40 @@ impl Scope {
         }
     }
 
-    /// `policy` with this scope's rows added to it, for the account whose home is `home`.
+    /// `policy` with this scope's rows added to it, for the account whose home is `home`, and a
+    /// run at `place`, which decides the key a signed commit is made with ([`crate::signing`]).
     ///
     /// No row names a private key or `~/.ssh` as a directory: a push signs through the agent, and
     /// what ssh reads beside it is the configuration, the hosts it has verified, and the public
-    /// half of a key, which is how it names an identity to the agent. The one row written is
+    /// half of a key, which is how it names an identity to the agent. The public half is the one
+    /// at each default name and the one at each `IdentityFile` the person's `~/.ssh/config`
+    /// names, as [`named_public_keys`] judges them. The one row written is
     /// `known_hosts`, as a file, since a host ssh cannot record is a push that fails and an account
     /// without one gets one created rather than a directory nobody asked for. A tool's directory
     /// is read and never written, since what a write there leaves is a command the person's own
     /// shell runs later: a `credential_process`, an exec plugin, a `credsStore` helper.
-    pub fn grant(self, policy: SandboxPolicy, home: &Path) -> SandboxPolicy {
+    pub fn grant(self, policy: SandboxPolicy, home: &Path, place: &Place) -> SandboxPolicy {
         match self {
             Self::Remote => {
                 let mut policy = policy;
                 for row in REMOTE {
                     policy = policy.allow_read(under(home, row));
                 }
+                for public_key in named_public_keys(home) {
+                    policy = policy.allow_read(public_key);
+                }
+                // A pull that merges or rebases signs the commit it makes.
+                for key in crate::signing::lent(home, place) {
+                    policy = policy.allow_read(key);
+                }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
+            }
+            Self::Signing => {
+                let mut policy = policy;
+                for key in crate::signing::lent(home, place) {
+                    policy = policy.allow_read(key);
+                }
+                policy
             }
             Self::Aws | Self::Kubernetes | Self::Docker => {
                 let mut policy = policy;
@@ -281,7 +319,7 @@ pub fn environment_reach(
 pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String)]) -> Vec<Reach> {
     let programs: &[&str] = match scope {
         Scope::Remote => &["gh", "git"],
-        Scope::Aws | Scope::Kubernetes | Scope::Docker => &[""],
+        Scope::Aws | Scope::Kubernetes | Scope::Docker | Scope::Signing => &[""],
     };
     programs
         .iter()
@@ -344,7 +382,166 @@ fn rows(scope: Scope) -> &'static [&'static str] {
         Scope::Aws => &[".aws"],
         Scope::Kubernetes => &[".kube"],
         Scope::Docker => &[".docker"],
+        Scope::Signing => &[],
     }
+}
+
+/// The most `~/.ssh/config` bytes read for its `IdentityFile` lines.
+const SSH_CONFIG_LIMIT: u64 = 1 << 20;
+
+/// The most public keys the configuration may add to the remote scope.
+const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
+
+/// The public key files the person's own `~/.ssh/config` names with an `IdentityFile` line, as
+/// the sandbox will be told them.
+///
+/// ssh reads the `.pub` file beside an identity to choose which key the agent offers, so a key
+/// named in the configuration needs the same read as one at a default name. A line naming `<name>`
+/// adds `<name>.pub`, and one already ending in `.pub` adds that file. A name is absolute or
+/// begins `~/` or `%d/`; one with any other `%` or a `$` adds nothing, since ssh would read it
+/// from somewhere this cannot know, and neither does a line that is not valid UTF-8. A file is
+/// added only where it is a regular file, the file a
+/// link leads to is named `*.pub`, and that file is not in a credential location other than
+/// `~/.ssh`. No private key name is added, whatever the line says. Only the user's own file is
+/// read, and a repository's `core.sshCommand`, an `Include` and a `Match` are not followed. A file
+/// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
+/// fixed count of keys.
+fn named_public_keys(home: &Path) -> Vec<PathBuf> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(under(home, ".ssh/config")) else {
+        return Vec::new();
+    };
+    let mut configuration = Vec::new();
+    if file
+        .take(SSH_CONFIG_LIMIT)
+        .read_to_end(&mut configuration)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let mut keys: Vec<PathBuf> = Vec::new();
+    for line in configuration.split(|byte| *byte == b'\n') {
+        // A lossy decode would name a different file than ssh opens.
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some(named) = identity_file(line) else {
+            continue;
+        };
+        let Some(path) = judged_public_key(&named, home) else {
+            continue;
+        };
+        if already_read(Scope::Remote, &path, home) || keys.contains(&path) {
+            continue;
+        }
+        keys.push(path);
+        if keys.len() == NAMED_PUBLIC_KEYS_LIMIT {
+            break;
+        }
+    }
+    keys
+}
+
+/// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
+/// ssh's default names and the ones its configuration names, each judged as the remote scope
+/// judges one, so a key listed here is a key a stage with that scope reads.
+pub fn candidate_public_keys(home: &Path) -> Vec<PathBuf> {
+    let mut keys: Vec<PathBuf> = Vec::new();
+    for row in REMOTE.iter().filter(|row| row.ends_with(".pub")) {
+        if let Some(path) = judged_public_key(&under(home, row), home)
+            && !keys.contains(&path)
+        {
+            keys.push(path);
+        }
+    }
+    for path in named_public_keys(home) {
+        if !keys.contains(&path) {
+            keys.push(path);
+        }
+    }
+    keys
+}
+
+/// The path an `IdentityFile` line names, as a public key file's name, or `None` for any other
+/// line or one that does not spell an absolute path.
+fn identity_file(line: &str) -> Option<PathBuf> {
+    let line = line.trim_start();
+    let keyword = line.get(.."IdentityFile".len())?;
+    if !keyword.eq_ignore_ascii_case("IdentityFile") {
+        return None;
+    }
+    let rest = &line["IdentityFile".len()..];
+    // ssh takes `Keyword value` and `Keyword=value`, and a separator is required.
+    let rest = match rest.chars().next()? {
+        '=' => &rest[1..],
+        separator if separator.is_whitespace() => rest.trim_start().trim_start_matches('='),
+        _ => return None,
+    };
+    let rest = rest.trim_start();
+    let value = match rest.strip_prefix('"') {
+        Some(quoted) => quoted.split('"').next()?,
+        None => rest.split_whitespace().next()?,
+    };
+    if value.contains('$') || value.contains('\\') {
+        return None;
+    }
+    let (home, beneath) = match value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("%d/"))
+    {
+        Some(beneath) => (true, beneath),
+        None => (false, value),
+    };
+    if beneath.contains('%') {
+        return None;
+    }
+    public_name(if home {
+        Path::new("~").join(beneath)
+    } else {
+        PathBuf::from(beneath)
+    })
+}
+
+/// `path` with `.pub` on the end of its name, unless the name already ends in it.
+fn public_name(path: PathBuf) -> Option<PathBuf> {
+    if path.to_str()?.ends_with(".pub") {
+        return Some(path);
+    }
+    let mut name = path.into_os_string();
+    name.push(".pub");
+    Some(PathBuf::from(name))
+}
+
+/// A public key file a configuration named, as the sandbox will be told it, or `None` where it is
+/// refused.
+pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
+    let spelled = match named.strip_prefix("~") {
+        Ok(beneath) => home.join(beneath),
+        Err(_) => named.to_path_buf(),
+    };
+    if !spelled.is_absolute()
+        || spelled
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return None;
+    }
+    // Where the name is a link, what it leads to is what ssh opens, and that is judged.
+    let resolved = std::fs::canonicalize(&spelled).ok()?;
+    let a_public_key = resolved.extension().is_some_and(|ending| ending == "pub")
+        && std::fs::metadata(&resolved).is_ok_and(|held| held.is_file());
+    (a_public_key && !in_another_credential_location(&resolved, home)).then_some(resolved)
+}
+
+/// Whether `resolved`, already resolved, is in a credential location other than `~/.ssh`.
+pub(crate) fn in_another_credential_location(resolved: &Path, home: &Path) -> bool {
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    [home, real_home.as_path()].iter().any(|home| {
+        every_credential_directory()
+            .filter(|row| **row != ".ssh")
+            .any(|row| resolved.starts_with(under(home, row)))
+    })
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -421,6 +618,60 @@ fn a_remote_operation(args: &[String]) -> bool {
         _ => return false,
     };
     rest.all(|argument| !names_a_program(argument, short))
+}
+
+/// The `git` operations that write a commit or a tag, and so sign it where the person's
+/// configuration says to.
+const SIGNING_OPERATIONS: [&str; 7] = [
+    "commit",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "revert",
+    "am",
+    "tag",
+];
+
+/// Whether `args`, the argv after `git`, is an operation that signs what it writes and names no
+/// program of its own.
+///
+/// Read as [`a_remote_operation`] reads an argv: `-C <directory>` is the one option in front of the
+/// operation, which is matched exactly. After it, a long option is refused where it is any
+/// abbreviation of `--exec` or `--strategy`, since the first runs a command between commits and the
+/// second `git-merge-<name>` from the search path, and so is a short one that spells either for the
+/// operation: `-x` and `-s` for `rebase`, `-s` for `merge`. Unlike a remote operation the argv holds
+/// free text, a commit message with `::` in it, so an address is not read.
+fn a_signing_operation(args: &[String]) -> bool {
+    let mut rest = args.iter().map(String::as_str);
+    let operation = loop {
+        match rest.next() {
+            Some("-C") => {
+                if rest.next().is_none() {
+                    return false;
+                }
+            }
+            Some(operation) => break operation,
+            None => return false,
+        }
+    };
+    let short: &[char] = match operation {
+        "rebase" => &['x', 's'],
+        "merge" => &['s'],
+        _ if SIGNING_OPERATIONS.contains(&operation) => &[],
+        _ => return false,
+    };
+    rest.all(|argument| {
+        if let Some(long) = argument.strip_prefix("--") {
+            let name = long.split('=').next().unwrap_or(long);
+            return name.is_empty()
+                || !["exec", "strategy"]
+                    .iter()
+                    .any(|option| option.starts_with(name));
+        }
+        argument
+            .strip_prefix('-')
+            .is_none_or(|cluster| !cluster.chars().any(|flag| short.contains(&flag)))
+    })
 }
 
 /// Whether one argument after the operation names a program for `git` to run.
@@ -507,6 +758,139 @@ fn names_an_option(args: &[String], option: &str) -> bool {
     })
 }
 
+/// The host and the owner an ssh address names: the account or organisation whose name is the
+/// first part of the repository's path. A key the person's `git.identities` names is chosen by
+/// these two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Address {
+    pub host: String,
+    pub owner: String,
+}
+
+/// The ssh address the argv of a `git` stage names, read from the argv alone, or `None`.
+///
+/// `args` is the argv after `git`. An argument after the operation that does not start with `-` is
+/// an address where it is written `ssh://[user@]host[:port]/owner/...`, with `git+ssh://` and
+/// `ssh+git://` read the same way, or `user@host:owner/...` with no `/` before the first `:`. A
+/// scp-like address is read only with a user in front, so that a refspec such as
+/// `HEAD:refs/heads/main` is not taken for one. `None` where no argument is an address, which is
+/// the case for a remote given by name such as `origin`: its URL is in the repository's
+/// configuration, which is workspace content and is not read. `None` also where two arguments name
+/// different addresses.
+pub fn ssh_address(args: &[String]) -> Option<Address> {
+    let mut rest = args.iter().map(String::as_str);
+    // Past `-C <directory>` and the operation word.
+    while let "-C" = rest.next()? {
+        rest.next()?;
+    }
+    let mut found: Option<Address> = None;
+    for address in rest
+        .filter(|argument| !argument.starts_with('-'))
+        .filter_map(address_in)
+    {
+        match &found {
+            Some(held) if !held.same_as(&address) => return None,
+            Some(_) => {}
+            None => found = Some(address),
+        }
+    }
+    found
+}
+
+impl Address {
+    /// The address `host` and `owner` spell, or `None` where either holds anything but ASCII
+    /// letters, digits, `.` and `-`, and `_` in the owner, or is empty. A `git.identities` entry's
+    /// name and an address in the argv are read by this one rule, so that an entry the settings
+    /// accept is one an argv can match.
+    pub fn spelled(host: &str, owner: &str) -> Option<Address> {
+        let host_spelled = !host.is_empty()
+            && host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
+        let owner_spelled = !owner.is_empty()
+            && owner
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+        (host_spelled && owner_spelled).then(|| Address {
+            host: host.to_string(),
+            owner: owner.to_string(),
+        })
+    }
+
+    /// Whether two addresses name the same host and owner. Both are compared without regard to
+    /// ASCII case, as a host name and a GitHub account are.
+    pub fn same_as(&self, other: &Address) -> bool {
+        self.host.eq_ignore_ascii_case(&other.host) && self.owner.eq_ignore_ascii_case(&other.owner)
+    }
+}
+
+/// The schemes of an address git reaches over ssh.
+const SSH_SCHEMES: [&str; 3] = ["ssh://", "git+ssh://", "ssh+git://"];
+
+/// The address one argument spells, or `None`.
+fn address_in(argument: &str) -> Option<Address> {
+    let (host, path) = match SSH_SCHEMES
+        .iter()
+        .find_map(|scheme| argument.strip_prefix(scheme))
+    {
+        Some(rest) => {
+            let (authority, path) = rest.split_once('/')?;
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            let host = match host.split_once(':') {
+                Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => host,
+                Some(_) => return None,
+                None => host,
+            };
+            (host, path)
+        }
+        None => {
+            if argument.contains("://") {
+                return None;
+            }
+            let (before, path) = argument.split_once(':')?;
+            let (user, host) = before.rsplit_once('@')?;
+            if user.is_empty() || before.contains('/') {
+                return None;
+            }
+            (host, path.strip_prefix('/').unwrap_or(path))
+        }
+    };
+    let (owner, repository) = path.split_once('/')?;
+    Address::spelled(host, owner).filter(|_| !repository.is_empty())
+}
+
+/// The public key file a `git.identities` entry names, as the sandbox will be told it, or `None`
+/// where it is refused.
+///
+/// The value is read as an `IdentityFile` line's is ([`named_public_keys`]): absolute or beginning
+/// `~/`, with `.pub` added to a name that does not end in it, so an entry naming a private key
+/// reads the public file beside it and never the key. The file must be a regular file named
+/// `*.pub` once a link is followed and outside every credential location other than `~/.ssh`.
+pub fn identity_key(written: &str, home: &Path) -> Option<PathBuf> {
+    let named = PathBuf::from(written);
+    if !(written.starts_with("~/") || named.is_absolute()) {
+        return None;
+    }
+    judged_public_key(&public_name(named)?, home)
+}
+
+/// The `GIT_SSH_COMMAND` that has ssh offer the host `key` first, and after it only the keys an
+/// `IdentityFile` line of the person's ssh configuration names, or `None` where the key's path
+/// cannot be written so that ssh opens that file.
+///
+/// git hands the value to a shell, so the path is quoted, and a path holding a `'` is refused
+/// rather than escaped. ssh expands `%` and `${` in a key's name, so a path holding `%` or `$` is
+/// refused too, as an `IdentityFile` line holding one is, and so is one that is not valid UTF-8.
+pub fn ssh_command(key: &Path) -> Option<String> {
+    let key = crate::rules::without_verbatim_prefix(key.to_path_buf());
+    let key = key
+        .to_str()
+        .filter(|text| !text.contains(['\'', '%', '$']))?;
+    Some(format!("ssh -i '{key}' -o IdentitiesOnly=yes"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,7 +910,9 @@ mod tests {
     /// lookup would accept and so lend a credential the planner did not name.
     #[test]
     fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
-        for word in ["root", "Remote", "", " aws", "aws ", "all", "*", "ssh"] {
+        for word in [
+            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh",
+        ] {
             assert_eq!(Requested::named(word), None, "{word:?} named a request");
         }
         for word in Requested::MENU {
@@ -535,12 +921,14 @@ mod tests {
         }
     }
 
-    /// SANDBOX-26: the menu is every scope and every toolchain, so a name the prompt offers cannot
-    /// fail to parse and a scope cannot exist that the planner has no word for.
+    /// SANDBOX-26: the menu is every scope, every toolchain and the loopback interface, so a name
+    /// the prompt offers cannot fail to parse and a scope cannot exist that the planner has no word
+    /// for.
     #[test]
     fn the_menu_is_every_scope_and_every_toolchain() {
         let scopes = EVERY_SCOPE.map(Scope::name);
         assert!(scopes.iter().all(|name| Requested::MENU.contains(name)));
+        assert!(Requested::MENU.contains(&Scope::Signing.name()));
         for toolchain in [
             Toolchain::Cargo,
             Toolchain::Node,
@@ -551,7 +939,8 @@ mod tests {
         ] {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
-        assert_eq!(Requested::MENU.len(), scopes.len() + 6);
+        assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";
@@ -584,7 +973,11 @@ mod tests {
     }
 
     fn a_scope(scope: Scope) -> SandboxPolicy {
-        scope.grant(SandboxPolicy::strict(), Path::new(A_HOME))
+        scope.grant(
+            SandboxPolicy::strict(),
+            Path::new(A_HOME),
+            &Place::default(),
+        )
     }
 
     fn granted_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
@@ -641,14 +1034,14 @@ mod tests {
     }
 
     /// The scope follows the operation rather than the first word of the argv. One keyed on
-    /// `git` alone hands `~/.git-credentials` to a `git status`, a `git commit` running a
-    /// repository's own hooks, and an alias whose expansion a configuration file decides.
+    /// `git` alone hands `~/.git-credentials` to a `git status`, a `git submodule update` and an
+    /// alias whose expansion a configuration file decides. A `git commit` is not among them for the
+    /// remote scope: it signs, and what it is lent for that is the signing scope.
     #[test]
     fn a_git_operation_that_talks_to_no_remote_carries_none() {
         for line in [
             "",
             "status",
-            "commit -m a-message",
             "log",
             "submodule update --init",
             "remote update",
@@ -660,6 +1053,7 @@ mod tests {
         ] {
             assert_eq!(of(GIT, line), None, "git {line}");
         }
+        assert_ne!(of(GIT, "commit -m a-message"), Some(Scope::Remote));
     }
 
     /// A first word `gh` has no command for runs an alias or an extension, a program a
@@ -996,6 +1390,241 @@ mod tests {
         }
     }
 
+    /// A home on disk with `~/.ssh/config` holding `configuration`, and the files under it that
+    /// `files` names (each with a body that is not read).
+    #[cfg(unix)]
+    fn a_home_with(name: &str, configuration: &str, files: &[&str]) -> PathBuf {
+        let home = scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        for file in files {
+            let path = home.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "a key").unwrap();
+        }
+        std::fs::write(home.join(".ssh/config"), configuration).unwrap();
+        std::fs::canonicalize(home).unwrap()
+    }
+
+    /// What the remote scope reads for `home` beyond its fixed rows.
+    #[cfg(unix)]
+    fn read_for_the_configuration(home: &Path) -> Vec<PathBuf> {
+        let fixed: Vec<PathBuf> = REMOTE.iter().map(|row| under(home, row)).collect();
+        Scope::Remote
+            .grant(SandboxPolicy::strict(), home, &Place::default())
+            .readable
+            .into_iter()
+            .filter(|row| !fixed.contains(row))
+            .collect()
+    }
+
+    /// `IdentityFile ~/.ssh/work` makes ssh read `work.pub` to choose the key the agent offers. A
+    /// push by a key at a name ssh was told, with `IdentitiesOnly yes`, fails without that read.
+    /// The keyword is case-insensitive, the value may follow `=`, and `%d` is the home.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_in_the_ssh_configuration_adds_its_public_key() {
+        let home = a_home_with(
+            "identity-files-named",
+            "Host github.com\n  User git\n  IdentityFile ~/.ssh/work\n  identityfile=~/.ssh/other.pub\n\
+             IdentityFile \"%d/.ssh/quoted\"\nIdentitiesOnly yes\n",
+            &[
+                ".ssh/work",
+                ".ssh/work.pub",
+                ".ssh/other.pub",
+                ".ssh/quoted",
+                ".ssh/quoted.pub",
+            ],
+        );
+        let mut read = read_for_the_configuration(&home);
+        read.sort();
+        assert_eq!(
+            read,
+            [
+                home.join(".ssh/other.pub"),
+                home.join(".ssh/quoted.pub"),
+                home.join(".ssh/work.pub"),
+            ]
+        );
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
+        for private in [".ssh/work", ".ssh/quoted", ".ssh"] {
+            assert!(
+                !granted_paths(&policy).contains(&home.join(private)),
+                "the remote scope reads {private}"
+            );
+        }
+        assert!(
+            policy
+                .writable
+                .iter()
+                .all(|row| row.path == home.join(".ssh/known_hosts"))
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The keys a person can be asked about are the ones at ssh's default names and the ones the
+    /// configuration names, each once. Rejects a list that holds only the configuration's, which
+    /// leaves out `id_ed25519.pub`, the key ssh offers first, or one that lists a default twice
+    /// when the configuration also names it.
+    #[test]
+    #[cfg(unix)]
+    fn candidate_keys_are_the_default_names_and_the_named_ones_once_each() {
+        let home = a_home_with(
+            "candidate-keys",
+            "IdentityFile ~/.ssh/work\nIdentityFile ~/.ssh/id_ed25519\nIdentityFile ~/.ssh/missing\n",
+            &[".ssh/id_ed25519.pub", ".ssh/work.pub", ".ssh/unnamed.pub"],
+        );
+
+        assert_eq!(
+            candidate_public_keys(&home),
+            [home.join(".ssh/id_ed25519.pub"), home.join(".ssh/work.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line adds a public key and nothing else: not a name with no `.pub` file, not a private
+    /// key behind a `.pub` link, not a file in another credential location, not a directory, and
+    /// not a path whose spelling ssh resolves somewhere this cannot know.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_that_is_not_a_public_key_adds_nothing() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-files-refused",
+            "IdentityFile ~/.ssh/missing\n\
+             IdentityFile ~/.ssh/leak.pub\n\
+             IdentityFile ~/.ssh/aws.pub\n\
+             IdentityFile ~/.ssh/state.pub\n\
+             IdentityFile ~/.ssh/a-directory.pub\n\
+             IdentityFile ~/.ssh/../.aws/creds.pub\n\
+             IdentityFile ~/.aws/creds\n\
+             IdentityFile ~/.bravebot/gateway\n\
+             IdentityFile relative.pub\n\
+             IdentityFile ~/.ssh/%h.pub\n\
+             IdentityFile $HOME/.ssh/home.pub\n\
+             IdentityFileOther ~/.ssh/other.pub\n\
+             IdentityFile\n\
+             # IdentityFile ~/.ssh/commented.pub\n",
+            &[
+                ".ssh/id_leaked",
+                ".aws/creds.pub",
+                ".bravebot/gateway.pub",
+                ".ssh/home.pub",
+                ".ssh/other.pub",
+                ".ssh/commented.pub",
+                "relative.pub",
+            ],
+        );
+        symlink(home.join(".ssh/id_leaked"), home.join(".ssh/leak.pub")).unwrap();
+        symlink(home.join(".aws/creds.pub"), home.join(".ssh/aws.pub")).unwrap();
+        symlink(
+            home.join(".bravebot/gateway.pub"),
+            home.join(".ssh/state.pub"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".ssh/a-directory.pub")).unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A link is judged by where it leads: the row is the file ssh opens, and a link out of
+    /// `~/.ssh` to a public key somewhere else is that file and nothing around it.
+    #[test]
+    #[cfg(unix)]
+    fn a_named_public_key_behind_a_link_is_read_where_it_leads() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-files-linked",
+            "IdentityFile ~/.ssh/linked\n",
+            &["keys/real.pub", "keys/beside-it"],
+        );
+        symlink(home.join("keys/real.pub"), home.join(".ssh/linked.pub")).unwrap();
+        assert_eq!(
+            read_for_the_configuration(&home),
+            [home.join("keys/real.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line holding bytes that are not UTF-8 is skipped whole. A lossy decode would spell its
+    /// name with U+FFFD and grant the file of that spelling, which ssh never opens. The lines
+    /// either side of it are still read.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read() {
+        let home = a_home_with(
+            "identity-files-not-text",
+            "",
+            &[
+                ".ssh/before.pub",
+                ".ssh/tool-\u{FFFD}.pub",
+                ".ssh/after.pub",
+            ],
+        );
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/after\n",
+        )
+        .unwrap();
+        let mut read = read_for_the_configuration(&home);
+        read.sort();
+        assert_eq!(
+            read,
+            [home.join(".ssh/after.pub"), home.join(".ssh/before.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and neither is granted.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The configuration is the person's, read to a fixed length and for a fixed count of keys,
+    /// and a home without one reads only the fixed rows. Neither the aws, kubernetes nor docker
+    /// scope reads it.
+    #[test]
+    #[cfg(unix)]
+    fn the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone() {
+        let names: Vec<String> = (0..40)
+            .map(|number| format!(".ssh/key-{number}.pub"))
+            .collect();
+        let files: Vec<&str> = names.iter().map(String::as_str).collect();
+        let configuration: String = (0..40)
+            .map(|number| format!("IdentityFile ~/.ssh/key-{number}.pub\n"))
+            .collect();
+        let home = a_home_with("identity-files-counted", &configuration, &files);
+        assert_eq!(
+            read_for_the_configuration(&home).len(),
+            NAMED_PUBLIC_KEYS_LIMIT
+        );
+        for scope in [Scope::Aws, Scope::Kubernetes, Scope::Docker] {
+            let policy = scope.grant(SandboxPolicy::strict(), &home, &Place::default());
+            assert!(!reaches(
+                &policy,
+                home.join(".ssh/key-0.pub").to_str().unwrap()
+            ));
+        }
+        std::fs::remove_file(home.join(".ssh/config")).unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     /// A scope is added to the base and to whatever list the stage brings, so what those granted
     /// has to reach the backend as it was.
     #[test]
@@ -1008,7 +1637,7 @@ mod tests {
         );
 
         for scope in EVERY_SCOPE {
-            let policy = scope.grant(base.clone(), Path::new(A_HOME));
+            let policy = scope.grant(base.clone(), Path::new(A_HOME), &Place::default());
             assert!(policy.readable.starts_with(&base.readable), "{scope:?}");
             assert!(policy.writable.starts_with(&base.writable), "{scope:?}");
             assert_eq!(policy.allow_network, base.allow_network, "{scope:?}");
@@ -1498,6 +2127,356 @@ mod tests {
                 variable: "XDG_CONFIG_HOME",
                 path: PathBuf::from("/home/a-person/xdg/gh")
             }]
+        );
+    }
+
+    /// SANDBOX-16: an operation that writes a signed commit or tag carries the signing scope, wherever
+    /// the repository it runs in is, and a commit message holding `::` or an address is only text.
+    #[test]
+    fn an_operation_that_signs_carries_the_signing_scope() {
+        for line in [
+            "commit -m message",
+            "commit --amend --no-edit",
+            "commit -m fix::the-thing",
+            "commit -m see:https://example.com/a",
+            "-C ../other commit -m message",
+            "rebase main",
+            "rebase --continue",
+            "rebase -i HEAD~3",
+            "rebase --onto main a b",
+            "merge feature",
+            "merge --no-ff feature",
+            "cherry-pick abc123",
+            "cherry-pick -s abc123",
+            "revert abc123",
+            "am patch.mbox",
+            "tag -s v1",
+        ] {
+            assert_eq!(of(GIT, line), Some(Scope::Signing), "git {line}");
+        }
+        assert_eq!(Scope::Signing.name(), "signing");
+    }
+
+    /// An option that makes git run a program from the argv, or a configuration written in front of
+    /// the operation, leaves the stage with no scope: the signature is then made on the strength of
+    /// a command the plan chose.
+    #[test]
+    fn a_signing_operation_that_names_a_program_carries_nothing() {
+        for line in [
+            "-c core.sshCommand=x commit -m message",
+            "-c gpg.ssh.program=x commit -m message",
+            "--exec-path=/x commit -m message",
+            "--config-env=a=B commit -m message",
+            "rebase --exec make main",
+            "rebase --exe=make main",
+            "rebase --e=make main",
+            "rebase -x make main",
+            "rebase -ix make main",
+            "rebase --strategy=x main",
+            "rebase --str=x main",
+            "rebase -s x main",
+            "merge --strategy=x feature",
+            "merge --s=x feature",
+            "merge -s x feature",
+            "commit --exec=x",
+            "cherry-pick --strategy=x abc",
+            "alias-for-commit",
+            "stash",
+            "status",
+            "log",
+            "diff",
+        ] {
+            assert_eq!(of(GIT, line), None, "git {line}");
+        }
+        let assignment = the_environment(&[("GIT_SSH_COMMAND", "x")]);
+        assert_eq!(
+            Scope::of(Path::new(GIT), &argv("commit -m message"), &assignment),
+            None
+        );
+    }
+
+    /// An operation that talks to a remote stays remote, and only a program named `git` signs.
+    #[test]
+    fn signing_does_not_change_the_other_scopes() {
+        assert_eq!(of(GIT, "push origin main"), Some(Scope::Remote));
+        assert_eq!(of(GIT, "pull --rebase"), Some(Scope::Remote));
+        assert_eq!(of(GIT, "pull -s ours"), None);
+        assert_eq!(of("/usr/bin/gh", "commit"), None);
+        assert_eq!(of("/tmp/not-git", "commit -m message"), None);
+    }
+
+    /// SANDBOX-16, SANDBOX-26: a `run` call may ask for the signing scope by name, so a line that
+    /// signs without the argv shape the scope is keyed on (a script, or `-c` before the
+    /// operation) can have it. `/reach` and a remembered grant do not name it.
+    #[test]
+    fn signing_can_be_requested_and_not_remembered() {
+        assert_eq!(
+            Requested::named("signing"),
+            Some(Requested::Scope(Scope::Signing))
+        );
+        assert!(Requested::MENU.contains(&"signing"));
+        assert_eq!(Scope::named("signing"), None);
+    }
+
+    /// A home with `.gitconfig` signing with `~/keys/work.pub`, and an unrelated private key.
+    #[cfg(unix)]
+    fn a_home_that_signs(name: &str) -> PathBuf {
+        let home = a_home_with(name, "", &[".ssh/id_ed25519", "keys/work.pub", "keys/work"]);
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/work.pub\n",
+        )
+        .unwrap();
+        home
+    }
+
+    /// SANDBOX-16: a stage that signs reads the one public key `user.signingkey` names and nothing
+    /// else of the remote scope: no `~/.ssh`, no known hosts, no private key, no write.
+    #[test]
+    #[cfg(unix)]
+    fn the_signing_scope_reads_the_public_key_and_nothing_else() {
+        let home = a_home_that_signs("signing-scope-grant");
+        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
+        assert_eq!(granted_paths(&policy), [home.join("keys/work.pub")]);
+        assert!(policy.writable.is_empty());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A person who does not sign with ssh, or whose key is no public key in the home, is lent
+    /// nothing: the grant follows the configuration and not the argv.
+    #[test]
+    #[cfg(unix)]
+    fn the_signing_scope_reads_nothing_where_the_key_is_refused_or_signing_is_off() {
+        let home = a_home_that_signs("signing-scope-refused");
+        for gitconfig in [
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/work\n",
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/.ssh/id_ed25519\n",
+            "[gpg]\nformat = ssh\n",
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+        ] {
+            std::fs::write(home.join(".gitconfig"), gitconfig).unwrap();
+            let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
+            assert!(granted_paths(&policy).is_empty(), "{gitconfig}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// `git pull` merges or rebases and signs the commit it makes, so the remote scope reads the
+    /// key too, and still no private key.
+    #[test]
+    #[cfg(unix)]
+    fn the_remote_scope_reads_the_signing_key_as_well() {
+        let home = a_home_that_signs("signing-remote-grant");
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
+        assert!(granted_paths(&policy).contains(&home.join("keys/work.pub")));
+        for private in ["keys/work", ".ssh/id_ed25519", ".ssh"] {
+            assert!(
+                !granted_paths(&policy).contains(&home.join(private)),
+                "{private}"
+            );
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a `.pub` in `~/.ssh` whose key the agent holds is read by the signing scope and
+    /// by the remote scope, and the private key and a `.pub` for a key the agent lacks are not.
+    #[test]
+    #[cfg(unix)]
+    fn the_scopes_that_sign_read_a_public_key_in_ssh_that_the_agent_holds() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_that_signs("signing-held-grant");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let line = |seed: u8| format!("ssh-ed25519 {} c\n", crate::signing::base64(&key(seed)));
+        std::fs::write(home.join(".ssh/repo.pub"), line(2)).unwrap();
+        std::fs::write(home.join(".ssh/unheld.pub"), line(3)).unwrap();
+        std::fs::write(home.join(".ssh/repo"), "a private key").unwrap();
+        let agent = FakeAgent::answering("signing-held-grant", Answer::Holding(vec![key(2)]));
+        let place = Place {
+            agent: Some(agent.socket().to_path_buf()),
+            ..Place::default()
+        };
+        for scope in [Scope::Signing, Scope::Remote] {
+            let granted = granted_paths(&scope.grant(SandboxPolicy::strict(), &home, &place));
+            assert!(granted.contains(&home.join("keys/work.pub")), "{scope:?}");
+            assert!(granted.contains(&home.join(".ssh/repo.pub")), "{scope:?}");
+            assert!(
+                !granted.contains(&home.join(".ssh/unheld.pub")),
+                "{scope:?}"
+            );
+            assert!(!granted.contains(&home.join(".ssh/repo")), "{scope:?}");
+        }
+        let alone =
+            granted_paths(&Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default()));
+        assert_eq!(alone, [home.join("keys/work.pub")]);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    fn address_of(args: &[&str]) -> Option<(String, String)> {
+        let args: Vec<String> = args.iter().map(|argument| argument.to_string()).collect();
+        ssh_address(&args).map(|address| (address.host, address.owner))
+    }
+
+    fn named(host: &str, owner: &str) -> Option<(String, String)> {
+        Some((host.to_string(), owner.to_string()))
+    }
+
+    /// An ssh address in the argv names the host and owner a key is chosen by, in each spelling git
+    /// reads over ssh. The regression it rejects is an address read in one spelling only, so that
+    /// `ssh://` or a port leaves the push on whichever key ssh offers first.
+    #[test]
+    fn an_ssh_address_in_the_argv_names_its_host_and_owner() {
+        for (args, expected) in [
+            (
+                &["push", "git@github.com:netzenbot/bravebot.git", "main"][..],
+                named("github.com", "netzenbot"),
+            ),
+            (
+                &[
+                    "push",
+                    "git@github.com:netzenbot/bravebot.git",
+                    "HEAD:refs/heads/fix",
+                ][..],
+                named("github.com", "netzenbot"),
+            ),
+            (
+                &["clone", "ssh://git@github.com/brave/bravebot.git", "here"][..],
+                named("github.com", "brave"),
+            ),
+            (
+                &["fetch", "ssh://git@ssh.github.com:443/brave/bravebot"][..],
+                named("ssh.github.com", "brave"),
+            ),
+            (
+                &["-C", "/work", "ls-remote", "git+ssh://github.com/o-1/r"][..],
+                named("github.com", "o-1"),
+            ),
+            (
+                &["push", "--force-with-lease", "me@git.example:/team.x/r.git"][..],
+                named("git.example", "team.x"),
+            ),
+            (
+                &[
+                    "push",
+                    "git@github.com:Brave/a.git",
+                    "ssh://git@GitHub.com/brave/b.git",
+                ][..],
+                named("github.com", "Brave"),
+            ),
+        ] {
+            assert_eq!(address_of(args), expected, "{args:?}");
+        }
+    }
+
+    /// No address is read from a remote named by name, whose URL is the repository's
+    /// configuration, nor from a refspec, an option, an https or local address, or an argv naming
+    /// two different owners. The regression it rejects is a refspec such as `HEAD:refs/heads/x`
+    /// read as host `HEAD` and owner `refs`, which would then make a second address and drop the
+    /// real one.
+    #[test]
+    fn a_remote_name_a_refspec_or_another_transport_names_no_address() {
+        for args in [
+            &["push", "origin", "main"][..],
+            &["push", "origin", "HEAD:refs/heads/fix"][..],
+            &["push", "origin", "main:feature/x"][..],
+            &["clone", "https://github.com/brave/bravebot.git"][..],
+            &["clone", "file:///srv/repo.git"][..],
+            &["clone", "/srv/repo.git"][..],
+            &["clone", "github.com:brave/bravebot.git"][..],
+            &["push", "--repo=git@github.com:brave/bravebot.git"][..],
+            &["push", "git@github.com:bravebot.git"][..],
+            &["push", "git@github.com:brave/"][..],
+            &["push", "ssh://git@github.com:x/brave/r"][..],
+            &["push", "git@git hub.com:brave/r"][..],
+            &["push", "git@github.com:a/r", "git@github.com:b/r"][..],
+            &["push", "git@github.com:a/r", "git@gitlab.com:a/r"][..],
+            &["-C"][..],
+            &[][..],
+        ] {
+            assert_eq!(address_of(args), None, "{args:?}");
+        }
+    }
+
+    /// A `git.identities` entry names a public key as an `IdentityFile` line does: a name without
+    /// `.pub` reads the file beside it, and what is read is a regular `*.pub` file outside the other
+    /// credential locations. The regression it rejects is an entry naming a private key, or a
+    /// `.pub` link to one, being read as the key.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_key_is_a_public_key_file_and_never_a_private_one() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-keys",
+            "",
+            &[
+                ".ssh/work",
+                ".ssh/work.pub",
+                ".ssh/id_leaked",
+                ".aws/creds.pub",
+                "keys/spare.pub",
+            ],
+        );
+        symlink(home.join(".ssh/id_leaked"), home.join(".ssh/leak.pub")).unwrap();
+        symlink(home.join(".aws/creds.pub"), home.join(".ssh/aws.pub")).unwrap();
+        let spare = home.join("keys/spare.pub");
+
+        assert_eq!(
+            identity_key("~/.ssh/work", &home),
+            Some(home.join(".ssh/work.pub"))
+        );
+        assert_eq!(
+            identity_key("~/.ssh/work.pub", &home),
+            Some(home.join(".ssh/work.pub"))
+        );
+        assert_eq!(
+            identity_key(spare.to_str().unwrap(), &home),
+            Some(spare.clone())
+        );
+        for refused in [
+            "~/.ssh/leak.pub",
+            "~/.ssh/aws.pub",
+            "~/.ssh/missing.pub",
+            "~/.ssh/../.aws/creds.pub",
+            "~/.aws/creds",
+            ".ssh/work.pub",
+            "work.pub",
+            "",
+        ] {
+            assert_eq!(identity_key(refused, &home), None, "{refused}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The command names the one key, quoted for the shell git hands it to. The regressions it
+    /// rejects are a path with a quote in it escaping the quoting and running a command of its own,
+    /// and a path holding `%` or `$`, which ssh expands into the name of another file.
+    #[test]
+    fn the_ssh_command_offers_one_key_and_refuses_a_path_it_cannot_quote() {
+        assert_eq!(
+            ssh_command(Path::new("/home/person/.ssh/my key.pub")).as_deref(),
+            Some("ssh -i '/home/person/.ssh/my key.pub' -o IdentitiesOnly=yes")
+        );
+        for refused in [
+            "/home/person/.ssh/x';touch pwned;'.pub",
+            "/home/person/.ssh/100%u.pub",
+            "/home/person/.ssh/${HOME}.pub",
+        ] {
+            assert_eq!(ssh_command(Path::new(refused)), None, "{refused}");
+        }
+    }
+
+    /// A key whose path is not text is refused rather than written as its lossy lookalike, which
+    /// would have ssh offer a different file than the one the person named.
+    #[test]
+    #[cfg(unix)]
+    fn the_ssh_command_refuses_a_key_whose_path_is_not_text() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = Path::new(OsStr::from_bytes(b"/home/person/.ssh/key-\xff.pub"));
+        let lookalike = Path::new("/home/person/.ssh/key-\u{FFFD}.pub");
+        assert_eq!(ssh_command(invalid), None);
+        assert_eq!(
+            ssh_command(lookalike).as_deref(),
+            Some("ssh -i '/home/person/.ssh/key-\u{FFFD}.pub' -o IdentitiesOnly=yes")
         );
     }
 }

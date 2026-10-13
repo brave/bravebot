@@ -4,8 +4,11 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/command_table.rs
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
+  - crates/tui/src/away.rs
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
   - crates/tui/src/prompt_files.rs
@@ -279,7 +282,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
 | touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| everything else | every other command, `/sandbox` in every form, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
@@ -554,7 +557,8 @@ session starts. While it is on, the platform's inhibitor runs whenever the sessi
 and is ended once it has none. Work is pending while a turn is in flight and while a loop has a tick
 to come, which includes the wait a turn asked for with `schedule_next`
 ([tools/schedule-next.md](tools/schedule-next.md#SCHED-1)). A background job is covered by its turn,
-since none outlives it ([tools/run.md](tools/run.md#RUN-15)). A watch waiting on a file holds
+and a job the session keeps past its turn ([tools/run.md](tools/run.md#RUN-15)) holds nothing
+between turns, since the person can see it and stop it there. A watch waiting on a file holds
 nothing, and neither does an idle session.
 
 The first `/caffeinate` in a person's state directory turns nothing on. It says what the command
@@ -672,7 +676,7 @@ A `/review` is a command, so a prompt file or skill of that name is shadowed by 
 **Why.** A review exists to read changes the planner may not be allowed to see, and the answer to
 that elsewhere is a processor whose output goes to the person. A typed record of findings that the
 planner could act on would be the driver branching on processor output, which the design reserves for
-the three exceptions in [labels.md](labels.md) and which needs the maintainers' agreement
+the exceptions in [labels.md](labels.md) that read a processor's or a check's answer and which needs the maintainers' agreement
 before it is built. This command is the part that needs none of that.
 
 `verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
@@ -727,7 +731,8 @@ decide, so the command only says which one the person meant.
 ### CMD-15: `/request` opens the last request built, and takes no argument
 
 `/request` opens a read-only view of the last request a turn built for the planner, which
-[TRACE-9](trace.md#TRACE-9) states. It takes no argument, so `/request` followed by words is a
+[TRACE-9](trace.md#TRACE-9) states, including which instruction files were loaded into it and how
+many bytes each contributed. It takes no argument, so `/request` followed by words is a
 prompt (CMD-2). It reads what the session already holds in memory, so it is carried out as it is
 typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
 line a person typed reaches it (CMD-1).
@@ -843,6 +848,63 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
+
+<a id="CMD-20"></a>
+### CMD-20: a person who has been away is given a recap, once, without asking
+
+When the terminal has reported being left, at least five minutes have passed since the last turn
+completed, and the session has had at least three turns, the interface does what `/recap` does
+(CMD-16), once, with nothing queued behind it. It does not do it again until another turn has
+completed, and a recap the person asked for counts as one. A terminal that reports no focus changes is
+taken to be in front of the person, so it never recaps by itself. An `awaySummaryEnabled` setting of
+`false` turns it off, and any other value, or none, leaves it on. It is the terminal interface's
+alone: a `-p` run and the desktop app have no such view and never make one.
+
+Nothing from the conversation reaches the decision. It reads the clock, the focus reports, a count of
+turns and the setting, all of which the interface holds itself.
+
+**Why.** CMD-16 only helps a person who thinks to ask. A person returning to a long session is the one
+least likely to remember what it was doing, and the first thing they would do is ask.
+
+`verified-by: bravebot_tui::away::a_recap_is_due_once_every_condition_holds`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_idle_time`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_terminal_to_be_left`
+`verified-by: bravebot_tui::away::a_recap_waits_for_enough_turns`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_twice_in_a_row`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_where_the_setting_turned_it_off`
+`verified-by: bravebot_tui::away::a_session_with_no_completed_turn_owes_nothing`
+`verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
+`verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
+
+<a id="CMD-21"></a>
+### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+
+Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
+and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
+because every row's description starts after the longest word in the list and a spelled-out hint
+would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
+set of levels the program accepts, so a level added there appears in both.
+
+Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
+start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
+levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
+as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
+only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+
+Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+
+**Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
+Completing a start from the same set the command accepts keeps the hint, the completion and the
+refusal for an unknown word in step.
+
+`verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
+`verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
+`verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
+`verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 ## Known costs
 

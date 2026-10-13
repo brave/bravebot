@@ -7,6 +7,8 @@
 //!
 //! [SANDBOX-24]: ../../../docs/specs/sandboxing.md
 
+use std::net::IpAddr;
+
 use crate::toolchain::Toolchain;
 
 /// The hosts a stage carrying the remote scope reaches by default.
@@ -61,6 +63,14 @@ pub fn normalise(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// `host` as a record may carry it: the normalised name where it is a host name or an IP address,
+/// and `None` for anything else. A program chooses the name it asks a proxy for, so a record that
+/// held it verbatim would let a program put any bytes, a newline included, into a trail.
+pub fn recordable(host: &str) -> Option<String> {
+    let name = normalise(host);
+    (valid_name(&name) || name.parse::<std::net::IpAddr>().is_ok()).then_some(name)
+}
+
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 253
@@ -82,6 +92,9 @@ pub enum Refusal {
     NotListed,
     /// The name is allowed, and the port asked for is one the proxy does not carry.
     Port,
+    /// The request named an address that is not public, or a name that resolved to one, and no
+    /// exact entry of the allowed list is that address.
+    NotPublic,
 }
 
 /// What the list decided about one host, and the rule that decided it.
@@ -153,6 +166,18 @@ impl HostList {
         }
     }
 
+    /// Whether an exact entry of the allowed list is `address` and no denied entry covers it. An
+    /// IPv4-mapped address is compared as its IPv4 address. A wildcard names no address, so
+    /// `*.0.0.1` does not let a tunnel reach `127.0.0.1`, and no entry can spell an IPv6 address.
+    pub fn names_address(&self, address: IpAddr) -> bool {
+        let address = address.to_canonical().to_string();
+        !self.denied.iter().any(|rule| rule.covers(&address))
+            && self
+                .allowed
+                .iter()
+                .any(|rule| !rule.wildcard && rule.name == address)
+    }
+
     pub fn allowed(&self) -> &[HostRule] {
         &self.allowed
     }
@@ -176,6 +201,25 @@ pub fn registry_hosts(toolchain: Toolchain) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record carries a host name or an address, normalised, and nothing else. The regression
+    /// it rejects is a name with a control character, a space or a bracket reaching a trail.
+    #[test]
+    fn only_a_host_name_or_an_address_may_be_recorded() {
+        assert_eq!(recordable("GitHub.com."), Some("github.com".to_string()));
+        assert_eq!(recordable("127.0.0.1"), Some("127.0.0.1".to_string()));
+        assert_eq!(recordable("::1"), Some("::1".to_string()));
+        for bad in [
+            "",
+            "a b.example",
+            "a\nb.example",
+            "x\u{1b}[2J.example",
+            "a..b",
+            "-.é",
+        ] {
+            assert_eq!(recordable(bad), None, "{bad:?}");
+        }
+    }
 
     fn list(allowed: &[&str], denied: &[&str]) -> HostList {
         let (list, invalid) = HostList::parse(allowed.iter().copied(), denied.iter().copied());
@@ -229,6 +273,27 @@ mod tests {
         }
         let narrow = list(&["*.example.com"], &["api.example.com"]);
         assert!(narrow.decide("www.example.com").is_allowed());
+    }
+
+    /// An address is named by an exact entry that spells it, an IPv4-mapped one by the entry
+    /// spelling its IPv4 address, and by nothing else. The regressions it rejects: a wildcard whose
+    /// domain matches the end of an address's text counting as naming it, an allowed entry winning
+    /// over a denied one, and a mapped address missed by the entry that names its IPv4 form.
+    #[test]
+    fn an_address_is_named_only_by_an_exact_entry_no_denied_one_covers() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let exact = list(&["*.github.io", "127.0.0.1"], &[]);
+        assert!(exact.names_address(ip("127.0.0.1")));
+        assert!(exact.names_address(ip("::ffff:127.0.0.1")));
+        assert!(!exact.names_address(ip("127.0.0.2")));
+        assert!(!exact.names_address(ip("::1")));
+
+        let wildcard = list(&["*.0.0.1"], &[]);
+        assert!(wildcard.decide("127.0.0.1").is_allowed());
+        assert!(!wildcard.names_address(ip("127.0.0.1")));
+
+        let denied = list(&["10.0.0.1"], &["10.0.0.1"]);
+        assert!(!denied.names_address(ip("10.0.0.1")));
     }
 
     #[test]

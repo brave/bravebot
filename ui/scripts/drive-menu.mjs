@@ -151,8 +151,8 @@ const ALLOWED_IDS = [
   'view.theme',
   // Open the find bar and put the caret in the composer. Both move focus inside the window.
   'view.find', 'view.focus-composer',
-  // Chooses what the next turn asks. It answers no question already put: the running turn keeps
-  // the mode it began with (MODE-8).
+  // Chooses what the session asks. It answers no question already put: the running turn follows
+  // it from its next question (MODE-8).
   'mode.cycle',
   // Opens a dialog that names every file it would put back. Only that dialog's button rewinds.
   'turn.rewind',

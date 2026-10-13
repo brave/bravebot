@@ -3,6 +3,7 @@ id: NET
 title: Network egress
 status: normative
 governs:
+  - crates/net/src/address.rs
   - crates/net/src/lib.rs
   - crates/net/src/transport.rs
 documented-by: docs/website/docs/security/security.md
@@ -57,7 +58,8 @@ Revalidating is what makes a hop checkable; what the check consists of depends o
 being made. For a `fetch_url` call it is [FETCH-4](tools/fetch-url.md#FETCH-4), which holds the
 chain to the host a person approved. For this program's own connection to its endpoint it is the
 capability and nothing more, for the reason that clause gives. Whichever it is, the hop is also held
-to the transport the hop before it used, by [NET-9](#NET-9).
+to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` call to the
+address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`

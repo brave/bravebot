@@ -50,20 +50,20 @@ Present whether or not an agent ever runs.
 
 | Group | Where it lives |
 | --- | --- |
-| OS stores | `~/Library/Keychains/login.keychain-db`; `%APPDATA%\Microsoft\Credentials`, `\Protect`; `~/.local/share/keyrings/`; `~/.password-store/`; `keyctl` session |
-| Shell & env | `~/.bashrc`, `.zshrc`, `.zshenv`, `.profile`, `.bash_profile`; `.bash_history`, `.zsh_history`, `.psql_history`, `.mysql_history`, `.node_repl_history`, `.dbshell`; agent env, including the `env` block of `~/.bravebot/settings.json` |
-| SSH | `~/.ssh/id_rsa`, `id_ed25519`, `id_ecdsa`, custom names; `~/.ssh/config`; `*.ppk`; `\\wsl$\...\home\<user>\.ssh` |
-| Git | `~/.git-credentials`; `~/.gitconfig`; `~/.netrc`, `_netrc`; `~/.config/gh/hosts.yml`, `~/.config/glab-cli/config.yml` |
-| Cloud | `~/.aws/credentials`, `~/.aws/config`, `AWS_*` env; `~/.aws/sso/cache/*.json`, `~/.aws/cli/cache/`; `~/.config/gcloud/credentials.db`, `access_tokens.db`, `application_default_credentials.json`, SA JSON; `~/.azure/msal_token_cache.json`, `azureProfile.json`; `~/.config/vercel/auth.json`, `~/.config/netlify/config.json`, `~/.fly/config.yml`, `~/.config/doctl/`, `~/.supabase/`; `http://169.254.169.254`, Codespaces token endpoint |
+| OS stores | `~/Library/Keychains/login.keychain-db`; `%APPDATA%\Microsoft\Credentials`, `\Protect`; `~/.local/share/keyrings/`, `~/.local/share/kwalletd/`; `~/.password-store/`; `keyctl` session |
+| Shell & env | `~/.bashrc`, `~/.zshrc`, `~/.zshenv`, `~/.profile`, `~/.bash_profile`; `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions/`, `~/.bash_sessions/`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell`, `~/.mongodb/mongosh/mongosh_repl_history`; agent env, including the `env` block of `~/.bravebot/settings.json` |
+| SSH | `~/.ssh/id_rsa`, `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa`, custom names; `~/.ssh/config`; `*.ppk`; `\\wsl$\...\home\<user>\.ssh` |
+| Git | `~/.git-credentials`; `~/.gitconfig`; `~/.netrc`, `_netrc`; `~/.config/gh/hosts.yml`, `~/.config/glab-cli/config.yml`, `~/.config/hub` |
+| Cloud | `~/.aws/credentials`, `~/.aws/config`, `AWS_*` env; `~/.aws/sso/cache/*.json`, `~/.aws/cli/cache/`; `~/.config/gcloud/credentials.db`, `~/.config/gcloud/access_tokens.db`, `~/.config/gcloud/application_default_credentials.json`, SA JSON; `~/.azure/msal_token_cache.json`, `~/.azure/azureProfile.json`; `~/.config/vercel/auth.json`, `~/.config/netlify/config.json`, `~/.fly/config.yml`, `~/.config/doctl/`, `~/.supabase/`, `~/.config/rclone/`; `http://169.254.169.254`, Codespaces token endpoint |
 | Containers | `~/.docker/config.json`, `~/.config/containers/auth.json`; `~/.kube/config`, `~/.kube/cache/`; `/var/run/secrets/kubernetes.io/serviceaccount/token`; `~/.config/helm/repositories.yaml` |
-| Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
-| IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `.gitlab-runner/config.toml` |
-| Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json`, JetBrains password safe, TablePlus, pgAdmin `pgadmin4.db` |
-| IDE & agent | `claude_desktop_config.json`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from; `settings.json`, Settings Sync, extension storage; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history; `~/.config/github-copilot/hosts.json` |
+| Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
+| IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `~/.gitlab-runner/config.toml`; the 1Password CLI's `~/.config/op/` |
+| Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json` under `~/.local/share/DBeaverData/` or `~/Library/DBeaverData/`, JetBrains password safe, TablePlus, pgAdmin `~/.pgadmin/pgadmin4.db` |
+| IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history; `~/.config/github-copilot/hosts.json` |
 | Browser | `Login Data`, `Cookies`, `Web Data`, `Local State`; `logins.json`, `key4.db`, `cookies.sqlite`; `userDataDir`, `storageState.json` outside the tree |
 | Certs & signing | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` outside the tree; mkcert `rootCA-key.pem`; `~/.android/debug.keystore`, release keystores; `~/Library/MobileDevice/Provisioning Profiles/`, App Store Connect `.p8`; code-signing certs: OS keychain / cert store |
-| Network & host | `*.ovpn`, `~/.config/openconnect/`; SMB credential files under the home directory |
-| API clients | `~/Postman/`, environment exports; `~/.config/Insomnia/`, `~/.config/Bruno/` |
+| Network & host | `*.ovpn`, `~/.config/openconnect/`; SMB credential files under the home directory; the X display's cookie `~/.Xauthority` |
+| API clients | `~/Postman/`, environment exports, and Postman's own `~/.config/Postman/`, `~/Library/Application Support/Postman/`; `~/.config/Insomnia/`, `~/Library/Application Support/Insomnia/`, `~/.config/Bruno/`, `~/Library/Application Support/Bruno/` |
 | User files | `notes.txt`, `passwords.txt`, `creds.txt` on Desktop / Documents; KeePass `.kdbx`, Bitwarden `data.json`, Enpass |
 | Indirect | `~/Downloads`, `~/Desktop`; memory artifacts: core dumps, swap / hibernation file, crash reports; Docker layers with `ARG`/`COPY .env`, published bundles |
 
@@ -595,6 +595,12 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 that resolves them is a program this agent started all the same, so it is handed what the person's
 own environment holds and none of what this agent authenticates with.
 
+**The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
+the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
+program the gateway keys and `settings.json` and a Windows container cannot be refused a path
+inside it ([SANDBOX-18](sandboxing.md#SANDBOX-18)). Linux and macOS refuse the directory inside
+the grant ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
+
 **The record is closed elsewhere.** No field of the trail can hold a credential, because
 [TRACE-2](trace.md#TRACE-2) admits only a gate name, a capability, a label, a path or a slot id.
 That is a stronger answer than a redaction rule and it is why this clause does not restate one; what
@@ -605,6 +611,7 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
@@ -1253,9 +1260,10 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it needs the durable salt and the store above, so this is the cost of not having them yet rather
   than a separate gap.
 
-- **`read_file` and `read_git` are the only reads that are scanned.** CRED-15 runs at the tools
-  whose whole purpose is putting a file's text in front of the planner, now or as it stood in a
-  commit. Three other results carry a vouched file's
+- **`read_file`, `read_git` and `repo_map` are the only reads that are scanned.** CRED-15 runs at
+  the tools whose whole purpose is putting a file's text in front of the planner, now or as it stood
+  in a commit, and at the map, which drops a file with a finding without asking, since it shows
+  declaration lines and not one path a person could answer for. Three other results carry a vouched file's
   bytes there and are not scanned: `search` quotes the lines it matched, `load_skill` carries the
   body of a skill, and `read_output` hands over what a program printed. Each needs its own answer
   rather than the same one. A search walks many files at once and mixes vouched ones with

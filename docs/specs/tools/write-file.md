@@ -75,3 +75,18 @@ directory and are the only party who can say whether that file should be rewritt
 `verified-by: bravebot_agent::turn::every_write_through_a_reference_is_shown`
 `verified-by: bravebot_agent::turn::a_write_through_a_reference_says_what_landed_and_that_it_is_done`
 `verified-by: bravebot_agent::turn::a_reference_write_is_reviewed_as_a_diff`
+
+<a id="WRITE-5"></a>
+### WRITE-5: the result says what a running language server found wrong
+
+Where a language server for the file's language is already running, the result of a write adds
+the line numbers of the errors it reports, as [LSP-12](lsp.md#LSP-12) specifies: counts and lines
+in this repository's words, never the server's, never started by the write, and given only for a
+file the trust map vouches for after the write.
+
+**Why.** A planner that finds a syntax error only by running a build spends a round and a second
+approval on something the server already knew.
+
+`verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
+`verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`

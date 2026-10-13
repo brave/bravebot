@@ -27,6 +27,8 @@ pub enum Ending {
     Refused,
     /// The request never reached the backend.
     Unreachable,
+    /// The run finished and its reply does not match the schema it was given.
+    Schema,
 }
 
 impl Ending {
@@ -42,6 +44,7 @@ impl Ending {
             Self::Configuration => 3,
             Self::Refused => 4,
             Self::Unreachable => 5,
+            Self::Schema => 6,
         }
     }
 
@@ -57,6 +60,7 @@ impl Ending {
             Self::Configuration => "configuration",
             Self::Refused => "refused",
             Self::Unreachable => "unreachable",
+            Self::Schema => "schema",
         }
     }
 
@@ -146,6 +150,7 @@ mod tests {
             Ending::Configuration,
             Ending::Refused,
             Ending::Unreachable,
+            Ending::Schema,
         ];
 
         let mut seen: Vec<u8> = endings.iter().map(|e| e.status()).collect();
@@ -169,6 +174,7 @@ mod tests {
             Some("BB1003")
         );
         assert_eq!(Ending::Unreachable.identifier().as_deref(), Some("BB1005"));
+        assert_eq!(Ending::Schema.identifier().as_deref(), Some("BB1006"));
     }
 
     /// Said in front of the message rather than instead of it: the sentence is what tells the

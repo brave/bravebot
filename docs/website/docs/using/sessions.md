@@ -244,11 +244,17 @@ and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitl
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
 `/panel`, and a column 36 wide opens on the right of the screen with
 
-- the session's name, its directory and its branch,
+- the session's name, with a GitHub pull request or issue address in it shown as
+  `brave/bravebot#1975` and still a link to the address in a terminal that supports links,
+  its directory and its branch, and below them its id over two rows, the one
+  `bravebot --resume`, `--fork` and `/resume` take, so you can resume or fork a running session from
+  another terminal without `/status`; it appears once the session has been saved,
 - the model you chose and the effort level in force,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
-  each cut from the left where it is long so the number at the end stays in view,
+  each cut from the left where it is long so the number at the end stays in view. A GitHub pull
+  request or issue address is shown as `brave/bravebot#1975` and is still a link to the address in
+  a terminal that supports links,
 - how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
   cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
@@ -434,6 +440,13 @@ replaces the earlier figure rather than leaving it standing. See
 
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.
+
+A skill the planner loaded before the cut is not left to the summary. Its text is sent again after
+the summary, word for word: the newest load of each skill, the first 5,000 tokens of any one skill
+(estimated at four bytes a token) and 25,000 tokens for all of them, newest first. A skill that
+is cut says so and names `load_skill` for the rest. These count as kept when deciding whether a cut
+frees enough. A skill whose result was sent as prose, which is the fallback for a round whose calls
+carried no ids, is summarised like any other message.
 
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the

@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
   - crates/ui-bridge/src/attached.rs
 guards:
@@ -310,10 +311,11 @@ Persian, Indic and emoji text needs only the first of each, after a character th
   that the user chose what to copy, can see on their own screen what they pasted, and is the party
   this serves. It is the cost shell mode carries, reached by another route.
 
-- **Only a paste is cleaned.** Text typed at the keyboard, a path a dropped file names
-  ([dropping.md](dropping.md)), and a prompt given with `-p` or in the desktop application's
+- **Only a paste is cleaned.** Text typed at the keyboard, a path a file dropped onto a prompt
+  writes ([dropping.md](dropping.md)), and a prompt given with `-p` or in the desktop application's
   message box are not run through the filter, so a character nobody can see can still reach a
-  message by those routes.
+  message by those routes. A drop onto a shell line where a name holds such a character writes nothing
+  ([DROP-6](dropping.md#DROP-6)).
 
 - **A listed character is removed even when it was meant.** A soft hyphen or a word joiner in text
   a person copied from a typeset page goes too. The notice says how many, and the words read the

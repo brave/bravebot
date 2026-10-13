@@ -1,4 +1,4 @@
-// That the permission mode chosen in the composer governs the next turn: accepting edits writes a
+// That the permission mode chosen in the composer governs the session's turns: accepting edits writes a
 // file with no card and still puts a command to the window, planning writes nothing and asks
 // nothing about a write, the control stays usable while a turn runs, and the Chat menu's
 // shortcut walks the modes.
@@ -7,8 +7,8 @@
 // directory the person did not trust, so every write would be asked about. Nothing is paid for.
 // Whether a write landed is read off the disk.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:permission-mode` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:permission-mode` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
@@ -136,7 +136,6 @@ try {
   const run = page.locator('.confirm.run')
   await run.waitFor()
   assert.equal(await mode.locator('button').isDisabled(), false, 'the mode can be changed while a turn runs')
-  assert.match(await mode.getAttribute('data-tooltip'), /next turn/, 'and says a change applies from the next turn')
   await page.screenshot({ path: join(output, 'mode-command-asked.png') })
   await run.locator('.reject').click()
   await stop.waitFor({ state: 'hidden' })
@@ -149,7 +148,7 @@ try {
   assert.equal(await writeCards.count(), 0, 'planning put a write to the window')
   assert.equal(existsSync(join(project, 'plan.md')), false, 'planning wrote a file')
   assert.ok(rounds[sentBefore].includes('Plan mode.'), 'the planner was told it is planning')
-  assert.match(lastToolResult(rounds.at(-1)), /refused: this turn is in plan mode/, 'the planner was told plan mode refused the write')
+  assert.match(lastToolResult(rounds.at(-1)), /refused: the session is in plan mode/, 'the planner was told plan mode refused the write')
   await refusedWriteLaysOut('plan.md')
   assert.equal(await changeState('plan.md'), 'refused', 'a write plan mode refused is listed as refused, not failed')
   assert.equal(await changeState('notes.md'), 'applied', 'the write that landed is listed as applied')

@@ -198,6 +198,11 @@ if [ -z "$RUNNERS" ]; then
         [ -z "$script_files" ] || RUNNERS="$RUNNERS sveltegrep"
     fi
     has 'package-lock.json' '*/package-lock.json' && RUNNERS="$RUNNERS npm-audit"
+    # security-action's npm-audit runs `npm audit --package-lock-only` on package-lock.json files only
+    # and has no pnpm equivalent, so pnpm-lock.yaml is audited by neither this script nor the PR scan.
+    if has 'pnpm-lock.yaml' '*/pnpm-lock.yaml'; then
+        say "pnpm-lock.yaml is not audited: security-action's npm-audit reads only package-lock.json"
+    fi
     has 'pyproject.toml' '*/pyproject.toml' 'requirements*.txt' '*/requirements*.txt' \
         && RUNNERS="$RUNNERS pip-audit"
 fi

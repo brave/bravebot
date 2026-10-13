@@ -307,15 +307,17 @@ impl TrustStore {
 
     /// The decision recorded under `key`, reached however the key was spelled.
     ///
-    /// Where the volume answers to either spelling of a name ([`TrustStore::folding_case`]), the
-    /// rule that sorts first among every key spelling the same name decides, an exact-spelling hit
-    /// included: a rule written about `src/fetched.json` decides the very same bytes read as
-    /// `SRC/fetched.json`, and a probe that could not see it would answer from the trusted rule
-    /// above the file instead, the laundering spelled-past-a-rule closes elsewhere. Two rules that
-    /// differ only in case can coexist, and giving the exact spelling priority would let a
-    /// distrust recorded under one spelling miss a file vouched for under the other. Folding only
-    /// reaches a rule already written, and on such a volume the two spellings are one file, so no
-    /// rule reaches a file it was not about. Otherwise the map stays byte-exact.
+    /// Where the volume answers to either spelling of a name ([`TrustStore::folding_case`]), every
+    /// key spelling the same name is a rule about `key`: a rule written about `src/fetched.json`
+    /// decides the very same bytes read as `SRC/fetched.json`, and a probe that could not see it
+    /// would answer from the trusted rule above the file instead, the laundering
+    /// spelled-past-a-rule closes elsewhere. Two rules that differ only in case can coexist, and
+    /// the weakest of them decides every spelling, a distrust before an undecided boundary before
+    /// a trust: letting a spelling or a sort order win would let a trust answer for bytes a
+    /// distrust was recorded about. A trust under one spelling does not replace a lower rule under
+    /// another, because a name that folds the same is not always the same file: NTFS holds
+    /// `cla\u{df}.md` and `class.md` apart, and so does a directory added from a case-sensitive
+    /// volume for `Docs` and `docs`. Otherwise the map stays byte-exact.
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
         if !self.folds_case {
@@ -324,8 +326,13 @@ impl TrustStore {
         let folded = fold_case(key);
         self.rules
             .iter()
-            .find(|(rule, _)| fold_case(rule) == folded)
+            .filter(|(rule, _)| fold_case(rule) == folded)
             .map(|(_, decision)| decision)
+            .min_by_key(|decision| match decision {
+                Some(Integrity::Untrusted) => 0,
+                None => 1,
+                Some(Integrity::Trusted) => 2,
+            })
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -449,9 +456,9 @@ pub fn is_absolute_key(key: &str) -> bool {
 ///
 /// A `..` segment is kept as written rather than resolved. Resolving one lexically would be a
 /// guess: nothing here has a filesystem, and `a/../b` names `b` only if `a` is a directory and
-/// not a symlink somewhere else. A confined path never contains one, since confinement refuses
-/// `..` rather than resolving it (TRUST-10), so what this leaves unmerged is the spelling a
-/// dropped file arrives under.
+/// not a symlink somewhere else. A confined path never reaches here with one, since confinement
+/// takes the `..` out of the path it admits and refuses the rest (TRUST-10), so what this leaves
+/// unmerged is the spelling a dropped file arrives under.
 ///
 /// An absolute path **keeps** its leading slash, which is what makes it a key already rather than
 /// a name to be read under the working directory.
@@ -845,28 +852,43 @@ mod tests {
         );
     }
 
-    /// Two rules differing only in case can coexist on a folding volume, and the one that sorts
-    /// first decides both spellings, whichever spelling the probe uses and in either polarity.
+    /// Two rules differing only in case decide every spelling on a folding volume by the weaker of
+    /// them, whichever sorts first and whichever was written last. A trusted write and then an
+    /// untrusted one through two spellings of one file leaves the distrust answering for the bytes
+    /// the second write put there. A trust written after a distrust under another spelling leaves
+    /// the path untrusted too, since the two names may be two files (`cla\u{df}.md` and `class.md`
+    /// on NTFS), and a trust about one is no yes for the other.
     #[test]
-    fn a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings() {
-        for (first, second) in [
-            (Integrity::Untrusted, Integrity::Trusted),
-            (Integrity::Trusted, Integrity::Untrusted),
+    fn a_folding_volume_lets_the_weakest_case_variant_decide_every_spelling() {
+        let (trusted, untrusted) = (Some(Integrity::Trusted), Some(Integrity::Untrusted));
+        // Every ordered pair of decisions, each written in both orders of spelling, so neither the
+        // rule that sorts first, nor the one that sorts last, nor the later one is what decides. The
+        // trust over the working directory makes an undecided answer differ from a missing rule.
+        for (first, second, weakest) in [
+            (trusted, untrusted, untrusted),
+            (untrusted, trusted, untrusted),
+            (trusted, None, None),
+            (None, trusted, None),
+            (None, untrusted, untrusted),
+            (untrusted, None, untrusted),
         ] {
-            let mut store = TrustStore::new("/work").folding_case(true);
-            // "/work/Docs/a.md" sorts before "/work/docs/a.md".
-            for (path, integrity) in [("Docs/a.md", first), ("docs/a.md", second)] {
-                match integrity {
-                    Integrity::Trusted => store.trust(path),
-                    Integrity::Untrusted => store.distrust(path),
+            for (earlier, later) in [("Docs/a.md", "docs/a.md"), ("docs/a.md", "Docs/a.md")] {
+                let mut store = TrustStore::new("/work").folding_case(true);
+                store.trust(".");
+                for (path, decision) in [(earlier, first), (later, second)] {
+                    match decision {
+                        Some(Integrity::Trusted) => store.trust(path),
+                        Some(Integrity::Untrusted) => store.distrust(path),
+                        None => store.undecide(path),
+                    }
                 }
-            }
-            for spelling in ["Docs/a.md", "docs/a.md", "DOCS/A.MD"] {
-                assert_eq!(
-                    store.integrity_of(spelling),
-                    Some(first),
-                    "{spelling} was not decided by the rule that sorts first"
-                );
+                for spelling in ["Docs/a.md", "docs/a.md", "DOCS/A.MD"] {
+                    assert_eq!(
+                        store.integrity_of(spelling),
+                        weakest,
+                        "{spelling}: {first:?} as {earlier}, then {second:?} as {later}"
+                    );
+                }
             }
         }
     }

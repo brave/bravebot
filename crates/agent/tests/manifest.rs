@@ -5,6 +5,10 @@
 //! are the ones that matter, and each asserts the negative directly, that no extra request went
 //! out and no file appeared, rather than asserting that a reply looked sensible.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::manifest;
 use bravebot_agent::turn::Task;
 use bravebot_agent::{Mode, Workspace};
@@ -544,6 +548,12 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
         assert!(
             body.contains("data:image/png;base64,iVA="),
             "the dropped picture did not reach the planner: {body}"
+        );
+        // DROP-11: both calls name the file beside its bytes, so the planner can write a step
+        // about the path it was shown rather than about a marker standing for nothing.
+        assert!(
+            body.contains("Dropped file: shot.png"),
+            "the dropped file's path did not reach the planner: {body}"
         );
     }
 }
@@ -1331,6 +1341,21 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -1485,6 +1510,21 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -1895,7 +1935,7 @@ fn a_turn_reports_no_planning_record() {
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
 
-    let outcome = bravebot_agent::turn::run(
+    let outcome = turns::run(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,

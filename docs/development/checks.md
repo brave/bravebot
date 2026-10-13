@@ -30,7 +30,7 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, npm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
 | `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
@@ -47,8 +47,10 @@ the Rust build.
 
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
-touches and says which of Rust, the desktop app, the cross-builds, the website, the npm lockfiles
-and the dependency policy they could affect. The specs, security, locales, versions and narration
+touches and says which of Rust, the desktop app, the cross-builds, the Windows installers, the
+website, the pnpm lockfiles and the dependency policy they could affect. On a pull request the
+Windows installers are built and installed only for a change to the scripts that make them; main
+and every tag build and install them whatever changed. The specs, security, locales, versions and narration
 jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
@@ -89,7 +91,7 @@ installs `xvfb`, `libgtk-3-0`, `libnss3` and `libasound2t64`. CI uses the same b
 and walkthrough targets, with a separate timeout for the walkthrough.
 The check build leaves out backend credentials, even when your development build has
 them, so the walkthrough can test the unconfigured app without using your account.
-Run `npm --prefix ui run build` afterwards to restore a configured development build.
+Run `pnpm --dir ui run build` afterwards to restore a configured development build.
 
 `make check-agent-client` builds `bravebot-rpc`, then installs, type-checks, builds and tests
 `packages/agent-client`. Its tests start that binary against a model service of their own, an empty
@@ -99,10 +101,10 @@ Run it for a change to the session view or the client.
 
 `make check-scripts` checks that every required gate runs, that UI, installer and lockfile
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
-half also holds `check-npm` to reaching the installer test before anything installs a dependency
-for it to depend on, and to failing rather than passing when that test is no longer there. It runs
+half also holds `check-npm` to reaching the installer test and the lockfile lint's own cases before
+any lockfile is read, and to failing rather than passing when that test is no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest` and `check-pr-fix-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest` and `check-maintenance-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -163,7 +165,7 @@ counted rather than merely named and so is every function forwarding its caller'
 whether every workflow step is on a commit rather than a tag its owner can move, whether every
 container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
-or a secret installs or runs an npm dependency, which every step in that job could read the
+or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, and whether the check contexts a merge is held to are written down,
 name jobs that exist, and cover every job whose purpose is running a check. CI runs it too, so a
@@ -176,6 +178,15 @@ whoever remembers to run this. It is the deterministic half of the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
 check contexts, or the trust specs.
+
+`make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
+and TypeScript exports named nowhere but where they are defined or only from tests, allowances
+silencing the dead-code lint, blocks of lines and string literals repeated across files, and files
+and functions past a length. rustc warns about none of the first kind in a library crate, and no
+check compares one file with another. The scan reads no code and exits zero whatever it lists, so
+nothing runs it in CI. It is the deterministic half of the
+[maintenance skill](../../agents/skills/maintenance/SKILL.md), whose reviewers read each candidate
+and draft an issue for the ones worth fixing.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
@@ -205,8 +216,8 @@ gap makes fail, and is the one to read while translating. Run the check before a
 `crates/i18n/locales`.
 
 `make check-versions` holds every file that states the version to the workspace manifest: the
-published wrapper and its lockfile, and the desktop application and its lockfile, each of which
-states it in its own header and, for a lockfile, in the entry for the package it locks. `make
+published wrapper and the desktop application, each of which states it in its own
+`package.json`; a pnpm lockfile records no version for the project it locks. `make
 check` runs it and so does CI, because the tagging path's own refusal fires on release day, which
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
@@ -222,7 +233,7 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
-`make check-npm` installs from the lockfile and lints it, as CI does, and runs the installer test
+`make check-npm` lints the pnpm lockfiles, as CI does, and runs the installer test
 under `npm/tests`, which holds the release origin the published package downloads from to this
 repository whatever the environment says. That test is the one thing in the tree that runs a
 clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to

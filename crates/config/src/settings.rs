@@ -138,10 +138,14 @@ const READ_KEYS: &[&str] = &[
     "advisorModel",
     "agent",
     "attribution",
+    "awaySummaryEnabled",
+    "deferMcpToolsAbove",
+    "download",
     "editorMode",
     "effort",
     "env",
     "fallbackModel",
+    crate::git_identities::BLOCK,
     "keybindings",
     "limit",
     "mcp",
@@ -154,6 +158,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "suggestions",
     "summaryModel",
     "terminalTitle",
     "tui",
@@ -276,12 +281,19 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
-    /// The session spend limit the top-level `limit` key named, in tokens, if it named a usable one.
-    limit: Option<u64>,
+    /// The session spend limit the top-level `limit` key named, if it named a usable one.
+    limit: Option<crate::limit::Limit>,
+    /// The size in tokens above which the top-level `deferMcpToolsAbove` key asks for a server's
+    /// tools to be offered by name, if it named a usable one.
+    defer_mcp_tools_above: Option<u64>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
+    /// What the top-level `suggestions` key said, if it said a boolean.
+    suggestions: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
+    /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
+    away_summary_enabled: Option<bool>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -337,6 +349,11 @@ pub struct Settings {
     /// into a checkout and is still asked has to be told it was dropped rather than conclude the
     /// rule is in force and the prompt is a separate fault.
     allow_ignored: Vec<(PathBuf, String)>,
+    /// Each rule in force and the file that wrote it, in the order the layers were read.
+    ///
+    /// Kept because the merged lists cannot say which file an entry came from, and a report of
+    /// which rule decided a call has to name the file to edit (CLI-30).
+    rule_sources: Vec<RuleSource>,
     /// The layers that named a `provider` block and were not obeyed, weakest first, for `doctor`.
     ///
     /// Kept for the reason `vetting_ignored` is kept: a provider block decides where a request is
@@ -416,6 +433,11 @@ pub struct Settings {
     /// about its own: answering with the number here would make this crate the second place it is
     /// written down.
     run_output: Option<usize>,
+    /// What `download.maxBytes` said, if it said anything.
+    ///
+    /// `None` is the built-in cap, which belongs to the turn that spends the disk, for the reason
+    /// `run_output` is `None` where nobody named a figure.
+    download_max: Option<usize>,
     /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
     run_deadlines: RunDeadlines,
     /// What `run.network` came to across the layers, if any of them said it.
@@ -454,6 +476,16 @@ pub struct Settings {
     sandbox_hosts_ignored: Vec<(PathBuf, &'static str)>,
     /// The layers that gave one of the three keys a value it cannot read.
     sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)>,
+    /// What `git.identities` came to across the layers that may choose a key.
+    ///
+    /// Settled by [`Settings::layered`]: an entry is read from the person's own file and the one
+    /// `--settings` names outside the workspace, as `sandbox.mode` is.
+    git_identities: crate::git_identities::Identities,
+    /// The layers that wrote `git.identities` and were not obeyed.
+    git_identities_ignored: Vec<PathBuf>,
+    /// The layers that gave `git.identities`, or one entry of it, a value it cannot read, with the
+    /// name of what was not read.
+    git_identities_misshapen: Vec<(PathBuf, String)>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -536,6 +568,15 @@ impl RunDeadlines {
     pub fn is_empty(&self) -> bool {
         self.default.is_none() && self.ceiling.is_none()
     }
+}
+
+/// One rule in force, with the file that wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuleSource {
+    list: &'static str,
+    anchored: String,
+    written: String,
+    file: PathBuf,
 }
 
 /// The `permissions` block, as text, exactly as the file spelled it.
@@ -679,6 +720,7 @@ impl Settings {
         // the person wrote in their own file. See [`Settings::allow_ignored`].
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
+        let mut rule_sources = Vec::new();
         // Settled per layer for the same reason: which file chose a mode decides whether it binds.
         let mut sandbox_chosen = None;
         let mut sandbox_asked_strict = Vec::new();
@@ -722,6 +764,11 @@ impl Settings {
         let mut sandbox_hosts = crate::sandbox_network::Hosts::default();
         let mut sandbox_hosts_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
+        // Settled per layer for the reason `sandbox.mode` is: which file chose a key decides
+        // whether it binds.
+        let mut git_identities = crate::git_identities::Identities::default();
+        let mut git_identities_ignored: Vec<PathBuf> = Vec::new();
+        let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -845,6 +892,13 @@ impl Settings {
                 &mut sandbox_hosts_ignored,
                 &mut sandbox_hosts_misshapen,
             );
+            git_identities.absorb(
+                &root,
+                Some(&path),
+                granting,
+                &mut git_identities_ignored,
+                &mut git_identities_misshapen,
+            );
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -852,7 +906,16 @@ impl Settings {
                 // reporting it here would say a rule was withheld where PERM-11 is already about
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
-                    true => allow.push(anchor_slash_rule(&rule, &directory)),
+                    true => {
+                        let anchored = anchor_slash_rule(&rule, &directory);
+                        rule_sources.push(RuleSource {
+                            list: "allow",
+                            anchored: anchored.clone(),
+                            written: rule,
+                            file: path.clone(),
+                        });
+                        allow.push(anchored);
+                    }
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
@@ -872,8 +935,23 @@ impl Settings {
             for key in unread_keys(&root) {
                 unread.push((path.clone(), key));
             }
-            found.push(path);
+            let written = permission_lists(&root);
+            found.push(path.clone());
             root.anchor_slash_rules(&directory);
+            let anchored = permission_lists(&root);
+            for (list, written, anchored) in [
+                ("deny", written.deny, anchored.deny),
+                ("ask", written.ask, anchored.ask),
+            ] {
+                rule_sources.extend(written.into_iter().zip(anchored).map(
+                    |(written, anchored)| RuleSource {
+                        list,
+                        anchored,
+                        written,
+                        file: path.clone(),
+                    },
+                ));
+            }
             merge(&mut merged, root.take());
         }
 
@@ -909,11 +987,15 @@ impl Settings {
         settings.sandbox_hosts = sandbox_hosts;
         settings.sandbox_hosts_ignored = sandbox_hosts_ignored;
         settings.sandbox_hosts_misshapen = sandbox_hosts_misshapen;
+        settings.git_identities = git_identities;
+        settings.git_identities_ignored = git_identities_ignored;
+        settings.git_identities_misshapen = git_identities_misshapen;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
+        settings.rule_sources = rule_sources;
         settings.misshapen = misshapen;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
@@ -996,17 +1078,35 @@ impl Settings {
             effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
             limit: match root.get("limit") {
+                Some(serde_json::Value::Number(count)) => count
+                    .as_u64()
+                    .filter(|tokens| *tokens > 0)
+                    .map(crate::limit::Limit::tokens),
+                Some(serde_json::Value::String(text)) => {
+                    crate::limit::parse(text, crate::limit::Unit::Tokens)
+                }
+                _ => None,
+            },
+            defer_mcp_tools_above: match root.get("deferMcpToolsAbove") {
                 Some(serde_json::Value::Number(count)) => {
                     count.as_u64().filter(|tokens| *tokens > 0)
                 }
-                Some(serde_json::Value::String(text)) => crate::limit::parse_tokens(text),
+                Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
                 _ => None,
             },
             terminal_title: match root.get("terminalTitle") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            suggestions: match root.get("suggestions") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             update_check: match root.get("updateCheck") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
+            away_summary_enabled: match root.get("awaySummaryEnabled") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
@@ -1030,6 +1130,7 @@ impl Settings {
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
             allow_ignored: Vec::new(),
+            rule_sources: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each key was written in.
             misshapen: Vec::new(),
             mcp_declared: Vec::new(),
@@ -1039,6 +1140,7 @@ impl Settings {
             attribution: attribution_block(root),
             search: search_caps(root),
             run_output: run_output_cap(root),
+            download_max: download_max_bytes(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             // The word one root states, there being no file to name. [`Settings::layered`]
@@ -1063,6 +1165,14 @@ impl Settings {
             },
             sandbox_hosts_ignored: Vec::new(),
             sandbox_hosts_misshapen: Vec::new(),
+            // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
+            git_identities: {
+                let mut identities = crate::git_identities::Identities::default();
+                identities.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
+                identities
+            },
+            git_identities_ignored: Vec::new(),
+            git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1177,12 +1287,21 @@ impl Settings {
         self.editor_mode.as_deref()
     }
 
-    /// The most tokens a session may spend before it asks, if the settings in force name one.
+    /// The most a session may spend before it asks, if the settings in force name one.
     ///
-    /// A whole number, or a string such as `"500k"`. Anything else, and zero, is absence: a
-    /// misspelt limit leaves the session unbounded, as it was without the key.
-    pub fn limit(&self) -> Option<u64> {
+    /// A whole number of tokens, or a string such as `"500k"` or `"40 credits"`. Anything else, and
+    /// zero, is absence: a misspelt limit leaves the session unbounded, as it was without the key.
+    pub fn limit(&self) -> Option<crate::limit::Limit> {
         self.limit
+    }
+
+    /// The size in tokens above which the settings in force have a server's tools offered by name
+    /// only, if they name one.
+    ///
+    /// A number, or a size written as `"limit"` is (`"20k"`). Anything else is absence, which
+    /// leaves every tool offered in full. It only ever offers less, so any layer may state it.
+    pub fn defer_mcp_tools_above(&self) -> Option<u64> {
+        self.defer_mcp_tools_above
     }
 
     /// Whether the settings in force let the interface set the terminal's title, if they said.
@@ -1194,6 +1313,16 @@ impl Settings {
         self.terminal_title
     }
 
+    /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
+    ///
+    /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
+    /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
+    /// [`Settings::terminal_title`], and for the opposite reason: a suggestion is a request that
+    /// spends, so a value read loosely could spend for somebody who wrote something else.
+    pub fn suggestions(&self) -> Option<bool> {
+        self.suggestions
+    }
+
     /// Whether the settings in force let the startup screen check for a newer release, if they said.
     ///
     /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key exists
@@ -1201,6 +1330,15 @@ impl Settings {
     /// comes from the person's own configuration and never from a response.
     pub fn update_check(&self) -> Option<bool> {
         self.update_check
+    }
+
+    /// Whether the settings in force let the interface recap a session by itself when a person has
+    /// been away, if they said.
+    ///
+    /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key exists
+    /// to turn the recap off, so a quoted `"false"` is absence and the recap stays on.
+    pub fn away_summary_enabled(&self) -> Option<bool> {
+        self.away_summary_enabled
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1302,6 +1440,19 @@ impl Settings {
             .map(|(path, rule)| (path.as_path(), rule.as_str()))
     }
 
+    /// The file that wrote the rule `anchored` in `list` (`deny`, `ask` or `allow`), and the
+    /// rule as that file spelled it, or `None` where no layer wrote it.
+    ///
+    /// `anchored` is the text [`Settings::permissions`] holds, which differs from what the file
+    /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
+    /// the same rule, the weakest layer that did is named.
+    pub fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
+        self.rule_sources
+            .iter()
+            .find(|source| source.list == list && source.anchored == anchored)
+            .map(|source| (source.file.as_path(), source.written.as_str()))
+    }
+
     /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
     /// are read from, and the file each was written in, weakest first.
     ///
@@ -1370,6 +1521,13 @@ impl Settings {
     /// would put a second copy of it in this crate.
     pub fn run_output_cap(&self) -> Option<usize> {
         self.run_output
+    }
+
+    /// The most the settings in force let one `download_url` call write to a file.
+    ///
+    /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`.
+    pub fn download_max_bytes(&self) -> Option<usize> {
+        self.download_max
     }
 
     /// How long the settings in force let a command run, and the most a call may name for itself.
@@ -1446,6 +1604,26 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), *key))
     }
 
+    /// The key each owner's repositories are pushed and fetched with over ssh, from the layers that
+    /// may choose one: the person's own file and the one `--settings` names outside the workspace.
+    pub fn git_identities(&self) -> &crate::git_identities::Identities {
+        &self.git_identities
+    }
+
+    /// The layers that wrote `git.identities` and were not obeyed, since a checkout cannot choose
+    /// which credential a program uses.
+    pub fn git_identities_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.git_identities_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The layers that gave `git.identities`, or one entry of it, a value it cannot read, with what
+    /// was not read.
+    pub fn git_identities_misshapen(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.git_identities_misshapen
+            .iter()
+            .map(|(path, name)| (path.as_path(), name.as_str()))
+    }
+
     /// The layers that gave one of the four keys something other than a list of strings.
     pub fn sandbox_filesystem_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
         self.sandbox_filesystem_misshapen
@@ -1473,8 +1651,11 @@ impl Settings {
             && self.prompt_cache_ttl.is_none()
             && self.editor_mode.is_none()
             && self.limit.is_none()
+            && self.defer_mcp_tools_above.is_none()
             && self.terminal_title.is_none()
+            && self.suggestions.is_none()
             && self.update_check.is_none()
+            && self.away_summary_enabled.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1489,6 +1670,7 @@ impl Settings {
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
+            && self.download_max.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.run_network.is_none()
@@ -1500,6 +1682,9 @@ impl Settings {
             && self.sandbox_hosts.is_empty()
             && self.sandbox_hosts_ignored.is_empty()
             && self.sandbox_hosts_misshapen.is_empty()
+            && self.git_identities.is_empty()
+            && self.git_identities_ignored.is_empty()
+            && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1633,8 +1818,19 @@ impl Settings {
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
+            .chain(
+                self.defer_mcp_tools_above
+                    .is_some()
+                    .then_some("deferMcpToolsAbove"),
+            )
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
+            .chain(self.suggestions.is_some().then_some("suggestions"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
+            .chain(
+                self.away_summary_enabled
+                    .is_some()
+                    .then_some("awaySummaryEnabled"),
+            )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain(
@@ -1652,6 +1848,7 @@ impl Settings {
             .chain(self.search.files.is_some().then_some("search.maxFiles"))
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.run_output.is_some().then_some("run.maxOutput"))
+            .chain(self.download_max.is_some().then_some("download.maxBytes"))
             .chain(
                 self.run_deadlines
                     .default
@@ -2139,6 +2336,7 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
         .filter(|key| !READ_KEYS.contains(&key.as_str()))
         .cloned()
         .chain(beside_the_mode)
+        .chain(crate::git_identities::unread_inside(root))
         .collect()
 }
 
@@ -2173,7 +2371,8 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "provider"
                     || key == "attribution"
                     || key == "keybindings"
-                    || key == "search" =>
+                    || key == "search"
+                    || key == "download" =>
             {
                 for (name, value) in above {
                     lay_over(displaced, under, name, value);
@@ -2462,6 +2661,23 @@ fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<u
         return None;
     };
     run.get("maxOutput")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|cap| *cap > 0)
+        .and_then(|cap| usize::try_from(cap).ok())
+}
+
+/// The `download.maxBytes` value: the most one `download_url` call may write to a file.
+///
+/// Read the way `run.maxOutput` is, and absent on the same terms: zero is the number somebody
+/// writes meaning "no cap", and read literally it is a download permitted no bytes, which refuses
+/// every one. A value that is not a whole count is absence too, so a half-typed file leaves the
+/// built-in cap in force rather than stopping a session.
+fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
+    let serde_json::Value::Object(download) = root.get("download")? else {
+        return None;
+    };
+    download
+        .get("maxBytes")
         .and_then(serde_json::Value::as_u64)
         .filter(|cap| *cap > 0)
         .and_then(|cap| usize::try_from(cap).ok())
@@ -3409,6 +3625,38 @@ mod tests {
         );
     }
 
+    /// A saved file can be larger than anything worth reading, so the cap on a download is a number
+    /// a person writes down (DOWNLOAD-4). Zero and every shape that is not a whole count are absence,
+    /// and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_the_most_a_download_may_write() {
+        let settings = Settings::parse(r#"{"download": {"maxBytes": 104857600}}"#);
+        assert_eq!(settings.download_max_bytes(), Some(104_857_600));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["download.maxBytes"]);
+
+        for text in [
+            r#"{"download": {"maxBytes": 0}}"#,
+            r#"{"download": {"maxBytes": "100"}}"#,
+            r#"{"download": {"maxBytes": 1.5}}"#,
+            r#"{"download": {"maxBytes": -1}}"#,
+            r#"{"download": "big"}"#,
+            r#"{"maxBytes": 100}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).download_max_bytes(),
+                None,
+                "{text:?} capped something"
+            );
+        }
+
+        let layered = Layers::new("download-cap-layers")
+            .global(r#"{"download": {"maxBytes": 1000}}"#)
+            .project(r#"{"download": {"maxBytes": 2000}}"#)
+            .read();
+        assert_eq!(layered.download_max_bytes(), Some(2000));
+    }
+
     /// SCROLL-3: terminals differ in how many events a notch sends, so the figure has to reach the
     /// interface that moves the view. Read as a whole positive count, absent on the terms every
     /// other number here is absent on: a zero or a word leaves the built-in count in force rather
@@ -4050,6 +4298,50 @@ mod tests {
             .project(HOSTS_WIDE)
             .read();
         assert!(settings.sandbox_hosts().allowed.is_none());
+    }
+
+    /// A rule is traced to the layer that wrote it, in the list it was written in, so a report of
+    /// which rule decided can name the file to edit (CLI-30). The same text in two lists and two
+    /// layers is where a lookup on the text alone would name the wrong file.
+    #[test]
+    fn a_rule_is_traced_to_the_file_and_list_that_wrote_it() {
+        let layers = Layers::new("rule-sources")
+            .global(r#"{"permissions": {"deny": ["Bash(rm *)"], "allow": ["Bash(git *)", "Read(/notes.md)"]}}"#)
+            .project(r#"{"permissions": {"ask": ["Bash(git *)"], "deny": ["Read(/secret)"]}}"#);
+        let settings = layers.read();
+        let global = layers.home.join(SETTINGS_FILE);
+        let project = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+
+        let source = |list, rule| settings.rule_source(list, rule).map(|(file, _)| file);
+        assert_eq!(source("deny", "Bash(rm *)"), Some(global.as_path()));
+        assert_eq!(source("allow", "Bash(git *)"), Some(global.as_path()));
+        assert_eq!(source("ask", "Bash(git *)"), Some(project.as_path()));
+        assert_eq!(source("deny", "Bash(git *)"), None);
+
+        // A single leading slash is anchored where the file sits, and the file's own spelling is
+        // what comes back for the person to search for.
+        let anchored = settings
+            .permissions()
+            .deny
+            .iter()
+            .find(|rule| rule.contains("secret"))
+            .expect("the anchored rule")
+            .clone();
+        assert_ne!(anchored, "Read(/secret)");
+        assert_eq!(
+            settings.rule_source("deny", &anchored),
+            Some((project.as_path(), "Read(/secret)"))
+        );
+    }
+
+    /// An `allow` rule a checkout wrote is not in force, so it is traced to no file: nothing could
+    /// be said to have decided on its account.
+    #[test]
+    fn a_checkouts_allow_rule_is_traced_to_no_file() {
+        let settings = Layers::new("rule-sources-ignored")
+            .project(r#"{"permissions": {"allow": ["Bash(make *)"]}}"#)
+            .read();
+        assert!(settings.rule_source("allow", "Bash(make *)").is_none());
     }
 
     /// A file the command line named outside the workspace is the person's act; one inside is a
@@ -5416,10 +5708,14 @@ mod tests {
     /// guess, so only a positive whole number or a count string such as `"500k"` is a limit.
     #[test]
     fn only_a_positive_count_is_a_session_limit() {
+        use crate::limit::Limit;
         for (written, expected) in [
-            (r#"{"limit": 250000}"#, Some(250_000)),
-            (r#"{"limit": "500k"}"#, Some(500_000)),
-            (r#"{"limit": "2m"}"#, Some(2_000_000)),
+            (r#"{"limit": 250000}"#, Some(Limit::tokens(250_000))),
+            (r#"{"limit": "500k"}"#, Some(Limit::tokens(500_000))),
+            (r#"{"limit": "2m"}"#, Some(Limit::tokens(2_000_000))),
+            (r#"{"limit": "40 credits"}"#, Some(Limit::credits(40))),
+            (r#"{"limit": "0 credits"}"#, None),
+            (r#"{"limit": "credits"}"#, None),
             (r#"{"limit": 0}"#, None),
             (r#"{"limit": -5}"#, None),
             (r#"{"limit": 1.5}"#, None),
@@ -5439,7 +5735,7 @@ mod tests {
             .global(r#"{"limit": "1m"}"#)
             .project(r#"{"limit": "200k"}"#)
             .read();
-        assert_eq!(settings.limit(), Some(200_000));
+        assert_eq!(settings.limit(), Some(crate::limit::Limit::tokens(200_000)));
         assert_eq!(settings.unread_keys().count(), 0);
         assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"]);
     }
@@ -5473,6 +5769,83 @@ mod tests {
     /// A file that sets only this is not a file that set nothing, and it is a key this build reads:
     /// reported among the names, and never as one nothing reads, which would tell somebody who wrote
     /// it that the title they turned off is still being set.
+    /// SERVERS-16: a count or a size is a threshold, and anything else, including zero, leaves every
+    /// tool offered in full.
+    #[test]
+    fn only_a_positive_size_sets_the_mcp_deferral_threshold() {
+        for (written, expected) in [
+            (r#"{"deferMcpToolsAbove": 20000}"#, Some(20_000)),
+            (r#"{"deferMcpToolsAbove": "20k"}"#, Some(20_000)),
+            (r#"{"deferMcpToolsAbove": 0}"#, None),
+            (r#"{"deferMcpToolsAbove": true}"#, None),
+            (r#"{"deferMcpToolsAbove": -5}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).defer_mcp_tools_above(),
+                expected,
+                "{written}"
+            );
+        }
+    }
+
+    /// The key exists to turn the automatic recap off, so only a real `false` may do it, for the
+    /// reason the terminal title's is read the same way.
+    #[test]
+    fn only_a_boolean_turns_the_away_recap_off() {
+        for (written, expected) in [
+            (r#"{"awaySummaryEnabled": false}"#, Some(false)),
+            (r#"{"awaySummaryEnabled": true}"#, Some(true)),
+            (r#"{"awaySummaryEnabled": "false"}"#, None),
+            (r#"{"awaySummaryEnabled": 0}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).away_summary_enabled(),
+                expected,
+                "{written}"
+            );
+        }
+    }
+
+    /// A file that sets only this is not a file that set nothing, and the key is one this build
+    /// reads, so it is never reported as one nothing reads.
+    #[test]
+    fn the_away_recap_switch_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"awaySummaryEnabled": false}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["awaySummaryEnabled"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("away-read")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
+    /// `"true"` read as true would spend for somebody who wrote something else.
+    #[test]
+    fn only_a_boolean_turns_suggestions_on() {
+        for (written, expected) in [
+            (r#"{"suggestions": true}"#, Some(true)),
+            (r#"{"suggestions": false}"#, Some(false)),
+            (r#"{"suggestions": "true"}"#, None),
+            (r#"{"suggestions": 1}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).suggestions(),
+                expected,
+                "{written}"
+            );
+        }
+
+        let settings = Settings::parse(r#"{"suggestions": true}"#);
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["suggestions"]);
+        assert!(!settings.is_empty());
+    }
+
     #[test]
     fn the_terminal_title_switch_is_among_the_names_reported() {
         let settings = Settings::parse(r#"{"terminalTitle": false}"#);
@@ -6169,6 +6542,80 @@ mod tests {
         );
     }
 
+    /// SANDBOX-16: `git.identities` is read from the person's own file and a named file outside
+    /// the workspace, the later one replacing an entry for the same owner, and a checkout's two
+    /// files and a named file inside the workspace are reported and not obeyed. The regression it
+    /// rejects is a cloned repository choosing which of the person's keys a push offers.
+    #[test]
+    fn only_the_persons_own_files_choose_a_key_for_an_owner() {
+        let keys = |settings: &Settings| -> Vec<(String, String)> {
+            settings
+                .git_identities()
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        format!("{}/{}", entry.address.host, entry.address.owner),
+                        entry.key.clone(),
+                    )
+                })
+                .collect()
+        };
+        let own = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/home.pub", "github.com/other": "~/.ssh/other.pub"}}}"#;
+        let layers = Layers::new("identities-home")
+            .global(own)
+            .named(r#"{"git": {"identities": {"github.com/Brave": "~/.ssh/named.pub"}}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            keys(&settings),
+            [
+                (
+                    "github.com/other".to_string(),
+                    "~/.ssh/other.pub".to_string()
+                ),
+                (
+                    "github.com/Brave".to_string(),
+                    "~/.ssh/named.pub".to_string()
+                ),
+            ]
+        );
+        assert_eq!(settings.git_identities_ignored().count(), 0);
+        assert_eq!(settings.unread_keys().count(), 0);
+
+        let checkout = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#;
+        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+            let layers = Layers::new(&format!("identities-{name}")).global(own);
+            let layers = match text {
+                "p" => layers.project(checkout),
+                "l" => layers.local(checkout),
+                _ => layers.named_inside_the_workspace(checkout),
+            };
+            let settings = layers.read();
+            assert_eq!(
+                settings
+                    .git_identities()
+                    .for_address(
+                        &bravebot_sandbox::scope::Address::spelled("github.com", "brave").unwrap()
+                    )
+                    .map(|entry| entry.key.as_str()),
+                Some("~/.ssh/home.pub"),
+                "{name} chose a key"
+            );
+            assert_eq!(settings.git_identities_ignored().count(), 1, "{name}");
+        }
+
+        let layers = Layers::new("identities-unread")
+            .global(r#"{"git": {"identities": {}, "sshCommand": "ssh -i x"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings
+                .unread_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            ["git.sshCommand"]
+        );
+    }
+
     /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
     /// may ask for `strict` and are not obeyed when they name `standard` or `off`, whichever the
     /// person's own file says. The regression it rejects is a repository loosening the sandbox of
@@ -6345,6 +6792,42 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: a running session is held to the floor start-up applies. The regression it
+    /// rejects is the command reading no pin, which would let `/sandbox off` undo what an
+    /// administrator wrote the pin to prevent.
+    #[test]
+    fn a_session_moving_its_mode_meets_the_floor_start_up_applies() {
+        use crate::sandbox::{Floor, allowed_in_session};
+        let strict = pinned("session-strict", r#"{"sandbox": {"mode": "strict"}}"#);
+        for asked in [SandboxMode::Standard, SandboxMode::Off] {
+            let refused = allowed_in_session(asked, &strict).expect_err("looser than the pin");
+            assert_eq!(
+                (
+                    refused.asked,
+                    refused.asked_in.clone(),
+                    refused.pinned,
+                    refused.because
+                ),
+                (asked, None, SandboxMode::Strict, Floor::Mode)
+            );
+            assert!(refused.pinned_in.ends_with("managed.json"), "{refused:?}");
+        }
+        assert!(allowed_in_session(SandboxMode::Strict, &strict).is_ok());
+
+        let closed = pinned("session-closed", r#"{"run": {"network": "closed"}}"#);
+        let refused = allowed_in_session(SandboxMode::Off, &closed).expect_err("opens the network");
+        assert_eq!(
+            (refused.pinned, refused.because),
+            (SandboxMode::Standard, Floor::Network)
+        );
+        for allowed in [SandboxMode::Standard, SandboxMode::Strict] {
+            assert!(allowed_in_session(allowed, &closed).is_ok());
+        }
+        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+            assert!(allowed_in_session(mode, &crate::Managed::default()).is_ok());
+        }
+    }
+
     /// SANDBOX-22: a pin that is not a mode pins nothing and says so, so a session is not refused
     /// on the strength of a word nobody can read.
     #[test]
@@ -6385,6 +6868,49 @@ mod tests {
         assert_eq!(for_a_window(&off, &pin), SandboxMode::Strict);
         assert_eq!(
             for_a_window(&Settings::default(), &pin),
+            SandboxMode::Strict
+        );
+    }
+
+    /// SANDBOX-22: a window's choice outranks the settings, is held to the pin at each turn, and is
+    /// never `off`. The regression it rejects is the choice ignored, a choice that goes under the
+    /// pin, or one that leaves a program with no profile.
+    #[test]
+    fn a_windows_choice_outranks_the_settings_and_meets_the_pin() {
+        use crate::sandbox::for_a_window_choosing;
+        let none = crate::Managed::default();
+        let strict_file = Layers::new("sandbox-chosen-strict")
+            .global(r#"{"sandbox": {"mode": "strict"}}"#)
+            .read();
+        assert_eq!(
+            for_a_window_choosing(None, &strict_file, &none),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Standard), &strict_file, &none),
+            SandboxMode::Standard
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &none),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Off), &Settings::default(), &none),
+            SandboxMode::Standard
+        );
+
+        let pin = pinned("chosen", r#"{"sandbox": {"mode": "strict"}}"#);
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Standard), &Settings::default(), &pin),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &pin),
+            SandboxMode::Strict
+        );
+        let closed = pinned("chosen-closed", r#"{"run": {"network": "closed"}}"#);
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &closed),
             SandboxMode::Strict
         );
     }

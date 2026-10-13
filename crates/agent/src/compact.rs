@@ -279,13 +279,7 @@ pub fn compact<S: Sink>(
     let model = model.as_ref();
     let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Streamed because that is the shape the backend answers in. Nothing watches the pieces go
     // by: a summary appearing a word at a time in place of the transcript it replaces would read

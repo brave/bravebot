@@ -7,6 +7,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/agent/src/home.rs
+  - crates/tui/src/command_table.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---
@@ -21,7 +22,7 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), `/bg`, and the checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+([BG-12](#BG-12)) and the checkout ([BG-14](#BG-14)). `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
@@ -76,10 +77,23 @@ rules to keep in step with the first, and the second set is the one nobody reads
 
 `bravebot --bg "prompt"` starts a background session whose first turn is the prompt as typed.
 `/bg` between two turns of a foreground session hands that conversation to a background session and
-ends the foreground process once the record is written. `/bg` while a turn is running is refused,
-because the process holding that turn cannot be handed over. Both start the session in the working
-directory they ran in, and `/bg` keeps the permission mode the foreground session was in
-([BG-8](#BG-8)).
+ends the foreground process once the record is written. The new process resumes that record and
+opens idle. `/bg` typed while a turn is running waits for the turn to end ([CMD-8](commands.md#CMD-8)),
+since the record is written then. Both start the session in the working directory they ran in, and
+`/bg` keeps the permission mode the foreground session was in ([BG-8](#BG-8)).
+
+`/bg` is refused, and the foreground session carries on, in bypass ([BG-8](#BG-8)), in an incognito
+session or one with no record yet, after an option that `--bg` refuses (such as `--no-shell` or
+`--settings`) was given at the command line, after `/sandbox` moved the session to a sandbox mode
+other than the one start-up chose, and while a loop, a goal or a watch is running, because the
+background session has none of those ([Not decided](#not-decided)). The background process chooses
+its sandbox mode from the settings and the managed file as start-up did
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `standard`
+with nothing said; the refusal names both modes and the `/sandbox` line that moves the session back.
+The background process reads the settings of the directory the session is in when `/bg` is typed,
+and the check compares with the mode start-up chose, so after `/cd` into or out of a checkout whose
+settings choose another mode the session is handed over and goes on in the mode that checkout's
+settings choose, with nothing said.
 
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
@@ -89,7 +103,15 @@ and does not start one either.
 that may start unwatched work, so the only thing that may is a person, and the line they typed is
 the whole of what they asked for.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::the_background_command_is_never_a_prompt_and_waits_for_the_turn`
+`verified-by: bravebot_tui::app::the_background_command_carries_the_record_and_the_mode`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_sandbox_moved_the_mode`
+`verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
+`verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
+`verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
@@ -251,7 +273,7 @@ else: a turn that is running keeps running, and a held prompt stays held. The li
 sent to the session.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
-person's account and carries content with the label it was released under, so the terminal marks
+person's account, and to a program that holds the session's secret ([BG-15](#BG-15)), and carries content with the label it was released under, so the terminal marks
 quarantined bytes as it would in a foreground session. The attached terminal is handed what a
 foreground terminal would be handed, and nothing the session holds beyond that.
 
@@ -363,6 +385,35 @@ person has not seen arrive in their tree.
 
 `verified-by: none`
 
+<a id="BG-15"></a>
+### BG-15: the socket answers only a client that holds the session's secret
+
+The process makes a secret of 256 random bits before it binds its socket, and keeps it in a file
+beside the socket that only the person's account can read. The first line a client sends is that
+secret. A connection whose first line is anything else, whole or part of it, longer than it or empty,
+is closed without an answer, before another line is read as a request and before an attach is
+registered for it. The secret is new for every process. It is removed when the process ends of its
+own accord, and one that is killed leaves it until the next process for the session replaces it.
+`bravebot attach` and `bravebot reply` read it and send it. The comparison looks at every byte of
+the secret whatever the first difference is.
+
+The mode of the socket is not what keeps a program out. Where the kernel cannot stop a confined
+program from connecting to a socket by its path (Landlock below ABI 9, [SANDBOX-3](sandboxing.md#SANDBOX-3)),
+a program confined to its working directory could otherwise send `reply` and have a line
+taken as the person's next prompt, or `attach` and answer a held prompt. The state directory is
+denied to every stage on every platform ([SANDBOX-12](sandboxing.md#SANDBOX-12)), so a confined
+program cannot read the secret.
+
+**Why.** A file mode applies to the file, and a program of the same user that is allowed to connect
+passes it. Only a thing the confined program cannot read can tell the person's terminal from it.
+
+`verified-by: bravebot_cli::running::a_connection_without_the_sessions_secret_gets_nothing_from_it`
+`verified-by: bravebot_cli::host::a_client_without_the_secret_is_closed_unanswered_and_unread`
+`verified-by: bravebot_cli::host::a_client_with_the_secret_is_served`
+`verified-by: bravebot_cli::host::a_session_that_has_ended_leaves_no_secret_behind`
+`verified-by: bravebot_session::jobs::the_secret_of_a_process_is_random_private_and_replaced_each_time`
+`verified-by: bravebot_session::jobs::only_the_whole_secret_is_the_secret`
+
 ## What this changes in other specs
 
 None of the following is true of a build that has no background sessions, and each is marked where
@@ -390,6 +441,9 @@ it is stated.
   started asking stays asking, and a person who wants a session to write unasked has to start it
   from a foreground session already in that mode with `/bg`. Letting a mode change last until
   detach raises the question of what the session runs in after the person leaves.
+- **Whether a loop, a goal or a watch goes with `/bg`.** The session in lines has none of the
+  three, so `/bg` refuses while one is running and the person ends it or waits. Carrying one over
+  means the background process arms it again from the record, and nothing records it yet.
 - **Whether bypass is ever allowed.** Other tools refuse it until an interactive step accepts a
   disclaimer. Bravebot has no such step: the flag is the acceptance. [BG-8](#BG-8) refuses it.
 - **Whether the checkout is made at the first edit rather than at the start.** A checkout at the

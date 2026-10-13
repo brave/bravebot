@@ -99,12 +99,16 @@ cut that would not free more than it retains is not made at all.
 life and shortens nothing. Measured at 35 summaries in a turn that should have made none. Never
 relax this to compact sooner.
 
+A skill the cut would send again ([COMPACT-17](#COMPACT-17)) counts as kept, since it takes the
+place of what was given up.
+
 `verified-by: bravebot_agent::conversation::a_cut_that_would_give_up_less_than_it_keeps_is_not_worth_a_request`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
 `verified-by: bravebot_agent::conversation::a_head_that_is_only_an_earlier_summary_is_not_compacted_again`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_agent::conversation::a_conversation_with_nothing_but_recent_exchanges_is_not_compacted`
 `verified-by: bravebot_agent::turn::a_conversation_nobody_has_measured_is_not_compacted`
+`verified-by: bravebot_agent::conversation::a_cut_that_brings_back_skills_must_give_up_enough_to_pay_for_them`
 
 <a id="COMPACT-6"></a>
 ### COMPACT-6: the request is shortened, never the record
@@ -393,3 +397,58 @@ resumed session carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::conversation::the_carried_list_survives_a_second_compaction_until_a_newer_one_replaces_it`
 `verified-by: bravebot_agent::turn::a_task_list_the_summary_replaced_is_sent_again_after_the_cut`
 `verified-by: bravebot_agent::turn::a_compaction_adds_no_task_list_where_the_planner_never_wrote_one`
+
+<a id="COMPACT-17"></a>
+### COMPACT-17: a skill the planner loaded is sent again after the summary
+
+A summary of a skill's instructions is not the instructions. The newest load of each skill whose
+result was shown to the planner before the cut is sent again as a message after the summary, in the
+skill's own words, so a skill stays in force through the compaction that replaced the result which
+carried it. A skill loaded again in the part the cut keeps is not sent twice.
+
+**What is found, and from what.** A result that `load_skill` produced and `Policy::present` showed
+is recorded with the name the catalogue gave the skill, not the name in the call's arguments and not
+anything in the skill's text. A result that went to quarantine is not recorded, and a refused or
+misspelled load has no skill to record. A compaction reads that record and the role of the message,
+and reads no word of the conversation to decide. It looks in the archive as well as the part being
+replaced, so a skill carried across one compaction is carried across the next from the result it
+was made from rather than from a copy of a copy.
+
+**Bounded.** The first 5,000 tokens of any one skill are sent, and 25,000 tokens across all of them,
+served newest first. The count is four bytes a token, because nothing here has a tokeniser. What is
+left out is said to the planner, with the call that reads the rest.
+
+**What it does not change.** The words around the skill are the driver's and the skill is the text
+the planner was already shown, so nothing enters the request that was not past the gate
+([COMPACT-1](#COMPACT-1)). The quarantine, the counter and the integrity are untouched
+([COMPACT-3](#COMPACT-3)). The result stays in the archive and the record, and a carried skill is
+drawn in no transcript ([COMPACT-6](#COMPACT-6)). No cut falls in front of a carried skill, and each one
+the cut would send counts as kept for [COMPACT-5](#COMPACT-5). A fork cut inside the archive leaves
+the copies out, since the results they repeat come back with it.
+
+**Not covered.** A result sent as prose, which is the fallback for a round whose calls carried no
+ids, is not recorded and is summarised like any other message.
+
+**Why.** A summary paraphrases or drops the instructions, so without this the planner stops
+following them once the result is replaced, and nothing tells it or the user.
+
+`verified-by: bravebot_agent::conversation::a_skill_loaded_before_a_cut_is_sent_again_word_for_word_after_it`
+`verified-by: bravebot_agent::conversation::a_skill_loaded_twice_is_sent_once_from_its_newer_load`
+`verified-by: bravebot_agent::conversation::a_skill_loaded_again_in_the_part_that_is_kept_is_not_sent_a_second_time`
+`verified-by: bravebot_agent::conversation::one_long_skill_is_cut_to_its_share_and_the_planner_is_told`
+`verified-by: bravebot_agent::conversation::skills_share_a_limit_and_the_newest_loads_are_served_first`
+`verified-by: bravebot_agent::conversation::a_carried_skill_is_neither_a_place_to_cut_nor_summarised_by_the_next_compaction`
+`verified-by: bravebot_agent::turn::a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_compacted`
+`verified-by: bravebot_agent::conversation::a_long_turn_is_not_cut_for_the_skills_it_carried`
+`verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_past_the_skills_a_compaction_carries`
+`verified-by: bravebot_agent::conversation::a_skill_survives_being_written_down_and_read_back`
+`verified-by: bravebot_agent::conversation::a_skill_cut_inside_a_character_is_cut_before_it`
+`verified-by: bravebot_agent::conversation::skills_the_cap_leaves_out_do_not_raise_what_a_cut_must_give_up`
+`verified-by: bravebot_agent::conversation::a_kept_task_list_is_still_found_after_a_compaction_carries_skills`
+`verified-by: bravebot_agent::conversation::a_carried_copy_of_a_skill_loaded_again_is_not_an_exchange_given_up`
+`verified-by: bravebot_agent::conversation::a_carried_copy_of_a_skill_loaded_again_is_not_a_round_given_up`
+`verified-by: bravebot_agent::conversation::a_skill_tag_on_anything_but_a_tool_result_carries_nothing`
+`verified-by: bravebot_agent::conversation::a_skill_is_not_drawn_as_something_the_user_said`
+`verified-by: bravebot_ui_bridge::fork::a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again`
+`verified-by: bravebot_agent::turn::a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not`
+`verified-by: bravebot_agent::turn::a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted`

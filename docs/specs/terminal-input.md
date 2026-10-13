@@ -4,15 +4,19 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/vi.rs
   - crates/tui/src/wrap.rs
   - crates/tui/src/editor.rs
   - crates/tui/src/history_search.rs
   - crates/tui/src/vim.rs
   - crates/tui/src/config_prompt.rs
+  - crates/tui/src/list_picker.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
+  - crates/tui/src/command_table.rs
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
@@ -548,6 +552,35 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
 
+<a id="INPUT-42"></a>
+### INPUT-42: a prompt waiting on a long command moves the command to the background
+
+While a prompt waits to go into the turn in flight ([INPUT-10](#INPUT-10)) and the turn is waiting
+on a line the move key could move ([RUN-25](tools/run.md#RUN-25)), the line is moved once it has run
+for 10 seconds. A line that has run that long when the prompt is sent is moved at once. The line
+goes on as a job, and the turn takes the prompt at the round boundary the move lets it reach.
+
+**Only for a prompt the turn will take.** A command or a command line waiting moves nothing, since
+those wait for the turn to end whatever the line does. Nor does a prompt behind a turn being
+stopped, which takes nothing more. A line the key could not move is waited for as before.
+
+**Not in the first 10 seconds.** Counted from when the line started. A line about to finish would
+otherwise hand the turn a job to ask about in place of output that was on its way.
+
+**It is the move the key makes.** Everything [RUN-25](tools/run.md#RUN-25) says of a moved line
+holds: it has no deadline, the planner is told the user moved it and reads its output with
+`job_output`, and the trail records the `handoff`. Sending the prompt was the request.
+
+**Why.** A waiting prompt goes in only once every call in the round has run, and a test run or a
+build can take minutes, up to [RUN-11](tools/run.md#RUN-11)'s limit. The person had to wait, stop
+the turn and lose the line, or know to press ctrl-b. A prompt typed during that wait is meant for
+the turn now.
+
+`verified-by: bravebot_tui::state::a_waiting_prompt_moves_a_command_that_has_run_long_enough`
+`verified-by: bravebot_tui::state::a_waiting_prompt_leaves_a_command_that_only_just_started`
+`verified-by: bravebot_tui::state::only_a_waiting_prompt_moves_the_command`
+`verified-by: bravebot_tui::state::a_turn_being_stopped_moves_nothing`
+
 <a id="INPUT-11"></a>
 ### INPUT-11: what is attached is drawn nearest the box, above what is waiting
 
@@ -560,6 +593,7 @@ was no part of, which reads as though it went with one of them, and the row for 
 person had just dropped moved further from the box with every prompt they queued.
 
 `verified-by: bravebot_tui::render::what_is_attached_is_drawn_above_what_is_waiting`
+`verified-by: bravebot_tui::render::what_is_waiting_is_drawn_above_what_the_half_typed_line_could_become`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
 `verified-by: bravebot_tui::render::a_waiting_prompt_is_shown_as_waiting`
 
@@ -744,13 +778,15 @@ unchanged with nothing anywhere saying why, which is neither a failure nor an ed
 `verified-by: bravebot_tui::editor::the_fallback_list_is_the_same_on_every_platform`
 `verified-by: bravebot_tui::editor::a_configured_editor_that_will_not_start_ends_the_search`
 `verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait`
+`verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait_only_where_the_user_wrote_no_arguments_of_their_own`
 `verified-by: bravebot_tui::editor::the_flag_follows_the_program_through_a_path`
 `verified-by: bravebot_tui::editor::a_terminal_editor_is_given_no_extra_flag`
 
 <a id="INPUT-16"></a>
 ### INPUT-16: an editor is started under the name it was asked for
 
-A name is looked for where a shell would look for it, and what runs is that name and not the file a
+A name is looked for where a shell would look for it, in the `PATH` directories a confined stage
+cannot write ([SANDBOX-30](sandboxing.md#SANDBOX-30)), and what runs is that name and not the file a
 symlink behind it points at. The name is only kept while it still reaches the same program: a link
 that now points elsewhere, or one that no longer resolves, is started by resolved path instead. This
 is the editor alone. Everywhere a program is approved before it runs, the approval names the file
@@ -765,11 +801,7 @@ started rather than approved, and for it the name is part of what the user asked
 `verified-by: bravebot_tui::editor::a_configured_link_to_a_gui_shim_runs_as_the_link`
 `verified-by: bravebot_tui::editor::a_terminal_editor_behind_a_gui_shim_is_started_under_its_own_name`
 `verified-by: bravebot_tui::editor::a_program_reached_through_a_link_keeps_the_name_it_was_asked_for`
-`verified-by: bravebot_tui::editor::the_name_is_looked_for_on_the_path_not_beside_the_resolved_file`
-`verified-by: bravebot_tui::editor::an_empty_path_entry_is_not_searched`
 `verified-by: bravebot_tui::editor::a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path`
-`verified-by: bravebot_tui::editor::a_name_the_path_holds_under_another_spelling_still_starts_the_program`
-`verified-by: bravebot_tui::editor::a_name_is_looked_for_under_every_spelling_it_may_be_filed_under`
 
 <a id="INPUT-17"></a>
 ### INPUT-17: Ctrl-S puts the line away, and puts it back
@@ -1110,9 +1142,13 @@ standing in for both. The default is a number chosen to be safe against models i
 about, so a reading against it is drawn with a mark saying it is one.
 
 **A measurement is taken wherever one exists, not only where a turn ended well.** A session resumed
-from disk opens with what the last request of the session it read came to. A turn that failed after
-sending a request reports what that request came to. A turn that sent nothing leaves the reading
-where it was, which for a session that has sent nothing at all is absent.
+from disk opens with what the last request of the session it read came to. A turn in flight reports
+what each round's request came to as the round completes, so the first turn of a session reads a
+figure before it ends. A turn that failed after sending a request reports what that request came
+to. A turn that sent nothing leaves the reading where it was, which for a session that has sent
+nothing at all is absent. A compaction partway through a turn reports no figure, since the last
+request measured the conversation the summary replaced, and the reading is next taken when the
+round after it completes.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
@@ -1140,6 +1176,10 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::state::updating_budget_retains_token_count_with_new_capacity`
 `verified-by: bravebot_tui::state::a_budget_that_did_not_move_can_still_stop_being_one_anybody_advertised`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_how_full_the_old_one_was`
+`verified-by: bravebot_tui::app::a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round`
+`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to`
+`verified-by: bravebot_tui::app::a_round_that_reports_no_request_leaves_the_reading_where_it_was`
+`verified-by: bravebot_agent::turn::a_compaction_reports_no_context_figure_for_the_conversation_it_replaced`
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`
@@ -1229,11 +1269,11 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_config::settings::a_blank_value_is_not_a_choice`
 `verified-by: bravebot_config::settings::a_style_of_editing_is_among_the_names_reported`
 `verified-by: bravebot_tui::config_prompt::the_picker_opens_on_the_style_in_force`
-`verified-by: bravebot_tui::config_prompt::the_style_in_force_is_marked_wherever_the_cursor_is`
-`verified-by: bravebot_tui::config_prompt::the_cursor_stops_at_the_ends_of_the_list`
-`verified-by: bravebot_tui::config_prompt::escape_and_ctrl_c_leave_the_style_alone`
-`verified-by: bravebot_tui::config_prompt::the_arrows_and_vis_own_keys_walk_the_list`
-`verified-by: bravebot_tui::config_prompt::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::list_picker::the_row_in_force_is_marked_wherever_the_cursor_is`
+`verified-by: bravebot_tui::list_picker::the_cursor_stops_at_the_ends_of_the_list`
+`verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
+`verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
+`verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -1909,58 +1949,62 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-40"></a>
-### INPUT-40: Up walks this session's prompts, and the scope chord reaches every stored one
+### INPUT-40: Up walks every stored prompt, and the scope chord narrows it to this session's
 
-Up and Down walk the prompts this session sent, and the ones its record holds when it was resumed,
-and Up stops at the oldest of them (INPUT-18). While a stored prompt is on screen, the scope chord,
-Ctrl-N by default, walks every stored prompt from every session and workspace instead, staying on
-the prompt on screen, and pressed again goes back to this session's. Where the prompt on screen is
-not this session's, the way back lands on the newest of this session's before it, and failing that
-the oldest of them. The border of the box names the scope with the position, `This session 2/3` or
-`All 78/83`, and the chord that changes it. Ending the walk, editing the line, or sending puts the
-scope back to this session's. `/clear` starts a new session's own prompts, and a prompt queued
-during a turn counts as sent from the moment it is queued (INPUT-10). The stored file is unchanged:
-which prompts are this session's is known from what this process sent and from the turns of a
-resumed record.
+Up and Down walk every stored prompt, from every session and workspace, and Up stops at the oldest
+of them (INPUT-18). While a sent prompt is on screen and this session has sent one, the scope
+chord, Ctrl-N by default, walks only the prompts this session sent, and the ones its record holds
+when it was resumed, staying on the prompt on screen, and pressed again goes back to every stored
+prompt. Where the prompt on screen is not this session's, the narrow scope lands on the newest of
+this session's before it, and failing that the oldest of them. The border of the box names the
+scope with the position, `All 78/83` or `This session 2/3`, and the chord that changes it. The
+scope stays where the person put it: ending the walk, editing the line and sending do not change
+it. `/clear` starts a new session's own prompts and puts the scope back on every stored prompt,
+and a prompt queued during a turn counts as sent from the moment it is queued (INPUT-10). The
+stored file is unchanged: which prompts are this session's is known from what this process sent
+and from the turns of a resumed record.
 
-A session that has sent nothing has nothing to recall, and Up says so on the hint line, naming the
-scope chord; with an empty box that chord then widens the scope, and Up walks every stored prompt.
-It does not walk into earlier sessions silently. Where the history has nothing to switch, in a line
-being typed or with nothing recalled, the chord is not typed and does nothing, except that a
+Where this session has sent nothing, the walk is over every stored prompt, the chord is not
+offered on the border, and pressing it does nothing. Where the history has nothing to switch, in a
+line being typed or with nothing recalled, the chord is not typed and does nothing, except that a
 chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Alt-Left and
 Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
 recalled in order to be edited and a terminal may deliver the arrows with a modifier as something
 other than the key (macOS reserves Ctrl-Left and Ctrl-Right for Mission Control). The chord is
-one of the ten a settings file can move (INPUT-32), and the border and the hint name the chord in
-force. A person who moved it, or whose terminal delivers nothing for it, still reaches every stored
-prompt through the search (INPUT-19).
+one of the ten a settings file can move (INPUT-32), and the border names the chord in force. A
+person who moved it, or whose terminal delivers nothing for it, still reaches this workspace's
+prompts through the search (INPUT-19).
 
-`bravebot --incognito` stores nothing, so there are no earlier prompts there and the session scope
-is all there is.
+`bravebot --incognito` stores nothing, so the prompts Up walks are the ones this session sent.
 
-**Why.** A person who presses Up wants the last thing said in this conversation first. A walk
-across every session mixes this conversation's prompts with other sessions' and gives no mark where
-this one's end, so a person reaching for what they just said can land on a prompt from last week.
-The wide list stays one chord away, and the search is where an old prompt is found by a word. The
-switch is a letter chord because a letter chord reaches the app in every terminal, while a Ctrl
-arrow chord may be taken by the system (Mission Control on macOS) and never arrive. It is one chord
-that toggles because a pair of directions is two things to remember.
+**Why.** A person who presses Up is looking for something said before, and which session said it
+is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
+away for a person who wants only this conversation's last prompts. The scope holds once chosen,
+because a person who narrowed it to this conversation would otherwise be put back on last week's
+prompts by the next send. It is not offered before this session has sent a prompt, since the chord
+would have nothing to narrow to. The switch is a letter chord because a letter chord reaches the
+app in every terminal, while a Ctrl arrow chord may be taken by the system (Mission Control on
+macOS) and never arrive. It is one chord that toggles because a pair of directions is two things
+to remember.
 
-`verified-by: bravebot_tui::app::the_scope_chord_widens_the_walk_to_every_stored_prompt_and_narrows_it_again`
+`verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::app::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
 `verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
 `verified-by: bravebot_tui::app::the_scope_chord_does_nothing_in_a_line_being_typed`
 `verified-by: bravebot_tui::app::a_moved_scope_chord_switches_and_the_old_one_does_not`
 `verified-by: bravebot_tui::app::a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on`
 `verified-by: bravebot_tui::app::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
-`verified-by: bravebot_tui::app::up_in_a_new_session_says_why_it_recalled_nothing`
+`verified-by: bravebot_tui::app::up_in_a_new_session_walks_the_stored_prompts_and_offers_no_switch`
 `verified-by: bravebot_tui::app::the_scope_chord_works_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_prompt_queued_during_a_turn_is_one_this_session_sent`
-`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_up_walks`
-`verified-by: bravebot_tui::render::the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts`
-`verified-by: bravebot_tui::render::the_border_and_hint_name_the_scope_chord_a_settings_file_moved`
+`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_the_chord_narrows_to`
+`verified-by: bravebot_tui::render::the_border_names_the_scope_and_offers_the_switch_only_where_it_works`
+`verified-by: bravebot_tui::render::the_border_names_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
-`verified-by: bravebot_tui::history::stored_prompts_are_not_this_sessions`
+`verified-by: bravebot_tui::history::up_walks_every_stored_prompt_by_default`
+`verified-by: bravebot_tui::history::this_sessions_scope_is_offered_only_from_a_prompt_when_the_session_has_sent_one`
+`verified-by: bravebot_tui::history::the_scope_stays_where_it_was_put_when_the_walk_ends`
 `verified-by: bravebot_tui::history::narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it`
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
@@ -1982,8 +2026,8 @@ block, so one place answers what a key does. Ten actions can be moved, and nothi
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
-- `scope` (default: `ctrl-n`): switch the prompt history Up walks between this session's prompts and
-  every stored one (INPUT-40).
+- `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
+  this session's prompts (INPUT-40).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2432,3 +2476,69 @@ a line put away on purpose ([INPUT-17](#INPUT-17)).
 `verified-by: bravebot_tui::history::sending_drops_the_draft`
 `verified-by: bravebot_tui::history::the_draft_is_not_a_stored_entry`
 `verified-by: bravebot_tui::history::the_draft_has_no_position_in_the_list_of_sent_prompts`
+
+<a id="INPUT-41"></a>
+### INPUT-41: a change in the terminal's size is drawn without waiting for another event
+
+While the box is idle, a change in the terminal's size draws a frame at the new size. The frame is
+the one a terminal of that size would have drawn from the start, so the hint row and the status row
+sit on the new bottom row, fitted to the new width. A burst of size changes from dragging a window
+edge is coalesced into frames like any other burst of input, not drawn once per event.
+
+**Why.** Without a frame on a size change, the idle loop draws nothing until a key arrives, so the
+screen keeps the old size's layout, and the bottom row suffers most. Every other loop draws on each
+pass, so only the idle loop needs this event.
+
+`verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
+`verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`
+
+<a id="INPUT-43"></a>
+### INPUT-43: an empty box may hold one suggested next prompt, which only Tab or Right takes
+
+With the `suggestions` setting `true`, a turn that ended with a reply is followed by one request, to
+the model `summaryModel` names where it names one, as [compaction.md](compaction.md) has it, and the session's own model
+otherwise, over the exchange the planner already holds and with no tools. The request asks for the
+prompt the person is most likely to type next. It is not made in plan mode, in an incognito
+session, after a turn that failed or was stopped, or while a loop or a watch has a prompt to send.
+It is made once per turn, without the box waiting for it.
+
+What comes back is offered only if it holds 2 to 12 words, fewer than 100 characters and one line.
+The driver counts and nothing else: it does not read what the words say, and an answer outside the
+counts is not offered, rather than being cut to something the model did not write. An offer is
+drawn dimmed in the box where the invitation is, and only while the box is empty and the session
+idle.
+
+Tab or Right pressed bare moves the offer into the box as text, which the person edits and sends as
+any line. Nothing sends it, and one that begins with `/` is words in the box until Enter is pressed
+on it, as [commands.md](commands.md) has it. Any other key removes it and is then read as it always was. A modifier pressed alone
+does not remove it. What the request cost is charged to the session and its trail kept, whether or
+not the answer was offered.
+
+Only a boolean `true` turns the setting on; a quoted `"true"` is absence, and the default is off,
+because the request spends on every turn.
+
+**Why.** The request is the driver's own words over the planner's own context, which holds no
+untrusted content, and the answer is text a person must take and send themselves, so it decides
+nothing. Counting is the only judgement the driver makes of it, which keeps this on the right side
+of the rule that the driver does not branch on what a model wrote. Off by default because a spend
+nobody asked for on each turn is the cost this setting exists to let a person choose.
+
+`verified-by: bravebot_agent::aside::a_suggestion_is_offered_only_inside_its_counts`
+`verified-by: bravebot_agent::aside::the_suggestion_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_suggestions_on`
+`verified-by: bravebot_tui::app::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
+`verified-by: bravebot_tui::app::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
+`verified-by: bravebot_tui::app::any_other_key_removes_the_suggestion_and_still_types`
+`verified-by: bravebot_tui::app::a_modifier_on_its_own_leaves_the_suggestion_standing`
+`verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
+`verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
+`verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
+`verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
+`verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
+`verified-by: bravebot_tui::app::a_worker_that_ends_without_answering_is_forgotten`
+`verified-by: bravebot_tui::app::an_answer_that_arrives_after_typing_is_charged_and_not_offered`
+`verified-by: bravebot_tui::app::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
+`verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
+`verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`

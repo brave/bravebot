@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
 /**
  * A function whose identity never changes and which always calls the latest `fn`.
@@ -72,4 +72,46 @@ export function useFitTextArea(host: React.RefObject<HTMLElement | null>, value:
     fit()
     return () => { cancelAnimationFrame(frame); observer.disconnect() }
   }, [host, value, minRows, maxRows])
+}
+
+/**
+ * Puts back the role of every checkable item in the menu `trigger` opens.
+ *
+ * Leo stamps `role="menuitem"` on every item each time a `ButtonMenu` opens, so a checkable item
+ * declares its role as `data-role` and gets it back here.
+ */
+export function useMenuItemRoles(trigger: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const menu = trigger.current?.parentElement
+    if (!menu) return
+    const restore = (): void => {
+      for (const item of menu.querySelectorAll<HTMLElement>('leo-menu-item[data-role]')) {
+        if (item.getAttribute('role') !== item.dataset.role) item.setAttribute('role', item.dataset.role!)
+      }
+    }
+    restore()
+    const watch = new MutationObserver(restore)
+    watch.observe(menu, { subtree: true, childList: true, attributes: true, attributeFilter: ['role'] })
+    return () => watch.disconnect()
+  }, [])
+}
+
+/**
+ * What a `ButtonMenu` needs to decide whether closing returns focus to `trigger`.
+ *
+ * Escape and a choice return it; a click elsewhere (reason `blur`) leaves focus where the pointer
+ * landed. Pass `onClose` to the menu and call `restoreFocus` when it reports closed.
+ */
+export function useFocusReturn(trigger: RefObject<HTMLElement | null>): {
+  onClose: (detail: { reason: string }) => void
+  restoreFocus: () => void
+} {
+  const reason = useRef('explicit')
+  return {
+    onClose: (detail) => { reason.current = detail.reason },
+    restoreFocus: () => {
+      if (reason.current !== 'blur') trigger.current?.focus()
+      reason.current = 'explicit'
+    },
+  }
 }

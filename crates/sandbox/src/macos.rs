@@ -10,7 +10,7 @@
 //! (curl fails to resolve or connect) and cannot create files, while still being able
 //! to exec and read permitted paths.
 
-use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy, with_their_resolved_spelling};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
@@ -22,6 +22,39 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// The socket every host name lookup on macOS goes through.
 const RESOLVER: &str = "/private/var/run/mDNSResponder";
+
+/// The Mach services every confined process may look up. Each answers a question about the machine
+/// (accounts, groups, network configuration, log and notification delivery) or is the keychain
+/// service the base reads a keychain file for. None starts a program, reads or writes the
+/// pasteboard, or opens a file or URL on the caller's behalf, which is what LaunchServices, the
+/// pasteboard and launchd do, so a lookup of any of those is refused.
+const MACH_SERVICES: &[&str] = &[
+    "com.apple.SecurityServer",
+    "com.apple.SystemConfiguration.DNSConfiguration",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.bsd.dirhelper",
+    "com.apple.logd",
+    "com.apple.system.notification_center",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+];
+
+/// The certificate trust services, looked up only by a process that may reach the network. Trust
+/// evaluation makes these fetch an issuer from the certificate's Authority Information Access URL
+/// from their own unconfined process, so a profile with no egress that allowed them would let the
+/// process make a request to any URL it names.
+const TRUST_SERVICES: &[&str] = &["com.apple.trustd", "com.apple.trustd.agent"];
+
+/// The services a policy's profile allows a lookup of: the trust services only where the policy
+/// allows network egress.
+fn mach_services(policy: &SandboxPolicy) -> impl Iterator<Item = &'static &'static str> {
+    let trust: &[&str] = if policy.allow_network {
+        TRUST_SERVICES
+    } else {
+        &[]
+    };
+    MACH_SERVICES.iter().chain(trust)
+}
 
 /// Refuses a write to any path with a `.git` component, in either case, since the default
 /// volume opens `.GIT` when git asks for `.git`.
@@ -82,12 +115,41 @@ impl SeatbeltSandbox {
     pub fn profile(policy: &SandboxPolicy) -> String {
         let mut out = String::from("(version 1)\n(deny default)\n");
 
-        // Without these the process cannot start at all: the loader must exec the
-        // binary and mach lookups are needed for basic runtime services. They grant no
-        // filesystem or network reach of their own.
+        // Without these the process cannot start at all: the loader must exec the binary and
+        // the system libraries look up the services in `MACH_SERVICES`, and `TRUST_SERVICES` where
+        // the network is allowed. Those grant no filesystem or network reach of their own, and no
+        // other service is reachable.
         out.push_str("(allow process-exec)\n");
-        out.push_str("(allow sysctl-read)\n");
-        out.push_str("(allow mach-lookup)\n");
+        // KERN_PROCARGS2 can be authorised through either sysctl-read or process-info*.
+        // Refuse both routes: emptying a child's environment does not erase the parent's
+        // exec-time environment. Only named machine-information queries are allowed.
+        out.push_str("(deny process-info*)\n");
+        // System tools query their own pidinfo during startup. This exception cannot name
+        // the parent or any other process, including another process in the same sandbox.
+        out.push_str("(allow process-info-pidinfo (target self))\n");
+        // CPU count and page size serve language runtimes (the numeric page-size query
+        // resolves to pagesize_compat). The remaining names are uname's fields, used by
+        // Python's package platform detection. No process arguments or environment query
+        // is in this list.
+        out.push_str("(allow sysctl-read");
+        for name in [
+            "hw.machine",
+            "hw.ncpu",
+            "hw.pagesize",
+            "hw.pagesize_compat",
+            "kern.hostname",
+            "kern.osrelease",
+            "kern.ostype",
+            "kern.version",
+        ] {
+            out.push_str(&format!(" (sysctl-name {})", quote(name)));
+        }
+        out.push_str(")\n");
+        out.push_str("(allow mach-lookup");
+        for service in mach_services(policy) {
+            out.push_str(&format!(" (global-name {})", quote(service)));
+        }
+        out.push_str(")\n");
 
         // The dynamic loader reads the root directory entry itself, which a subpath
         // grant for e.g. /usr does not cover. Without this the process dies with
@@ -105,11 +167,16 @@ impl SeatbeltSandbox {
         // narrowest: a refusal follows the grants it narrows, a row beneath a refusal lifts it, and
         // a refusal beneath that row holds again. At one path a read row follows the refusal, which
         // is how a credential scope lifts a location the base refuses.
+        //
+        // Seatbelt matches the path a process ends up opening, so a refusal written as a link
+        // matches nothing. Each refusal is therefore written where it stands and where it leads
+        // (SANDBOX-12), the way the Linux backend holds one.
+        let refused_reads = with_their_resolved_spelling(&policy.unreadable);
         let mut reads: Vec<(&Path, bool)> = policy
             .readable
             .iter()
             .map(|path| (path.as_path(), true))
-            .chain(policy.unreadable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
             .collect();
         reads.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in reads {
@@ -122,12 +189,13 @@ impl SeatbeltSandbox {
 
         // Written the same way, except that a row at a refused path is withdrawn and not lifted:
         // the refusal of a write is a person's, and it wins at the path it names.
+        let refused_writes = with_their_resolved_spelling(&policy.unwritable);
         let mut writes: Vec<(&Path, bool)> = policy
             .writable
             .iter()
             .filter(|row| !policy.unwritable.contains(&row.path))
             .map(|row| (row.path.as_path(), true))
-            .chain(policy.unwritable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_writes.iter().map(|path| (path.as_path(), false)))
             .collect();
         writes.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in writes {
@@ -158,12 +226,23 @@ impl SeatbeltSandbox {
         // included. Egress is IP, and a socket is reached where a write row reaches it, as
         // Landlock's ResolveUnix is granted. Host names resolve through the platform resolver's
         // socket, where Linux resolves over IP.
+        //
+        // Egress limited to a port is to that port on the loopback address and to nothing else by
+        // IP, and the resolver is left out: the proxy on that port resolves the names it is asked
+        // for.
         if policy.allow_network {
-            out.push_str("(allow network-outbound (remote ip))\n");
-            out.push_str(&format!(
-                "(allow network-outbound (literal {}))\n",
-                quote(RESOLVER)
-            ));
+            match policy.egress_only_to {
+                Some(port) => out.push_str(&format!(
+                    "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+                )),
+                None => {
+                    out.push_str("(allow network-outbound (remote ip))\n");
+                    out.push_str(&format!(
+                        "(allow network-outbound (literal {}))\n",
+                        quote(RESOLVER)
+                    ));
+                }
+            }
             for row in &policy.writable {
                 out.push_str(&format!(
                     "(allow network-outbound (subpath {}))\n",
@@ -172,9 +251,26 @@ impl SeatbeltSandbox {
             }
         }
 
+        // Listening is `network-inbound`, which covers binding the port as well as accepting on
+        // it. Each row names this machine's loopback address, so a stage that listens is reached
+        // from this machine and a stage that connects goes to this machine. A stage held to the
+        // proxy's port keeps that one port: another local port could be a service that carries it
+        // past the host list.
+        if policy.allow_loopback {
+            out.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+            if policy.egress_only_to.is_none() {
+                out.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+            }
+        }
+
         if policy.allow_subprocesses {
             out.push_str("(allow process-fork)\n");
         }
+
+        // Without a signal row a process cannot stop a child it started, and a test runner or a
+        // `timeout` waits on it for good. `same-sandbox` reaches what this profile started and no
+        // process outside it: `pgrp` would reach the session, which shares the process group.
+        out.push_str("(allow signal (target same-sandbox))\n");
 
         out
     }
@@ -286,9 +382,13 @@ impl Sandbox for SeatbeltSandbox {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["seatbelt"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: true,
             // A profile is text the kernel reads as the process starts, so a path that is
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
+            subtracts_from_a_grant: true,
+            // A connect to a socket is checked against the profile's write rows.
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -606,6 +706,40 @@ mod argument_tests {
         );
     }
 
+    /// Neither a broad sysctl grant nor default process-info access may expose a parent's
+    /// exec-time environment. The only process-info exception names the caller itself.
+    #[test]
+    fn process_inspection_is_refused_and_sysctls_are_named_machine_queries() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write("/tmp")
+            .allow_network_egress()
+            .allow_subprocesses();
+        let profile = SeatbeltSandbox::profile(&policy);
+        let inspection: Vec<_> = profile
+            .lines()
+            .filter(|line| line.contains("process-info") || line.contains("sysctl"))
+            .collect();
+        assert_eq!(
+            inspection,
+            [
+                "(deny process-info*)",
+                "(allow process-info-pidinfo (target self))",
+                concat!(
+                    "(allow sysctl-read",
+                    " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.ncpu\")",
+                    " (sysctl-name \"hw.pagesize\")",
+                    " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.hostname\")",
+                    " (sysctl-name \"kern.osrelease\")",
+                    " (sysctl-name \"kern.ostype\")",
+                    " (sysctl-name \"kern.version\"))",
+                ),
+            ]
+        );
+    }
+
     /// A backslash in a path is escaped as well as a quote. Left alone, the backslash would
     /// combine with the escape written for a quote after it, the pair would read as an escaped
     /// backslash, and the quote would end the literal and let the rest of the path be read as
@@ -668,6 +802,39 @@ mod argument_tests {
             "a write row at a refused path was kept: {profile}"
         );
         assert!(profile.contains(r#"(deny file-write* (subpath "/h/gone"))"#));
+    }
+
+    /// Seatbelt matches the path a process ends up opening, so a refusal written as the link a
+    /// person spelled holds nothing when the credential directory is a link into a dotfiles
+    /// repository. The profile carries each refusal where it stands and where it leads.
+    #[test]
+    fn a_refusal_of_a_link_is_written_where_the_link_leads_as_well() {
+        let home = crate::testutil::scratch_dir("bravebot-sandbox-refused-link-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let real = home.join("dotfiles/aws");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".aws")).unwrap();
+        let real = std::fs::canonicalize(&real).unwrap();
+        let link = home.join(".aws");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write(&home)
+            .deny_read(&link)
+            .deny_write(&link);
+        let profile = SeatbeltSandbox::profile(&policy);
+        for (operation, path) in [
+            ("file-read*", &link),
+            ("file-read*", &real),
+            ("file-write*", &link),
+            ("file-write*", &real),
+        ] {
+            let row = format!(
+                "(deny {operation} (subpath {}))",
+                quote(&path.to_string_lossy())
+            );
+            assert!(profile.contains(&row), "{row} is not in:\n{profile}");
+        }
     }
 }
 
@@ -732,9 +899,28 @@ int main(void) {
     }
 
     /// Answer one request, so a curl that was permitted a socket gets a reply and exits rather
-    /// than waiting out its own timeout. Called only where a connection is expected to arrive.
+    /// than waiting out its own timeout. Called only where a connection is expected to arrive, so
+    /// one that has not arrived in ten seconds fails the test rather than leaving it waiting.
     fn answer_one(listener: &TcpListener) {
-        let (mut stream, _) = listener.accept().expect("the connection arrives");
+        listener
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => panic!("the connection did not arrive: {error}"),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("the connection can be read in turn");
         let _ = stream.read(&mut [0u8; 1024]);
         let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
     }
@@ -896,6 +1082,215 @@ int main(void) {
         );
     }
 
+    /// SANDBOX-3: loopback is its own grant. Its rows name this machine's address, so a policy
+    /// that asks for it gets no rule for any address and no resolver, and a policy that does not
+    /// gets no network row at all.
+    #[test]
+    fn loopback_is_granted_by_its_own_rows_and_opens_no_other_address() {
+        let without = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_write("/w"));
+        for operation in ["network-bind", "network-inbound", "network-outbound"] {
+            assert!(!without.contains(operation), "{operation}: {without}");
+        }
+
+        let with = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_loopback());
+        assert!(
+            with.contains("(allow network-inbound (local ip \"localhost:*\"))\n"),
+            "{with}"
+        );
+        assert!(
+            with.contains("(allow network-outbound (remote ip \"localhost:*\"))\n"),
+            "{with}"
+        );
+        assert!(
+            !with.contains("(remote ip))"),
+            "an open egress rule: {with}"
+        );
+        assert!(!with.contains(RESOLVER), "the resolver is reached: {with}");
+    }
+
+    /// SANDBOX-3: a stage held to the proxy's port and granted loopback may listen, and connects
+    /// to that one port still, so loopback does not let it around the host list.
+    #[test]
+    fn loopback_leaves_a_stage_held_to_a_port_with_that_port_alone() {
+        let held = SeatbeltSandbox::profile(
+            &SandboxPolicy::strict()
+                .allow_network_egress_only_to(8123)
+                .allow_loopback(),
+        );
+        assert!(
+            held.contains("(allow network-inbound (local ip \"localhost:*\"))\n"),
+            "{held}"
+        );
+        assert!(
+            held.contains("(allow network-outbound (remote ip \"localhost:8123\"))\n"),
+            "{held}"
+        );
+        assert!(
+            !held.contains("(remote ip \"localhost:*\")"),
+            "a held stage connects to every local port: {held}"
+        );
+    }
+
+    /// Egress limited to a port names that port on the loopback address and leaves out the rule
+    /// for any address and the resolver's socket, while a write row still reaches its socket.
+    #[test]
+    fn egress_limited_to_a_port_names_the_port_and_no_other_address() {
+        let profile = SeatbeltSandbox::profile(
+            &SandboxPolicy::strict()
+                .allow_write("/tmp/agent")
+                .allow_network_egress_only_to(8123),
+        );
+        assert!(
+            profile.contains("(allow network-outbound (remote ip \"localhost:8123\"))\n"),
+            "{profile}"
+        );
+        assert!(
+            !profile.contains("(allow network-outbound (remote ip))"),
+            "egress to any address is still granted: {profile}"
+        );
+        assert!(
+            !profile.contains(RESOLVER),
+            "the resolver is still granted: {profile}"
+        );
+        assert!(
+            profile.contains("(allow network-outbound (subpath \"/tmp/agent\"))\n"),
+            "a socket under a write row is no longer reached: {profile}"
+        );
+    }
+
+    /// The port is the only thing a limited process reaches by IP. Both halves run against
+    /// listeners this test holds: the named port answering is what makes a refusal of the other
+    /// mean the rule was applied and not that nothing was listening.
+    #[test]
+    fn a_process_limited_to_a_port_reaches_that_port_and_not_another() {
+        let named = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let other = TcpListener::bind("127.0.0.1:0").expect("a second loopback port");
+        let (named_port, other_port) = (
+            named.local_addr().expect("the bound address").port(),
+            other.local_addr().expect("the bound address").port(),
+        );
+        other
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read("/private/etc")
+            .allow_read("/System")
+            .allow_read("/Library")
+            .allow_network_egress_only_to(named_port);
+        let curl = |port: u16| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(named_port);
+        answer_one(&named);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "the named port was refused, so nothing below means anything"
+        );
+
+        let mut refused = curl(other_port);
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "the connection was not what failed"
+        );
+        assert!(
+            matches!(
+                other.accept(),
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "a connection arrived at a port the policy did not name"
+        );
+    }
+
+    /// SANDBOX-3: loopback does not let a process held to the proxy's port connect to another
+    /// port of this machine, where a local service could carry it past the host list. The held
+    /// port answering is what makes the refusal mean the rule was applied.
+    #[test]
+    fn a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port() {
+        let named = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let other = TcpListener::bind("127.0.0.1:0").expect("a second loopback port");
+        let (named_port, other_port) = (
+            named.local_addr().expect("the bound address").port(),
+            other.local_addr().expect("the bound address").port(),
+        );
+        other
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = reads_the_system_only()
+            .allow_network_egress_only_to(named_port)
+            .allow_loopback();
+        let curl = |port: u16| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(named_port);
+        answer_one(&named);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "the held port was refused, so nothing below means anything"
+        );
+
+        let mut refused = curl(other_port);
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "loopback let a held process connect to another local port"
+        );
+        assert!(
+            matches!(
+                other.accept(),
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "a connection arrived at a port the policy did not name"
+        );
+    }
+
     /// A path containing a quote must not close the string literal and let its
     /// remainder be parsed as profile directives. The payload text still appears, but it
     /// is part of the path, but every quote in it is escaped, so Seatbelt reads the
@@ -957,11 +1352,251 @@ int main(void) {
         assert!(matches!(err, SandboxError::PolicyTooPermissive));
     }
 
+    /// `bootstrap_look_up` of the name in its argument, reported as an exit status the caller can
+    /// tell apart: 0 found, 10 refused to this process, 11 not registered, 12 anything else.
+    /// Built in `dir`, because no program macOS ships asks the bootstrap server for a name and
+    /// says which of those answers it got.
+    fn mach_lookup_probe(dir: &Path) -> PathBuf {
+        const SOURCE: &str = r#"#include <mach/mach.h>
+#include <servers/bootstrap.h>
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        return 12;
+    }
+    mach_port_t port = MACH_PORT_NULL;
+    kern_return_t result = bootstrap_look_up(bootstrap_port, argv[1], &port);
+    if (result == KERN_SUCCESS) {
+        return 0;
+    }
+    if (result == BOOTSTRAP_NOT_PRIVILEGED) {
+        return 10;
+    }
+    return result == BOOTSTRAP_UNKNOWN_SERVICE ? 11 : 12;
+}
+"#;
+        let source = dir.join("lookup.c");
+        std::fs::write(&source, SOURCE).expect("the scratch directory is writable");
+        let program = dir.join("lookup");
+        let built = Command::new("cc")
+            .arg("-o")
+            .arg(&program)
+            .arg(&source)
+            .status()
+            .expect("cc, which linked this test binary, is on the machine");
+        assert!(built.success(), "the lookup probe did not compile");
+        program
+    }
+
+    const LOOKUP_FOUND: i32 = 0;
+    const LOOKUP_REFUSED: i32 = 10;
+
+    /// SANDBOX-31: the profile names the services a confined process may look up, and a lookup
+    /// of anything is not one of its rules. The regression it rejects is `(allow mach-lookup)`
+    /// written without a name, which grants every service the account's session registers.
+    #[test]
+    fn the_profile_allows_a_lookup_of_named_services_and_not_of_every_service() {
+        let profile = SeatbeltSandbox::profile(&reads_the_system_only());
+        let rules: Vec<&str> = profile
+            .lines()
+            .filter(|line| line.contains("mach-lookup"))
+            .collect();
+        assert_eq!(rules.len(), 1, "one rule decides the lookups: {profile}");
+        for service in MACH_SERVICES {
+            assert!(
+                rules[0].contains(&format!("(global-name {})", quote(service))),
+                "{service} is not named in {}",
+                rules[0]
+            );
+        }
+        assert_eq!(
+            rules[0].matches("(global-name ").count(),
+            MACH_SERVICES.len(),
+            "the rule grants something the list does not name: {}",
+            rules[0]
+        );
+        assert!(
+            !rules[0].contains("regex") && !rules[0].contains("prefix"),
+            "a pattern grants services the list does not name: {}",
+            rules[0]
+        );
+    }
+
+    /// SANDBOX-31: the certificate trust services are in a profile only where the policy allows
+    /// network egress, whether to every host or to one proxy port. The regression it rejects is the
+    /// constant list of both, which lets a stage with no egress ask trustd to fetch a URL for it.
+    #[test]
+    fn the_trust_services_are_looked_up_only_where_the_network_is_allowed() {
+        let lookups = |policy: &SandboxPolicy| -> Vec<String> {
+            SeatbeltSandbox::profile(policy)
+                .lines()
+                .filter(|line| line.contains("mach-lookup"))
+                .flat_map(|line| line.split("(global-name ").skip(1))
+                .map(|name| {
+                    let name = name.trim_end().trim_end_matches(')');
+                    name.trim_matches('"').to_owned()
+                })
+                .collect()
+        };
+        let closed = lookups(&reads_the_system_only());
+        for service in TRUST_SERVICES {
+            assert!(
+                !closed.contains(&(*service).to_owned()),
+                "{service} in {closed:?}"
+            );
+        }
+        assert_eq!(closed.len(), MACH_SERVICES.len());
+        for policy in [
+            reads_the_system_only().allow_network_egress(),
+            reads_the_system_only().allow_network_egress_only_to(8080),
+        ] {
+            let open = lookups(&policy);
+            for service in TRUST_SERVICES.iter().chain(MACH_SERVICES) {
+                assert!(
+                    open.contains(&(*service).to_owned()),
+                    "{service} not in {open:?}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-31: a confined process finds each service the list names and is refused the ones
+    /// that act on the person's behalf. Run against the bootstrap server, so a name the profile
+    /// spells wrongly is not found, and a list left empty fails the first half as readily as a
+    /// blanket allow fails the second.
+    ///
+    /// A refused service is compared with what this process finds unconfined, so a session that
+    /// registers no pasteboard does not pass for a profile that refuses it. LaunchServices is a
+    /// daemon of the system domain, so it is always there to be refused.
+    #[test]
+    fn a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-mach-lookup");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let probe = mach_lookup_probe(&dir);
+        let policy = reads_the_system_only().allow_read(&dir);
+        let networked = policy.clone().allow_network_egress();
+        let lookup_under = |name: &str, policy: &SandboxPolicy| -> i32 {
+            sandbox
+                .spawn(
+                    probe.as_os_str(),
+                    &[name.into()],
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+                .expect("the probe exits")
+        };
+        let lookup = |name: &str, confined: bool| -> i32 {
+            if !confined {
+                return Command::new(&probe)
+                    .arg(name)
+                    .status()
+                    .expect("the probe runs")
+                    .code()
+                    .expect("the probe exits");
+            }
+            sandbox
+                .spawn(
+                    probe.as_os_str(),
+                    &[name.into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+                .expect("the probe exits")
+        };
+
+        for service in MACH_SERVICES {
+            assert_eq!(
+                lookup(service, false),
+                LOOKUP_FOUND,
+                "{service} is listed and is not a service this session registers"
+            );
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_FOUND,
+                "{service} is listed and could not be looked up"
+            );
+        }
+
+        // Each of these stopped a program when it was refused: account lookups (every program
+        // that asks who it runs as), notifications and logging (libSystem), the keychain (`gh`
+        // and git's `osxkeychain`), and certificate trust (a Go program such as `gh` verifying a
+        // TLS certificate through the platform, which fails with `x509: OSStatus -26276`).
+        for service in [
+            "com.apple.system.opendirectoryd.libinfo",
+            "com.apple.system.opendirectoryd.membership",
+            "com.apple.system.notification_center",
+            "com.apple.logd",
+            "com.apple.SecurityServer",
+        ] {
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_FOUND,
+                "{service} is what a program needs to run and could not be looked up"
+            );
+        }
+
+        // Certificate trust is found by a process that may reach the network, and refused to one
+        // that may not, which would otherwise have trustd fetch a URL on its behalf.
+        for service in TRUST_SERVICES {
+            assert_eq!(
+                lookup(service, false),
+                LOOKUP_FOUND,
+                "{service} is registered"
+            );
+            assert_eq!(
+                lookup_under(service, &networked),
+                LOOKUP_FOUND,
+                "{service} is what a program verifying a certificate needs"
+            );
+            assert_eq!(
+                lookup_under(service, &policy),
+                LOOKUP_REFUSED,
+                "{service} fetches for a process that has no network"
+            );
+        }
+
+        assert_eq!(
+            lookup("com.apple.coreservices.launchservicesd", false),
+            LOOKUP_FOUND,
+            "LaunchServices is registered in every session, so a refusal of it is observable"
+        );
+        let mut refused = 0;
+        for service in [
+            "com.apple.coreservices.launchservicesd",
+            "com.apple.lsd.mapdb",
+            "com.apple.pasteboard.1",
+        ] {
+            if lookup(service, false) != LOOKUP_FOUND {
+                continue;
+            }
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_REFUSED,
+                "{service} acts for the person and could be looked up"
+            );
+            refused += 1;
+        }
+        assert!(refused >= 1, "no refused service was there to be refused");
+    }
+
     #[test]
     fn capabilities_report_kernel_enforcement() {
         let caps = SeatbeltSandbox.capabilities();
         assert_eq!(caps.level, ConfinementLevel::Kernel);
         assert!(caps.network_denial_enforced);
+        assert!(caps.egress_limited_to_a_port);
+        assert!(caps.governs_sockets_with_a_path);
         assert!(caps.mechanisms.contains(&"seatbelt"));
     }
 
@@ -1064,6 +1699,83 @@ int main(void) {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
+    /// on a child does not wait on it until it ends by itself.
+    #[test]
+    fn a_confined_process_can_signal_a_process_it_started() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_subprocesses();
+        // 143 is the status a shell reports for a child that SIGTERM ended.
+        let status = sandbox
+            .spawn(
+                OsStr::new("/bin/sh"),
+                &[
+                    "-c".into(),
+                    "sleep 5 & kill $!; wait $!; test $? -eq 143".into(),
+                ],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert!(status.success(), "the child was not stopped: {status:?}");
+    }
+
+    /// A confined process signals nothing outside its own sandbox: not a process of the account
+    /// running unconfined in the same process group, as the session does, and not a process
+    /// another stage started.
+    #[test]
+    fn a_confined_process_cannot_signal_a_process_outside_its_sandbox() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+        let mut unconfined = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let mut other_stage = sandbox
+            .spawn(
+                OsStr::new("/bin/sleep"),
+                &["30".into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+
+        for (target, whose) in [
+            (unconfined.id(), "an unconfined process"),
+            (other_stage.id(), "another stage's process"),
+        ] {
+            let status = sandbox
+                .spawn(
+                    OsStr::new("/bin/kill"),
+                    &[target.to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait");
+            assert!(!status.success(), "{whose} was signalled");
+        }
+        let unconfined_ran_on = unconfined.try_wait().expect("should poll").is_none();
+        let other_stage_ran_on = other_stage.try_wait().expect("should poll").is_none();
+        let _ = unconfined.kill();
+        let _ = unconfined.wait();
+        let _ = other_stage.kill();
+        let _ = other_stage.wait();
+        assert!(unconfined_ran_on, "the unconfined process was stopped");
+        assert!(other_stage_ran_on, "the other stage's process was stopped");
     }
 
     /// Confirms the sandbox actually runs a process, not just that a profile string
@@ -1192,6 +1904,105 @@ int main(void) {
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed, so this says nothing about network denial"
+        );
+    }
+
+    /// The policy a program that only reads the system needs to start, with no network.
+    fn reads_the_system_only() -> SandboxPolicy {
+        SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read("/private/etc")
+            .allow_read("/System")
+            .allow_read("/Library")
+    }
+
+    /// SANDBOX-3: a process granted loopback and no network connects to a port of this machine,
+    /// and one granted neither is refused that same connection. The parent answers, so the
+    /// refused half is a connection that did not arrive and not a listener that was absent.
+    #[test]
+    fn a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let port = listener.local_addr().expect("the bound address").port();
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let curl = |policy: &SandboxPolicy| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(&reads_the_system_only().allow_loopback());
+        answer_one(&listener);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "a process granted loopback could not reach the listener"
+        );
+
+        let mut refused = curl(&reads_the_system_only());
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "the connection was not what failed, so this says nothing about the missing grant"
+        );
+    }
+
+    /// SANDBOX-3: a process granted loopback listens on a port of this machine, which is what an
+    /// `sccache` server and a test that binds `127.0.0.1:0` do, and one without the grant cannot
+    /// bind it. The parent is the client: a connection arrives only where `nc` is bound.
+    #[test]
+    fn a_process_granted_loopback_can_listen_and_one_without_it_cannot() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let listens_on = |policy: &SandboxPolicy| -> bool {
+            let port = {
+                let probe = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
+                probe.local_addr().expect("the bound address").port()
+            };
+            let args: Vec<OsString> = ["-l", "-w", "4", "127.0.0.1", &port.to_string()]
+                .iter()
+                .map(OsString::from)
+                .collect();
+            let mut child = sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/nc"),
+                    &args,
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            let reached = (0..30).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+            });
+            let _ = child.wait();
+            reached
+        };
+
+        assert!(
+            listens_on(&reads_the_system_only().allow_loopback()),
+            "nothing listened, so the refusal below says nothing"
+        );
+        assert!(
+            !listens_on(&reads_the_system_only()),
+            "a process without the grant bound a port"
         );
     }
 
@@ -1983,6 +2794,7 @@ int main(void) {
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
             ".bravebot/mcp.json",
+            ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",
@@ -1998,6 +2810,58 @@ int main(void) {
             "Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
             "Library/Cookies/Cookies.binarycookies",
             "Library/Safari/History.db",
+            ".config/sops/age/keys.txt",
+            ".password-store/site.gpg",
+            ".bash_history",
+            ".zsh_history",
+            ".zsh_sessions/A1B2.history",
+            ".bash_sessions/A1B2.history",
+            ".local/share/fish/fish_history",
+            ".psql_history",
+            ".mysql_history",
+            ".node_repl_history",
+            ".python_history",
+            ".rediscli_history",
+            ".sqlite_history",
+            ".dbshell",
+            ".mongodb/mongosh/mongosh_repl_history",
+            ".claude/.credentials.json",
+            ".claude.json",
+            ".codex/auth.json",
+            ".gemini/oauth_creds.json",
+            ".local/share/opencode/auth.json",
+            ".config/github-copilot/hosts.json",
+            ".config/openconnect/vpn.conf",
+            ".gitlab-runner/config.toml",
+            ".pgadmin/pgadmin4.db",
+            "Postman/files/environment.json",
+            "Library/Application Support/Google/Chrome Beta/Default/Cookies",
+            "Library/Application Support/Google/Chrome Canary/Default/Cookies",
+            "Library/Application Support/Google/Chrome Dev/Default/Cookies",
+            "Library/Application Support/Chromium/Default/Cookies",
+            "Library/Application Support/Microsoft Edge/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Beta/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Dev/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Canary/Default/Cookies",
+            "Library/Application Support/Arc/User Data/Default/Cookies",
+            "Library/Application Support/Vivaldi/Default/Cookies",
+            "Library/Messages/chat.db",
+            "Library/Mail/V10/message.emlx",
+            "Library/Thunderbird/Profiles/x/logins.json",
+            "Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/1password.sqlite",
+            "Library/Application Support/Slack/Cookies",
+            "Library/Application Support/discord/Local Storage/leveldb/000003.log",
+            "Library/Application Support/Signal/config.json",
+            "Library/Application Support/Code/User/globalStorage/state.vscdb",
+            "Library/Application Support/Code - Insiders/User/globalStorage/state.vscdb",
+            "Library/Application Support/VSCodium/User/globalStorage/state.vscdb",
+            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+            "Library/Application Support/Claude/claude_desktop_config.json",
+            "Library/Application Support/Insomnia/insomnia.Environment.db",
+            "Library/Application Support/Bruno/preferences.json",
+            "Library/Application Support/Postman/Partitions/x/Cookies",
+            "Library/DBeaverData/workspace6/General/.dbeaver/credentials-config.json",
+            "Library/Application Support/sops/age/keys.txt",
         ];
         let read = [
             ".gitconfig",
@@ -2014,6 +2878,13 @@ int main(void) {
             "Library/Keychains/login.keychain-db",
             "Documents/notes.txt",
             "Library/Application Support/Other/state",
+            ".vault-token",
+            ".yarnrc.yml",
+            ".zsh_history_other",
+            ".local/share/fish/fish_variables",
+            ".mongodb/mongosh/snippets/state",
+            "Library/Application Support/JetBrains/Toolbox/scripts/idea",
+            "Library/Group Containers/group.other/state",
         ];
         for row in held_back.iter().chain(&read) {
             let file = home.join(row);
@@ -2199,6 +3070,7 @@ int main(void) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             &home,
+            &crate::signing::Place::default(),
         );
         let at = |path: PathBuf| path.display().to_string();
         let code = |program: &str, path: PathBuf| {
@@ -2259,6 +3131,298 @@ int main(void) {
             "an account with no known_hosts could not have one made"
         );
         assert!(ssh.join("known_hosts").is_file());
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A public key the person's `~/.ssh/config` names, in a stage that reads the machine except
+    /// its credential table: the kernel lets ssh read that file and still refuses the private key
+    /// beside it, a public key the configuration does not name, and a file a link in `~/.ssh`
+    /// leads to in another credential directory.
+    #[test]
+    fn a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-named-public-key");
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).expect("the scratch home is creatable");
+        std::fs::create_dir_all(home.join(".aws")).expect("the scratch home is creatable");
+        std::fs::write(
+            ssh.join("config"),
+            "Host *\n  IdentityFile ~/.ssh/work\n  IdentityFile ~/.ssh/toward-aws.pub\n",
+        )
+        .expect("the scratch home is writable");
+        for file in ["work", "work.pub", "unnamed.pub"] {
+            std::fs::write(ssh.join(file), "a key").expect("the scratch home is writable");
+        }
+        std::fs::write(home.join(".aws/credentials.pub"), "a credential")
+            .expect("the scratch home is writable");
+        std::os::unix::fs::symlink(
+            home.join(".aws/credentials.pub"),
+            ssh.join("toward-aws.pub"),
+        )
+        .expect("the scratch home is writable");
+        let policy = crate::scope::Scope::Remote.grant(
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            &home,
+            &crate::signing::Place::default(),
+        );
+        let code = |path: PathBuf| {
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                "/bin/cat",
+                &[&path.display().to_string()],
+            )
+        };
+
+        assert_eq!(code(ssh.join("work.pub")), Some(0), "work.pub was not read");
+        for refused in ["work", "unnamed.pub", "toward-aws.pub"] {
+            assert_eq!(
+                code(ssh.join(refused)),
+                Some(READ_FAILED),
+                "{refused} was read"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// An ssh agent started for a test and ended with it.
+    struct AnAgent(std::process::Child);
+
+    impl Drop for AnAgent {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// SANDBOX-16: the signature a commit asks `ssh-keygen -Y sign` for, as the kernel holds it.
+    /// The tool loads the public key `user.signingkey` names and asks the person's agent for the
+    /// signature, so a stage that signs needs that one file and the agent's socket. Without the
+    /// file it fails with "Couldn't load public key", without the socket with "Couldn't connect to
+    /// agent", and with both it signs and still cannot read the private key beside the public one.
+    #[test]
+    fn a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key() {
+        let (scratch, home, temporary) = a_home_and_a_temporary_directory("sg");
+        let socket = scratch.join("s");
+        if socket.as_os_str().len() > 100 {
+            eprintln!(
+                "skipped: {} is too long for a unix socket",
+                socket.display()
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+            return;
+        }
+        let keys = home.join(".ssh");
+        std::fs::create_dir_all(&keys).expect("the scratch home is creatable");
+        let private = keys.join("work");
+        let public = keys.join("work.pub");
+        let made = std::process::Command::new("/usr/bin/ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&private)
+            .status()
+            .expect("ssh-keygen is on macOS");
+        assert!(made.success(), "ssh-keygen made no key");
+        let _agent = AnAgent(
+            std::process::Command::new("/usr/bin/ssh-agent")
+                .args(["-D", "-a"])
+                .arg(&socket)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("ssh-agent is on macOS"),
+        );
+        for _ in 0..100 {
+            if socket.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let added = std::process::Command::new("/usr/bin/ssh-add")
+            .arg(&private)
+            .env("SSH_AUTH_SOCK", &socket)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("ssh-add is on macOS");
+        assert!(added.success(), "the agent took no key");
+        std::fs::write(
+            home.join(".gitconfig"),
+            format!(
+                "[gpg]\n\tformat = ssh\n[user]\n\tsigningkey = {}\n",
+                public.display()
+            ),
+        )
+        .expect("the scratch home is writable");
+        let message = temporary.join("message");
+        std::fs::write(&message, "a commit").expect("the scratch directory is writable");
+
+        let run_base =
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
+        let sign = |policy: &SandboxPolicy| {
+            let _ = std::fs::remove_file(temporary.join("message.sig"));
+            exit_code_under_with(
+                policy,
+                environment(),
+                "/usr/bin/ssh-keygen",
+                &[
+                    "-Y",
+                    "sign",
+                    "-n",
+                    "git",
+                    "-f",
+                    &public.display().to_string(),
+                    &message.display().to_string(),
+                ],
+                crate::process::Streams {
+                    stdin: crate::process::Stream::Null,
+                    stdout: crate::process::Stream::Null,
+                    stderr: crate::process::Stream::Inherited,
+                },
+            )
+        };
+
+        assert_ne!(sign(&run_base()), Some(0), "signed with no scope");
+        let key_only = crate::scope::Scope::Signing.grant(
+            run_base(),
+            &home,
+            &crate::signing::Place::default(),
+        );
+        assert_ne!(sign(&key_only), Some(0), "signed with no agent");
+        let key_and_agent = key_only.allow_write(&socket);
+        assert_eq!(sign(&key_and_agent), Some(0), "the signature failed");
+        assert!(temporary.join("message.sig").exists());
+        assert_eq!(
+            exit_code_under(
+                &key_and_agent,
+                environment(),
+                "/bin/cat",
+                &[&private.display().to_string()],
+            ),
+            Some(READ_FAILED),
+            "the private key was read"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// SANDBOX-16: a commit signed with a key a repository's configuration names, as the kernel
+    /// holds it. The person's own configuration names no file, so the only way the stage reads
+    /// `~/.ssh/repo.pub` is that the agent holds its key. A `.pub` for a key the agent does not
+    /// hold is not readable, and the private key beside the held one never is.
+    #[test]
+    fn a_stage_that_signs_loads_a_public_key_the_agent_holds_and_no_other() {
+        let (scratch, home, temporary) = a_home_and_a_temporary_directory("sh");
+        let socket = scratch.join("s");
+        if socket.as_os_str().len() > 100 {
+            eprintln!(
+                "skipped: {} is too long for a unix socket",
+                socket.display()
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+            return;
+        }
+        let keys = home.join(".ssh");
+        std::fs::create_dir_all(&keys).expect("the scratch home is creatable");
+        for name in ["repo", "unheld"] {
+            let made = std::process::Command::new("/usr/bin/ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(keys.join(name))
+                .status()
+                .expect("ssh-keygen is on macOS");
+            assert!(made.success(), "ssh-keygen made no key");
+        }
+        let _agent = AnAgent(
+            std::process::Command::new("/usr/bin/ssh-agent")
+                .args(["-D", "-a"])
+                .arg(&socket)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("ssh-agent is on macOS"),
+        );
+        for _ in 0..100 {
+            if socket.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let added = std::process::Command::new("/usr/bin/ssh-add")
+            .arg(keys.join("repo"))
+            .env("SSH_AUTH_SOCK", &socket)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("ssh-add is on macOS");
+        assert!(added.success(), "the agent took no key");
+        std::fs::write(home.join(".gitconfig"), "[gpg]\n\tformat = ssh\n")
+            .expect("the scratch home is writable");
+        let message = temporary.join("message");
+        std::fs::write(&message, "a commit").expect("the scratch directory is writable");
+
+        let run_base =
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
+        let sign = |policy: &SandboxPolicy, key: &str| {
+            let _ = std::fs::remove_file(temporary.join("message.sig"));
+            exit_code_under_with(
+                policy,
+                environment(),
+                "/usr/bin/ssh-keygen",
+                &[
+                    "-Y",
+                    "sign",
+                    "-n",
+                    "git",
+                    "-f",
+                    &keys.join(key).display().to_string(),
+                    &message.display().to_string(),
+                ],
+                crate::process::Streams {
+                    stdin: crate::process::Stream::Null,
+                    stdout: crate::process::Stream::Null,
+                    stderr: crate::process::Stream::Inherited,
+                },
+            )
+        };
+        let without_the_agent = crate::scope::Scope::Signing
+            .grant(run_base(), &home, &crate::signing::Place::default())
+            .allow_write(&socket);
+        let asking_the_agent = crate::scope::Scope::Signing
+            .grant(
+                run_base(),
+                &home,
+                &crate::signing::Place {
+                    agent: Some(socket.clone()),
+                    ..crate::signing::Place::default()
+                },
+            )
+            .allow_write(&socket);
+
+        assert_ne!(
+            sign(&without_the_agent, "repo.pub"),
+            Some(0),
+            "signed with a key no one lent"
+        );
+        assert_eq!(
+            sign(&asking_the_agent, "repo.pub"),
+            Some(0),
+            "the signature failed"
+        );
+        assert!(temporary.join("message.sig").exists());
+        assert_ne!(
+            sign(&asking_the_agent, "unheld.pub"),
+            Some(0),
+            "signed with a key the agent does not hold"
+        );
+        assert_eq!(
+            exit_code_under(
+                &asking_the_agent,
+                environment(),
+                "/bin/cat",
+                &[&keys.join("repo").display().to_string()],
+            ),
+            Some(READ_FAILED),
+            "the private key was read"
+        );
 
         let _ = std::fs::remove_dir_all(&scratch);
     }

@@ -725,6 +725,11 @@ fn a_stage_started_through_a_link_sends_the_link() {
     let value = wire::run_request(1, &request);
     assert_eq!(value["stages"][0]["resolved"], "/usr/bin/python3.12");
     assert_eq!(value["stages"][0]["startedAs"], "/w/.venv/bin/python");
+    assert_eq!(
+        value["stages"][0]["binary"],
+        "/w/.venv/bin/python -> /usr/bin/python3.12"
+    );
+    assert!(value["confinement"].is_null());
 }
 
 #[test]
@@ -744,6 +749,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     };
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
@@ -798,6 +804,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     use bravebot_sandbox::scope::{Requested, Scope};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: Some(Confined {
             reads_the_machine: false,
             directories: vec![],
@@ -860,6 +867,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
@@ -900,6 +908,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
@@ -1118,10 +1127,12 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
 fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
     use bravebot_agent::confirm::ServerRequest;
     let request = ServerRequest {
-        language: "Rust",
+        language: "Rust".into(),
         program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        args: Vec::new(),
         workspace: "/home/someone/project".into(),
         runs_build_tooling: true,
+        declared: false,
     };
 
     assert_eq!(
@@ -1130,8 +1141,11 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
             "request": 5,
             "language": "Rust",
             "program": "/home/someone/.cargo/bin/rust-analyzer",
+            "args": [],
+            "argumentsLine": "",
             "workspace": "/home/someone/project",
             "runsBuildTooling": true,
+            "declared": false,
             "summary": "start the Rust language server",
         })
     );
@@ -1140,12 +1154,28 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
             6,
             &ServerRequest {
                 runs_build_tooling: false,
-                ..request
+                ..request.clone()
             }
         )["runsBuildTooling"],
         false,
         "a server that builds nothing was said to build"
     );
+
+    // LSP-11: a server a person declared carries its arguments and says it was declared, so the card
+    // can say that what starting it runs is not known.
+    let declared = wire::server_request(
+        7,
+        &ServerRequest {
+            language: "clangd".into(),
+            program: "/usr/bin/clangd".into(),
+            args: vec!["--background-index".into()],
+            declared: true,
+            ..request
+        },
+    );
+    assert_eq!(declared["declared"], true);
+    assert_eq!(declared["args"], json!(["--background-index"]));
+    assert_eq!(declared["argumentsLine"], "--background-index");
 }
 
 /// Every step crosses, in order and unshortened, because the answer covers the whole plan
@@ -1380,5 +1410,81 @@ fn accepted_composed_prompts_cross_without_their_text() {
     assert_eq!(
         wire::submitted("must not cross", Some(&Composed::Consolidation)),
         json!({"kind": "consolidation"})
+    );
+}
+
+/// SANDBOX-22: a window may name `strict` or `standard` and nothing else. The failure this rejects
+/// is `off`, or a word that is almost a mode, read as one.
+#[test]
+fn a_window_may_name_strict_or_standard_and_no_other_sandbox_mode() {
+    use bravebot_sandbox::SandboxMode;
+    assert_eq!(
+        wire::sandbox_mode(&json!("strict")).unwrap(),
+        SandboxMode::Strict
+    );
+    assert_eq!(
+        wire::sandbox_mode(&json!("standard")).unwrap(),
+        SandboxMode::Standard
+    );
+    for refused in [
+        json!("off"),
+        json!("Strict"),
+        json!(""),
+        json!(null),
+        json!(true),
+    ] {
+        assert!(wire::sandbox_mode(&refused).is_err(), "{refused}");
+    }
+    assert_eq!(wire::sandbox_mode_name(SandboxMode::Strict), "strict");
+    assert_eq!(wire::sandbox_mode_name(SandboxMode::Standard), "standard");
+}
+
+/// SANDBOX-22: the refusal names the managed file and the mode it holds the session to, for each
+/// reason the file can be a floor.
+#[test]
+fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
+    use bravebot_config::sandbox::{Floor, Refused};
+    use bravebot_sandbox::SandboxMode;
+    let refused = |asked, pinned, because| Refused {
+        asked,
+        asked_in: None,
+        pinned,
+        pinned_in: "/etc/bravebot/managed.json".into(),
+        because,
+    };
+    let by_mode = wire::sandbox_refusal(&refused(
+        SandboxMode::Standard,
+        SandboxMode::Strict,
+        Floor::Mode,
+    ));
+    assert!(by_mode.contains("/etc/bravebot/managed.json"), "{by_mode}");
+    assert!(by_mode.contains("sandbox.mode"), "{by_mode}");
+    assert!(by_mode.contains("strict"), "{by_mode}");
+    let by_network = wire::sandbox_refusal(&refused(
+        SandboxMode::Off,
+        SandboxMode::Standard,
+        Floor::Network,
+    ));
+    assert!(
+        by_network.contains("/etc/bravebot/managed.json"),
+        "{by_network}"
+    );
+    assert!(by_network.contains("run.network"), "{by_network}");
+}
+
+/// The hosts cross as the program named them, and nothing else does.
+#[test]
+fn a_host_prompt_carries_the_hosts_and_nothing_else() {
+    use bravebot_agent::confirm::HostRequest;
+    let value = wire::host_request(
+        4,
+        &HostRequest {
+            hosts: vec!["registry.example.com".into(), "10.0.0.1".into()],
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({"request": 4, "hosts": ["registry.example.com", "10.0.0.1"]})
     );
 }

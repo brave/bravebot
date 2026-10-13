@@ -15,6 +15,7 @@ governs:
   - crates/agent/src/scratch.rs
   - crates/agent/src/trusted.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
   - crates/ui-files/src/names.rs
@@ -32,6 +33,7 @@ governs:
   - ui/scripts/session-directory.test.mjs
   - ui/src/renderer/components/Permissions.tsx
   - ui/scripts/remembered-trust-list.test.mjs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -100,7 +102,11 @@ a map that does not fold has never made trust cover a path it was not written ab
 without the answer compares bytes, and a map moved to another directory takes that directory's
 answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
 as `src` and `ſ` is its own lower case. Where two rules differ only in case on a volume that folds,
-the one that sorts first decides, and the map does not replace one with the other.
+the weaker decides every spelling, whichever sorts first and whichever was written last: untrusted
+over undecided, and undecided over trusted. A decision about one spelling replaces the rule about
+that spelling and leaves a lower rule about another in force, since a name that folds the same is
+not always the same file: NTFS holds `claß.md` and `class.md` apart, and a directory added from a
+case-sensitive volume holds `Docs` and `docs` apart.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
@@ -124,7 +130,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
-`verified-by: bravebot_core::trust::a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings`
+`verified-by: bravebot_core::trust::a_folding_volume_lets_the_weakest_case_variant_decide_every_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
@@ -184,17 +190,30 @@ No reader can capture replacement bytes under an earlier grant. This covers cont
 attachments, deferred references and searches as well as direct reads. Collection never merges
 a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
 same authority after turn-owned children finish, including on failure or cancellation, and save
-its current file decisions rather than substituting the map from before the turn.
+its current file decisions rather than substituting the map from before the turn. Manifest runs
+also retain current file decisions on every returned error or cancellation, as
+[manifest.md](manifest.md) requires.
 
 Approvals based on a preview are checked against the path's revision before effect entry or
 vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
-that approval. A backup records the trust of its bytes at capture under the same boundary.
+that approval. A backup records the trust of its bytes at capture under the same boundary. On a
+volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer an
+active path refuses and for the revision an approval is checked against, so a run line redirecting
+to one file under two such spellings is refused as a second writer to it.
 
+`verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 `verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
 `verified-by: bravebot_core::file_authority::path_revisions_follow_whole_segment_ancestors`
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
+`verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
+`verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
+`verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
@@ -444,6 +463,10 @@ about the place (TRUST-2) and the project is in it, so there is nothing to excep
 rules are the more specific ones and still decide wherever they exist, which is what keeps a no
 given inside the project from being undone by a yes given above it.
 
+In bypass mode a `request_path` that is granted opens its directory in the same way, with the same
+refusals and the same two halves ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), and `/add-dir close`
+takes it back as it takes back one a person typed.
+
 Opening such a directory ends checkouts ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), so `/add-dir` and
 `--add-dir` both say so when it opens, naming `/add-dir close` as the way back, rather than leaving a
 person to find out from a spawn refused after the turn is spent.
@@ -465,6 +488,7 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
 `verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
@@ -478,14 +502,23 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 ### TRUST-10: no rule extends reach; reading, writing and listing stay confined
 
 Reading, writing, editing, listing and searching are confined to the working directory and to
-whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
-and an absolute path outside those are refused rather than resolved, in an added directory exactly as
-in the project, and a symlink leaving one is refused.
-A relative path always means the project, so no file has two spellings. A path whose first segment
+whatever has been opened beside it, the directory the session was given among them (TRUST-16). An
+absolute path outside those is refused, in an added directory exactly as in the project, and a
+symlink leaving one is refused. A path with `..` in it is resolved only where it lands in a
+directory that is open, and then as the absolute path it lands on, with the `..` taken out of the
+text; any other `..` is refused. A relative path means the project, so no file has two spellings
+except by `..` into an opened directory and `~`. A path whose first segment
 is exactly `~` is read as the person's home directory, the one a command line's `~` stands for
 ([CMDLINE-4](tools/command-line.md#CMDLINE-4)), and is expanded before any check, so it is then an
 absolute path like any other, reachable only inside an opened directory, and the trust key and the
-trail see the expanded spelling. `~notes/x` is a relative path. Where there is no home the `~` is
+trail see the expanded spelling. A `..` into an opened directory is treated the same way: it
+becomes the absolute path it lands on before anything else asks about it, so the trail, the trust
+key and the permission rules see only that spelling ([PERM-7](permissions.md#PERM-7)), and a
+failure or a result that names the path names that one. The `..` is taken out of the text only
+where nothing on the way is a link, since the file system follows a link and its `..` is the
+parent of the target; a climb through a link is refused. A climb that lands on a name that is not
+UTF-8 is refused as well, since the trust key, the rules and the result carry the absolute spelling
+as text, and a lossy rendering of it names a different file. `~notes/x` is a relative path. Where there is no home the `~` is
 refused and named, never read as a directory called `~`. A missing relative path says what it was
 joined to. Naming a directory includes nothing, since a directory is somewhere to type through rather than a file to read.
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
@@ -502,9 +535,20 @@ the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, list
 since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
 workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
-`run`. Every other refusal for leaving the workspace offers nothing, since opening a directory would
-not make that path work: one that climbs with `..`, one a link carries out, and an absolute path
-that lands inside the root, where no directory can be opened.
+`run`. A path that climbs out with `..` into a directory that is not open is refused the same
+way, and once that directory is opened the same path, as typed, reaches the file. Every other
+refusal for leaving the workspace offers nothing, since opening a directory would not make that
+path work: a climb that lands inside the root, off the top of the file system or on a name that is
+not UTF-8, one a link carries out, and an absolute path that lands inside the root, where no
+directory can be opened.
+A climb that lands inside the root stays refused even where a directory holding the root is open,
+since the relative spelling reaches the file.
+
+`request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
+person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
+them, with the trust that comes with it ([TRUST-9](#TRUST-9)). In bypass mode, where nobody is there
+to run `/add-dir`, the grant of a `request_path` opens the directory as `/add-dir` would, and the
+refusal is not reached for it.
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
@@ -532,6 +576,18 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
+`verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open`
+`verified-by: bravebot_agent::workspace::a_path_climbing_into_a_directory_that_is_not_open_is_refused`
+`verified-by: bravebot_agent::workspace::a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere`
+`verified-by: bravebot_agent::workspace::a_climb_is_reported_as_the_absolute_path_only_where_it_is_taken_out_and_admitted`
+`verified-by: bravebot_agent::workspace::a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out`
+`verified-by: bravebot_agent::workspace::a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike`
+`verified-by: bravebot_agent::turn::a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absolute_path`
+`verified-by: bravebot_agent::turn::a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path`
+`verified-by: bravebot_agent::turn::a_deny_rule_on_the_absolute_path_covers_the_spelling_that_climbs_to_it`
+`verified-by: bravebot_agent::workspace::a_path_climbing_out_under_reads_stay_in_workspace_is_not_told_to_open_a_directory`
+`verified-by: bravebot_agent::workspace::a_path_climbing_after_a_link_is_not_told_to_use_the_absolute_spelling`
+`verified-by: bravebot_agent::turn::a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_out_of_the_workspace_is_refused`
@@ -1125,8 +1181,12 @@ root and of the home directory apply when reading, so a line written by hand is 
 
 **What answers first.** A resume that brought its own map takes it (TRUST-6), and the mode that
 asks about nothing answers before the record is read and never writes it (TRUST-7). A one-shot run
-reads no record and writes none: it asks no question to keep an answer to, and a run nobody is
-watching has answered nothing. In an incognito session the record is read, as the other records are
+reads the record and writes none: it asks no question to keep an answer to, and `--trust-workspace`
+([TRUST-26](#TRUST-26)) answers before the record is read. Where the record holds an answer that
+settles a session here, about this directory or the root of its git worktree, the run opens
+trusting this directory, as a session in lines does, and says so on stderr with
+when it was kept and how to take it back. Where it holds none the run trusts nothing. In an
+incognito session the record is read, as the other records are
 ([incognito.md](incognito.md#INCOG-5)), and remembering is not offered.
 
 **Why.** See TRUST-6: a fresh yes already trusts whatever arrived since the last session, so asking
@@ -1170,6 +1230,10 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
 `verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
+`verified-by: bravebot_cli::main::a_kept_answer_trusts_a_one_shot_run_there_and_says_so`
+`verified-by: bravebot_cli::main::a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere`
+`verified-by: bravebot_cli::main::a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
 `verified-by: bravebot_tui::trust_prompt::r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen`
 `verified-by: bravebot_tui::trust_prompt::a_question_not_offering_to_remember_never_takes_r`
@@ -1212,6 +1276,36 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+
+## Trusting the directory of a run nobody is watching
+
+<a id="TRUST-26"></a>
+### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes
+
+`--trust-workspace` on the command line of a one-shot run starts it from the rule a yes writes
+([TRUST-7](#TRUST-7)): the working directory and everything beneath it, and nothing else. The
+directories `--add-dir` opens stay vouched for by nothing ([CLI-11](cli.md#CLI-11)), and nothing is
+written: no line is added under `~/.bravebot/trusted`. A run carrying on an earlier session
+([CLI-25](cli.md#CLI-25)) keeps the map that session recorded and adds the rule to it. Given twice
+it is given once.
+
+It is read from the command line and from nothing else: no settings file, environment variable or
+file in the directory carries it, so a checkout cannot turn it on for the person who runs a task
+there. A path the run writes with untrusted content is still marked untrusted when it is written
+([TRUST-4](#TRUST-4)), so what the run fetched and wrote is not read back as trusted.
+
+**Why.** Nobody can be asked in a run nobody is watching, and an empty map quarantines every file in
+the project, so the planner reads project files only through a processor or a file named with
+`--file`. [CLI-1](cli.md#CLI-1) refuses to answer in a person's place. A flag the person typed is not
+an answer in their place: it is the answer, given before the run and for the one run, as
+`--dangerously-skip-permissions` is, and it grants trust alone, approving no effect.
+
+`verified-by: bravebot_cli::main::a_flagged_run_trusts_its_directory_and_nothing_outside_it`
+`verified-by: bravebot_cli::main::a_flagged_run_writes_no_record_and_says_nothing`
+`verified-by: bravebot_cli::main::the_workspace_flag_is_read_from_the_command_line_and_may_repeat`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record`
+`verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted`
+`verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_project_file_quarantined`
 
 ## What a killed session leaves
 
@@ -1315,7 +1409,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   above apply to it: what landed in the tree since is trusted, and what an earlier session marked
   untrusted is forgotten. What it loses beyond a yes is the question itself, the moment a person who
   has just pulled a branch or added a dependency might have answered `n`. The line the session opens
-  with, `/status` and `/forget-trust` are what is left of it. Keeping the paths earlier sessions
+  with, `/status` and `/forget-trust` are what is left of it. A one-shot run in the directory is
+  the same case without even the opening line on a screen, so it says the same on stderr. Keeping the paths earlier sessions
   marked untrusted beside the answer would close the second half, and is not built.
   [MEMORY-5](definition-memory.md#MEMORY-5) keeps it for definitions' memories alone.
 - **A directory is told from the one before it at the same path by what the filesystem keeps.**

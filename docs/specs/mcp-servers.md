@@ -688,6 +688,10 @@ expands it. `1` or `y` is answer 1. `2` is answer 2. `3`, `n` or Esc is answer 3
 nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing
 and tells the planner the person declined.
 
+A call that is not asked about, under an allow rule, answer 2 or bypassing, has no prompt to show
+its arguments, so the transcript row names the call by `alias:tool` and its arguments, asked or
+not ([VIEW-25](terminal-transcript.md#VIEW-25)).
+
 Answer 2 is written to `mcp-tools` as the alias, the tool and the workspace root with its links
 followed. Where the session has no state directory, or writes nothing as an incognito one does, it
 is drawn as not offered and its key does nothing. A record that will not take it still makes the
@@ -1439,6 +1443,47 @@ branch on untrusted content.
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_bounds_the_declaration_it_replaces_gave`
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
+
+<a id="SERVERS-16"></a>
+### SERVERS-16: past a size the setting names, a vouched tool is offered by name until the planner loads it
+
+The `deferMcpToolsAbove` setting names a size in tokens, as a number or as `limit` does (`"20k"`),
+and is absent by default. Where it is set and the definitions of every tool the turn is offered
+would weigh more than that, estimated from their length at four characters a token, the planner is
+offered no server tool in full. It is offered `load_tool` instead, whose description lists the
+tools as `alias:tool`, and a person's own list is the only source of those names. `load_tool` takes
+`name` as routing and nothing else, matched exactly against that list as
+[LOAD-1](tools/load-skill.md#LOAD-1) and [LOAD-2](tools/load-skill.md#LOAD-2) match a skill's: a name
+one character out, in another case or a prefix of one loads nothing, and nothing falls back to a
+nearest match. A load offers that tool's definition, exactly as it would have been offered, on the
+request after the one that loaded it, and for the rest of the turn.
+
+A call to a tool that is on the list and not loaded is refused with the sentence to load it first,
+and is not put to the person or sent to the server. Loading changes what is offered and nothing
+about who is asked: a loaded tool is put to the person before each call as any other is
+([SERVERS-7](#SERVERS-7)). The search is not over descriptions and nothing is chosen by what a server
+wrote, so no decision is taken on bytes a person did not vouch for ([SERVERS-8](#SERVERS-8)). No
+description of a tool is sent until it is loaded. `load_tool` is offered only where the run holds a
+server and `--tools` has not taken servers away. A reader, a checker, a definition with a `tools:`
+line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none and a run limited by
+`--tools` are offered no loader, and a call to one is refused as any unknown name is
+([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn without the
+setting, is offered every tool in full and no `load_tool`.
+
+**Why.** Every tool of every approved server is otherwise sent in full on every turn, so a person
+who connects several pays that context on turns that use none of them. Deferral moves when vouched
+text is shown and decides nothing from it.
+
+`verified-by: bravebot_agent::mcp::a_deferred_tool_is_offered_by_name_and_its_definition_arrives_once_loaded`
+`verified-by: bravebot_agent::mcp::a_name_close_to_a_deferred_tool_loads_nothing`
+`verified-by: bravebot_agent::mcp::a_call_to_a_deferred_tool_that_is_not_loaded_is_refused_and_reaches_no_one`
+`verified-by: bravebot_agent::mcp::a_loaded_tool_is_still_put_to_the_person_before_each_call`
+`verified-by: bravebot_agent::mcp::tools_under_the_threshold_are_offered_in_full_with_no_loader`
+`verified-by: bravebot_agent::mcp::a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one`
+`verified-by: bravebot_agent::mcp::a_delegate_holding_the_server_is_offered_the_loader_and_loads_through_it`
+`verified-by: bravebot_agent::mcp::an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server`
+`verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
+`verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
 
 ## Testing this with the weather server
 

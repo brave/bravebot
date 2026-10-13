@@ -254,13 +254,26 @@ pub enum AfterCeilingStop {
 /// What a turn did when the session had spent its limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AfterSpendLimit {
-    /// The person gave a new limit, in tokens.
+    /// The person gave a new limit, in the unit the old one counted.
     Raised(u64),
     /// The person asked to go on without one.
     Lifted,
     /// The person chose to stop.
     Stopped,
     /// Nobody answered, which is a stop.
+    Unanswered,
+}
+
+/// What a turn did about a call the planner made for the third time running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterRepeatedCall {
+    /// The person let this one call through.
+    LetThrough,
+    /// The person chose that the call is not run.
+    Refused,
+    /// The person chose to stop the turn.
+    Stopped,
+    /// Nobody could be asked, so the call was not run.
     Unanswered,
 }
 
@@ -289,6 +302,14 @@ pub struct Policy<'sink, S: Sink> {
     /// the workspace does. [`Policy::integrity_in_force`] is where that happens, and it is the only
     /// thing this field is for.
     scratch: Option<std::path::PathBuf>,
+    /// The directories of the user's own skills that this turn has loaded, spelled as the host
+    /// names them.
+    ///
+    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers, so a
+    /// directory is here because a skill was loaded out of it this turn and for no other reason.
+    /// [`Policy::integrity_in_force`] reads it, and the workspace reads it to know where a read
+    /// may land outside the project.
+    skill_reach: Vec<std::path::PathBuf>,
     /// Whether the host separates one segment of a path from the next with a backslash as well as
     /// with a slash, which decides how a name is spelled before the map is asked about it
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
@@ -468,6 +489,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
             scratch: None,
+            skill_reach: Vec::new(),
             backslash_separates: false,
             programs: crate::programs::TrustedPrograms::new(),
             asked: crate::programs::AskedAbout::new(),
@@ -512,6 +534,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
+    }
+
+    /// Record that programs may reach `path` for the rest of the session (SANDBOX-28).
+    ///
+    /// `mode` is the name of the mode that answered in the person's place, and `None` is a yes a
+    /// person gave. The path is the one the question showed, and nothing is marked trusted by it.
+    pub fn record_path_reach(&mut self, path: &str, write: bool, mode: Option<&'static str>) {
+        let access = if write { "read and write" } else { "read" };
+        let detail = match mode {
+            Some(mode) => {
+                format!(
+                    "{mode} mode let programs {access} {path} for this session, nobody was asked"
+                )
+            }
+            None => format!("the user let programs {access} {path} for this session"),
+        };
+        self.allow("path_reach", detail);
+    }
+
+    /// Record that a mode that answers in the person's place opened `path` for the file tools and
+    /// vouched for it, as `/add-dir` does for a directory a person names (TRUST-9, PATHREQ-7).
+    ///
+    /// The path is one the question showed, resolved by the workspace, so nothing a file or a model
+    /// said decides it. Said even where a file effect keeps it untrusted, so the trail never shows
+    /// a directory opened without saying how it stands.
+    pub fn vouch_for_opened_directory(&mut self, path: &str, mode: &'static str) {
+        if !self.trust.publish(path, Integrity::Trusted) {
+            self.allow(
+                "trust",
+                format!("{path} remains untrusted while a file effect is active"),
+            );
+            return;
+        }
+        self.allow(
+            "trust",
+            format!("{path} trusted: {mode} mode opened it for the file tools, nobody was asked"),
+        );
+    }
+
+    /// Whether this run holds `capability`, asked without recording anything.
+    ///
+    /// For a caller that wants to do something extra where a capability is held and nothing at all
+    /// where it is not: [`Policy::before_capability`] records a denial, which is right for an
+    /// action somebody asked for and noise for one the driver was only considering.
+    pub fn holds_capability(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
     }
 
     /// Check that a capability was granted before it is exercised.
@@ -728,6 +796,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+    }
+
+    /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
+    /// [`Policy::fetch_finished`].
+    ///
+    /// For the egress path to scope the check on what a name resolves to the way
+    /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
+    /// connections a person set up themselves.
+    pub fn fetch_in_flight(&self) -> bool {
+        self.fetching.is_some()
     }
 
     /// Confine egress to where a declared server is, until the request reports back.
@@ -1127,12 +1205,61 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
         let path = &*self.keyed(path);
+        // Provenance, not the map: the user's own skill directory is trusted for being the user's
+        // own (SKILL-3), and the map is keyed by workspace-relative paths and has nothing to say
+        // about it (TRUST-11).
+        if self.is_loaded_skill_file(path) {
+            return Some(Integrity::Trusted);
+        }
         let assumed = if self.is_scratch(path) {
             self.trust.integrity_of("")
         } else {
             None
         };
         self.trust.integrity_of_or(path, assumed)
+    }
+
+    /// Whether the key `path` lands in a directory a skill was loaded out of this turn.
+    ///
+    /// A key holding `..` is not, as for [`Policy::is_scratch`]: matching by component would take a
+    /// name that climbs out of the directory for one inside it.
+    fn is_loaded_skill_file(&self, path: &str) -> bool {
+        let path = std::path::Path::new(path);
+        if path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return false;
+        }
+        self.skill_reach.iter().any(|directory| {
+            path.starts_with(std::path::Path::new(
+                &*self.keyed(&directory.to_string_lossy()),
+            ))
+        })
+    }
+
+    /// Record that a skill of the user's own was loaded out of `directory`, so the files beside its
+    /// `SKILL.md` may be read for the rest of the turn and are labelled by where they are.
+    ///
+    /// Only for a directory under `~/.bravebot/skills`, which is trusted by provenance. It is never
+    /// asked of a project's skill directory, which the trust map governs like any other file of the
+    /// project, and nothing a file or a planner said is the argument: the caller is `load_skill`,
+    /// naming a directory the driver found before the turn began.
+    pub fn reach_skill_directory(&mut self, directory: &std::path::Path) {
+        self.allow(
+            "provenance",
+            format!(
+                "{}: files beside the loaded skill are read as trusted, from the user's own \
+                 configuration directory",
+                directory.display()
+            ),
+        );
+        self.skill_reach.push(directory.to_path_buf());
+    }
+
+    /// The directories of the user's own skills loaded this turn, which a read may land in.
+    pub fn loaded_skill_directories(&self) -> &[std::path::PathBuf] {
+        &self.skill_reach
     }
 
     /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set
@@ -1940,6 +2067,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a past session was named with `@session:<id>` and part of it added to the prompt.
+    ///
+    /// The trail holds the id and how many characters were taken and none of the content, as it
+    /// does for an interjection. The excerpt reaches the planner as words in the person's own
+    /// message: the record it was read from holds only what a planner could hold (SESSION-2), and
+    /// the person chose the session by typing its name. Nothing is routed by it.
+    ///
+    /// This must only ever be reached from a mention in a line a human typed. Never point it at an
+    /// id found in model output or in anything a tool read.
+    pub fn admit_session_excerpt(&mut self, id: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!("{characters} characters of session {id}, named by the user with @"),
+        );
+    }
+
     /// Record a prompt the user typed while the turn was already running.
     ///
     /// On the footing of [`Policy::admit_pasted_image`], and for the same reason: a keystroke is
@@ -2379,18 +2522,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Record that the session had spent its limit, what the person was asked, and what came of it
     /// (TURN-8).
     ///
-    /// Counts and the person's own choice, so the line carries no content. A turn that went on past
-    /// the limit leaves nothing else saying it was allowed to, and by whom.
+    /// Counts, a fixed word for what they count and the person's own choice, so the line carries no
+    /// content. A turn that went on past the limit leaves nothing else saying it was allowed to,
+    /// and by whom.
     pub fn record_spend_limit(
         &mut self,
         round: usize,
         spent: u64,
         limit: u64,
+        unit: &'static str,
         then: AfterSpendLimit,
     ) {
         let then = match then {
             AfterSpendLimit::Raised(raised) => {
-                format!("the person set a new limit of {raised} tokens and the turn went on")
+                format!("the person set a new limit of {raised} {unit} and the turn went on")
             }
             AfterSpendLimit::Lifted => {
                 "the person went on without a limit and the turn went on".to_string()
@@ -2401,9 +2546,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow(
             "spend_limit",
             format!(
-                "round {round}: {spent} tokens spent against a limit of {limit}; the person was \
+                "round {round}: {spent} {unit} spent against a limit of {limit}; the person was \
                  asked and {then}"
             ),
+        );
+    }
+
+    /// Record a call held for being the same as the ones before it, and what came of it (TURN-9).
+    ///
+    /// The round and the count only. The call's name and arguments are the planner's own and stay
+    /// out of the line, so it carries no content (TRACE-2).
+    pub fn record_repeated_call(&mut self, round: usize, count: usize, then: AfterRepeatedCall) {
+        let then = match then {
+            AfterRepeatedCall::LetThrough => "the person let it through once",
+            AfterRepeatedCall::Refused => "the person chose that it is not run",
+            AfterRepeatedCall::Stopped => "the person chose to stop and the turn ended",
+            AfterRepeatedCall::Unanswered => "nobody could be asked, so it was not run",
+        };
+        self.allow(
+            "repeated_call",
+            format!("round {round}: the same call made {count} times in a row; {then}"),
         );
     }
 
@@ -5872,6 +6034,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.plan_needs_approval_requesting(plan, &[])
     }
 
+    /// Whether a line the planner asked to start with no sandbox is put to a person: always.
+    ///
+    /// Asked before any rule and any standing answer is read, for the reason a requested scope is:
+    /// an entry or a remembered line made for the same line under a profile would otherwise cover it
+    /// with none, and a rule was not written knowing the line would be unconfined (SANDBOX-29).
+    pub fn plan_needs_approval_unconfined(&mut self) -> bool {
+        self.allow(
+            "approval",
+            "the planner asked for this line to run with no sandbox, which no vouched entry, \
+             remembered line or rule records, asking"
+                .to_string(),
+        );
+        true
+    }
+
     /// [`Policy::plan_needs_approval`] for a line the planner asked to carry the credential scopes
     /// or toolchain lists `requested` names, each a word of the fixed menu.
     ///
@@ -6168,6 +6345,38 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("run_network", detail);
     }
 
+    /// Record the hosts the programs of one `run` asked its allowed-hosts proxies for and what the
+    /// host list decided for each (SANDBOX-24).
+    ///
+    /// `detail` holds a host only as the sandbox crate lets a record carry one, a valid name or
+    /// an address and nothing else, with the entry that decided it and stage numbers. A refusal
+    /// is recorded here as a decision taken, not as a gate that blocked the turn, since the
+    /// program was refused and the run went on.
+    pub fn record_hosts(&mut self, detail: String) {
+        self.allow("hosts", detail);
+    }
+
+    /// Record that the person was asked whether programs may reach `hosts` that the allowed-hosts
+    /// list does not cover, and what they answered (SANDBOX-24).
+    ///
+    /// `hosts` are the names the question showed, each a valid host name or address as the sandbox
+    /// crate lets a record carry one. A no is also what nobody being there to ask comes to, and the
+    /// mode that asks nothing, so the record says the answer was not a yes and no more.
+    pub fn record_host_answer(&mut self, hosts: &[String], granted: bool) {
+        let detail = match granted {
+            true => format!(
+                "the user let programs reach {} for this session",
+                hosts.join(", ")
+            ),
+            false => format!(
+                "programs were not let reach {} for this session: the user declined, or nobody \
+                 could be asked",
+                hosts.join(", ")
+            ),
+        };
+        self.allow("host_grant", detail);
+    }
+
     /// Record the credential scopes and toolchain lists the planner asked one `run` to add, and
     /// the stages each was added to.
     ///
@@ -6187,6 +6396,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
     }
 
+    /// Record the output style whose words open a turn's system prompt, by name and by whether the
+    /// person's own file or this build supplied it (INSTR-12).
+    ///
+    /// The style is a thing a person switches mid-session with no word in the transcript, and it
+    /// changes how every later answer reads, so the trail is the only place to see which was in
+    /// force. `name` is a built-in's static text or a slug, never the words of the file.
+    pub fn record_output_style(&mut self, name: &str, from_file: bool) {
+        let source = if from_file {
+            "a file of the person's own"
+        } else {
+            "built in"
+        };
+        self.allow(
+            "output_style",
+            format!("the turn began in the {name} style ({source})"),
+        );
+    }
+
     /// Record the sandbox mode a `run` starts its programs under, by its name (SANDBOX-22).
     ///
     /// Said per run rather than per turn, because the record that matters is what bound the
@@ -6194,6 +6421,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// started with no profile. The name is the mode's own static text, never anything a turn read.
     pub fn record_sandbox_mode(&mut self, mode: &'static str) {
         self.allow("sandbox", format!("the programs ran in {mode} mode"));
+    }
+
+    /// Record that the programs of a `run` were given every path a `request_path` for writing would
+    /// be granted, without the planner asking (SANDBOX-28).
+    ///
+    /// The text is fixed. It names no path, since the rows come from the mode and the fixed
+    /// refusals and nothing a turn read.
+    pub fn record_sandbox_unasked_writes(&mut self) {
+        self.allow(
+            "sandbox",
+            "the programs were given every path a request_path with write set would be granted"
+                .to_string(),
+        );
     }
 
     /// Record who answered a prompt the policy had decided to put.
@@ -10300,6 +10540,35 @@ five
         assert!(policy.plan_needs_approval_requesting(&a_plan(), &["aws", "cargo"]));
     }
 
+    /// SANDBOX-24: an answer about hosts is recorded under its own gate, with the hosts, and says a
+    /// yes as a yes and anything else as not let. The regression it rejects: a no recorded as a
+    /// grant, or a grant that leaves no record.
+    #[test]
+    fn a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.record_host_answer(&["a.example".to_string(), "b.example".to_string()], true);
+        policy.record_host_answer(&["c.example".to_string()], false);
+        drop(policy);
+        let details: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "host_grant",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(details.len(), 2, "{details:?}");
+        assert_eq!(
+            details[0],
+            "the user let programs reach a.example, b.example for this session"
+        );
+        assert!(details[1].starts_with("programs were not let reach c.example"));
+    }
+
     /// SANDBOX-26: the question is audited with the names, and the scopes a run was given are
     /// recorded under their own gate.
     #[test]
@@ -10914,6 +11183,23 @@ five
             policy.before_network("https://elsewhere.test/x").is_ok(),
             "a finished fetch went on confining where the turn could reach"
         );
+    }
+
+    /// The egress path scopes its check of what a name resolves to by this, so it has to be true
+    /// from the approval to the end of the call and not after.
+    #[test]
+    fn a_fetch_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://example.com/start";
+        policy.endorse_fetch(url);
+        policy.before_fetch(url).expect("the fetch was allowed");
+        assert!(policy.fetch_in_flight());
+
+        policy.fetch_finished();
+        assert!(!policy.fetch_in_flight());
     }
 
     /// A declared server is one destination and a redirect names another, so the hop is refused
@@ -12115,6 +12401,24 @@ five
                 "{mode}: {recorded}"
             );
         }
+    }
+
+    /// SANDBOX-22, SANDBOX-28: a `run` given every path a request would be granted leaves a
+    /// `sandbox` entry saying so, in fixed words that name no path. The regression it rejects is a
+    /// bypass run whose wider reach the trail does not mention.
+    #[test]
+    fn the_trail_says_the_programs_were_given_what_a_request_would_be() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_sandbox_unasked_writes();
+        let recorded = format!("{:?}", sink.events());
+        assert!(recorded.contains("sandbox"), "{recorded}");
+        assert!(
+            recorded.contains(
+                "the programs were given every path a request_path with write set would be granted"
+            ),
+            "{recorded}"
+        );
     }
 
     /// Auto-vetting changes who answers and nothing about what an answer is worth. The bytes come
@@ -16230,7 +16534,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 12] = [
+        const OFFERED: [&str; 14] = [
             "read_file",
             "list_files",
             "write_file",
@@ -16238,9 +16542,11 @@ five
             "run",
             "lsp",
             "ask_user",
+            "request_path",
             "todo_write",
             "schedule_next",
             "fetch_url",
+            "download_url",
             "vet_content",
             "spawn_agent",
         ];
@@ -16271,10 +16577,12 @@ five
                     [
                         "read_file",
                         "ask_user",
+                        "request_path",
                         "apply_checkout",
                         "todo_write",
                         "schedule_next",
                         "fetch_url",
+                        "download_url",
                         "vet_content",
                         "spawn_agent",
                     ]
@@ -16588,7 +16896,7 @@ five
             }
         }
 
-        /// ADDRESS-8. Each of the six is kept from a delegate for a reason naming the thing this
+        /// ADDRESS-8. Each of the seven is kept from a delegate for a reason naming the thing this
         /// turn is not: nobody watching, no turn to outlive, a depth nobody chose. So the kernel
         /// withholds none of them by name. Whether a later look is offered at all is the
         /// driver's, since only it knows whether anything will ask again.

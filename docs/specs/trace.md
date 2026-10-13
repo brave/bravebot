@@ -65,13 +65,17 @@ asked", which is most of what anyone asks it.
 ### TRACE-2: the trail holds no content
 
 Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
-Network decisions omit URL userinfo, paths, queries and fragments. That is why it can be shown
+Network decisions omit URL userinfo, paths, queries and fragments. A host a confined program asked
+a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)),
+and so is a host the person answered a question about, under `host_grant`.
+That is why it can be shown
 on a screen and written to a file without any release, and it is what makes the record safe to keep
 for a workspace nobody vouched for.
 
 `verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 `verified-by: bravebot_agent::turn::a_fetch_records_the_host_and_none_of_the_rest_of_the_url_in_the_trail`
+`verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one
@@ -248,6 +252,15 @@ content let through from a reference, `typed, with dropped files` for a line sen
 `unrecorded` where nothing recorded it. Other results are named by what they are, as in
 `shell output (trusted)`.
 
+The view also names, above the spans, every instruction file the system prompt was built from, each
+with the bytes it contributed, and says none loaded where there were none. The list is read back out
+of the system prompt's own `trusted file <path>` spans, so it cannot name a file whose words are not
+in the request, and it holds only those: a trusted file sent with a prompt is a message rather than
+an instruction, and the skill list and the driver's paragraphs are not files. The path is the one
+the composing code recorded when it put the file into the prompt
+([INSTR-5](instructions.md#INSTR-5)) and the length is of what was sent, counted and never read, so
+no branch is taken on the bytes of a file.
+
 The view is read from the request value handed to the backend, in memory, and never rebuilt from
 the transcript or the saved record. The pieces of the system prompt are the text sent, joined, and
 a prompt that cannot be shown in pieces that join to what was sent is shown whole as `unrecorded`.
@@ -277,7 +290,11 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_request_it_sent`
 `verified-by: bravebot_agent::conversation::a_message_is_labelled_by_what_was_recorded_and_never_guessed_at`
 `verified-by: bravebot_agent::request_view::pieces_that_are_not_the_prompt_sent_are_not_trusted_to_describe_it`
+`verified-by: bravebot_agent::request_view::the_instruction_files_are_the_trusted_files_the_system_prompt_was_built_from`
+`verified-by: bravebot_agent::request_view::a_prompt_with_no_instruction_file_names_none`
 `verified-by: bravebot_tui::render::the_request_view_draws_each_span_under_its_provenance`
+`verified-by: bravebot_tui::render::the_request_view_names_the_instruction_files_loaded_with_their_lengths`
+`verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
 

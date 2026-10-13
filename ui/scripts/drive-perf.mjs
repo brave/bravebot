@@ -6,7 +6,7 @@
 // window is reloaded under watch; then a deterministic 500-entry transcript is loaded into one
 // of them, each budget is measured in the page, and the run exits 1 if any one is missed.
 //
-//   npx electron-vite build && node scripts/drive-perf.mjs
+//   pnpm exec electron-vite build && node scripts/drive-perf.mjs
 //
 // Headless or software rendering inflates frame times. PERF_TOLERANCE=2 doubles every time
 // budget (not the dropped-frame share) rather than editing the constants below.

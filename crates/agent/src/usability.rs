@@ -55,7 +55,6 @@ pub enum Expect {
 pub struct Stage {
     program: String,
     args: Vec<String>,
-    environment: Vec<(String, String)>,
 }
 
 impl Stage {
@@ -66,18 +65,7 @@ impl Stage {
         Self {
             program: program.to_string(),
             args: args.iter().map(ToString::to_string).collect(),
-            environment: Vec::new(),
         }
-    }
-
-    /// `NAME=value` written in front of the program, which is how a line removes the credential
-    /// scope from the stage ([SANDBOX-16]).
-    ///
-    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
-    #[must_use]
-    pub fn with_env(mut self, name: &str, value: &str) -> Self {
-        self.environment.push((name.to_string(), value.to_string()));
-        self
     }
 }
 
@@ -505,17 +493,12 @@ fn start(
     let program = places.fill(&stage.program);
     let started_as = find_from(&program, &places.session, &path).ok_or(Started::Other)?;
     let args: Vec<String> = stage.args.iter().map(|arg| places.fill(arg)).collect();
-    let environment: Vec<(String, String)> = stage
-        .environment
-        .iter()
-        .map(|(name, value)| (name.clone(), places.fill(value)))
-        .collect();
     let step = Step {
         program: stage.program.clone(),
         resolved: started_as.canonicalize().map_err(|_| Started::Other)?,
         started_as: started_as.clone(),
         args: args.clone(),
-        environment: environment.clone(),
+        environment: Vec::new(),
         routes: Vec::new(),
     };
 
@@ -539,9 +522,6 @@ fn start(
     {
         command.env("RUSTUP_HOME", Path::new(&real).join(".rustup"));
     }
-    for (name, value) in &environment {
-        command.env(name, value);
-    }
     crate::scrub::apply(&mut command);
 
     let mut command = match confinement {
@@ -553,7 +533,8 @@ fn start(
     let output = std::fs::File::create(log).map_err(|_| Started::Other)?;
     let errors = output.try_clone().map_err(|_| Started::Other)?;
     command.stdin(Stdio::null()).stdout(output).stderr(errors);
-    let child = command.spawn().map_err(|_| Started::Other)?;
+    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Started::Other)?;
     Ok(wait_for(child))
 }
 
@@ -678,7 +659,8 @@ fn ask_for_the_login(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = command.spawn().map_err(|_| Started::Other)?;
+    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Started::Other)?;
     Ok(wait_for(child))
 }
 
@@ -986,7 +968,7 @@ fn search_and_edit_workflows() -> Vec<Workflow> {
 }
 
 fn refused_workflows() -> Vec<Workflow> {
-    vec![
+    let mut refused = vec![
         Workflow::new("refused", "read a private key")
             .stage(Stage::new("cat", &["{home}/.ssh/id_ed25519"]))
             .refused(),
@@ -999,5 +981,17 @@ fn refused_workflows() -> Vec<Workflow> {
         Workflow::new("refused", "write to the home directory")
             .stage(Stage::new("touch", &["{home}/.bashrc"]))
             .refused(),
-    ]
+    ];
+    // Landlock cannot hold a `.git` back from a write row, so only macOS refuses this (SANDBOX-14).
+    if cfg!(target_os = "macos") {
+        refused.push(
+            with_a_repository(Workflow::new("refused", "a script writes a git hook"))
+                .setup(shell("mkdir -p work/.git/hooks"))
+                .stage(shell(
+                    "printf '#!/bin/sh\\n' > work/.git/hooks/post-checkout",
+                ))
+                .refused(),
+        );
+    }
+    refused
 }

@@ -528,8 +528,8 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
 ///
 /// Rules a person's gesture recorded are left in `trust` whether the run finishes, fails or is
 /// stopped: `dropping.md` DROP-2 has a dropped file trusted for the rest of the session, and
-/// [`crate::attached::read`] writes that rule back on failure for the same reason. A run that
-/// finishes also leaves the map its steps ended with, which is the one in [`Outcome::trust`].
+/// [`crate::attached::read`] writes that rule back on failure for the same reason. Every ordinary
+/// ending also leaves the current file decisions, including downgrades from completed writes.
 #[allow(clippy::too_many_arguments)]
 pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
@@ -571,12 +571,6 @@ struct Accounting {
 }
 
 impl Accounting {
-    fn add(&mut self, usage: bravebot_aichat::protocol::Usage) {
-        self.spent.tokens += usage.total();
-        self.spent.output_tokens += usage.completion_tokens;
-        self.spent.cached.add(usage.cached);
-    }
-
     fn publish(&mut self, reporter: &mut impl Reporter) {
         self.spent.timing = self.elapsed.finish();
         reporter.spent(self.spent);
@@ -663,7 +657,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     // read, nothing has been written, and nobody has been asked to approve a plan whose writes
     // were never going to land. A plan that writes nothing runs, because there is nothing in it
     // for the mode to refuse.
-    if task.permission_mode.refuses_writes()
+    if task.permission_mode.get().refuses_writes()
         && let Some((index, _)) = planned
             .plan
             .steps()
@@ -681,7 +675,8 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
-    match execute(
+    let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let result = execute(
         config,
         egress,
         workspace,
@@ -693,17 +688,18 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         confirmer,
         reporter,
         sink,
-        trust.clone(),
+        authority.clone(),
         subscription.as_mut(),
         cancel,
         task.model.as_deref(),
         &task.prompt,
         &mut attempt,
         accounting,
-    ) {
-        Ok(outcome) => Ok(outcome),
-        Err(error) => Err(stopped(attempt, error)),
-    }
+    );
+    // Whatever the ending, the caller's map takes the authority's decisions, which hold the
+    // attachment grants `attached::read` recorded and every downgrade a completed write made.
+    *trust = authority.snapshot();
+    result.map_err(|error| stopped(attempt, error))
 }
 
 /// Wrap a failure up with everything the run managed to produce.
@@ -865,7 +861,7 @@ fn plan<S: Sink, R: Reporter>(
             }
             Message::user_parts(
                 std::iter::once(Part::Text { text: opening })
-                    .chain(dropped.iter().map(crate::attached::Carried::part))
+                    .chain(dropped.iter().flat_map(crate::attached::Carried::parts))
                     .chain(task.images.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             )
@@ -1001,7 +997,7 @@ fn ask<S: Sink, R: Reporter>(
         Err(error) => error.completed_usage(),
     };
     if let Some(usage) = usage {
-        accounting.add(usage);
+        accounting.spent.add_usage(usage);
     }
     accounting.publish(reporter);
     let completion = completion?;
@@ -1031,7 +1027,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     reporter: &mut R,
     sink: &mut S,
-    trust: TrustStore,
+    authority: bravebot_core::file_authority::FileAuthority,
     subscription: Option<&mut crate::ImportedSubscription>,
     cancel: &Cancel,
     chosen_model: Option<&str>,
@@ -1078,7 +1074,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
     let mut policy = policy
-        .with_trust(trust)
+        .with_file_authority(authority)
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
     // Shown before the first step, which is the last moment at which the whole of what is about
@@ -1475,7 +1471,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 Err(_) => None,
             };
             if let Some(usage) = usage {
-                accounting.add(usage);
+                accounting.spent.add_usage(usage);
             }
             accounting.publish(reporter);
             let processed = processed.map_err(|e| e.to_string())?;

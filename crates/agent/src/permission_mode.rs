@@ -155,14 +155,81 @@ impl PermissionMode {
     pub fn instruction(self) -> Option<&'static str> {
         match self {
             Self::Plan => Some(
-                "\n\nPlan mode. The user is deciding what to do, so writing is refused for this \
-                 turn however they would have answered: do not call write or edit, and do not \
+                "\n\nPlan mode. The user is deciding what to do, so writing is refused while it \
+                 lasts however they would have answered: do not call write or edit, and do not \
                  offer to. Read the code, run what you need to understand it, and answer with what \
                  you would do and why. When the plan is settled they will leave this mode and ask \
                  you to carry it out.",
             ),
             Self::Ask | Self::AcceptEdits | Self::Bypass => None,
         }
+    }
+}
+
+impl PermissionMode {
+    /// What the planner is told when the person changes the mode while its turn runs (MODE-8).
+    ///
+    /// The prompt it started with still says the old mode, so a change into plan mode repeats the
+    /// instruction and a change out of it says the refusal is over. Between the other modes nothing
+    /// is said, for the reason [`PermissionMode::instruction`] says nothing about them. Both are
+    /// worded for the rest of the turn, because they stay in the conversation after it ends and the
+    /// next turn is told its own mode afresh.
+    pub fn change_notice(self, to: PermissionMode) -> Option<String> {
+        match (self, to) {
+            (from, to) if from == to => None,
+            (_, Self::Plan) => to.instruction().map(|instruction| {
+                format!("The user changed the mode while this turn was running.{instruction}")
+            }),
+            (Self::Plan, _) => Some(
+                "Plan mode has ended for the rest of this turn. The user changed the mode, so \
+                 writing is no longer refused by it."
+                    .to_string(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// The mode a session is in, readable from a turn that is running while the person changes it.
+///
+/// Cloning gives another handle on the same mode, so the key that sets it, the confirmer that
+/// answers under it, the tools that refuse under it and a delegate's turn all read what the person
+/// chose last (MODE-8). A value made from a [`PermissionMode`] is a handle nobody else holds.
+#[derive(Debug, Clone)]
+pub struct LiveMode(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl LiveMode {
+    pub fn new(mode: PermissionMode) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            mode as u8,
+        )))
+    }
+
+    /// The mode in force now. Read once per decision: two reads in one decision can disagree.
+    pub fn get(&self) -> PermissionMode {
+        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+            x if x == PermissionMode::AcceptEdits as u8 => PermissionMode::AcceptEdits,
+            x if x == PermissionMode::Plan as u8 => PermissionMode::Plan,
+            x if x == PermissionMode::Bypass as u8 => PermissionMode::Bypass,
+            _ => PermissionMode::Ask,
+        }
+    }
+
+    pub fn set(&self, mode: PermissionMode) {
+        self.0
+            .store(mode as u8, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl Default for LiveMode {
+    fn default() -> Self {
+        Self::new(PermissionMode::default())
+    }
+}
+
+impl From<PermissionMode> for LiveMode {
+    fn from(mode: PermissionMode) -> Self {
+        Self::new(mode)
     }
 }
 
@@ -178,7 +245,7 @@ impl PermissionMode {
 /// otherwise identical turn for a permission bug to live in.
 pub struct Confining<'a, C: Confirmer> {
     inner: &'a mut C,
-    mode: PermissionMode,
+    mode: LiveMode,
     auto_vetting: bool,
 }
 
@@ -187,10 +254,14 @@ impl<'a, C: Confirmer> Confining<'a, C> {
     /// same value the task carries. A parameter rather than a default, because the two prompts that
     /// promote quarantined content answer yes without it: a builder call left off at one of the
     /// callers below would be a run that stopped screening and said nothing about it.
-    pub fn new(inner: &'a mut C, mode: PermissionMode, auto_vetting: bool) -> Self {
+    ///
+    /// `mode` is a [`LiveMode`] where the person can change it while the work runs, and each
+    /// question is answered under the mode in force when it is asked. A bare [`PermissionMode`]
+    /// is a mode that never changes.
+    pub fn new(inner: &'a mut C, mode: impl Into<LiveMode>, auto_vetting: bool) -> Self {
         Self {
             inner,
-            mode,
+            mode: mode.into(),
             auto_vetting,
         }
     }
@@ -239,7 +310,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// drawn for a key to reach.
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         let creates_a_credential = !request.credentials.is_empty();
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Plan => WriteDecision::reject(),
             mode if mode.answers_a_write_unasked(creates_a_credential) => WriteDecision::approve(),
             _ => self.inner.confirm_write(request),
@@ -257,7 +328,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        if self.mode.answers_a_run_unasked() {
+        // Not a line that asked to start with no sandbox: the permission mode never widens the
+        // sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that line, so it
+        // goes to the person in this mode as in every other.
+        if self.mode.get().answers_a_run_unasked() && !request.unconfined {
             RunDecision::approve()
         } else {
             self.inner.confirm_run(request)
@@ -266,7 +340,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
 
     /// Asked in every mode but bypass, where the verdict answers where screening was asked for.
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_read_output(request)
@@ -283,7 +357,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Bypassing answers it, and is the one mode whose answer can be no: a run told to ask nobody
     /// and to screen what it promotes has the check's word and nothing else to go on.
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_vetted_read(request)
@@ -299,7 +373,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// written and a fetch changes nothing here; what it does do is leave the machine, which is
     /// the person's to agree to.
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_fetch(request)
@@ -307,20 +381,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
-    /// Asked in every mode but bypass, including plan mode and accepting edits.
+    /// Asked in every mode, bypass, plan mode and accepting edits included.
     ///
     /// Accepting edits does not start servers: what that mode grants is writes to this tree, and a
     /// language server runs the ecosystem's build tooling with the user's own access, which is
     /// nearer to a run than to an edit. Plan mode asks rather than refusing, for the reason a fetch
     /// does: reading the code is how a plan gets written, and a server writes nothing here. What it
     /// does do is execute code out of the dependency tree, which stays the person's to agree to.
+    ///
+    /// Bypassing does not answer it, for the reason it does not answer a line that asks to start
+    /// with no sandbox: the server runs with no profile, and it runs the `build.rs`, the project's
+    /// `tsserver.js` or the `.pth` file a confined stage could have written.
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
-        match self.mode {
-            PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_server(request)
-            }
-        }
+        self.inner.confirm_server(request)
     }
 
     /// Approves a whole plan only where every check is being bypassed, and asks in every other mode
@@ -337,7 +410,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// question, and a person in plan mode who wants a run planned before it touches anything is
     /// asking for exactly what this mode does.
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_manifest(request)
@@ -354,7 +427,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// one a check read, so the answer stays the mode's however the check answered. No check is made
     /// before it either, for the reason it is made before the other two: nothing would read the word.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_vouch(request)
@@ -374,7 +447,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// it: a check is a model being shown the content, which is the disclosure the question is
     /// about, so asking one would perform the act it was deciding about.
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_exposing_read(request)
@@ -389,7 +462,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// standing decision about every tool on the list, a larger question than the one a check read.
     /// What bypassing answers it records nothing, so the next session that asks anybody asks again.
     fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_tool_list(request)
@@ -406,10 +479,37 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         &mut self,
         request: &crate::confirm::McpCallRequest,
     ) -> crate::confirm::CallDecision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_mcp_call(request)
+            }
+        }
+    }
+
+    /// Approved where nothing is asked, which is the one mode that answers a run unasked, and put to
+    /// the inner confirmer in every other, plan mode and accepting edits included.
+    ///
+    /// Accepting edits does not accept this: what that mode grants is writes to this tree, and a
+    /// yes here widens what every later command can reach. The request was judged before it got
+    /// here, so the refusals a row meets have been applied to a bypassed run as to any other.
+    fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+        match self.mode.get().answers_a_run_unasked() {
+            true => Decision::Approve,
+            false => self.inner.confirm_path(request),
+        }
+    }
+
+    /// Refused where every check is being bypassed, and asked in every other.
+    ///
+    /// A yes widens the network every later command reaches, and the hosts were chosen by a program
+    /// rather than named by the person, so the mode that answers nothing does not answer this one
+    /// yes: `onUnlisted: ask` behaves as `refuse` there (SANDBOX-24).
+    fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Reject,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_host(request)
             }
         }
     }
@@ -421,7 +521,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// rewrite a declaration to a url a server wrote, so the mode would be declaring a server at a
     /// destination nobody read, and each later session would reach it with nothing asked.
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
-        match self.mode {
+        match self.mode.get() {
             PermissionMode::Bypass => Decision::Reject,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
                 self.inner.confirm_move(request)
@@ -525,6 +625,15 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -536,6 +645,87 @@ mod tests {
         }
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
+        }
+    }
+
+    /// Says yes to a host question and counts the times it was asked; refuses everything else.
+    struct YesToHosts(usize);
+
+    impl Confirmer for YesToHosts {
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            self.0 += 1;
+            Decision::Approve
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// SANDBOX-24: a host question is put to the person in every mode but bypass, which refuses it
+    /// without asking. The regression it rejects: a bypassed session answering yes to hosts a
+    /// program chose, which opens the network for every later command, or one that asks.
+    #[test]
+    fn a_host_question_is_asked_in_every_mode_but_bypass_which_refuses() {
+        let request = crate::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        };
+        for (mode, asked, answer) in [
+            (PermissionMode::Ask, 1, Decision::Approve),
+            (PermissionMode::AcceptEdits, 1, Decision::Approve),
+            (PermissionMode::Plan, 1, Decision::Approve),
+            (PermissionMode::Bypass, 0, Decision::Reject),
+        ] {
+            let mut yes = YesToHosts(0);
+            let decided = Confining::new(&mut yes, mode, false).confirm_host(&request);
+            assert_eq!((yes.0, decided), (asked, answer), "{mode:?}");
         }
     }
 
@@ -782,6 +972,15 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
@@ -795,6 +994,104 @@ mod tests {
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
         }
+    }
+
+    /// Says yes to starting a language server and counts the times it was asked; refuses
+    /// everything else.
+    #[derive(Default)]
+    struct YesToServers(usize);
+
+    impl Confirmer for YesToServers {
+        fn confirm_server(&mut self, _request: &crate::confirm::ServerRequest) -> Decision {
+            self.0 += 1;
+            Decision::Approve
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    fn a_server() -> crate::confirm::ServerRequest {
+        crate::confirm::ServerRequest {
+            language: "Rust".to_string(),
+            program: "/usr/bin/rust-analyzer".to_string(),
+            args: Vec::new(),
+            workspace: "/work/project".to_string(),
+            runs_build_tooling: true,
+            declared: false,
+        }
+    }
+
+    /// LSP-5, MODE-4: starting a language server is put to the person in every mode, bypass
+    /// included, since the server runs with no profile and executes the `build.rs` or `.pth` file a
+    /// confined stage could have written. A run with nobody to ask refuses it. The regression it
+    /// rejects is bypassing approving the server unasked, as it approves a confined line.
+    #[test]
+    fn a_language_server_is_put_to_the_person_in_every_mode_bypass_included() {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let mut asked = YesToServers::default();
+            let decided = Confining::new(&mut asked, mode, false).confirm_server(&a_server());
+            assert_eq!((decided, asked.0), (Decision::Approve, 1), "{mode:?}");
+        }
+        let mut refusing = Unattended;
+        assert_eq!(
+            Confining::new(&mut refusing, PermissionMode::Bypass, false)
+                .confirm_server(&a_server()),
+            Decision::Reject
+        );
     }
 
     fn a_move() -> crate::confirm::MoveRequest {
@@ -1171,6 +1468,15 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -1221,5 +1527,44 @@ mod tests {
             mode = mode.cycle(true);
         }
         assert_eq!(mode, PermissionMode::Bypass);
+    }
+
+    /// MODE-8: a confirmer answers under the mode the person last chose, not the one it was made
+    /// in, so a change while a turn runs reaches the questions still to come.
+    #[test]
+    fn a_confirmer_follows_the_mode_chosen_after_it_was_made() {
+        let live = LiveMode::new(PermissionMode::Ask);
+        let mut asked = Unattended;
+        let mut confining = Confining::new(&mut asked, live.clone(), false);
+        assert!(!confining.confirm_write(&a_write()).approved());
+
+        live.set(PermissionMode::AcceptEdits);
+        assert!(confining.confirm_write(&a_write()).approved());
+
+        live.set(PermissionMode::Plan);
+        assert!(!confining.confirm_write(&a_write()).approved());
+    }
+
+    /// MODE-8: the planner is told of a change that matters to it and of none that does not.
+    #[test]
+    fn the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode() {
+        use PermissionMode::*;
+        for from in [Ask, AcceptEdits, Bypass] {
+            let said = from.change_notice(Plan).expect("told of plan mode");
+            assert!(said.contains(Plan.instruction().expect("plan says something").trim()));
+        }
+        assert!(
+            Plan.change_notice(Ask)
+                .is_some_and(|said| said.contains("ended"))
+        );
+        assert!(Plan.change_notice(Bypass).is_some());
+        for (from, to) in [
+            (Ask, AcceptEdits),
+            (AcceptEdits, Bypass),
+            (Bypass, Ask),
+            (Plan, Plan),
+        ] {
+            assert_eq!(from.change_notice(to), None, "{from:?} to {to:?}");
+        }
     }
 }

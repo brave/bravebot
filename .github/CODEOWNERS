@@ -7,9 +7,10 @@
 #
 # The rest is what decides what executes with this tree checked out, and who decides it: the
 # workflows, the image the released binaries are built in, the script an install runs, the hook npm
-# runs on install, and the three lockfiles. None of these was owned, so the one approval the
-# protection requires for a change that moves a pinned step onto a movable tag was owed to nobody
-# in particular. required-checks.txt is here for the same reason: it is the tree's statement of
+# runs on install, the three pnpm lockfiles, and the three pnpm-workspace.yaml files, which list
+# the dependencies trusted to run a script on install. None of these was owned, so the one approval
+# the protection requires for a change that moves a pinned step onto a movable tag was owed to
+# nobody in particular. required-checks.txt is here for the same reason: it is the tree's statement of
 # which checks hold a merge.
 #
 # Last matching pattern wins, so keep the more specific rules below the general ones.
@@ -27,7 +28,11 @@
 /install.sh @bbondy
 /npm/scripts/ @bbondy
 /ui/package.json @bbondy
-/package-lock.json @bbondy
-/ui/package-lock.json @bbondy
+/ui/pnpm-lock.yaml @bbondy
+/docs/website/pnpm-lock.yaml @bbondy
+/packages/agent-client/pnpm-lock.yaml @bbondy
+/ui/pnpm-workspace.yaml @bbondy
+/docs/website/pnpm-workspace.yaml @bbondy
+/packages/agent-client/pnpm-workspace.yaml @bbondy
 /Cargo.lock @bbondy
 /contrib/required-checks.txt @bbondy

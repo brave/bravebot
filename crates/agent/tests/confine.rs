@@ -3,17 +3,51 @@
 //! the places that hold a credential.
 //!
 //! Each test skips where this machine cannot apply a profile, which includes a suite run from
-//! inside another profile.
+//! inside another profile. On Windows a test does not skip: a machine that cannot create a
+//! container profile fails them, since a job that confined nothing must not report green.
 
 use bravebot_agent::confine::Confinement;
 use bravebot_agent::exec;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::command::Plan;
 use bravebot_sandbox::network::Network;
+#[cfg(unix)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `path` with its links followed, spelled as a session directory is: on Windows without the
+/// `\\?\` prefix `canonicalize` adds, which a command line cannot carry.
+fn resolved(path: &Path) -> PathBuf {
+    let path = path.canonicalize().expect("a canonical path");
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(ordinary) if cfg!(windows) => PathBuf::from(ordinary),
+        _ => path,
+    }
+}
+
+/// A line that prints `file`. Windows runs `cmd.exe`, a native program: Git's `cat` is an MSYS
+/// program, which expects a POSIX layer a container does not hold.
+fn cat(file: impl std::fmt::Display) -> String {
+    if cfg!(windows) {
+        format!("cmd /c type '{file}'")
+    } else {
+        format!("cat '{file}'")
+    }
+}
+
+/// A line that makes `file`, or on Windows a directory of that name, where there is none.
+fn touch(file: impl std::fmt::Display) -> String {
+    if cfg!(windows) {
+        format!("cmd /c mkdir '{file}'")
+    } else {
+        format!("touch '{file}'")
+    }
+}
 
 /// A session directory, a second one beside it that the session was not opened on, and a home
 /// directory holding a credential of each kind, all under the build directory.
@@ -23,8 +57,55 @@ struct Places {
     home: PathBuf,
 }
 
+/// On Windows, keeps only the directories of this process's `PATH` that lie under the system and
+/// Program Files directories, where `cmd.exe` and Git's programs are.
+///
+/// Every `PATH` directory, and the parent of each `bin` among them, is a read row of every stage
+/// (SANDBOX-18). Every container already reads the system and Program Files directories, so a row
+/// there writes nothing. Anywhere else a row is an entry the platform writes onto every file
+/// beneath the directory as the stage starts and removes as it ends, so with a CI runner's `PATH`,
+/// which names toolchain installations, and the build directories `cargo test` adds to it, a stage
+/// takes minutes to start and can pass the run deadline before its program runs. None of these
+/// tests is about those rows. The job cannot do this for them, because cargo adds its own
+/// directories to whatever `PATH` the job gives it.
+#[cfg(windows)]
+fn hold_path_to_what_every_container_reads() {
+    static HELD: std::sync::Once = std::sync::Once::new();
+    HELD.call_once(|| {
+        let roots: Vec<PathBuf> = [
+            "SystemRoot",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+        ]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+        let under = |directory: &Path, root: &Path| {
+            let mut parts = directory.components();
+            root.components().all(|part| {
+                parts
+                    .next()
+                    .is_some_and(|own| own.as_os_str().eq_ignore_ascii_case(part.as_os_str()))
+            })
+        };
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let kept = std::env::join_paths(
+            std::env::split_paths(&path)
+                .filter(|directory| roots.iter().any(|root| under(directory, root))),
+        )
+        .expect("directories that were on PATH can be joined again");
+        // SAFETY: `set_var` is sound on Windows whatever other threads are doing, as its
+        // documentation states.
+        unsafe { std::env::set_var("PATH", kept) };
+    });
+}
+
 impl Places {
     fn new(name: &str) -> Self {
+        #[cfg(windows)]
+        hold_path_to_what_every_container_reads();
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!("confine-{name}"));
@@ -38,6 +119,7 @@ impl Places {
         let home = top.join("home");
         for (path, contents) in [
             (".aws/credentials", "aws secret\n"),
+            (".bravebot/gateway-keys.json", "gateway secret\n"),
             (".ssh/id_ed25519", "ssh secret\n"),
             (".ssh/id_ed25519.pub", "ssh public\n"),
             (".ssh/config", "ssh config\n"),
@@ -49,9 +131,9 @@ impl Places {
             std::fs::write(file, contents).expect("home file");
         }
         Self {
-            session: session.canonicalize().expect("canonical session"),
-            beside: beside.canonicalize().expect("canonical beside"),
-            home: home.canonicalize().expect("canonical home"),
+            session: resolved(&session),
+            beside: resolved(&beside),
+            home: resolved(&home),
         }
     }
 
@@ -66,11 +148,21 @@ impl Places {
     }
 
     fn run(&self, line: &str, confinement: Option<&Confinement>) -> exec::Ran {
+        self.run_given(line, confinement, None)
+    }
+
+    /// [`Places::run`] for a session that was given `scratch` as its own directory.
+    fn run_given(
+        &self,
+        line: &str,
+        confinement: Option<&Confinement>,
+        scratch: Option<&Path>,
+    ) -> exec::Ran {
         exec::run_plan_observed(
             &self.plan(line),
             &Cancel::new(),
             exec::LIMIT,
-            None,
+            scratch,
             None,
             confinement,
             &mut |_| Ok(()),
@@ -79,9 +171,28 @@ impl Places {
     }
 }
 
+#[cfg(unix)]
 fn can_confine() -> bool {
     bravebot_sandbox::base::Prelude::current().is_some()
         && bravebot_sandbox::confinement_works_here()
+}
+
+/// A `strict` stage is refused on a Linux kernel below Landlock ABI 9 (SANDBOX-3), so a test that
+/// needs one to start has nothing to test there.
+#[cfg(unix)]
+fn strict_runs_here() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
+}
+
+/// `confinement_works_here` starts `/bin/true`, which is not a Windows program, so it cannot say
+/// whether a container can be created here and is not asked.
+#[cfg(windows)]
+fn can_confine() -> bool {
+    bravebot_sandbox::for_current_platform()
+        .expect("a container profile can be created on this machine");
+    true
 }
 
 /// The regression it rejects, on a platform that lists what a program reaches: confinement passed
@@ -94,7 +205,7 @@ fn a_confined_program_cannot_read_a_file_outside_the_session() {
         return;
     }
     let places = Places::new("read");
-    let line = format!("cat {}", places.beside.join("outside.txt").display());
+    let line = cat(places.beside.join("outside.txt").display());
 
     let control = places.run(&line, None);
     let confined = places.run(&line, Some(&places.confinement()));
@@ -165,7 +276,7 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
 fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     use bravebot_sandbox::SandboxMode;
     use bravebot_sandbox::scope::{Requested, Scope};
-    if !can_confine() {
+    if !strict_runs_here() {
         return;
     }
     let places = Places::new("requested-scope");
@@ -192,6 +303,60 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     assert!(
         !read(".ssh/id_ed25519", &asked(Scope::Aws)).ended_well,
         "a request for aws read a private key"
+    );
+}
+
+/// INSTR-9 tells the planner to stand in for a missing Python module with one written in a
+/// directory inside the session's own and named, quoted, on the line's `PYTHONPATH`. The
+/// regressions it rejects are a confinement that refuses reading the session's directory or drops
+/// the assignment, so the road the planner is told to take fails under the sandbox, and a stage
+/// given the session's directory on its `PYTHONPATH` whatever the line says, which puts whatever
+/// the work left there ahead of every program's own modules. A module of the same name at the top
+/// of the session's directory stands for that: the named line imports the stand-in and not it, and
+/// the line with no assignment imports neither. The unconfined line is the control that Python
+/// finds the stand-in at all.
+#[cfg(unix)]
+#[test]
+fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("stand-in-module");
+    if bravebot_agent::programs::resolve("python3", &places.session).is_none() {
+        return;
+    }
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    let stand_in = own.join("stand-in");
+    std::fs::create_dir(&stand_in).expect("a directory for the stand-in");
+    std::fs::write(
+        stand_in.join("bravebot_stand_in.py"),
+        "from json import *\n",
+    )
+    .expect("a module");
+    std::fs::write(
+        own.join("bravebot_stand_in.py"),
+        "def dumps(_):\n    return 'left in the session directory'\n",
+    )
+    .expect("a module left beside it");
+    let program = "python3 -c 'import bravebot_stand_in; print(bravebot_stand_in.dumps([1]))'";
+    let named = format!("PYTHONPATH='{}' {program}", stand_in.display());
+    let confinement =
+        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
+            .expect("a platform with a base");
+
+    let control = places.run_given(&named, None, Some(&own));
+    let confined = places.run_given(&named, Some(&confinement), Some(&own));
+    let unnamed = places.run_given(program, Some(&confinement), Some(&own));
+
+    assert_eq!(control.stdout, "[1]\n", "unconfined: {control:?}");
+    assert!(
+        confined.ended_well && confined.stdout == "[1]\n",
+        "the module was not imported with the assignment: {confined:?}"
+    );
+    assert!(
+        !unnamed.ended_well && unnamed.stdout.is_empty(),
+        "a module was imported with no assignment on the line: {unnamed:?}"
     );
 }
 
@@ -255,10 +420,10 @@ fn a_confined_program_reads_and_writes_inside_the_session() {
     let places = Places::new("inside");
     let confinement = places.confinement();
 
-    let read = places.run("cat inside.txt", Some(&confinement));
-    let wrote = places.run("touch made.txt", Some(&confinement));
+    let read = places.run(&cat("inside.txt"), Some(&confinement));
+    let wrote = places.run(&touch("made.txt"), Some(&confinement));
 
-    assert_eq!(read.stdout, "inside\n");
+    assert_eq!(read.stdout, "inside\n", "{read:?}");
     assert!(wrote.ended_well, "{wrote:?}");
     assert!(places.session.join("made.txt").exists());
 }
@@ -272,14 +437,238 @@ fn a_confined_program_cannot_write_outside_the_session() {
     }
     let places = Places::new("write");
     let target = places.beside.join("planted.txt");
+    let control = places.run(&touch("control.txt"), Some(&places.confinement()));
 
-    let ran = places.run(
-        &format!("touch {}", target.display()),
-        Some(&places.confinement()),
+    let ran = places.run(&touch(target.display()), Some(&places.confinement()));
+
+    assert!(
+        control.ended_well && places.session.join("control.txt").exists(),
+        "the same command could not write inside the session, so a refusal outside it means nothing: {control:?}"
     );
-
     assert!(!ran.ended_well, "{ran:?}");
     assert!(!target.exists());
+}
+
+/// SANDBOX-14, SANDBOX-18: on macOS a stage whose program is not git cannot write a repository's
+/// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
+/// names a gitdir, and neither can git when a script starts it, while a stage whose program is git
+/// writes the configuration. git runs what those files name with no profile around it the next
+/// time anybody runs git there. The regressions it rejects are the `.git` refusal lifted for every
+/// stage, and lifted for none. The confined write beside the `.git` is the control that the stage
+/// writes the session, and each refused line run without the sandbox is the control that the file
+/// is writable.
+#[cfg(target_os = "macos")]
+#[test]
+fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("git-directory");
+    let repository = places.session.join("repo");
+    let initialised = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&repository)
+        .status();
+    if !initialised.is_ok_and(|status| status.success()) {
+        return;
+    }
+    std::fs::create_dir_all(repository.join(".git/hooks")).expect("a hooks directory");
+    std::fs::create_dir_all(repository.join(".git/modules/sub")).expect("a submodule's gitdir");
+    std::fs::write(repository.join(".git/modules/sub/config"), "").expect("its configuration");
+    std::fs::create_dir_all(places.session.join("linked")).expect("a linked work tree");
+    std::fs::write(places.session.join("linked/.git"), "gitdir: ../repo/.git\n")
+        .expect("a .git file");
+    let confinement = places.confinement();
+
+    let beside = places.run("sh -c 'printf x > repo/beside.txt'", Some(&confinement));
+    assert!(
+        beside.ended_well && repository.join("beside.txt").exists(),
+        "the stage could not write the session, so a refusal below means nothing: {beside:?}"
+    );
+
+    for (line, file) in [
+        (
+            "sh -c 'printf x > repo/.git/hooks/post-checkout'",
+            "repo/.git/hooks/post-checkout",
+        ),
+        (
+            "sh -c 'printf \"[a]\\n\\tb = c\\n\" >> repo/.git/config'",
+            "repo/.git/config",
+        ),
+        (
+            "sh -c 'git -C repo config core.hooksPath elsewhere'",
+            "repo/.git/config",
+        ),
+        (
+            "sh -c 'printf x >> repo/.git/modules/sub/config'",
+            "repo/.git/modules/sub/config",
+        ),
+        (
+            "sh -c 'printf \"gitdir: elsewhere\" > linked/.git'",
+            "linked/.git",
+        ),
+    ] {
+        let file = places.session.join(file);
+        let before = std::fs::read(&file).ok();
+        let confined = places.run(line, Some(&confinement));
+        assert!(
+            !confined.ended_well && std::fs::read(&file).ok() == before,
+            "`{line}` wrote {}: {confined:?}",
+            file.display()
+        );
+        let control = places.run(line, None);
+        assert!(
+            control.ended_well && std::fs::read(&file).ok() != before,
+            "`{line}` does not write {} without the sandbox: {control:?}",
+            file.display()
+        );
+    }
+
+    let git = places.run("git -C repo config bravebot.probe yes", Some(&confinement));
+    assert!(git.ended_well, "{git:?}");
+    let configuration =
+        std::fs::read_to_string(repository.join(".git/config")).expect("the configuration");
+    assert!(configuration.contains("probe = yes"), "{configuration}");
+}
+
+/// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
+/// where a run failed before the planner could ask. The regression it rejects is the flag never
+/// reaching the profile, so the write is refused as it is without bypass; the stage without the
+/// flag is the control that the same line is refused.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-beside");
+    let target = places.beside.join("made.txt");
+    let line = format!("touch '{}'", target.display());
+
+    let control = places.run(&line, Some(&places.confinement()));
+    assert!(
+        !control.ended_well && !target.exists(),
+        "the write is allowed without bypass, so the test shows nothing: {control:?}"
+    );
+    let bypass = places.run(&line, Some(&places.confinement().with_unasked_writes(true)));
+    assert!(bypass.ended_well && target.exists(), "{bypass:?}");
+}
+
+/// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
+/// regression it rejects is a row wide enough to cover a credential location, a file a shell or
+/// git runs later, a per-user job, the home directory's own entries, or the directory above it.
+/// The first write is the control that the stage can write at all.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-refused");
+    std::fs::create_dir_all(places.home.join(".config/gcloud")).expect("a credential directory");
+    for directory in ["Library/LaunchAgents", ".config/systemd/user"] {
+        std::fs::create_dir_all(places.home.join(directory)).expect("a job directory");
+    }
+    std::fs::write(places.home.join(".editorconfig"), "root = true\n").expect("a home file");
+    std::fs::write(places.home.join(".zshrc"), "export A=1\n").expect("a startup file");
+    let confinement = places.confinement().with_unasked_writes(true);
+    let top = places.home.parent().expect("a parent").to_path_buf();
+    let attempt = |path: PathBuf| {
+        let ran = places.run(&format!("touch '{}'", path.display()), Some(&confinement));
+        (ran.ended_well, path.exists())
+    };
+    let appended = |name: &str| {
+        places
+            .run(
+                &format!("tee -a '{}'", places.home.join(name).display()),
+                Some(&confinement),
+            )
+            .ended_well
+    };
+
+    let beside = attempt(places.beside.join("control.txt"));
+    let existing = appended(".editorconfig");
+    let new_in_existing_dir = attempt(places.home.join(".config/other.txt"));
+    let refused = [
+        ("ssh", places.home.join(".ssh/planted")),
+        ("state directory", places.home.join(".bravebot/planted")),
+        ("aws", places.home.join(".aws/planted")),
+        ("gcloud", places.home.join(".config/gcloud/planted")),
+        (
+            "launch agent",
+            places.home.join("Library/LaunchAgents/planted.plist"),
+        ),
+        (
+            "systemd unit",
+            places.home.join(".config/systemd/user/planted.service"),
+        ),
+        ("new entry in home", places.home.join("planted")),
+        ("new entry above home", top.join("planted")),
+    ]
+    .map(|(what, path)| (what, attempt(path)));
+    let rewritten = [".zshrc", ".gitconfig"].map(|name| (name, appended(name)));
+
+    assert_eq!(beside, (true, true), "the stage could not write at all");
+    assert!(existing, "an existing file in home is not writable");
+    for (name, ended_well) in rewritten {
+        assert!(!ended_well, "{name} was written");
+    }
+    assert!(
+        !new_in_existing_dir.0,
+        "a directory holding a credential is treated as home: its new entries are refused"
+    );
+    for (what, (ended_well, exists)) in refused {
+        assert!(!ended_well && !exists, "{what} was written");
+    }
+}
+
+/// SANDBOX-22 under bypass: the person's `denyWrite` outranks the grant, and `strict` keeps the
+/// per-path request. The regression it rejects is a grant applied after the lists, which lets a
+/// stage write a path the person refused, and a mode check that reads bypass alone.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-denied");
+    let locked = places.beside.join("locked");
+    std::fs::create_dir_all(&locked).expect("a directory");
+    let free = places.run(
+        &format!("touch '{}'", places.beside.join("free.txt").display()),
+        Some(&places.confinement().with_unasked_writes(true)),
+    );
+    let listed = places
+        .confinement()
+        .with_unasked_writes(true)
+        .with_filesystem(&written(&[], &[], &[], &[&locked.display().to_string()]));
+    let refused = places.run(
+        &format!("touch '{}'", locked.join("planted.txt").display()),
+        Some(&listed),
+    );
+    let strict = strict_runs_here().then(|| {
+        places.run(
+            &format!("touch '{}'", places.beside.join("strict.txt").display()),
+            Some(
+                &places
+                    .confinement()
+                    .with_mode(bravebot_sandbox::SandboxMode::Strict)
+                    .with_unasked_writes(true),
+            ),
+        )
+    });
+
+    assert!(free.ended_well, "{free:?}");
+    assert!(
+        !refused.ended_well && !locked.join("planted.txt").exists(),
+        "{refused:?}"
+    );
+    if let Some(strict) = strict {
+        assert!(
+            !strict.ended_well && !places.beside.join("strict.txt").exists(),
+            "{strict:?}"
+        );
+    }
 }
 
 /// The regression it rejects: the background path spawning the plain command. A job left running
@@ -291,18 +680,28 @@ fn a_program_left_running_is_confined_as_well() {
     }
     let places = Places::new("background");
     let target = places.beside.join("planted.txt");
-    let plan = places.plan(&format!("touch {}", target.display()));
-    let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
-
-    let mut job = exec::start_steps(steps, &places.session, None, Some(&places.confinement()))
-        .expect("the job starts");
-    for _ in 0..200 {
-        if job.ended() {
-            break;
+    let finished = |line: &str| {
+        let plan = places.plan(line);
+        let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
+        let mut job = exec::start_steps(steps, &places.session, None, Some(&places.confinement()))
+            .expect("the job starts");
+        for _ in 0..200 {
+            if job.ended() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+        job
+    };
 
+    let mut control = finished(&touch("control.txt"));
+    let control_ended = control.ended();
+    let mut job = finished(&touch(target.display()));
+
+    assert!(
+        control_ended && places.session.join("control.txt").exists(),
+        "a job could not write inside the session, so a refusal outside it means nothing"
+    );
     assert!(job.ended(), "the job did not finish");
     assert!(!target.exists(), "the job wrote outside the session");
     assert_ne!(job.codes(), [Some(0)], "the write succeeded");
@@ -314,11 +713,18 @@ fn can_close_the_network() -> bool {
             .is_ok_and(|sandbox| sandbox.capabilities().network_denial_enforced)
 }
 
+fn can_hold_to_a_port() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+}
+
 /// Whether anything connected to a loopback listener while `line` ran under `confinement`.
 ///
 /// What is observed is the listener's accept, not the program's exit status: a program that is
 /// refused and one that finds nothing listening exit alike, so only a connection that arrived says
 /// the network was reached.
+#[cfg(unix)]
 fn reached_a_listener(
     places: &Places,
     line: impl FnOnce(u16) -> String,
@@ -349,6 +755,7 @@ fn reached_a_listener(
 /// The regression it rejects: a closed setting that is read and never applied, so a program with
 /// no reason to reach the network reaches it. The same line under the open setting is the control
 /// that this machine lets the connection through, without which the refusal means nothing.
+#[cfg(unix)]
 #[test]
 fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
     if !can_close_the_network() {
@@ -368,6 +775,7 @@ fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
 /// The regression it rejects: the closed setting taking egress from the stages it exists to leave
 /// it with. A `git ls-remote` carries the remote scope and `curl` exists to fetch, and both reach
 /// the listener with the network closed.
+#[cfg(unix)]
 #[test]
 fn a_closed_network_keeps_a_remote_stage_and_curl_reaching_it() {
     if !can_close_the_network() {
@@ -425,9 +833,48 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
     );
 }
 
+/// SANDBOX-4 through the agent: a `cmd` line holding an argument `cmd.exe` reads as its own syntax
+/// is refused before its redirection's file is opened, and nothing is made. The same line with a
+/// plain name is the control that it starts and the redirection's file is made. The regression it
+/// rejects is the agent's early check given the program without its arguments, so the file is
+/// created before the backend refuses the stage.
+#[cfg(windows)]
+#[test]
+fn a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("cmd-refused");
+    let confinement = places.confinement();
+
+    let control = places.run("cmd /c mkdir plain > control.txt", Some(&confinement));
+    let refused = exec::run_plan_observed(
+        &places.plan("cmd /c mkdir 'R&D' > refused.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&confinement),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        control.ended_well
+            && places.session.join("plain").is_dir()
+            && places.session.join("control.txt").exists(),
+        "{control:?}"
+    );
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("'&'")),
+        "{refused:?}"
+    );
+    for unmade in ["refused.txt", "R&D", "R"] {
+        assert!(!places.session.join(unmade).exists(), "{unmade} was made");
+    }
+}
+
 /// The lists a person writes, as the command line and the settings file hand them over: each entry a
 /// spelling and nothing else.
-#[cfg(unix)]
 fn written(
     allow_read: &[&str],
     deny_read: &[&str],
@@ -686,6 +1133,306 @@ fn a_denial_that_cannot_be_applied_stops_the_stage() {
     assert!(
         matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. })
             if detail.contains("denyRead") && detail.contains("../escape")),
+        "{refused:?}"
+    );
+}
+
+fn hosts(allowed: Option<&[&str]>, denied: &[&str]) -> bravebot_config::sandbox_network::Hosts {
+    use bravebot_config::sandbox_network::{HostEntry, Hosts};
+    let entry = |name: &&str| HostEntry {
+        entry: name.to_string(),
+        by: None,
+    };
+    Hosts {
+        allowed: allowed.map(|names| names.iter().map(entry).collect()),
+        denied: denied.iter().map(entry).collect(),
+        on_unlisted: None,
+    }
+}
+
+/// A line that prints `HTTPS_PROXY`, behind `assignment` when it is not empty. Windows runs
+/// `cmd.exe`, a native program: Git's `printenv` is an MSYS program, which a container cannot start,
+/// so the variable would be read as empty. It uses `set` because the container quotes an argument
+/// holding `%` and an unconfined run does not, so `echo %HTTPS_PROXY%` prints differently in each.
+fn print_proxy(assignment: &str) -> String {
+    let program = if cfg!(windows) {
+        "cmd /c set HTTPS_PROXY"
+    } else {
+        "printenv HTTPS_PROXY"
+    };
+    if assignment.is_empty() {
+        program.to_string()
+    } else {
+        format!("{assignment} {program}")
+    }
+}
+
+/// The value a [`print_proxy`] line printed, without the name that `set` puts before it. A stage is
+/// given `HTTPS_PROXY` and `https_proxy`, which Windows holds as one variable, so `set` may print
+/// either spelling.
+fn proxy_variable(places: &Places, line: &str, confinement: Option<&Confinement>) -> String {
+    let printed = places.run(line, confinement).stdout;
+    let printed = printed.trim();
+    printed
+        .split_once('=')
+        .filter(|(name, _)| name.eq_ignore_ascii_case("HTTPS_PROXY"))
+        .map_or(printed, |(_, value)| value)
+        .to_string()
+}
+
+/// What `CONNECT host:443` through the proxy at `address` was answered with, as a first line.
+fn connect_through(address: &str, host: &str) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream = std::net::TcpStream::connect(address).expect("the proxy listens");
+    write!(
+        stream,
+        "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\n\r\n"
+    )
+    .expect("a request");
+    let mut first = String::new();
+    BufReader::new(stream)
+        .read_line(&mut first)
+        .expect("an answer");
+    first.trim().to_string()
+}
+
+/// The regression it rejects: a host list that is read and never applied, so a stage with egress
+/// keeps the open network, or one whose variables name a port that decides with another list. The
+/// port the stage is told refuses the unlisted name and the listed one is not refused by it.
+#[test]
+fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-proxy");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let told = proxy_variable(&places, &print_proxy(""), Some(&listed));
+    let address = told.strip_prefix("http://").expect("a proxy url");
+    assert!(address.starts_with("127.0.0.1:"), "{told}");
+    assert!(connect_through(address, "evil.example").contains("403"));
+    assert!(!connect_through(address, "mine.example").contains("403"));
+}
+
+/// SANDBOX-24: a host the person let programs reach for the session is carried by the stage's
+/// proxy, a host they did not is still refused, and a host the denied list names stays refused even
+/// when granted. The regressions it rejects: a grant that is recorded and never reaches the
+/// proxy, and a grant that outranks a denial.
+#[test]
+fn a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-granted");
+    let list = hosts(Some(&["mine.example"]), &["banned.example"]);
+    let grants = ["granted.example".to_string(), "banned.example".to_string()];
+    let address_of = |confinement: &Confinement| {
+        let told = proxy_variable(&places, &print_proxy(""), Some(confinement));
+        told.strip_prefix("http://")
+            .expect("a proxy url")
+            .to_string()
+    };
+
+    let before = address_of(&places.confinement().with_hosts(Some(&list)));
+    assert!(connect_through(&before, "granted.example").contains("403"));
+
+    let after = address_of(
+        &places
+            .confinement()
+            .with_hosts(Some(&list))
+            .with_host_grants(&grants),
+    );
+    assert!(!connect_through(&after, "granted.example").contains("403"));
+    assert!(!connect_through(&after, "mine.example").contains("403"));
+    assert!(connect_through(&after, "banned.example").contains("403"));
+    assert!(connect_through(&after, "other.example").contains("403"));
+}
+
+/// The regression it rejects: the proxy variables applied before the stage's own assignment, so a
+/// model-written `HTTPS_PROXY=` points the stage at a proxy of its choosing.
+#[test]
+fn an_assignment_in_the_line_cannot_point_a_stage_elsewhere() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-assignment");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let plain = proxy_variable(&places, &print_proxy(""), Some(&listed));
+    let assigned = proxy_variable(
+        &places,
+        &print_proxy("HTTPS_PROXY=http://elsewhere.example:3128"),
+        Some(&listed),
+    );
+    assert!(plain.starts_with("http://127.0.0.1:"), "{plain}");
+    assert_eq!(assigned, plain);
+}
+
+/// The regressions it rejects: a proxy started for a session that set no list, and one started for
+/// a list whose only key is a denial, which takes reach away and gives none. Each stage is
+/// compared with the unconfined control, so a proxy variable the machine already has is not read
+/// as ours.
+#[test]
+fn no_allowed_list_means_no_proxy() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("hosts-absent");
+    let control = proxy_variable(&places, &print_proxy(""), None);
+    for list in [None, Some(hosts(None, &["bad.example"]))] {
+        let confinement = places.confinement().with_hosts(list.as_ref());
+        assert_eq!(
+            proxy_variable(&places, &print_proxy(""), Some(&confinement)),
+            control
+        );
+    }
+}
+
+/// The regression it rejects: a proxy handed to a stage that has no egress, which gives the stage
+/// a route the closed setting took away. It needs a platform that enforces the closed setting.
+#[test]
+fn a_stage_with_no_egress_is_given_no_proxy() {
+    if !can_close_the_network() {
+        return;
+    }
+    let places = Places::new("hosts-closed");
+    let control = proxy_variable(&places, &print_proxy(""), None);
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let closed = places
+        .confinement()
+        .with_network(Network::Closed)
+        .with_hosts(Some(&list));
+    assert_eq!(
+        proxy_variable(&places, &print_proxy(""), Some(&closed)),
+        control
+    );
+}
+
+/// The regression it rejects: a `denyRead` or `denyWrite` entry under a session directory being
+/// dropped on a platform that cannot subtract from a grant, so the stage starts and the program
+/// reads and writes the file the person denied. SANDBOX-25 says such a stage is not started.
+#[cfg(windows)]
+#[test]
+fn a_denied_entry_under_the_session_stops_the_stage() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("filesystem-deny-windows");
+    std::fs::write(places.session.join("secret.env"), "VALUE=1\n").expect("a file");
+    let listed =
+        places
+            .confinement()
+            .with_filesystem(&written(&[], &["secret.env"], &[], &["secret.env"]));
+
+    let refused = exec::run_plan_observed(
+        &places.plan("cat secret.env"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&listed),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { .. })),
+        "the stage started: {refused:?}"
+    );
+}
+
+/// The regression it rejects: the credential check skipped on Windows, so a session opened on the
+/// home directory, or on a credential location itself, is granted read and write over the
+/// directories that hold a key and `settings.json`, which a container cannot be refused a path
+/// inside. The stage is refused before any program starts. A session beside the credential
+/// locations is the control that the refusal is not made for every session.
+#[cfg(windows)]
+#[test]
+fn a_session_opened_on_the_home_directory_is_refused_the_credential_locations() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("home-session");
+    let line = cat(places.home.join(".bravebot\\gateway-keys.json").display());
+    for (root, location) in [
+        (places.home.clone(), ".bravebot"),
+        (places.home.join(".ssh"), ".ssh"),
+    ] {
+        let confinement = Confinement::here(vec![root.clone()], None, Some(&places.home))
+            .expect("a platform with a base");
+        let plan = bravebot_agent::cmdline::compile(&line, &root, None, &mut |_, _| Ok(()))
+            .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
+
+        let refused = exec::run_plan_observed(
+            &plan,
+            &Cancel::new(),
+            exec::LIMIT,
+            None,
+            None,
+            Some(&confinement),
+            &mut |_| Ok(()),
+        );
+
+        assert!(
+            matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains(location)),
+            "a session on {} was not refused for {location}: {refused:?}",
+            root.display()
+        );
+    }
+
+    let ran = places.run(
+        &cat(places.session.join("inside.txt").display()),
+        Some(&places.confinement()),
+    );
+    assert!(ran.ended_well && ran.stdout.contains("inside"), "{ran:?}");
+}
+
+/// The regression it rejects: a stage that ignores the proxy variables connecting straight to its
+/// target, which makes the list advice. The same line with no list is the control that this
+/// machine lets the connection through; under the list nothing arrives.
+#[cfg(unix)]
+#[test]
+fn a_stage_under_a_host_list_cannot_connect_around_the_proxy() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-around");
+    let line = |port: u16| format!("nc -z 127.0.0.1 {port}");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let control = reached_a_listener(&places, line, Some(&places.confinement()));
+    let around = reached_a_listener(&places, line, Some(&listed));
+
+    assert!(control, "the open network did not reach the listener");
+    assert!(!around, "a stage reached a port other than the proxy's");
+}
+
+/// The regression it rejects: a platform that cannot hold a program to the proxy running the stage
+/// anyway, with the variables set and the network otherwise open. It refuses, and the refusal names
+/// the setting.
+#[test]
+fn a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it() {
+    if !can_confine() || can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-refused");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let refused = exec::run_plan_observed(
+        &places.plan("cat inside.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&listed),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("sandbox.network.allowedHosts")),
         "{refused:?}"
     );
 }

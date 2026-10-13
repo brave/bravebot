@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/watch_command.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs

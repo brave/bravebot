@@ -4,7 +4,11 @@ title: The scroller
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/render.rs
+  - crates/tui/src/render/scroller.rs
+  - crates/tui/src/render/transcript.rs
+  - crates/tui/src/render/export.rs
   - crates/tui/src/state.rs
   - crates/tui/src/editor.rs
   - crates/config/src/settings.rs
@@ -147,6 +151,12 @@ the footer until the key it is for arrives, where the row has room for it beside
 (SCROLL-7). Any other key drops it and does what it does alone, the wheel included, and Escape
 abandons it and does nothing else.
 
+The prompts that scroll a body (write, output, run, vetting, vouch, exposure, server, tool list,
+call and plan, and the questions a session opens with) take Up / Down, `k` / `j`, PageUp / PageDown
+and Home / End. A prompt takes that set whole, so a new prompt does not choose its own. `j` and `k`
+are never answers, so a person scrolling cannot write a grant: the run prompt remembers a requested
+reach for every session with `e` ([SANDBOX-27](sandboxing.md#SANDBOX-27)).
+
 **Why.** Two dialects, because the people who reach for a pager have `less` or `vi` in their hands
 already and neither group should have to learn the other's. A key that does nothing on arrival
 reads as a broken feature, and the cost of answering both is a row in this table.
@@ -165,6 +175,9 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_line_keys_move_the_view_by_a_line`
 `verified-by: bravebot_tui::app::the_half_page_keys_move_the_view_by_half_a_screen`
 `verified-by: bravebot_tui::app::the_page_keys_move_the_view_by_a_whole_screen`
+`verified-by: bravebot_tui::confirm::j_and_k_scroll_each_prompt_a_line_as_the_arrows_do`
+`verified-by: bravebot_tui::confirm::j_and_k_scroll_the_run_prompt_where_keep_reach_is_offered_too`
+`verified-by: bravebot_tui::trust_prompt::j_and_k_scroll_the_question_a_line_and_answer_nothing`
 `verified-by: bravebot_tui::app::the_end_keys_reach_the_first_row_and_the_last`
 `verified-by: bravebot_tui::app::the_prompt_keys_land_on_the_turn_before_and_the_turn_after`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
@@ -343,6 +356,41 @@ somebody opened a pager to look at.
 
 `verified-by: bravebot_tui::render::the_scroller_takes_the_whole_screen_but_its_own_footer`
 `verified-by: bravebot_tui::render::the_usual_hint_comes_back_when_the_scroller_closes`
+
+<a id="SCROLL-10"></a>
+### SCROLL-10: `x` expands the call the view is on past its glimpse, and collapses it again
+
+The call nearest the top of the view that has more to show than it draws, among those on the
+screen, is expanded in place: a result the planner read shows every line the agent kept, and a
+write shows every change instead of the first twelve. A second press collapses it to the glimpse or
+the twelve lines drawn by [terminal-transcript.md](terminal-transcript.md), and the transcript is
+drawn collapsed again once the scroller closes. Expansion is a key the person pressed and is never
+decided by what a result contains. The key does nothing in a delegate's view and on a call with
+nothing more to show.
+
+Expanded lines are released through the same display gate as the glimpse, with control characters
+replaced by visible glyphs, and drawn behind the plain margin with each line cut to one row. A
+quarantined result has no plain expansion, and its marked block is unchanged.
+
+The agent keeps at most 500 lines of one result, and the session holds at most 20000 lines across
+all of them. Where either bound cut lines, the expanded rows end with the count of lines left out,
+as the glimpse does. A resumed session keeps no results, so only calls made in the running
+session expand.
+
+**Why.** The transcript shows five lines of a result and twelve of a write, and says how many it
+left out. Without a key the rest is reachable only by rerunning the command or opening the file.
+
+`verified-by: bravebot_tui::app::x_expands_the_call_the_view_is_on_and_a_second_press_collapses_it`
+`verified-by: bravebot_tui::render::the_expand_key_toggles_the_call_the_view_is_on`
+`verified-by: bravebot_tui::render::the_expand_key_does_nothing_where_a_call_has_no_more`
+`verified-by: bravebot_tui::render::an_expanded_result_shows_every_line_it_kept`
+`verified-by: bravebot_tui::render::an_expanded_result_says_how_many_lines_the_bound_cut`
+`verified-by: bravebot_tui::render::a_late_line_of_an_expanded_result_cannot_draw_its_own_escapes`
+`verified-by: bravebot_tui::render::an_expanded_write_shows_past_twelve_lines`
+`verified-by: bravebot_tui::render::a_transcript_at_rest_is_drawn_collapsed_after_the_scroller_closes`
+`verified-by: bravebot_tui::render::the_expand_key_leaves_a_call_below_the_screen_alone`
+`verified-by: bravebot_tui::state::a_session_holds_a_bounded_number_of_lines_for_expansion`
+`verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 
 ## Known costs
 

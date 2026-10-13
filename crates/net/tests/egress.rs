@@ -1084,3 +1084,73 @@ fn a_body_that_stops_partway_is_a_failure_rather_than_a_short_body() {
         "expected a transport failure, got {error:?}"
     );
 }
+
+/// A fetch the way `fetch_url` runs one: approved for this URL, then in flight.
+fn fetch_approved(egress: &Egress, url: &str) -> Result<bravebot_net::Response, EgressError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+    policy.endorse_fetch(url);
+    policy.before_fetch(url).expect("approved");
+    let outcome = egress.fetch(&mut policy, Request::get(url), Label::untrusted_public());
+    policy.fetch_finished();
+    outcome
+}
+
+/// `localhost` is a name, so what the system resolver answers for it is classified: the approval
+/// was for a host as written, and a name is the case it says nothing about. The listener answers,
+/// so a refusal that came from nothing being there to connect to would still show a connection.
+#[test]
+fn a_fetched_name_that_resolves_to_this_machine_is_refused_without_a_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    listener.set_nonblocking(true).expect("nonblocking");
+
+    let url = format!("http://localhost:{port}/page");
+    let error = fetch_approved(&Egress::new(), &url).expect_err("must be refused");
+
+    assert!(
+        matches!(&error, EgressError::AddressRefused { url: named } if *named == url),
+        "{error:?}"
+    );
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        listener.accept().is_err(),
+        "a connection reached the listener"
+    );
+    assert!(!error.to_string().contains("127.0.0.1"), "{error}");
+}
+
+/// The refusal is the fetch's. The same name, reached by something that is not a fetch in flight,
+/// is a local model endpoint and goes through.
+#[test]
+fn the_same_name_is_reached_when_no_fetch_is_in_flight() {
+    let base = serve_as("localhost", vec![ok_response("a local model")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let response = Egress::new()
+        .fetch(&mut policy, Request::get(&base), Label::untrusted_public())
+        .expect("not a fetch");
+    assert_eq!(response.status, 200);
+}
+
+/// An address the person approved as written is not a lookup. The same server, asked for by name,
+/// is the case above.
+#[test]
+fn an_approved_address_literal_on_this_machine_is_fetched() {
+    let base = serve(vec![ok_response("local page")]);
+    let response = fetch_approved(&Egress::new(), &format!("{base}/page")).expect("a literal");
+    assert_eq!(response.status, 200);
+}

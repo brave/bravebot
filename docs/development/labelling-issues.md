@@ -54,8 +54,12 @@ already editing the issue for another reason.
 ## The kind, and the three axes
 
 The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `spec-coverage`,
-`spec-bug`, `parity`, `beyond-parity`, `enhancement`. The three axes say what to **do** about it, and every open
+`spec-bug`, `parity`, `beyond-parity`, `enhancement`, `maintenance`. The three axes say what to **do** about it, and every open
 issue carries one value from each: an `importance`, an `urgency`, and a `size`.
+
+`maintenance` is code to delete, share or split where what the program does stays the same: an
+item nothing uses, two copies of one block, a file too long to work on. Where the cleanup turns up
+something that does not work, the issue is a `bug` instead.
 
 More than one kind can be true at once, and a `spec-mismatch` usually carries a second: `bug` where
 the code attempts the clause's behaviour and gets it wrong, `enhancement` where nothing attempts it
@@ -125,6 +129,26 @@ An area is a fact about the issue rather than a judgement, so it can be applied 
 it. Apply none where the answer is not clear from the issue: an area guessed wrong is worse than
 one missing, because it routes the issue away from the person who would have found it.
 
+## Release-blocking and blocked
+
+`release-blocking` says the issue has to be resolved before the next release. `make bump-version`
+lists every open issue with it, with links, and asks before going on. The peer-advisories skill
+applies it to everything it files, since each is a defect another agent had and this tree may share.
+Remove it when the release no longer waits on the issue. The label is red, and a person creates it:
+
+```bash
+gh label create release-blocking --repo brave/bravebot --color d73a4a \
+  --description "Must be resolved before the next release"
+```
+
+`blocked/needs-planning` says the issue cannot be started until something else is decided or
+done. It is a statement about the issue's own progress and does not affect a release. It was
+previously named `blocked`:
+
+```bash
+gh label edit blocked --repo brave/bravebot --name blocked/needs-planning
+```
+
 ## Security
 
 `security` says the issue is about the guarantee this repository exists for, and it goes on with a
@@ -153,6 +177,10 @@ The [peer-advisories skill](../../agents/skills/peer-advisories/SKILL.md), which
 another coding agent's published advisory finds here, applies the same set, except that
 `security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
 
+Every issue the peer-advisories skill files also carries `release-blocking`, described in
+[the next section](#release-blocking-and-blocked). The skill refuses to post while that label does
+not exist.
+
 The [peer-features skill](../../agents/skills/peer-features/SKILL.md), which files what other
 coding agents document that bravebot lacks or could do measurably better, applies a kind, an `area`
 and no axis. A missing capability is `parity`. A change that makes an existing capability about 10%
@@ -162,4 +190,14 @@ while `beyond-parity` does not exist, because a person creates labels:
 ```bash
 gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
   --description "Better than what comparable tools offer, by a concrete margin"
+```
+
+The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
+duplication and files or functions past a length, applies `maintenance`, or `bug` where a reviewer
+found a defect, an `area` or `infrastructure` where one is clear, and no axis. It assigns every
+issue to netzenbot. The skill refuses to post while `maintenance` does not exist:
+
+```bash
+gh label create maintenance --repo brave/bravebot --color C5DEF5 \
+  --description "Dead code, duplication or structure to clean up; behaviour does not change"
 ```

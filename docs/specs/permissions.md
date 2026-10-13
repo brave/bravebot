@@ -287,9 +287,17 @@ of a denied directory is refused whether or not the volume's case handling could
 `ask` rule still asks for a write that comes through a link. A file tool's path that starts with `~`
 is also judged under the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), since a
 rule anchored at the home directory never matches the spelling `~/x`, and that name is reachable only
-once the home is opened. The second name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
+once the home is opened. A `run` redirection whose target climbs with `..` is also judged under the
+name with each `..` taken out where the entry before it is not a link, and under the file it opens
+once everything is followed, so `config/sub/../app.env`, or `../app.env` run from `config/sub`, is
+refused by a rule naming `config/app.env` whether or not `config` or the file is a link. The second
+name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
-the rules cannot be matched against a spelling that is not the file's.
+the rules cannot be matched against a spelling that is not the file's. A `run` redirection's
+target, read or written, is held to the same refusal as a file tool's path. A short name is
+accepted only in the spelling of the open directory the target lands in, which names that one
+directory; in a target that reaches no open directory through an ancestor of its own it is refused
+wherever it appears.
 
 The same holds for the spelling a rule is written in. A `deny` or `ask` path rule whose segments
 before the first `*` pass through a symbolic link also covers the place the link reaches, under the
@@ -344,6 +352,11 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
 `verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`
 `verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file`
+`verified-by: bravebot_agent::turn::a_deny_rule_on_a_file_refuses_a_redirection_that_reaches_it_through_a_parent_directory`
+`verified-by: bravebot_agent::turn::a_deny_rule_on_a_file_refuses_a_redirection_that_reads_it_through_a_parent_directory`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens`
+`verified-by: bravebot_agent::turn::a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
@@ -377,6 +390,9 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
+`verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
+`verified-by: bravebot_agent::tools::a_redirection_through_a_name_windows_reads_as_another_file_is_refused_before_it_runs`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_name_windows_reads_as_another_file_is_refused`
 `verified-by: bravebot_agent::turn::a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_against_a_trusted_workspace`
 `verified-by: bravebot_agent::turn::a_deny_rule_holds_where_every_permission_check_is_bypassed`

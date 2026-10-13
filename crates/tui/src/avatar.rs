@@ -1,7 +1,9 @@
 //! The pixel faces bots wear, drawn in half-blocks beside the mark on the opening screen.
 //!
 //! A port of `ui/src/renderer/avatar/pixels.ts`: the same streams, parts and colour maths, so a
-//! seed draws the same face in the terminal as in the app.
+//! seed draws the same shape in the terminal as in the app. The terminal paints it from the three
+//! colours the wordmark is drawn through rather than from the app's palette, so the face reads as
+//! part of the wordmark.
 
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -23,9 +25,31 @@ pub const ROWS: usize = INNER as usize / 2;
 const EYE_WHITE: Rgb = (0xff, 0xff, 0xff);
 const EYE_PUPIL: Rgb = (0x1d, 0x1f, 0x27);
 const EYE_CONTRAST: f64 = 1.8;
-const HUE_DISTANCE: f64 = 60.0;
 
-const PAINT: [Rgb; 11] = [
+/// The paints a face is mixed from, and how far apart in hue any two on one face must be.
+struct Palette<'a> {
+    paints: &'a [Rgb],
+    hue_distance: f64,
+}
+
+/// The terminal's palette: the wordmark's three colours. Brave's oranges are a few degrees of hue
+/// apart, so no distance is required between them.
+fn mark(stops: &[Rgb; 3]) -> Palette<'_> {
+    Palette {
+        paints: stops,
+        hue_distance: 0.0,
+    }
+}
+
+/// The app's palette, kept to check the port against faces `pixels.ts` drew.
+#[cfg(test)]
+const APP: Palette<'static> = Palette {
+    paints: &APP_PAINT,
+    hue_distance: 60.0,
+};
+
+#[cfg(test)]
+const APP_PAINT: [Rgb; 11] = [
     (0xe5, 0x48, 0x4d),
     (0xf5, 0x92, 0x3a),
     (0xf2, 0xc9, 0x4c),
@@ -213,13 +237,14 @@ fn contrast(a: Rgb, b: Rgb) -> f64 {
 
 /// The stops from one paint to the next through every paint between them the short way round the
 /// hue ring, so a red to green face does not turn olive in the middle.
-fn walk(paints: &[usize]) -> Vec<Lch> {
-    let mut ring: Vec<usize> = (0..PAINT.len()).collect();
-    ring.sort_by(|a, b| lch_of(PAINT[*a]).h.total_cmp(&lch_of(PAINT[*b]).h));
+fn walk(palette: &Palette, paints: &[usize]) -> Vec<Lch> {
+    let all = palette.paints;
+    let mut ring: Vec<usize> = (0..all.len()).collect();
+    ring.sort_by(|a, b| lch_of(all[*a]).h.total_cmp(&lch_of(all[*b]).h));
     let length = ring.len();
     let place = |paint: usize| ring.iter().position(|p| *p == paint).unwrap_or(0);
 
-    let mut stops = vec![lch_of(PAINT[ring[place(paints[0])]])];
+    let mut stops = vec![lch_of(all[ring[place(paints[0])]])];
     for pair in paints.windows(2) {
         let (from, to) = (place(pair[0]), place(pair[1]));
         let forward = (to + length - from) % length;
@@ -227,7 +252,7 @@ fn walk(paints: &[usize]) -> Vec<Lch> {
         let mut at = from;
         while at != to {
             at = (at + step) % length;
-            stops.push(lch_of(PAINT[ring[at]]));
+            stops.push(lch_of(all[ring[at]]));
         }
     }
     stops
@@ -272,7 +297,7 @@ struct Face {
     gaze: i32,
 }
 
-fn build(seed: &str) -> Face {
+fn build(seed: &str, palette: &Palette) -> Face {
     let body = pick(seed, "body", &[0, 1, 2, 3, 4, 5, 6, 7]);
     let widths = BODIES[body];
     let widest = widths.iter().copied().max().unwrap_or(0);
@@ -381,13 +406,13 @@ fn build(seed: &str) -> Face {
     lopsided(seed, &mut filled, &guarded);
     keep_connected(&mut filled, left_eye);
 
-    let paints = paints_for(seed);
+    let paints = paints_for(seed, palette);
     let direction = pick(seed, "direction", &DIRECTIONS);
     let fringe = stream(&format!("{seed}/fringe")).next() < 0.35;
     let cells = paint(
         seed,
         &filled,
-        &walk(&paints),
+        &walk(palette, &paints),
         direction,
         fringe,
         left_eye,
@@ -467,17 +492,19 @@ fn keep_connected(filled: &mut Filled, from: (i32, i32)) {
     }
 }
 
-/// Two or three paints, each at least `HUE_DISTANCE` from every other.
-fn paints_for(seed: &str) -> Vec<usize> {
+/// Two or three distinct paints, each at least the palette's hue distance from every other.
+fn paints_for(seed: &str, palette: &Palette) -> Vec<usize> {
+    let all = palette.paints;
     let mut next = stream(&format!("{seed}/paints"));
-    let mut chosen = vec![(next.next() * PAINT.len() as f64).floor() as usize];
+    let mut chosen = vec![(next.next() * all.len() as f64).floor() as usize];
     let count = if next.next() < 0.4 { 3 } else { 2 };
     while chosen.len() < count {
-        let allowed: Vec<usize> = (0..PAINT.len())
+        let allowed: Vec<usize> = (0..all.len())
             .filter(|p| {
-                chosen
-                    .iter()
-                    .all(|c| hue_distance(PAINT[*c], PAINT[*p]) >= HUE_DISTANCE)
+                !chosen.contains(p)
+                    && chosen
+                        .iter()
+                        .all(|c| hue_distance(all[*c], all[*p]) >= palette.hue_distance)
             })
             .collect();
         if allowed.is_empty() {
@@ -673,9 +700,10 @@ fn held(seed: &str, seconds: f64, still: bool) -> Look {
     }
 }
 
-/// The face a seed describes, as terminal rows of [`WIDTH`] columns, held as `look` says.
-pub fn rows(seed: &str, look: Look) -> Vec<Vec<Span<'static>>> {
-    let face = build(seed);
+/// The face a seed describes, painted from `stops`, as terminal rows of [`WIDTH`] columns, held as
+/// `look` says.
+pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3]) -> Vec<Vec<Span<'static>>> {
+    let face = build(seed, &mark(stops));
     let mut pixels: [[Option<Rgb>; GRID]; GRID] = [[None; GRID]; GRID];
     for (x, y, fill) in &face.cells {
         pixels[*y as usize][*x as usize] = Some(*fill);
@@ -723,6 +751,7 @@ pub fn startup_seed() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::BRAND_STOPS;
 
     /// Faces drawn by `pixels.ts` for the same seeds: the cell count, a hash over every cell's
     /// position and colour, the eyes, the gaze and the first and last cell.
@@ -794,12 +823,12 @@ mod tests {
             })
     }
 
-    /// The terminal face is the app's face: a different PRNG step, colour step or part table
-    /// changes a cell, and so the hash.
+    /// Given the app's palette, the terminal face is the app's face: a different PRNG step, colour
+    /// step or part table changes a cell, and so the hash.
     #[test]
     fn a_seed_draws_the_face_the_app_draws() {
         for (seed, count, expected, eyes, gaze, first, last) in FROM_THE_APP {
-            let face = build(seed);
+            let face = build(seed, &APP);
             assert_eq!(face.cells.len(), *count, "{seed}");
             assert_eq!(hash(&face), *expected, "{seed}");
             assert_eq!(face.eyes, *eyes, "{seed}");
@@ -813,7 +842,7 @@ mod tests {
     #[test]
     fn every_face_sits_inside_the_drawn_area() {
         for i in 0..300 {
-            let face = build(&format!("v2:fit-{i}"));
+            let face = build(&format!("v2:fit-{i}"), &mark(&BRAND_STOPS));
             assert!(
                 face.cells
                     .iter()
@@ -827,14 +856,62 @@ mod tests {
     #[test]
     fn seeds_draw_distinct_faces() {
         let hashes: std::collections::HashSet<u32> = (0..200)
-            .map(|i| hash(&build(&format!("v2:distinct-{i}"))))
+            .map(|i| hash(&build(&format!("v2:distinct-{i}"), &mark(&BRAND_STOPS))))
             .collect();
         assert!(hashes.len() >= 195, "only {} of 200 differ", hashes.len());
     }
 
+    /// The terminal face is painted from the brand's oranges alone. A face mixed from the app's
+    /// palette has green, blue or purple cells, where red is not the strongest channel.
+    #[test]
+    fn the_terminal_face_is_painted_in_the_brands_oranges() {
+        for i in 0..300 {
+            let seed = format!("v2:orange-{i}");
+            for (x, y, (r, g, b)) in build(&seed, &mark(&BRAND_STOPS)).cells {
+                assert!(
+                    r > g && g >= b,
+                    "{seed} paints ({x}, {y}) as #{r:02x}{g:02x}{b:02x}"
+                );
+            }
+        }
+    }
+
+    /// Under a named theme the face is painted from that theme's colours instead. Blue stops are
+    /// far from any orange, so a face that kept the oranges has cells where blue is not the
+    /// strongest channel.
+    #[test]
+    fn a_face_is_painted_from_the_colours_it_is_given() {
+        let blues = [(0x5e, 0x81, 0xac), (0x81, 0xa1, 0xc1), (0x88, 0xc0, 0xd0)];
+        for i in 0..300 {
+            let seed = format!("v2:blue-{i}");
+            for (x, y, (r, g, b)) in build(&seed, &mark(&blues)).cells {
+                assert!(
+                    b > r && b >= g,
+                    "{seed} paints ({x}, {y}) as #{r:02x}{g:02x}{b:02x}"
+                );
+            }
+        }
+    }
+
+    /// Two or three paints are still chosen, as in the app, rather than the hue distance between
+    /// the oranges collapsing every face to one of them.
+    #[test]
+    fn a_terminal_face_mixes_more_than_one_orange() {
+        for i in 0..300 {
+            let paints = paints_for(&format!("v2:mix-{i}"), &mark(&BRAND_STOPS));
+            let mut distinct = paints.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert!(
+                (2..=3).contains(&paints.len()) && distinct.len() == paints.len(),
+                "v2:mix-{i} chose {paints:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_face_is_five_rows_of_ten_columns_with_the_eyes_on_it() {
-        let drawn = rows("v2:example-0", Look::default());
+        let drawn = rows("v2:example-0", Look::default(), &BRAND_STOPS);
         assert_eq!(drawn.len(), ROWS);
         assert!(drawn.iter().all(|row| row.len() == WIDTH));
         let eyes = drawn
@@ -863,6 +940,7 @@ mod tests {
                     away: i % 2 == 0,
                     blink: i % 3 == 0,
                 },
+                &BRAND_STOPS,
             )
             .iter()
             .flatten()
@@ -872,7 +950,11 @@ mod tests {
                 _ => 1,
             })
             .sum();
-            assert_eq!(painted, build(&seed).cells.len(), "{seed}");
+            assert_eq!(
+                painted,
+                build(&seed, &mark(&BRAND_STOPS)).cells.len(),
+                "{seed}"
+            );
         }
     }
 
@@ -917,13 +999,14 @@ mod tests {
 
     #[test]
     fn a_look_changes_the_eyes_and_nothing_else() {
-        let at_rest = rows("v2:example-0", Look::default());
+        let at_rest = rows("v2:example-0", Look::default(), &BRAND_STOPS);
         let shut = rows(
             "v2:example-0",
             Look {
                 away: false,
                 blink: true,
             },
+            &BRAND_STOPS,
         );
         let turned = rows(
             "v2:example-0",
@@ -931,6 +1014,7 @@ mod tests {
                 away: true,
                 blink: false,
             },
+            &BRAND_STOPS,
         );
         let differing = |a: &[Vec<Span<'static>>], b: &[Vec<Span<'static>>]| {
             a.iter()

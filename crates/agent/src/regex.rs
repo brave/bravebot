@@ -208,6 +208,56 @@ enum Inst {
 #[derive(Debug, Clone)]
 pub struct Regex {
     program: Vec<Inst>,
+    /// Characters of which every match must start with one, when the pattern is built so.
+    first: Option<FirstChars>,
+}
+
+/// The characters a match can begin with, for a pattern every branch of which begins with a
+/// literal. A line holding none of them cannot match, so it is rejected without running the NFA.
+#[derive(Debug, Clone)]
+struct FirstChars {
+    /// Which ASCII bytes begin a match, indexed by the byte.
+    ascii: [bool; 128],
+}
+
+impl FirstChars {
+    /// The first characters of `node`, or `None` where it can match without consuming one or can
+    /// begin with something that is not a literal character.
+    fn of(node: &Node) -> Option<Vec<(char, bool)>> {
+        match node {
+            Node::Char { want, folded } => Some(vec![(*want, *folded)]),
+            Node::Plus(inner) => Self::of(inner),
+            Node::Alt(branches) => {
+                let mut all = Vec::new();
+                for branch in branches {
+                    all.extend(Self::of(branch)?);
+                }
+                Some(all)
+            }
+            // `(?i)` compiles to an `Empty` that consumes nothing, so what follows it decides.
+            Node::Concat(nodes) => Self::of(nodes.iter().find(|n| **n != Node::Empty)?),
+            _ => None,
+        }
+    }
+
+    fn new(node: &Node) -> Option<Self> {
+        let starts = Self::of(node)?;
+        let mut ascii = [false; 128];
+        for (byte, slot) in ascii.iter_mut().enumerate() {
+            let c = char::from(byte as u8);
+            *slot = starts
+                .iter()
+                .any(|&(want, folded)| want == c || (folded && lower(want) == lower(c)));
+        }
+        Some(Self { ascii })
+    }
+
+    /// Whether `text` could hold a match. A non-ASCII character is always allowed through, since
+    /// it can fold to an ASCII one (U+212A, the Kelvin sign, folds to `k`) and the NFA decides.
+    fn allows(&self, text: &str) -> bool {
+        text.bytes()
+            .any(|byte| !byte.is_ascii() || self.ascii[usize::from(byte)])
+    }
 }
 
 impl Regex {
@@ -244,7 +294,10 @@ impl Regex {
         let mut program = Vec::new();
         emit(&node, &mut program);
         program.push(Inst::Match);
-        Ok(Self { program })
+        Ok(Self {
+            program,
+            first: FirstChars::new(&node),
+        })
     }
 
     /// Whether `text` holds a match anywhere in it.
@@ -253,17 +306,28 @@ impl Regex {
     /// is deduplicated at each position, so the work is bounded by the line's length times the
     /// program's size however many threads the pattern would like to spawn.
     pub fn matches(&self, text: &str) -> bool {
-        let chars: Vec<char> = text.chars().collect();
-        let mut current: Vec<usize> = Vec::new();
-        let mut next: Vec<usize> = Vec::new();
-        let mut on_current = vec![false; self.program.len()];
-        let mut on_next = vec![false; self.program.len()];
+        if let Some(first) = &self.first
+            && !first.allows(text)
+        {
+            return false;
+        }
+
+        let mut scratch = Scratch::new(self.program.len());
+        scratch.chars.extend(text.chars());
+        let Scratch {
+            chars,
+            current,
+            next,
+            on_current,
+            on_next,
+            pending,
+        } = &mut scratch;
 
         for position in 0..=chars.len() {
             // A fresh attempt beginning here, which is what makes the search unanchored. Where
             // the pattern starts with `^` the assertion kills this thread at once for every
             // position but the first.
-            self.follow(0, position, &chars, &mut current, &mut on_current);
+            self.follow(0, position, chars, current, on_current, pending);
 
             if current.iter().any(|&pc| self.program[pc] == Inst::Match) {
                 return true;
@@ -275,7 +339,7 @@ impl Regex {
             let c = chars[position];
             next.clear();
             on_next.iter_mut().for_each(|seen| *seen = false);
-            for &pc in &current {
+            for &pc in current.iter() {
                 let consumes = match &self.program[pc] {
                     Inst::Char { want, folded } => {
                         *want == c || (*folded && lower(*want) == lower(c))
@@ -287,12 +351,12 @@ impl Regex {
                     _ => continue,
                 };
                 if consumes {
-                    self.follow(pc + 1, position + 1, &chars, &mut next, &mut on_next);
+                    self.follow(pc + 1, position + 1, chars, next, on_next, pending);
                 }
             }
 
-            std::mem::swap(&mut current, &mut next);
-            std::mem::swap(&mut on_current, &mut on_next);
+            std::mem::swap(current, next);
+            std::mem::swap(on_current, on_next);
         }
 
         false
@@ -302,6 +366,8 @@ impl Regex {
     ///
     /// Iterative rather than recursive: the closure of a pattern like `(a*)*` reaches deep, and a
     /// pattern arriving through a turn must not be able to choose the depth of this stack.
+    /// `pending` is the stack, emptied on return and kept by the caller so that it is allocated
+    /// once for the line rather than once per character.
     fn follow(
         &self,
         pc: usize,
@@ -309,8 +375,9 @@ impl Regex {
         chars: &[char],
         list: &mut Vec<usize>,
         seen: &mut [bool],
+        pending: &mut Vec<usize>,
     ) {
-        let mut pending = vec![pc];
+        pending.push(pc);
         while let Some(pc) = pending.pop() {
             if seen[pc] {
                 continue;
@@ -343,6 +410,29 @@ impl Regex {
                 // Consumes a character, so it stays in the set for the step to deal with.
                 Inst::Char { .. } | Inst::Any | Inst::Class(_) | Inst::Match => list.push(pc),
             }
+        }
+    }
+}
+
+/// The buffers one call to `matches` works in.
+struct Scratch {
+    chars: Vec<char>,
+    current: Vec<usize>,
+    next: Vec<usize>,
+    on_current: Vec<bool>,
+    on_next: Vec<bool>,
+    pending: Vec<usize>,
+}
+
+impl Scratch {
+    fn new(states: usize) -> Self {
+        Self {
+            chars: Vec::new(),
+            current: Vec::with_capacity(states),
+            next: Vec::with_capacity(states),
+            on_current: vec![false; states],
+            on_next: vec![false; states],
+            pending: Vec::with_capacity(states),
         }
     }
 }
@@ -728,6 +818,9 @@ impl Parser<'_> {
 /// Anything whose mapping is longer stays as it is, which keeps a fold a comparison between two
 /// characters rather than a rewrite of the subject.
 fn lower(c: char) -> char {
+    if c.is_ascii() {
+        return c.to_ascii_lowercase();
+    }
     let mut mapped = c.to_lowercase();
     match (mapped.next(), mapped.next()) {
         (Some(single), None) => single,
@@ -736,6 +829,9 @@ fn lower(c: char) -> char {
 }
 
 fn upper(c: char) -> char {
+    if c.is_ascii() {
+        return c.to_ascii_uppercase();
+    }
     let mut mapped = c.to_uppercase();
     match (mapped.next(), mapped.next()) {
         (Some(single), None) => single,
@@ -1166,6 +1262,94 @@ mod tests {
         assert!(matches("[a-]", "-"));
         assert!(matches("[-a]", "-"));
         assert!(matches("[a-]", "a"));
+    }
+
+    /// A line holding none of the characters a match can begin with is rejected before the NFA
+    /// runs, so a line holding one of them but not the rest still has to be tried and refused.
+    #[test]
+    fn a_pattern_beginning_with_a_literal_matches_only_where_the_whole_pattern_does() {
+        assert!(matches("needle|haystack", "xx haystack"));
+        assert!(!matches("needle|haystack", "needl hayst"));
+        assert!(matches("ab+c", "zzabbbc"));
+        assert!(!matches("ab+c", "zzab"));
+        assert!(!matches("needle", ""));
+    }
+
+    #[test]
+    fn a_folded_pattern_beginning_with_a_literal_is_found_in_either_case() {
+        let folded = Regex::compile_folded("dead code|unused").expect("compiles");
+        assert!(folded.matches("An UNUSED import"));
+        assert!(folded.matches("Dead Code"));
+        let flagged = Regex::compile("(?i)dead code|unused").expect("compiles");
+        assert!(flagged.matches("An UNUSED import"));
+        assert!(!matches("dead code|unused", "An UNUSED import"));
+    }
+
+    /// Only a pattern every branch of which must consume a literal first may be filtered by its
+    /// first characters. Each pattern here has a branch that can match without that character.
+    #[test]
+    fn a_branch_that_can_begin_with_something_else_is_still_matched() {
+        assert!(matches("abc|x*y", "y"));
+        assert!(matches("abc|.d", "zd"));
+        assert!(matches(r"abc|\bd", "d"));
+        assert!(matches("a?b", "b"));
+        assert!(matches("(a|b*)c", "c"));
+        assert!(matches("abc|", "zzz"));
+        assert!(matches("^abc|def", "abc"));
+        assert!(matches("^abc|def", "xdef"));
+        assert!(!matches("^abc|def", "xabc"));
+        assert!(matches("abc|[xy]z", "yz"));
+    }
+
+    #[test]
+    fn only_a_pattern_that_must_begin_with_a_literal_is_filtered_by_its_first_characters() {
+        for pattern in [
+            "needle",
+            "ab+c",
+            "cat|dog",
+            "(?i)dead code|unused",
+            "(?:ab)+c",
+            "(a|b)c",
+        ] {
+            let regex = Regex::compile(pattern).expect("compiles");
+            assert!(regex.first.is_some(), "{pattern}");
+        }
+        for pattern in [
+            "x*y", "a?b", "abc|x*y", ".a", "[ab]c", "^a", "a|", r"\ba", r"\wa", "(a|b*)c", "$",
+        ] {
+            let regex = Regex::compile(pattern).expect("compiles");
+            assert!(regex.first.is_none(), "{pattern}");
+        }
+    }
+
+    /// The filter reads bytes, and a non-ASCII character folds to an ASCII one in one direction
+    /// (U+212A, the Kelvin sign, to `k`) and the other.
+    #[test]
+    fn a_character_that_folds_across_the_ascii_boundary_still_matches() {
+        let ascii = Regex::compile_folded("kelvin").expect("compiles");
+        assert!(ascii.matches("\u{212A}elvin"));
+        let kelvin = Regex::compile_folded("\u{212A}elvin").expect("compiles");
+        assert!(kelvin.matches("kelvin"));
+        assert!(kelvin.matches("KELVIN"));
+        assert!(
+            !Regex::compile("kelvin")
+                .expect("compiles")
+                .matches("\u{212A}elvin")
+        );
+    }
+
+    #[test]
+    fn a_non_ascii_letter_folds_to_its_other_case() {
+        let regex = Regex::compile_folded("école").expect("compiles");
+        assert!(regex.matches("L'ÉCOLE"));
+        assert!(regex.matches("l'école"));
+        assert!(
+            !Regex::compile("école")
+                .expect("compiles")
+                .matches("L'ÉCOLE")
+        );
+        let class = Regex::compile_folded("[é]").expect("compiles");
+        assert!(class.matches("É"));
     }
 
     #[test]
