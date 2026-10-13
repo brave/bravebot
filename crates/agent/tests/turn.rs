@@ -1958,6 +1958,11 @@ fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
             format!(r#"{{"query":"log","repository":"{outside}"}}"#),
             format!("read_git.repository: '{outside}'"),
         ),
+        (
+            "watch_file",
+            format!(r#"{{"path":"{outside}/todo.txt"}}"#),
+            format!("watch_file.path: '{outside}/todo.txt'"),
+        ),
     ];
     let mut script: Vec<_> = calls
         .iter()
@@ -1969,11 +1974,12 @@ fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
+    // A turn that may arm a watch, since one that may not is never offered watch_file (ARM-5).
     turns::run(
         &config,
         &egress,
         &workspace,
-        &Task::new("tidy up my notes"),
+        &Task::new("tidy up my notes").arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
     )
@@ -3807,7 +3813,8 @@ fn an_approval_names_what_answered_it() {
         "a credential-creating write under bypass"
     );
 
-    // Plan refuses a write before any prompt is raised, so nothing answered and nothing is recorded.
+    // Plan refuses a write before any prompt is raised, so nothing answered and no answer is
+    // recorded; the refusal is recorded under `permission_mode` instead.
     for (tool, arguments) in [write, edit] {
         assert_eq!(
             answers(PermissionMode::Plan, tool, arguments),
@@ -4133,6 +4140,69 @@ fn plan_mode_refuses_a_write_a_settings_rule_would_have_let_through() {
     assert!(
         recording.seen.is_empty(),
         "the write raised a prompt, so this is not the case the test is for"
+    );
+}
+
+/// A write plan mode refused is a refusal in the trail, and the turn does not end as clean.
+///
+/// The mode is answered before the tool runs, so no other gate sees the call. With no record of
+/// its own, the trail holds the mode the turn began in and nothing about the write it refused,
+/// which reads the same as a turn that never tried one.
+#[test]
+fn a_write_refused_by_plan_mode_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("permissions-plan-mode-recorded");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"replaced"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task =
+        Task::new("rewrite the notes").with_permission_mode(bravebot_agent::PermissionMode::Plan);
+    let mut recording = RecordingConfirmer::approving();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut recording, bravebot_agent::PermissionMode::Plan, false);
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "permission_mode",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["write_file: plan mode refuses a write, so nothing was written"],
+        "the refused write was not recorded once, under the tool: {:?}",
+        sink.events()
+    );
+    assert!(
+        !outcome.clean,
+        "a turn whose write plan mode refused was reported as clean"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "original",
+        "plan mode wrote to the workspace"
     );
 }
 

@@ -6792,6 +6792,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that the permission mode refused a write before anything was written (MODE-3).
+    ///
+    /// The mode is answered before any other gate sees the call, so without this the planner is
+    /// told of a refusal the trail leaves out (TRACE-1), and the turn reads as clean. `call` is the
+    /// tool, or a plan's step and its tool, and `mode` is the mode's own name.
+    pub fn refuse_write_in_mode(&mut self, call: &str, mode: &'static str) {
+        let _ = self.deny(
+            "permission_mode",
+            Principle::Capability,
+            format!("{call}: {mode} mode refuses a write, so nothing was written"),
+        );
+    }
+
     /// Accept a reference the planner named, as the source of content for an effect.
     ///
     /// A slot id is routing: it decides what an effect touches. A `path_ref` picks the file a

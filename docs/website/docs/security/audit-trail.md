@@ -104,6 +104,14 @@ or `bypass`. A command or write that was put to you gets an `approval` line afte
 ending in "asking" is never the only thing the trail says about who answered. A fetch or a server
 start that a mode answers carries no such line.
 
+A write call plan mode refused before the tool ran, and a planned run it refused for a step that
+writes, each get a blocked `permission_mode` line naming the tool, or the step and its tool, so the
+trail says why nothing was written:
+
+```
+BLOCK   permission_mode: write_file: plan mode refuses a write, so nothing was written
+```
+
 ## Delegates and checkouts are recorded
 
 A [delegate](../how-it-works.md#delegates) gets a line when it starts and another when it ends. The
