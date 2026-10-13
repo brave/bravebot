@@ -1756,7 +1756,9 @@ key of the settings, and from the managed file's pin; the default is `workspace-
 the workspace may name any of the four, the later of the two winning. The checkout's project and
 local files, and a `--settings` file inside the workspace, may name only `strict`; a `read-only`,
 `workspace-write` or `off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
-holds over what the home file chose. A value that is not exactly one of the four words chooses
+holds over what the home file or a `--settings` file outside the workspace chose, unless `strict` is looser than that
+choice or than the managed file's pin, which it is only of `read-only`. Such a `strict` is not obeyed and refuses
+nothing, and `doctor` names its file and the file that chose `read-only`. A value that is not exactly one of the four words chooses
 nothing and is reported with its file, except `standard`, the earlier name of `workspace-write`: it
 names `workspace-write` in `--sandbox`, `/sandbox`, a settings file and the managed file, and every
 report spells it `workspace-write`. Only `mode` is read from the `sandbox` block, and a key
@@ -1824,9 +1826,11 @@ what a `request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) r
 having no way to say "not under this" sends them to a wrapper script outside the tool that confines
 nothing and reports nothing. A mode they name, whose opening line reports it, is the same
 choice with the report kept. It is the person's to make and not the checkout's: a line in a
-repository that picked `off` would unconfine whoever cloned it, so the checkout may only ask for the
-stricter mode, which takes nothing from them, on the footing the `permissions` keys that only
-refuse already have ([PERM-18](permissions.md#PERM-18)). The pin is a floor because it is the
+repository that picked `off` would unconfine whoever cloned it, so the checkout may only ask for
+`strict`, and only where that takes nothing from them, on the footing the `permissions` keys that only
+refuse already have ([PERM-18](permissions.md#PERM-18)). Under a `read-only` the person or the managed
+file chose, `strict` would let the checkout's programs write the session's directories, which is the
+access `read-only` withholds. The pin is a floor because it is the
 administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
 the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
 stricter than the machine requires. Bypass may widen `workspace-write`'s writes because under bypass every
@@ -1858,6 +1862,9 @@ writable, since that directory is writable in every mode. A person who wants the
 `verified-by: bravebot_tui::sandbox_command::the_earlier_word_for_workspace_write_still_moves_the_mode`
 `verified-by: bravebot_config::settings::the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode`
 `verified-by: bravebot_config::settings::a_checkout_may_only_tighten_the_sandbox`
+`verified-by: bravebot_config::settings::a_checkouts_strict_does_not_lift_the_persons_read_only`
+`verified-by: bravebot_config::settings::a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only`
 `verified-by: bravebot_config::settings::a_word_that_is_not_a_mode_chooses_nothing_and_is_reported`
 `verified-by: bravebot_config::settings::the_flag_beats_the_files_and_the_default_is_workspace_write`
 `verified-by: bravebot_config::settings::a_managed_pin_refuses_a_looser_request_and_keeps_a_stricter_one`
@@ -1891,6 +1898,7 @@ writable, since that directory is writable in every mode. A person who wants the
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
 `verified-by: bravebot_ui_bridge::sandbox_mode::another_session_opens_under_the_settings_and_not_the_choice`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_projects_strict_does_not_lift_the_persons_read_only`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_choice_made_in_one_session_does_not_reach_another_open_beside_it`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_chosen_mode_is_what_the_next_turns_program_is_held_to`
 `verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`

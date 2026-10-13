@@ -335,8 +335,9 @@ pub struct Settings {
     /// the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
     /// the merge cannot say which file a value came from.
     sandbox_chosen: Option<(SandboxMode, PathBuf)>,
-    /// The layers not entitled to choose that asked for `strict`, weakest first. They may only
-    /// tighten, so nothing a stronger layer chose lifts one.
+    /// The layers not entitled to choose that asked for `strict`, weakest first. Obeyed over a
+    /// stronger layer's choice except where `strict` is looser than it or than the managed pin,
+    /// which it is only of `read-only`.
     sandbox_asked_strict: Vec<PathBuf>,
     /// The layers not entitled to choose that named `workspace-write` or `off`, with the mode, for
     /// `doctor`: dropped rather than obeyed, and said so.
@@ -1414,17 +1415,64 @@ impl Settings {
     /// The sandbox mode the settings files ask for and the file that asked, if any did
     /// (SANDBOX-22).
     ///
-    /// `strict` from any layer wins over what an entitled layer chose, because it only tightens: a
-    /// checkout asking for it is obeyed, and the person's own `off` does not lift it. Otherwise the
-    /// entitled layer's choice stands, the command-line file over the home one.
+    /// The entitled layer's choice, the command-line file over the home one, unless a checkout
+    /// asked for `strict` and `strict` is not looser than that choice: then the checkout's file.
+    /// So the person's own `off` does not lift a checkout's `strict`, and a checkout's `strict`
+    /// does not lift the person's `read-only`. The managed file is not read here;
+    /// [`crate::sandbox::resolve`] gives the mode in force.
     pub fn sandbox(&self) -> Option<(SandboxMode, &Path)> {
-        match &self.sandbox_chosen {
-            Some((SandboxMode::Strict, file)) => Some((SandboxMode::Strict, file.as_path())),
-            chosen => match self.sandbox_asked_strict.first() {
-                Some(file) => Some((SandboxMode::Strict, file.as_path())),
-                None => chosen.as_ref().map(|(mode, file)| (*mode, file.as_path())),
-            },
+        self.sandbox_under(&crate::Managed::default())
+    }
+
+    /// [`Settings::sandbox`] where a checkout's `strict` may not be looser than the mode `managed`
+    /// pins either.
+    pub(crate) fn sandbox_under(&self, managed: &crate::Managed) -> Option<(SandboxMode, &Path)> {
+        let chosen = self
+            .sandbox_chosen
+            .as_ref()
+            .map(|(mode, file)| (*mode, file.as_path()));
+        match self.sandbox_asked_strict.first() {
+            Some(file)
+                if !matches!(chosen, Some((SandboxMode::Strict, _)))
+                    && self.strict_held_by(managed).is_none() =>
+            {
+                Some((SandboxMode::Strict, file.as_path()))
+            }
+            _ => chosen,
         }
+    }
+
+    /// The checkout's files that asked for `strict` and are not obeyed, weakest first, each with
+    /// the mode `strict` is looser than and the file that chose that mode (SANDBOX-22).
+    ///
+    /// `strict` writes the session's directories, so a checkout asking for it would loosen a
+    /// `read-only` that the person's own file chose or that `managed` pins. Reported rather than
+    /// obeyed, as [`Settings::sandbox_ignored`] is.
+    pub fn sandbox_strict_ignored<'a>(
+        &'a self,
+        managed: &'a crate::Managed,
+    ) -> impl Iterator<Item = (&'a Path, SandboxMode, &'a Path)> {
+        self.strict_held_by(managed)
+            .into_iter()
+            .flat_map(|(mode, by)| {
+                self.sandbox_asked_strict
+                    .iter()
+                    .map(move |file| (file.as_path(), mode, by))
+            })
+    }
+
+    /// The mode a checkout's `strict` would be looser than, and the file that chose it: the
+    /// entitled layer's choice, else the managed pin.
+    fn strict_held_by<'a>(
+        &'a self,
+        managed: &'a crate::Managed,
+    ) -> Option<(SandboxMode, &'a Path)> {
+        self.sandbox_chosen
+            .as_ref()
+            .map(|(mode, file)| (*mode, file.as_path()))
+            .into_iter()
+            .chain(managed.sandbox().zip(managed.path()))
+            .find(|(mode, _)| SandboxMode::Strict.is_looser_than(*mode))
     }
 
     /// The layers that named `workspace-write` or `off` without being entitled to, with the mode, weakest
@@ -6751,6 +6799,76 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: a checkout's `strict` writes the session's directories, so it does not replace a
+    /// `read-only` the person's own file or a named file outside the workspace chose, and is
+    /// reported with the file that chose `read-only`. Over `workspace-write` and `off` it is still
+    /// obeyed. The regressions it rejects are a repository giving its programs the writes the person
+    /// withheld, in a session or a window, and a checkout's `strict` dropped under every choice.
+    #[test]
+    fn a_checkouts_strict_does_not_lift_the_persons_read_only() {
+        use crate::sandbox::for_a_window;
+        let none = crate::Managed::default();
+        let strict = r#"{"sandbox": {"mode": "strict"}}"#;
+        let read_only = r#"{"sandbox": {"mode": "read-only"}}"#;
+        for (name, layer) in [("home", "h"), ("named", "n")] {
+            for checkout in ["project", "local"] {
+                let layers = Layers::new(&format!("sandbox-read-only-{name}-{checkout}"));
+                let layers = match layer {
+                    "h" => layers.global(read_only),
+                    _ => layers.named(read_only),
+                };
+                let layers = match checkout {
+                    "project" => layers.project(strict),
+                    _ => layers.local(strict),
+                };
+                let chosen_in = match layer {
+                    "h" => layers.home.join(SETTINGS_FILE),
+                    _ => layers.named.clone().expect("a named file"),
+                };
+                let asked_in = layers.cwd.join(PROJECT_DIR).join(match checkout {
+                    "project" => SETTINGS_FILE,
+                    _ => LOCAL_SETTINGS_FILE,
+                });
+                let settings = layers.read();
+                assert_eq!(
+                    settings.sandbox(),
+                    Some((SandboxMode::ReadOnly, chosen_in.as_path())),
+                    "{name} {checkout}: the checkout's strict lifted read-only"
+                );
+                assert_eq!(
+                    settings.sandbox_strict_ignored(&none).collect::<Vec<_>>(),
+                    [(
+                        asked_in.as_path(),
+                        SandboxMode::ReadOnly,
+                        chosen_in.as_path()
+                    )],
+                    "{name} {checkout}"
+                );
+                assert_eq!(
+                    for_a_window(&settings, &none),
+                    SandboxMode::ReadOnly,
+                    "{name} {checkout}: the window"
+                );
+            }
+        }
+        for chosen in ["workspace-write", "off", "strict"] {
+            let settings = Layers::new(&format!("sandbox-strict-over-{chosen}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{chosen}"}}}}"#))
+                .project(strict)
+                .read();
+            assert_eq!(
+                settings.sandbox().map(|(mode, _)| mode),
+                Some(SandboxMode::Strict),
+                "{chosen}"
+            );
+            assert_eq!(
+                settings.sandbox_strict_ignored(&none).count(),
+                0,
+                "{chosen}"
+            );
+        }
+    }
+
     /// SANDBOX-22, COMPAT-001: a settings file or a managed pin written before `standard` was
     /// renamed `workspace-write` keeps its meaning, and a checkout's file that still says
     /// `standard` is not obeyed and is reported as the mode it names. The regression it rejects is
@@ -6926,6 +7044,94 @@ mod tests {
         for mode in [SandboxMode::Strict, SandboxMode::ReadOnly] {
             assert!(resolve(Some(mode), &Settings::default(), &workspace_write).is_ok());
         }
+    }
+
+    /// SANDBOX-22: under a pin of `read-only` a checkout's `strict` is not obeyed and refuses
+    /// nothing: the session starts at the pin, a refusal names the person's file rather than the
+    /// checkout's, and the checkout's file is reported with the pin. Under a pin `strict` is not
+    /// looser than, the checkout's `strict` is still the mode, and it does not stand in for the
+    /// person's `read-only` that a pin of `strict` refuses. The regressions it rejects are a
+    /// repository's file stopping the session at start-up, a refusal pointing the person at a file
+    /// that is not theirs, a checkout's `strict` dropped under every pin, and a repository's file
+    /// starting a session with the writes the person withheld.
+    #[test]
+    fn a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin() {
+        use crate::sandbox::{Choice, Floor, Refused, Source, resolve};
+        let strict = r#"{"sandbox": {"mode": "strict"}}"#;
+        let pin = pinned(
+            "checkout-under-read-only",
+            r#"{"sandbox": {"mode": "read-only"}}"#,
+        );
+        let pin_file = pin.path().expect("the pin's file").to_path_buf();
+
+        let layers = Layers::new("sandbox-checkout-under-read-only").project(strict);
+        let asked_in = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        let settings = layers.read();
+        assert_eq!(
+            resolve(None, &settings, &pin),
+            Ok(Choice {
+                mode: SandboxMode::ReadOnly,
+                source: Source::Managed(pin_file.clone()),
+            })
+        );
+        assert_eq!(
+            settings.sandbox_strict_ignored(&pin).collect::<Vec<_>>(),
+            [(
+                asked_in.as_path(),
+                SandboxMode::ReadOnly,
+                pin_file.as_path()
+            )]
+        );
+
+        let layers = Layers::new("sandbox-home-and-checkout-under-read-only")
+            .global(r#"{"sandbox": {"mode": "workspace-write"}}"#)
+            .project(strict);
+        assert_eq!(
+            resolve(None, &layers.read(), &pin),
+            Err(Refused {
+                asked: SandboxMode::WorkspaceWrite,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::ReadOnly,
+                pinned_in: pin_file.clone(),
+                because: Floor::Mode,
+            })
+        );
+
+        for (name, text) in [
+            ("strict", r#"{"sandbox": {"mode": "strict"}}"#),
+            (
+                "workspace-write",
+                r#"{"sandbox": {"mode": "workspace-write"}}"#,
+            ),
+            ("closed-network", r#"{"run": {"network": "closed"}}"#),
+        ] {
+            let other = pinned(&format!("checkout-under-{name}"), text);
+            assert_eq!(
+                resolve(None, &settings, &other),
+                Ok(Choice {
+                    mode: SandboxMode::Strict,
+                    source: Source::File(asked_in.clone()),
+                }),
+                "{name}"
+            );
+            assert_eq!(settings.sandbox_strict_ignored(&other).count(), 0, "{name}");
+        }
+
+        let strict_pin = pinned("read-only-under-strict", strict);
+        let layers = Layers::new("sandbox-read-only-and-checkout-under-strict")
+            .global(r#"{"sandbox": {"mode": "read-only"}}"#)
+            .project(strict);
+        assert_eq!(
+            resolve(None, &layers.read(), &strict_pin),
+            Err(Refused {
+                asked: SandboxMode::ReadOnly,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::Strict,
+                pinned_in: strict_pin.path().expect("the pin's file").to_path_buf(),
+                because: Floor::Mode,
+            }),
+            "the checkout's strict stood in for the person's refused read-only"
+        );
     }
 
     /// SANDBOX-22: a managed file that pins the network closed is a floor of `workspace-write`, because

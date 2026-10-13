@@ -543,6 +543,8 @@ doctor-settings-mcp-declared =
     rien de ce qu'il contient n'est démarré
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } dans { $path } n'est pas appliqué : le fichier d'un projet ne peut demander que strict, et les autres modes sont lus uniquement dans ~/.bravebot/settings.json et dans le fichier que --settings nomme
+doctor-settings-sandbox-strict-ignored =
+    sandbox.mode strict dans { $path } n'est pas appliqué : strict laisse les programmes écrire dans les répertoires de la session, ce que { $mode } depuis { $held } ne permet pas, et un fichier situé dans l'espace de travail ne peut pas assouplir le mode
 doctor-settings-sandbox-unreadable =
     sandbox.mode dans { $path } n'est ni strict, ni read-only, ni workspace-write, ni off : il est lu comme absent et la valeur par défaut s'applique
 doctor-sandbox-mode = mode du bac à sable

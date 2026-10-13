@@ -496,6 +496,17 @@ pub(crate) fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for (path, mode, held) in settings.sandbox_strict_ignored(&managed) {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_sandbox_strict_ignored,
+                        path = path.display().to_string(),
+                        mode = mode.name(),
+                        held = held.display().to_string()
+                    ),
+                );
+            }
             for path in settings.sandbox_unreadable() {
                 fact(
                     t!(doctor_settings_ignored),

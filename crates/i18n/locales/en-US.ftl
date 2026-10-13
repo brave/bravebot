@@ -627,6 +627,13 @@ doctor-settings-mcp-declared =
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
     other modes are read from ~/.bravebot/settings.json and from the file --settings names only
+# A `strict` from a file inside the workspace that is not obeyed, because the person's own file or the
+# managed file chose a mode `strict` is looser than. `strict` writes the session's directories and
+# `read-only` does not.
+doctor-settings-sandbox-strict-ignored =
+    sandbox.mode strict in { $path } is not obeyed: strict lets programs write the session's
+    directories, which { $mode } from { $held } does not, and a file inside the workspace may not
+    loosen the mode
 doctor-settings-sandbox-unreadable =
     sandbox.mode in { $path } is not strict, read-only, workspace-write or off, so it is read as absent and the default applies
 doctor-sandbox-mode = sandbox mode

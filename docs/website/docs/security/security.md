@@ -240,7 +240,8 @@ program's binary needs, the session's directories and the credential scope its c
 `--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
 earlier name of `workspace-write`, `standard`, is still read in the
 flag, `/sandbox`, the settings files and the managed file, and is reported as `workspace-write`. A repository's `.bravebot/settings.json` can ask for `strict` and
-nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
+nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is not obeyed where your
+settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
 says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
 refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this

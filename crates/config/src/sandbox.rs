@@ -5,7 +5,8 @@
 //! `run` starts may reach, so a line in a checkout that could pick `workspace-write` or `off` would let
 //! whoever wrote the checkout loosen what the person who cloned it is held to. Asking for `strict`
 //! takes nothing from that person, on the footing of the `permissions` keys that only refuse
-//! ([`crate::Narrowing`]).
+//! ([`crate::Narrowing`]), except where their file or the managed file chose `read-only`: `strict`
+//! writes the session's directories and `read-only` does not, so there the checkout is not obeyed.
 //!
 //! The managed file is a floor and not a default: nothing the command line or a settings file says
 //! may be looser than it, and a setting that is refuses the session before it starts, naming the
@@ -118,7 +119,7 @@ pub fn resolve(
             mode,
             source: Source::Flag,
         }),
-        None => settings.sandbox().map(|(mode, file)| Choice {
+        None => settings.sandbox_under(managed).map(|(mode, file)| Choice {
             mode,
             source: Source::File(file.to_path_buf()),
         }),

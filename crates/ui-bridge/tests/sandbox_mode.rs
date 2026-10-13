@@ -501,6 +501,32 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
     assert_eq!(front.ask(resumed), "strict", "a resume took a choice");
 }
 
+/// SANDBOX-22: a project's `strict` writes the session's directories, so it does not replace the
+/// person's `read-only` in a window either: the session opens and its turn runs at `read-only`.
+/// The failure this rejects is a cloned repository giving the programs a window runs the writes
+/// the person withheld.
+#[test]
+fn a_projects_strict_does_not_lift_the_persons_read_only() {
+    let scratch = Scratch::new("bridge-sandbox-project-strict");
+    settings(&scratch, r#"{"sandbox": {"mode": "read-only"}}"#);
+    let project_layer = scratch.project().join(".bravebot");
+    std::fs::create_dir_all(&project_layer).expect("a project layer");
+    std::fs::write(
+        project_layer.join("settings.json"),
+        r#"{"sandbox": {"mode": "strict"}}"#,
+    )
+    .expect("a project layer");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["sandboxMode"], "read-only", "{made}");
+    assert_eq!(
+        front.ask(&session),
+        "read-only",
+        "the project's strict replaced the person's read-only"
+    );
+}
+
 /// SANDBOX-22: a program a person approved is held to the mode chosen for that turn. `cat` reads a
 /// file outside the project: `workspace-write` reads the machine and `strict` does not. The failure this
 /// rejects is the mode reported and not enforced, or enforced for the first turn only.
