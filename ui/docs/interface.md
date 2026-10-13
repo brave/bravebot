@@ -42,7 +42,11 @@ Three columns, each side one resizable and foldable:
   Overview summarises the plan, reads and confined material; Changes distinguishes
   pending decisions, approved writes and their actual execution outcomes. Files
   provides a lazily loaded tree and project-wide filename search, including folders
-  not yet expanded. Text files can be previewed or opened in their default app.
+  not yet expanded. Text files can be previewed. **Open in default app** opens plain text,
+  Markdown, JSON, PDF, images, audio and video at once. For any other file,
+  or one marked executable, it first asks whether to open it, show it in its
+  folder or cancel, because the system may run the file as a program when it is opened and a
+  program run in the project may have written it. A symbolic link is judged by the file it points at.
   On narrow windows the inspector opens as a drawer.
 
 The two side columns fold from controls at either end of the transcript header, and their

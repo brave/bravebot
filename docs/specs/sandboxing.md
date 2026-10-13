@@ -2857,6 +2857,18 @@ credential scope names it, reads no keychain file, and writes only the cache of 
 stage resolved to or asked for ([SANDBOX-22](#SANDBOX-22)). None of them closes the sockets a Linux
 kernel below Landlock ABI version 9 leaves reachable ([SANDBOX-3](#SANDBOX-3)).
 
+**A stage can leave a file that runs when somebody opens it.** A stage writes the session's
+directories, so it can leave a `.command` or `.terminal` file or an application bundle on macOS, a
+`.desktop` file on Linux, or a `.bat`, `.cmd`, `.lnk` or `.exe` file on Windows. The system runs
+such a file outside the profile when it is opened, and no mark tells it the file came from a
+confined program. The sandbox does not mark the files a stage creates: on macOS a program carrying
+the download mark waits at its first start for an answer to the system's question, so a stage that
+builds a program and a later stage that starts it would wait for an answer nobody gives. The
+desktop app's Open in default app hands the system a text, PDF, image, audio or video file at once
+and asks the person first about any other file ([ui/docs/security.md](../../ui/docs/security.md)). Opening the
+file from the file manager or a terminal is not asked about by bravebot, and stays a cost on every
+platform.
+
 The rest of this section describes the keyed lists, which are what a stage on Windows and an MCP
 server start from.
 

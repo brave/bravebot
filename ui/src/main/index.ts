@@ -933,7 +933,7 @@ app.whenReady().then(() => {
       // is for the person, and the payload is the one thing they cannot act on.
       return { status: 'failed', message: 'that is not a file in this project' }
     }
-    return openInApp(session, path)
+    return openInApp(session, path, window)
   })
 
   // What the window can currently do, so the menu can grey what it cannot. The renderer is
