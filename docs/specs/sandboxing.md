@@ -495,17 +495,28 @@ except a fixed table of credential locations, and the only paths it writes are t
 directory the session resolved as it opened, where the platform has one as a file, the null
 device, and on macOS the `mds` directory in the account's per-user cache directory (below). The
 table is code, the same for every stage, and no value, argument vector, printed output
-or configuration file adds to it or removes from it. In the home directory it holds the program's own state
-directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, the browser
-relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay
-told to use another directory is not covered), and then `~/.ssh`,
-`~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on Windows also
-`~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the
-unix spellings hold (an application data directory moved out of the home is not covered); on macOS also
-`~/Library/Keychains`, `/Library/Keychains`, the browser profiles under
-`~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Firefox`), `~/Library/Cookies`
-and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-store`,
-`~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/chromium` and `~/.mozilla`. Three
+or configuration file adds to it or removes from it. These are its rows, each refused with
+everything beneath it:
+
+| Where | Refused |
+| --- | --- |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are; the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold (an application data directory moved out of the home is not covered) |
+| macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
+| Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
+
+Beside the program's own directories, the cloud and container tools' directories and the private
+keys, a row is another application's data (a browser's, a mail or chat client's, a password
+manager's, an editor's, a database or API client's, a VPN client's, a CI runner's or another
+agent's), what a person typed at a shell or a client, or a desktop session's secret store or
+display cookie. A build, a test or a deploy does not read one, and a shell or client a stage starts does not read its
+history, since a stage's standard input is never a terminal; the programs that do read a row are
+named under what a row costs, below. A browser's channels keep separate directories, so a row for
+one channel holds nothing of another's. 1Password's ssh agent keeps its socket in the group
+container, and a socket is reached through a write row and never through a read
+([SANDBOX-3](#SANDBOX-3)), so a stage that is lent that socket still reaches it. JetBrains keeps
+its settings on macOS in `~/Library/Application Support/JetBrains`, beside the scripts its Toolbox
+puts on the search path, so that directory is not a row. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
 `id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
@@ -518,10 +529,24 @@ Opening a keychain also makes the Security framework write its framework databas
 (`_CS_DARWIN_USER_CACHE_DIR`, resolved by the host with its links followed and handed in by the
 caller), and that directory is written by a stage that reads the machine and by no other. Without
 the read row, `gh` reports a failed login and `osxkeychain` fails with `-67674`; with only the read
-row they still do. The files a program reads by name to do what it was started for, which are
-`~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml` and
-`~/.pypirc`, are not in the table: the network is where they could leave, and the plan decides that
-([SANDBOX-3](#SANDBOX-3)). A path is refused by where it leads, so a link from a readable directory
+row they still do. The files a program reads by name to do what it was started for are not in the
+table, and neither are the files a shell reads as it starts or the person's own files: the network
+is where they could leave, and the plan decides that ([SANDBOX-3](#SANDBOX-3)). Of the stores
+[credential-protection.md](credential-protection.md) lists as already on the machine, a stage in
+the mode `standard` reads these on purpose:
+
+| What reads it | Read |
+| --- | --- |
+| `ssh` and the keychain lookup, through the lifts above | `~/.ssh/config`, `~/Library/Keychains/login.keychain-db` |
+| a shell, as it starts | `~/.bashrc`, `~/.zshrc`, `~/.zshenv`, `~/.profile`, `~/.bash_profile` |
+| `git`, `gh`, `glab` and `hub` | `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/glab-cli`, `~/.config/hub` |
+| a package manager | `~/.npmrc`, `~/.yarnrc.yml`, `~/.pypirc`, `~/.config/pip/pip.conf`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`, `~/.cache/huggingface/token` |
+| a client no scope covers, for a deploy, a cloud, a cluster or a secret | `~/.config/vercel`, `~/.config/netlify`, `~/.fly`, `~/.config/doctl`, `~/.supabase`, `~/.config/rclone`, `~/.config/containers`, `~/.config/helm`, `~/.terraformrc`, `~/.terraform.d`, `~/.pulumi`, `~/.vault-token`, `~/.config/op` |
+| a database client | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf` |
+| a build that signs | `~/.android/debug.keystore`, `~/Library/MobileDevice/Provisioning Profiles` |
+| a program handed a file of the person's own | `~/Downloads`, `~/Desktop` |
+
+A path is refused by where it leads, so a link from a readable directory
 to a refused one reaches nothing. On macOS the profile states the refusals after the grants they
 narrow and the lifts after the refusals, since the last matching rule wins. On Linux, where a
 directory is granted with everything beneath it and no subdirectory can be held back, the
@@ -572,6 +597,16 @@ system's own prompt, is the platform's and is not tested here. The `mds` write l
 the framework's cache files, which are rebuilt on demand. The read row names the file and not the
 directory so that `aws-vault.keychain-db` and every other keychain file stay refused.
 
+A row costs the program that does read the location: `claude`, `codex`, `gemini` or `opencode`
+started by a stage, `sops` decrypting with an age key kept where it looks by default, `pass`, a
+graphical program on an X display that checks the cookie, and a stage of a session opened inside
+one of the rows ([SANDBOX-18](#SANDBOX-18)). A person who wants one of those programs to work names
+the location in `allowRead`, or in `allowWrite` where the program also writes there, as the agents
+do ([SANDBOX-25](#SANDBOX-25)). The table names its locations one at a time, so a browser channel,
+an application or a history it does not name is read. The stores read on purpose cost the reverse:
+a stage that reads one can send what it holds wherever the network is open, which a session closes
+with [SANDBOX-20](#SANDBOX-20).
+
 `verified-by: bravebot_sandbox::base::the_base_reaches_no_credential`
 `verified-by: bravebot_sandbox::base::the_only_rows_under_a_home_directory_are_the_git_configuration`
 `verified-by: bravebot_sandbox::base::the_git_configuration_is_read_and_never_written`
@@ -595,6 +630,7 @@ directory so that `aws-vault.keychain-db` and every other keychain file stay ref
 `verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
 `verified-by: bravebot_sandbox::base::the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those`
 `verified-by: bravebot_sandbox::base::the_run_base_leaves_the_token_files_readable`
+`verified-by: bravebot_sandbox::base::every_store_the_catalog_names_is_refused_or_read_on_purpose`
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
 `verified-by: bravebot_sandbox::base::the_run_base_on_macos_reads_the_login_keychain_file_and_no_other_keychain_file`
 `verified-by: bravebot_sandbox::base::the_security_cache_row_is_the_one_directory_under_the_user_cache`
@@ -2526,12 +2562,14 @@ a subdirectory, that file is named on its own, which is why the cargo lock `~/.c
 is in a row beside the registry and the token file next to it is not. The same rule keeps
 `~/.config` and `~/Library/Caches` out, since `~/.config/gh` is a credential store the remote scope
 below grants, so the XDG git configuration and a cache on macOS are named one directory at a time
-rather than through the directory they sit in. `$HOME` itself is in no row, so a file in it that no
-row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable. What this costs is what those
-files say: npm passes over a configuration file it cannot read, so a registry or a proxy set in
-`~/.npmrc` is not in force for a confined stage, and naming the file is a person's to do. The same
-holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which hold a credential of their
-own. Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
+rather than through the directory they sit in. Where the lists are keyed, `$HOME` itself is in no
+row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable. What
+this costs is what those files say: npm passes over a configuration file it cannot read, so a
+registry or a proxy set in `~/.npmrc` is not in force for a confined stage, and naming the file is a
+person's to do. The same holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which
+hold a credential of their own. On Linux and macOS in the mode `standard` a stage reads all four,
+since they are not in the table ([SANDBOX-12](#SANDBOX-12)).
+Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
 already running, and a build handed to one the person's own shell started runs unconfined. Cargo's
 configuration is the one a list names, because cargo fails every invocation on a configuration file
 it cannot open, and it is read and never written, since a `build.rustc-wrapper` written there is a
