@@ -4718,6 +4718,22 @@ struct PathArgument {
 /// gain. A name that has no file behind it, which is anything a processor produced, is left as
 /// the model wrote it.
 pub(crate) fn name_references(text: &str, named: &[(SlotId, Label, String)]) -> String {
+    put_references_through(text, named, |slot, label, path| {
+        format!("{slot}{label}:{path}")
+    })
+}
+
+/// As [`name_references`], saying only the file: for a person who has never been told what a
+/// reference is, so a name beside the path is a second thing to decode.
+fn name_files(text: &str, named: &[(SlotId, Label, String)]) -> String {
+    put_references_through(text, named, |_, _, path| path.to_string())
+}
+
+fn put_references_through(
+    text: &str,
+    named: &[(SlotId, Label, String)],
+    say: impl Fn(&SlotId, &Label, &str) -> String,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
 
@@ -4733,9 +4749,7 @@ pub(crate) fn name_references(text: &str, named: &[(SlotId, Label, String)]) -> 
         // first of them. A bare filename on a line about a call the planner made reads as
         // though it knew the name, and the whole arrangement is that it does not.
         match named.iter().find(|(slot, _, _)| slot.as_str() == name) {
-            Some((slot, label, path)) if digits > 0 => {
-                out.push_str(&format!("{slot}{label}:{path}"))
-            }
+            Some((slot, label, path)) if digits > 0 => out.push_str(&say(slot, label, path)),
             _ => out.push_str(&name),
         }
         rest = &after[digits..];
@@ -7101,7 +7115,12 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // model's prompt, and there is no second model on this branch. What is left is the
         // person's own content going to the person's own screen, which is what a display release
         // is for. It reaches that screen and stops: no gate reads it.
+        //
+        // A processor's output is recorded as the planner's copy of its origin, which names
+        // references. The person has no use for `ref:0`, so they are put back as the files they
+        // name, as the reporter's line for the same slot does (VET-1).
         let origin = policy.release_where_a_slot_came_from(&slot, tools.slots);
+        let origin = name_files(&origin, &policy.names_for_display(tools.slots));
         let expects = match &spec {
             // `expects` is never absent on this route: the argument is required above, and this
             // is the one entry point into a check that carries what the planner claimed.
