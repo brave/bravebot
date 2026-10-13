@@ -75,7 +75,8 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     }).catch(() => {
       if (!gone) setProblem('Could not load models. Try again.')
     }).finally(() => { if (!gone) setLoading(false) })
-    return () => { gone = true }
+    // Closing the menu abandons the load, so the next open waits its 150ms again.
+    return () => { gone = true; setLoading(false) }
   }, [open, revision, session])
 
   const options = useMemo(() => {

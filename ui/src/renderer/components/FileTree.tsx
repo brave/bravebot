@@ -77,8 +77,8 @@ export function FileTree({
     if (!search.trim()) { setResults(null); setSearching(false); return }
     let gone = false
     setResults(null)
-    setSearching(true)
-    const timer = setTimeout(() => { void window.bravebot.searchFiles(session, search, hidden).then((value) => {
+    // Searching starts with the request, so the ring's 150ms are the request's and not the debounce's.
+    const timer = setTimeout(() => { setSearching(true); void window.bravebot.searchFiles(session, search, hidden).then((value) => {
       if (!gone) setResults(value)
     }).catch(() => { if (!gone) setProblem('Project search failed. Try again.') }).finally(() => { if (!gone) setSearching(false) }) }, 180)
     return () => { gone = true; clearTimeout(timer) }

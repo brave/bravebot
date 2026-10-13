@@ -49,9 +49,26 @@ const delayPassed = {
   },
 }
 
-async function load(path, plugins) {
-  const source = (await build({
-    entryPoints: [path],
+const ROWS = [
+  {
+    surface: 'file preview', file: 'FilePreview', props: { session: 's', path: 'notes.txt', onClose() {} },
+    words: 'Loading preview…', empty: 'A text preview is not available',
+  },
+  { surface: 'bot memory', file: 'BotMemory', props: { slug: 'helper', directory: '/p' }, words: 'Loading…', empty: 'Nothing remembered yet.' },
+  { surface: 'file watch list', file: 'Watches', props: { session: 's', onClose() {} }, words: 'Loading watches…', empty: 'No files watched' },
+]
+
+const bundles = new Map()
+
+/** The three components, built once for each set of plugins. */
+function components(plugins) {
+  const key = plugins.map((plugin) => plugin.name).join()
+  if (!bundles.has(key)) bundles.set(key, build({
+    stdin: {
+      contents: ROWS.map((row) => `export { ${row.file} } from './src/renderer/components/${row.file}.tsx'`).join('\n'),
+      resolveDir: process.cwd(),
+      loader: 'ts',
+    },
     bundle: true,
     write: false,
     platform: 'node',
@@ -59,20 +76,16 @@ async function load(path, plugins) {
     jsx: 'automatic',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
     plugins,
-  })).outputFiles[0].text
-  const module = { exports: {} }
-  new Function('require', 'module', 'exports', source)(require, module, module.exports)
-  return module.exports
+  }).then((built) => {
+    const module = { exports: {} }
+    new Function('require', 'module', 'exports', built.outputFiles[0].text)(require, module, module.exports)
+    return module.exports
+  }))
+  return bundles.get(key)
 }
 
-const ROWS = [
-  { surface: 'file preview', file: 'FilePreview', props: { session: 's', path: 'notes.txt', onClose() {} }, words: 'Loading preview…' },
-  { surface: 'bot memory', file: 'BotMemory', props: { slug: 'helper', directory: '/p' }, words: 'Loading…' },
-  { surface: 'file watches', file: 'Watches', props: { session: 's', onClose() {} }, words: 'Loading watches…' },
-]
-
 async function paint(row, plugins) {
-  const component = (await load(`src/renderer/components/${row.file}.tsx`, plugins))[row.file]
+  const component = (await components(plugins))[row.file]
   return renderToStaticMarkup(React.createElement(component, row.props))
 }
 
@@ -100,13 +113,13 @@ for (const row of ROWS) {
     assert.ok(tag, markup)
     assert.ok(!tag.includes('data-delayed'), tag)
   })
+
+  test(`the ${row.surface} does not show its empty state while loading, before its ring shows`, async () => {
+    const markup = await paint(row, [inPlaceModal])
+
+    assert.ok(!markup.includes(row.empty), markup)
+  })
 }
-
-test('a preview still loading does not say the file is unavailable before its ring shows', async () => {
-  const markup = await paint(ROWS[0], [inPlaceModal])
-
-  assert.ok(!markup.includes('A text preview is not available'), markup)
-})
 
 test('a row marked data-delayed is hidden by the stylesheets', () => {
   const styles = readdirSync('src/renderer/styles').filter((name) => name.endsWith('.css'))
