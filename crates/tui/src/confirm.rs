@@ -4708,6 +4708,7 @@ mod tests {
             let mut request = a_run(false);
             request.confined = Some(bravebot_agent::Confined {
                 reads_the_machine: false,
+                writes_git_directories: false,
                 directories: vec!["/home/someone/project".into()],
                 network: bravebot_sandbox::network::Network::Open,
                 filesystem: Default::default(),
