@@ -306,12 +306,13 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     );
 }
 
-/// INSTR-9 tells the planner to stand in for a missing Python module with one written in a
-/// directory inside the session's own and named, quoted, on the line's `PYTHONPATH`. The
-/// regressions it rejects are a confinement that refuses reading the session's directory or drops
-/// the assignment, so the road the planner is told to take fails under the sandbox, and a stage
-/// given the session's directory on its `PYTHONPATH` whatever the line says, which puts whatever
-/// the work left there ahead of every program's own modules. A module of the same name at the top
+/// INSTR-9 tells the planner to stand in for something missing with what connects it to something
+/// installed, written in a directory inside the session's own and named, quoted, on the search
+/// path the program reads from its environment. Python and `PYTHONPATH` are the instance run here.
+/// The regressions it rejects are a confinement that refuses reading the session's directory or
+/// drops the assignment, so the road the planner is told to take fails under the sandbox, and a
+/// stage given the session's directory on its `PYTHONPATH` whatever the line says, which puts
+/// whatever the work left there ahead of every program's own modules. A module of the same name at the top
 /// of the session's directory stands for that: the named line imports the stand-in and not it, and
 /// the line with no assignment imports neither. The unconfined line is the control that Python
 /// finds the stand-in at all.

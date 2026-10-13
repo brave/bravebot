@@ -184,7 +184,7 @@ They are labelled as facts about the machine rather than as instructions. One of
 of the planner as well, and only because a probe found what the request names: the scratch directory
 is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
 is for is said too, just outside this block, and [below](#the-github-cli) is what it says. So is
-[what to do about a missing Python module](#a-missing-python-module).
+[what to do when something a program needs is missing](#something-a-program-needs-is-missing).
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
 ago that was. The rest is stated because discovering any of it otherwise costs a `run`, and a run
@@ -215,20 +215,22 @@ A file there is read and written by its absolute path, but it prompts exactly wh
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
 
-### A missing Python module
+### Something a program needs is missing
 
-Where the session has a scratch directory, the planner is also told what to do when a Python program
-fails because a module is missing, such as `tomllib` on a Python older than 3.11. It checks whether
-an installed package provides the same module under another name, with a command like
-`python3 -c 'import tomli'` whose exit status answers it. Where one does, it writes a module of the
-missing name that re-exports the package in a new directory inside the scratch directory, and runs
-the program again with `PYTHONPATH='<that directory>'` in front of it on that one command. The
-program, your machine and your settings are left as they were, and the module goes with the session.
-Where nothing installed provides it, the planner says which module is missing and what provides it.
+Where the session has a scratch directory, the planner is also told what to do when a program fails
+because something it needs is missing from your machine. Before asking you to install anything or to
+edit the program, it looks at what is installed, with a command that only reads and whose exit
+status answers the question. Where something installed can stand in, it writes what connects the two
+in a new directory inside the scratch directory, and runs the program again with that directory on
+the search path the program reads from its environment, set in front of it for that one command. A
+Python older than 3.11 that lacks `tomllib` but has `tomli` installed is one such case. The program,
+your machine and your settings are left as they were, and what was written goes with the session.
+Where nothing installed can stand in, the planner says what is missing and what provides it.
 
-Only the new directory goes on `PYTHONPATH`, because Python imports from a directory there ahead of
-its standard library, and the scratch directory may hold other files the session put there. You
-approve each of these commands as you would any other. A session with no scratch directory is not
+The paragraph names no language, package or variable, so the same road is open to any of them. Only
+the new directory goes on the search path, because a directory there is searched ahead of what the
+program would otherwise load, and the scratch directory may hold other files the session put there.
+You approve each of these commands as you would any other. A session with no scratch directory is not
 told any of this, and neither is a delegate.
 
 ### The GitHub CLI
