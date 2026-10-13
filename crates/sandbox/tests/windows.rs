@@ -477,6 +477,24 @@ fn a_stage_let_go_of_while_running_leaves_no_program_behind() {
     );
 }
 
+/// RPCVIEW-8 on Windows: a stage is created under the gate every start of a program takes. The
+/// regression it rejects: a stage created outside it. The copies of the streams a stage is given
+/// are inheritable while it is created, and a program the standard library starts on another
+/// thread in that window inherits them as well, so an unconfined program would hold the stage's
+/// input and keep its output from ending.
+#[test]
+fn a_stage_start_waits_for_a_channel_being_created() {
+    bravebot_sandbox::process::start_waits_at_the_gate_within(
+        || {
+            let sandbox = sandbox();
+            let (code, printed) =
+                cmd(&sandbox, "echo started", &the_base("gate")).expect("cmd.exe starts");
+            assert_eq!(code, Some(0), "{printed}");
+        },
+        STARTING,
+    );
+}
+
 /// The processes attached to this process's console, which the console itself keeps, or none
 /// where this process has no console.
 fn on_this_console() -> Vec<u32> {
