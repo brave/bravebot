@@ -602,11 +602,13 @@ impl Drop for FrontEnd {
 /// The command that starts the attacker detached and returns at once, with whatever standard
 /// streams its parent was given. Nothing here redirects them, and `<&0` keeps standard input,
 /// which a shell otherwise replaces with the null device for a background command, so a
-/// descriptor the parent leaked to it is a descriptor it keeps.
+/// descriptor the parent leaked to it is a descriptor it keeps. Ignoring HUP in the shell is
+/// inherited across exec; macOS `nohup` also detaches from the console through process inspection,
+/// which a confined program is deliberately refused.
 fn start_attacker_command(attack_dir: &Path) -> String {
     let exe = std::env::current_exe().expect("the test binary");
     format!(
-        "{ATTACK_DIR}='{}' nohup '{}' --exact attacker_entry --test-threads=1 <&0 &",
+        "trap '' HUP; {ATTACK_DIR}='{}' '{}' --exact attacker_entry --test-threads=1 <&0 &",
         attack_dir.display(),
         exe.display()
     )
@@ -693,7 +695,22 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
         if let Ok(report) = std::fs::read_to_string(dir.join("report")) {
             break serde_json::from_str(&report).expect("a report");
         }
-        assert!(Instant::now() < deadline, "the attacker never reported");
+        assert!(
+            Instant::now() < deadline,
+            "the attacker never reported; bridge messages: {:?}; bridge stderr: {:?}",
+            waiting
+                .front
+                .seen
+                .borrow()
+                .iter()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|message| matches!(
+                    message["event"].as_str(),
+                    Some("quarantined" | "tool.finished" | "turn.error")
+                ))
+                .collect::<Vec<_>>(),
+            waiting.front.complaints.lock().expect("not poisoned")
+        );
         std::thread::sleep(Duration::from_millis(50));
     };
     drop(control.stdin.take());
