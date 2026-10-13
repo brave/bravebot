@@ -5232,6 +5232,69 @@ fn a_search_a_rule_emptied_names_the_rule_and_not_the_glob() {
     );
 }
 
+/// PERM-1, PERM-7: a `reason` is read from the person's own settings file and from no other layer,
+/// so a sentence a checkout wrote beside a deny rule never reaches the planner. The rule itself
+/// still refuses, which is what tells a dropped reason apart from a dropped rule. The regression
+/// this rejects is a reason read off whichever layer wrote it, which would let a checkout put its
+/// own text into a refusal the planner reads as the person's words.
+///
+/// Unix only, as the other tests that read a settings file from disk are.
+#[test]
+#[cfg(unix)]
+fn a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given() {
+    let scratch = Scratch::new("permissions-checkout-reason");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(scratch.path.join(".bravebot")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/settings.json"),
+        r#"{"permissions": {"deny": [
+             {"rule": "Read(./.env)", "reason": "pineapple quarantine beacon"}
+           ]}}"#,
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Read as a session reads them, with the checkout's file as its own layer: `Settings::parse`
+    // of one block cannot say which file wrote the entry, and that is what decides the reason.
+    let settings = bravebot_config::Settings::layered(Some(home), Some(workspace.root()), None);
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trusting_the_workspace(),
+        &[("read_file", r#"{"path":".env"}"#)],
+    );
+
+    let mut refused = false;
+    for body in &bodies {
+        for fragment in [
+            "pineapple quarantine beacon",
+            "pineapple",
+            "quarantine beacon",
+            "beacon",
+        ] {
+            assert!(
+                !body.contains(fragment),
+                "a reason a checkout wrote reached the planner: {body}"
+            );
+        }
+        assert!(
+            !body.contains("SECRET_TOKEN=hunter2"),
+            "the rule did not refuse the read: {body}"
+        );
+        refused |= body.contains("deny rule in the user's settings covers .env");
+    }
+    assert!(
+        refused,
+        "the planner was not told a rule refused the read, so nothing here is about a reason"
+    );
+}
+
 /// The same gap for the enumeration half of the rule. A denied file is not enumerated either, and a
 /// listing of the directory above it is where its name comes back.
 #[test]

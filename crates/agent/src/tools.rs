@@ -4675,7 +4675,10 @@ fn refuse_denied_path_as<S: Sink>(
             Purpose::Read => policy.before_read(name),
             Purpose::Effect => policy.refuse_denied_write(name),
         }
-        .map_err(|_| denied_by_rule(shown))
+        .map_err(|_| {
+            let reason = reason_for_denial(policy, purpose, name);
+            denied_by_rule(shown, reason.as_deref())
+        })
     };
     ask(policy, path)?;
     // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
@@ -4759,12 +4762,48 @@ pub(crate) fn write_needs_approval<S: Sink>(
         })
 }
 
+/// The reason the person wrote beside the rule that refuses `name`, where there is one (PERM-1).
+///
+/// The rules are asked which rule decides, exactly as the gate just did, and the reason is read off
+/// it. A reason reaches here only from the person's own settings file: `bravebot_config` drops the
+/// key in every other layer, so a sentence a checkout wrote is already absent by the time this is
+/// asked and cannot be put in front of the planner.
+///
+/// The subjects are the ones the gate consulted, in the order it consulted them, so the reason
+/// named is the one from the rule that refused.
+fn reason_for_denial<S: Sink>(
+    policy: &Policy<'_, S>,
+    purpose: Purpose,
+    name: &str,
+) -> Option<String> {
+    use bravebot_core::permissions::{Ruling, Subject};
+    let subjects: &[Subject] = match purpose {
+        Purpose::Read => &[Subject::Read],
+        Purpose::Effect => &[Subject::Edit, Subject::Read],
+    };
+    subjects.iter().find_map(|subject| {
+        // Which rule decided is routing, and so is which list it was in. The reason itself is
+        // never read here: it is carried into the refusal as it was written.
+        match policy.permissions().rule_for_path(*subject, name) {
+            Some((Ruling::Deny, rule)) => rule.reason().map(str::to_string),
+            _ => None,
+        }
+    })
+}
+
 /// What the planner is told when a rule refused. Says the rule is the reason and that retrying is
 /// not the answer, because a planner told only "refused" tries the same call again.
-fn denied_by_rule(shown: &str) -> String {
+///
+/// `reason` is what the person wrote beside the rule in their own settings file, and is quoted as
+/// theirs because it is theirs: no other layer's reason reaches this (PERM-7). It says why the file
+/// is off limits, which is what tells the planner whether to work without it or ask about it.
+fn denied_by_rule(shown: &str, reason: Option<&str>) -> String {
+    let because = reason
+        .map(|reason| format!(" The user's rule gives a reason: {reason}"))
+        .unwrap_or_default();
     format!(
         "refused: a deny rule in the user's settings covers {shown}, so nothing here can \
-         reach it. Do not retry, and do not look for another way to the same file: work \
+         reach it.{because} Do not retry, and do not look for another way to the same file: work \
          without it, or say in your reply what you needed it for."
     )
 }
@@ -16905,7 +16944,194 @@ mod tests {
             let refusal =
                 refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
                     .expect_err("the rule covers the file");
-            assert_eq!(refusal, denied_by_rule("~/secret.txt"));
+            assert_eq!(refusal, denied_by_rule("~/secret.txt", None));
+        }
+
+        /// PERM-1, PERM-7: the reason the person wrote beside a deny rule is in the refusal the
+        /// planner is given for a read. The reason named is the deciding rule's, so a second rule
+        /// over the same file in the `ask` list carries a different sentence and that sentence does
+        /// not appear. The regressions this rejects are a refusal assembled without the reason,
+        /// which leaves the planner retrying a file it will never get, and a reason read off a rule
+        /// that did not decide.
+        #[test]
+        fn a_read_refused_by_a_rule_with_a_reason_says_the_reason() {
+            let scratch = Scratch::new("deny-read-with-a-reason");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+
+            let (mut permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &["Read(~/secret.txt)".to_string()],
+                &["Read(~/secret.txt)".to_string()],
+                &[],
+                &bravebot_core::permissions::Anchors {
+                    home: home.to_str().map(str::to_string),
+                    ..bravebot_core::permissions::Anchors::none()
+                },
+            );
+            assert!(rejected.is_empty(), "the rules did not parse: {rejected:?}");
+            // What a reason in the person's own settings file does, without a settings file: the
+            // closure answers by list and written text exactly as `bravebot_config` does.
+            permissions.explain(|list, written| {
+                Some(format!("the {list} list wrote this about {written}"))
+            });
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal =
+                refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+                    .expect_err("the rule covers the file");
+            assert_eq!(
+                refusal,
+                denied_by_rule(
+                    "~/secret.txt",
+                    Some("the deny list wrote this about Read(~/secret.txt)")
+                )
+            );
+            assert!(
+                !refusal.contains("the ask list wrote this"),
+                "the refusal carries a reason from a rule that did not decide: {refusal}"
+            );
+        }
+
+        /// PERM-1, PERM-7: the same for a write, which consults `Edit` and then `Read`. Both lists
+        /// hold a rule covering the file and each carries its own reason, so the refusal says the
+        /// `Edit` rule's: that is the rule the gate refused on. The regressions this rejects are a
+        /// write refusal assembled without the reason and one that reports the `Read` rule's
+        /// sentence for a write an `Edit` rule stopped.
+        #[test]
+        fn a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason() {
+            let scratch = Scratch::new("deny-write-with-a-reason");
+            std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let (mut permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &["Edit(.env)".to_string(), "Read(.env)".to_string()],
+                &[],
+                &[],
+                &bravebot_core::permissions::Anchors::none(),
+            );
+            assert!(rejected.is_empty(), "the rules did not parse: {rejected:?}");
+            permissions
+                .explain(|_, written| Some(format!("{written} is the person's to keep closed")));
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "write a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal = refuse_denied_path(&mut policy, &workspace, Purpose::Effect, ".env")
+                .expect_err("the rule covers the file");
+            assert_eq!(
+                refusal,
+                denied_by_rule(".env", Some("Edit(.env) is the person's to keep closed"))
+            );
+            assert!(
+                !refusal.contains("Read(.env) is"),
+                "the write refusal names the Read rule, which is not what refused it: {refusal}"
+            );
+        }
+
+        /// PERM-1, PERM-7: a `reason` is read from the person's own settings file only, so a
+        /// sentence a checkout wrote beside a deny rule is not in the refusal the planner is given,
+        /// while the rule still refuses. The person's own layer carries a reason over the same
+        /// gate, so a refusal stripped of every reason fails this too. The regression this rejects
+        /// is a reason taken from whichever layer wrote it, which would let a checkout put its own
+        /// text into a refusal the planner reads as the person's words.
+        ///
+        /// The settings are written to files rather than parsed from one block, because which file
+        /// wrote the entry is the whole of what this turns on and
+        /// [`bravebot_config::Settings::parse`] has no layers.
+        #[test]
+        fn a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is() {
+            let scratch = Scratch::new("reason-layers-refusal");
+            let home = scratch.path.join("home");
+            let cwd = scratch.path.join("cwd");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(cwd.join(".bravebot")).unwrap();
+            std::fs::write(cwd.join(".env"), "SECRET_TOKEN=hunter2\n").unwrap();
+            std::fs::write(cwd.join("mine.env"), "SECRET_TOKEN=hunter2\n").unwrap();
+            std::fs::write(
+                home.join("settings.json"),
+                r#"{"permissions": {"deny": [
+                     {"rule": "Read(mine.env)", "reason": "my own keys live there"}
+                   ]}}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                cwd.join(".bravebot").join("settings.json"),
+                r#"{"permissions": {"deny": [
+                     {"rule": "Read(.env)", "reason": "pineapple quarantine beacon"}
+                   ]}}"#,
+            )
+            .unwrap();
+
+            let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+            let workspace = Workspace::new(&cwd).expect("workspace");
+            let (permissions, rejected) =
+                crate::permissions::from_settings(&settings, None, workspace.root());
+            assert!(
+                rejected.is_empty(),
+                "a rule here did not parse: {rejected:?}"
+            );
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let theirs = refuse_denied_path(&mut policy, &workspace, Purpose::Read, ".env")
+                .expect_err("the checkout's rule covers the file");
+            assert_eq!(
+                theirs,
+                denied_by_rule(".env", None),
+                "a reason a checkout wrote reached the planner"
+            );
+            for fragment in ["pineapple", "quarantine", "beacon"] {
+                assert!(
+                    !theirs.contains(fragment),
+                    "a word of a checkout's reason reached the planner: {theirs}"
+                );
+            }
+
+            let mine = refuse_denied_path(&mut policy, &workspace, Purpose::Read, "mine.env")
+                .expect_err("the person's own rule covers the file");
+            assert_eq!(
+                mine,
+                denied_by_rule("mine.env", Some("my own keys live there")),
+                "the reason the person wrote is not in the refusal, so the test above proves \
+                 nothing about layers"
+            );
         }
 
         /// What the planner was told, the trail's confinement refusals, and whether the turn

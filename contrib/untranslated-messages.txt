@@ -22,5 +22,6 @@ fr:host-no
 fr:host-row
 fr:host-title
 fr:host-yes
+fr:permissions-check-reason
 fr:status-hosts-asked
 fr:status-hosts-files-ask

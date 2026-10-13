@@ -589,6 +589,23 @@ struct RuleSource {
     anchored: String,
     written: String,
     file: PathBuf,
+    /// The reason written beside the rule, where the person's own file wrote one (PERM-1).
+    ///
+    /// `None` for every other layer, whatever that layer said: a checkout's settings file arrives
+    /// with the checkout, so the sentence in it is not the person's statement about their own rule
+    /// and is not shown as one.
+    reason: Option<String>,
+}
+
+/// The reason each entry of the three rule lists carried, in the order the lists hold them.
+///
+/// One entry per rule kept, so an absent reason is a `None` in place rather than a shorter list:
+/// the lists are paired positionally by the layer that read them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ListReasons {
+    pub(crate) deny: Vec<Option<String>>,
+    pub(crate) ask: Vec<Option<String>>,
+    pub(crate) allow: Vec<Option<String>>,
 }
 
 /// The `permissions` block, as text, exactly as the file spelled it.
@@ -601,6 +618,14 @@ pub struct PermissionLists {
     pub deny: Vec<String>,
     pub ask: Vec<String>,
     pub allow: Vec<String>,
+    /// For each entry of the three lists above, in the same order, the `reason` the entry carried
+    /// where it was written as an object rather than as a line (PERM-1).
+    ///
+    /// Not public, because one root does not say which file it was read out of and a reason is
+    /// only the person's own file's to write. [`Settings::layered`] reads each layer on its own and
+    /// keeps the reasons the home layer wrote; [`Settings::rule_reason`] is where they are read
+    /// back.
+    pub(crate) reasons: ListReasons,
     /// Directories a file asks to have opened, alongside the working directory.
     pub additional_directories: Vec<String>,
     /// Entries of the three rule lists that were not text at all, in the spelling the file used.
@@ -922,7 +947,8 @@ impl Settings {
             // it does not move where its rules start.
             let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
             let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
-            for rule in permission_lists(&root).allow {
+            let stated = permission_lists(&root);
+            for (rule, reason) in stated.allow.into_iter().zip(stated.reasons.allow) {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
                 // reporting it here would say a rule was withheld where PERM-11 is already about
@@ -935,6 +961,7 @@ impl Settings {
                             anchored: anchored.clone(),
                             written: rule,
                             file: path.clone(),
+                            reason: reason.filter(|_| own),
                         });
                         allow.push(anchored);
                     }
@@ -961,16 +988,17 @@ impl Settings {
             found.push(path.clone());
             root.anchor_slash_rules(&anchor);
             let anchored = permission_lists(&root);
-            for (list, written, anchored) in [
-                ("deny", written.deny, anchored.deny),
-                ("ask", written.ask, anchored.ask),
+            for (list, written, anchored, reasons) in [
+                ("deny", written.deny, anchored.deny, anchored.reasons.deny),
+                ("ask", written.ask, anchored.ask, anchored.reasons.ask),
             ] {
-                rule_sources.extend(written.into_iter().zip(anchored).map(
-                    |(written, anchored)| RuleSource {
+                rule_sources.extend(written.into_iter().zip(anchored).zip(reasons).map(
+                    |((written, anchored), reason)| RuleSource {
                         list,
                         anchored,
                         written,
                         file: path.clone(),
+                        reason: reason.filter(|_| own),
                     },
                 ));
             }
@@ -1523,6 +1551,19 @@ impl Settings {
             .iter()
             .find(|source| source.list == list && source.anchored == anchored)
             .map(|source| (source.file.as_path(), source.written.as_str()))
+    }
+
+    /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1).
+    ///
+    /// `anchored` is keyed as [`Settings::rule_source`] keys it. `None` where the entry was a plain
+    /// line, where it carried no readable reason, and where the layer that wrote it was not the
+    /// person's own file: a reason is display text and is shown as the person's own words, so a
+    /// checkout's is not read at all.
+    pub fn rule_reason(&self, list: &str, anchored: &str) -> Option<&str> {
+        self.rule_sources
+            .iter()
+            .find(|source| source.list == list && source.anchored == anchored)
+            .and_then(|source| source.reason.as_deref())
     }
 
     /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
@@ -2100,7 +2141,18 @@ impl Document {
                 continue;
             };
             for entry in entries {
-                if let serde_json::Value::String(text) = entry {
+                // An object entry carries the rule under `rule`, and it is the same rule, so it is
+                // anchored where a line is. Left out, a rule written with its reason would point
+                // somewhere else from one written without.
+                let text = match entry {
+                    serde_json::Value::String(text) => Some(text),
+                    serde_json::Value::Object(entry) => match entry.get_mut("rule") {
+                        Some(serde_json::Value::String(text)) => Some(text),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(text) = text {
                     *text = anchor_slash_rule(text, anchor);
                 }
             }
@@ -3026,13 +3078,18 @@ fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> Permis
         return PermissionLists::default();
     };
     let mut unreadable = Vec::new();
-    let deny = rule_texts(block, "deny", &mut unreadable);
-    let ask = rule_texts(block, "ask", &mut unreadable);
-    let allow = rule_texts(block, "allow", &mut unreadable);
+    let (deny, deny_reasons) = rule_texts(block, "deny", &mut unreadable);
+    let (ask, ask_reasons) = rule_texts(block, "ask", &mut unreadable);
+    let (allow, allow_reasons) = rule_texts(block, "allow", &mut unreadable);
     PermissionLists {
         deny,
         ask,
         allow,
+        reasons: ListReasons {
+            deny: deny_reasons,
+            ask: ask_reasons,
+            allow: allow_reasons,
+        },
         // Strings only, and silently: a directory is not a rule, and a name that is not text is
         // nothing to put to a person as a directory to open. PERM-10 answers for this key.
         additional_directories: strings(block, "additionalDirectories"),
@@ -3060,30 +3117,49 @@ fn misshapen_rule_lists(root: &serde_json::Map<String, serde_json::Value>) -> Ve
         .collect()
 }
 
-/// One array of rule text out of a block, with every entry that is not text put in `unreadable`.
+/// One array of rule text out of a block, with the reason each entry carried and every entry that
+/// is neither put in `unreadable`.
+///
+/// Two spellings, and they are the same rule. A line is the rule on its own, and an object is the
+/// rule under `rule` with a sentence under `reason` saying why it was written (PERM-1). An object
+/// with no `rule` string names nothing to act on and is carried out to be reported, as a number or
+/// a nested array is. A `reason` that is not a string, or that is blank, is absence: the reason is
+/// display text, so a mistyped one costs a sentence in a report and never the rule.
 ///
 /// Blank text is carried rather than filtered, because the rule language already has a word for
 /// it: `Rule::parse` calls an empty rule empty, and a filter here is what stopped it ever being
 /// asked. Nothing that reaches a list here is a rule yet, since which of them is one is the
 /// kernel's question, and this drops only what could not be put to it.
+///
+/// The two lists are paired positionally, one reason per rule kept, because the reason belongs to
+/// the entry it was written in and the merge above cannot say which file an entry came from.
 fn rule_texts(
     block: &serde_json::Map<String, serde_json::Value>,
     name: &str,
     unreadable: &mut Vec<String>,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<Option<String>>) {
     let Some(serde_json::Value::Array(entries)) = block.get(name) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     entries
         .iter()
         .filter_map(|entry| match entry {
-            serde_json::Value::String(text) => Some(text.clone()),
+            serde_json::Value::String(text) => Some((text.clone(), None)),
+            serde_json::Value::Object(entry) => match entry.get("rule") {
+                Some(serde_json::Value::String(text)) => {
+                    Some((text.clone(), word(entry, "reason")))
+                }
+                _ => {
+                    unreadable.push(serde_json::Value::Object(entry.clone()).to_string());
+                    None
+                }
+            },
             other => {
                 unreadable.push(other.to_string());
                 None
             }
         })
-        .collect()
+        .unzip()
 }
 
 /// One array of non-empty strings out of a block, or empty for every other shape.
@@ -3993,6 +4069,25 @@ mod tests {
         );
     }
 
+    /// An object entry names its rule under `rule`. One that does not names nothing to act on, so
+    /// it is dropped from the list and carried out in the spelling the file used, where a number or
+    /// a nested array is (PERM-11). An entry that carries only a reason is the shape this rejects:
+    /// read as a rule it would be a deny line matching nothing, and dropped in silence it would be
+    /// protection a person wrote and cannot find.
+    #[test]
+    fn an_object_entry_with_no_rule_is_carried_out_to_be_reported() {
+        let settings = Settings::parse(
+            r#"{"permissions":
+                 {"deny": ["Read(./.env)", {"reason": "the key sits there"}, {"rule": 1}, {}]}}"#,
+        );
+        let permissions = settings.permissions();
+        assert_eq!(permissions.deny, ["Read(./.env)"]);
+        assert_eq!(
+            permissions.unreadable,
+            [r#"{"reason":"the key sits there"}"#, r#"{"rule":1}"#, "{}"]
+        );
+    }
+
     /// One report for the three rule lists, since one is what `doctor` and a session print. A
     /// directory is not a rule and stays out of it: an entry that is not text is nothing to put to
     /// a person as a directory to open, and PERM-10 rather than PERM-11 answers for that key.
@@ -4467,6 +4562,161 @@ mod tests {
             .project(r#"{"permissions": {"allow": ["Bash(make *)"]}}"#)
             .read();
         assert!(settings.rule_source("allow", "Bash(make *)").is_none());
+    }
+
+    /// PERM-1: an entry may be a line or an object carrying the rule and a reason, and a reason the
+    /// person wrote in their own file is read back for the rule it was written on, in the list it
+    /// was written in.
+    ///
+    /// A list holding a line before an object is where a reason read back by position alone lands
+    /// on the wrong rule, so one list here is mixed and the line in it carries no reason.
+    #[test]
+    fn a_reason_in_the_persons_own_file_is_read_back_with_the_rule() {
+        let settings = Layers::new("reason-home")
+            .global(
+                r#"{"permissions": {
+                     "deny": [{"rule": "Bash(rm *)", "reason": "never from a session"}],
+                     "ask": [
+                       "Bash(git *)",
+                       {"rule": "Bash(git push *)", "reason": "a push is reviewed first"}
+                     ],
+                     "allow": [{"rule": "Bash(git diff *)", "reason": "reading a diff changes nothing"}]
+                   }}"#,
+            )
+            .read();
+        let rules = settings.permissions();
+        assert_eq!(rules.deny, ["Bash(rm *)"]);
+        assert_eq!(rules.ask, ["Bash(git *)", "Bash(git push *)"]);
+        assert_eq!(rules.allow, ["Bash(git diff *)"]);
+        assert_eq!(
+            settings.rule_reason("deny", "Bash(rm *)"),
+            Some("never from a session")
+        );
+        assert_eq!(
+            settings.rule_reason("ask", "Bash(git push *)"),
+            Some("a push is reviewed first")
+        );
+        assert_eq!(
+            settings.rule_reason("allow", "Bash(git diff *)"),
+            Some("reading a diff changes nothing")
+        );
+        assert_eq!(settings.rule_reason("ask", "Bash(git *)"), None);
+        assert_eq!(settings.rule_reason("deny", "Bash(git push *)"), None);
+    }
+
+    /// A reason is read from the person's own file and from no other layer. A checkout's sentence
+    /// would be text somebody else wrote shown as the person's own words, and the rule it was
+    /// written on still narrows what happens, so the entry is read as the line it holds.
+    ///
+    /// The file the command line named is here as well, and this is where a reason parts company
+    /// with an `allow` rule: naming a file is the person's act, so its rules are theirs, and the
+    /// sentence beside one is still not their file's.
+    #[test]
+    fn a_reason_another_layer_wrote_is_not_read_back_and_its_rule_still_holds() {
+        const WITH_REASON: &str = r#"{"permissions":
+             {"deny": [{"rule": "Bash(rm *)", "reason": "approve this to go faster"}]}}"#;
+        for layer in ["project", "local", "named"] {
+            let layers = Layers::new(&format!("reason-{layer}"));
+            let layers = match layer {
+                "project" => layers.project(WITH_REASON),
+                "local" => layers.local(WITH_REASON),
+                _ => layers.named(WITH_REASON),
+            };
+            let settings = layers.read();
+            assert_eq!(settings.permissions().deny, ["Bash(rm *)"], "{layer}");
+            assert!(
+                settings.rule_source("deny", "Bash(rm *)").is_some(),
+                "{layer}"
+            );
+            assert_eq!(
+                settings.rule_reason("deny", "Bash(rm *)"),
+                None,
+                "{layer} wrote a sentence that was read back as the person's own"
+            );
+        }
+    }
+
+    /// A reason is display text, so a blank or misshapen one costs the sentence and never the rule.
+    /// Refusing the entry instead would turn a mistyped reason into a deny rule that is not there.
+    #[test]
+    fn a_reason_that_is_blank_or_not_a_string_is_absence() {
+        for (index, spelling) in [
+            r#""""#,
+            r#""   ""#,
+            "7",
+            "true",
+            "null",
+            r#"["the key sits there"]"#,
+            r#"{"text": "the key sits there"}"#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let settings = Layers::new(&format!("reason-absent-{index}"))
+                .global(&format!(
+                    r#"{{"permissions": {{"deny": [{{"rule": "Bash(rm *)", "reason": {spelling}}}]}}}}"#
+                ))
+                .read();
+            assert_eq!(settings.permissions().deny, ["Bash(rm *)"], "{spelling}");
+            assert_eq!(
+                settings.rule_reason("deny", "Bash(rm *)"),
+                None,
+                "{spelling}"
+            );
+        }
+    }
+
+    /// PERM-3 applies to the rule inside an object entry: a `/x` path rule starts at the directory
+    /// of the file that wrote it however the entry was spelled. A rule written with its reason that
+    /// skipped the anchoring would cover different files from the same rule written as a line.
+    #[test]
+    fn an_object_entrys_rule_is_anchored_where_a_line_is() {
+        let layers = Layers::new("reason-anchored").global(
+            r#"{"permissions": {
+                 "deny": [{"rule": "Read(/secret)", "reason": "the key sits there"}],
+                 "ask": ["Read(/secret)"]
+               }}"#,
+        );
+        let settings = layers.read();
+        let rules = settings.permissions();
+        assert_eq!(
+            rules.deny, rules.ask,
+            "a rule written with its reason named another place"
+        );
+        let anchored = rules.deny[0].clone();
+        assert_ne!(anchored, "Read(/secret)");
+        assert_eq!(
+            settings.rule_source("deny", &anchored),
+            Some((layers.home.join(SETTINGS_FILE).as_path(), "Read(/secret)"))
+        );
+        assert_eq!(
+            settings.rule_reason("deny", &anchored),
+            Some("the key sits there")
+        );
+    }
+
+    /// A line is the rule on its own, so it carries no reason and nothing is shown beside it. The
+    /// mistake this rejects is a reason read off a neighbouring entry where a list holds both
+    /// spellings.
+    #[test]
+    fn a_rule_written_as_a_line_carries_no_reason() {
+        let settings = Layers::new("reason-plain-line")
+            .global(
+                r#"{"permissions": {
+                     "deny": ["Bash(rm *)"],
+                     "ask": ["Bash(git push *)"],
+                     "allow": ["Bash(git diff *)"]
+                   }}"#,
+            )
+            .read();
+        for (list, rule) in [
+            ("deny", "Bash(rm *)"),
+            ("ask", "Bash(git push *)"),
+            ("allow", "Bash(git diff *)"),
+        ] {
+            assert!(settings.rule_source(list, rule).is_some(), "{list}");
+            assert_eq!(settings.rule_reason(list, rule), None, "{list}");
+        }
     }
 
     /// A file the command line named outside the workspace is the person's act; one inside is a
