@@ -1,6 +1,7 @@
 //! The lists of paths a person wrote under `sandbox.filesystem`, as SANDBOX-25 in
-//! docs/specs/sandboxing.md has them reach the desktop front end: `bravebot-rpc` settles them from
-//! the person's settings before a session is assembled, and every program a `run` starts holds them.
+//! docs/specs/sandboxing.md has them reach the desktop front end and a session an editor hosts:
+//! `bravebot-rpc` and `bravebot-acp` each settle them from the person's settings before a session
+//! is assembled, and every program a `run` starts holds them.
 //!
 //! Driven through the binary against a model service of the test's own. The program is `touch`
 //! making a file in a directory the settings refuse, so whether the list reached the stage is read
@@ -142,8 +143,17 @@ fn a_planner_running(command: &'static str) -> String {
     endpoint
 }
 
+/// The program a front end starts: the desktop window's bridge, or the program an editor hosts a
+/// session in. Each settles the process-wide answers itself.
+#[derive(Clone, Copy)]
+enum Program {
+    Window,
+    Editor,
+}
+
 /// The front end, in an environment the test wrote rather than the one it inherited.
 struct FrontEnd {
+    program: Program,
     child: Child,
     said: mpsc::Receiver<Value>,
     held: std::collections::VecDeque<Value>,
@@ -151,8 +161,12 @@ struct FrontEnd {
 }
 
 impl FrontEnd {
-    fn start(scratch: &Scratch, endpoint: &str) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+    fn start(program: Program, scratch: &Scratch, endpoint: &str) -> Self {
+        let binary = match program {
+            Program::Window => env!("CARGO_BIN_EXE_bravebot-rpc"),
+            Program::Editor => env!("CARGO_BIN_EXE_bravebot-acp"),
+        };
+        let mut child = Command::new(binary)
             .env_clear()
             .env("HOME", scratch.home())
             .env("BRAVEBOT_LOCALE", "en-US")
@@ -169,6 +183,7 @@ impl FrontEnd {
             .expect("the built binary runs");
         let said = lines(child.stdout.take().expect("the front end answers"));
         Self {
+            program,
             child,
             said,
             held: Default::default(),
@@ -176,18 +191,43 @@ impl FrontEnd {
         }
     }
 
-    fn send(&mut self, method: &str, params: Value) -> u64 {
-        self.next += 1;
-        let id = self.next;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
+    fn write(&mut self, message: Value) {
         let stdin = self
             .child
             .stdin
             .as_mut()
             .expect("the front end reads requests");
-        writeln!(stdin, "{line}").expect("the request is written");
+        writeln!(stdin, "{message}").expect("the request is written");
         stdin.flush().expect("the request is sent");
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        self.write(json!({"id": id, "method": method, "params": params}));
         id
+    }
+
+    /// A JSON-RPC 2.0 request, as an editor sends one.
+    fn request(&mut self, method: &str, params: Value) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        self.write(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        id
+    }
+
+    /// The editor's answer to the request it sent as `id`, and not a request of the agent's that
+    /// happens to carry the same number.
+    fn answer_to(&mut self, id: u64) -> Value {
+        self.until(|message| message["id"] == id && message.get("method").is_none())
+    }
+
+    /// Select the single approval on the next question put to the editor, and return the question.
+    fn allow_once(&mut self) -> Value {
+        let asked = self.until(|message| message["method"] == "session/request_permission");
+        self.write(json!({"jsonrpc": "2.0", "id": asked["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}}}));
+        asked
     }
 
     fn call(&mut self, method: &str, params: Value) -> Value {
@@ -221,6 +261,9 @@ impl FrontEnd {
     /// One turn in the project: the person trusts the directory, the model asks to run its command,
     /// the person approves it, and the turn ends.
     fn run_one_command(&mut self, scratch: &Scratch) {
+        if let Program::Editor = self.program {
+            return self.run_one_command_for_an_editor(scratch);
+        }
         let opened = self.call(
             "session.new",
             json!({"directory": scratch.project().display().to_string()}),
@@ -245,6 +288,36 @@ impl FrontEnd {
         let done = self
             .until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");
         assert_eq!(done["event"], "turn.done", "{done}");
+    }
+
+    /// The same over the Agent Client Protocol, where the trust question and the command are each
+    /// put as a permission request.
+    fn run_one_command_for_an_editor(&mut self, scratch: &Scratch) {
+        let opened = self.request(
+            "session/new",
+            json!({"cwd": scratch.project(), "mcpServers": []}),
+        );
+        let opened = self.answer_to(opened);
+        let session = opened["result"]["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no session: {opened}"))
+            .to_string();
+        let prompt = self.request(
+            "session/prompt",
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": "make a file"}]}),
+        );
+        let trust = self.allow_once();
+        assert_eq!(
+            trust["params"]["toolCall"]["toolCallId"], "trust",
+            "{trust}"
+        );
+        let command = self.allow_once();
+        assert_eq!(
+            command["params"]["toolCall"]["kind"], "execute",
+            "{command}"
+        );
+        let done = self.answer_to(prompt);
+        assert_eq!(done["result"]["stopReason"], "end_turn", "{done}");
     }
 }
 
@@ -279,25 +352,37 @@ fn lines(stdout: ChildStdout) -> mpsc::Receiver<Value> {
 /// file be made.
 #[test]
 fn a_denied_write_in_the_settings_reaches_the_programs_a_window_runs() {
+    a_denied_write_reaches_the_programs_of(Program::Window, "bridge");
+}
+
+/// The same for a session an editor hosts. `bravebot-acp` makes its own call to settle the lists,
+/// so a copy of it that left the call out would pass the window's test above while an editor's
+/// programs ran with no refusal.
+#[test]
+fn a_denied_write_in_the_settings_reaches_the_programs_an_editor_runs() {
+    a_denied_write_reaches_the_programs_of(Program::Editor, "acp");
+}
+
+fn a_denied_write_reaches_the_programs_of(program: Program, prefix: &str) {
     if !bravebot_sandbox::confinement_works_here() {
         return;
     }
 
-    let control = Scratch::new("bridge-filesystem-control");
+    let control = Scratch::new(&format!("{prefix}-filesystem-control"));
     let endpoint = a_planner_running("/usr/bin/touch blocked/made.txt");
-    FrontEnd::start(&control, &endpoint).run_one_command(&control);
+    FrontEnd::start(program, &control, &endpoint).run_one_command(&control);
     assert!(
         control.made(),
         "the control did not make the file, so the refusal below says nothing"
     );
 
-    let refused = Scratch::new("bridge-filesystem-deny-write");
+    let refused = Scratch::new(&format!("{prefix}-filesystem-deny-write"));
     refused.settings(&format!(
         r#"{{"sandbox": {{"filesystem": {{"denyWrite": ["{}"]}}}}}}"#,
         refused.project().join("blocked/made.txt").display()
     ));
     let endpoint = a_planner_running("/usr/bin/touch blocked/made.txt");
-    FrontEnd::start(&refused, &endpoint).run_one_command(&refused);
+    FrontEnd::start(program, &refused, &endpoint).run_one_command(&refused);
     assert!(
         !refused.made(),
         "the settings' denyWrite did not reach the stage the bridge started"
