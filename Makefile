@@ -388,10 +388,10 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
 	check-maintenance-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
 	check-maintenance-selftest
 
 check-all-selftest:
@@ -414,6 +414,9 @@ check-peer-features-selftest:
 
 check-pr-fix-selftest:
 	python3 agents/skills/pr-fix/selftest.py
+
+check-pr-worktree-selftest:
+	python3 agents/pr_worktree_selftest.py
 
 check-maintenance-selftest:
 	python3 agents/skills/maintenance/selftest.py

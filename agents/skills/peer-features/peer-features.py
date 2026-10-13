@@ -138,18 +138,9 @@ def write_ledger(path, entries):
 
 def checked_commit(root):
     """The main commit this tree is, refusing a tree that differs from it anywhere but the ledger."""
-    ref = pa.main_ref(root)
-    tip = pa.git(root, "rev-parse", ref)
-    remedy = f"fetch, then review a tree at {ref}:\n  git worktree add --detach ../bravebot-peer-gaps {ref}"
-    if pa.run(["git", "-C", str(root), "merge-base", "--is-ancestor", tip, "HEAD"]).returncode != 0:
-        raise Problem(f"HEAD does not contain {ref} ({tip[:12]}); {remedy}")
-    changed = [p for p in pa.git(root, "diff", "--name-only", tip, "--").splitlines() if p != LEDGER]
-    if changed:
-        raise Problem(
-            f"this tree differs from {ref} in {len(changed)} file(s) besides the ledger, "
-            f"{changed[0]} first; what bravebot lacks has to be read off main, so {remedy}"
-        )
-    return ref, tip
+    return pa.checked_commit(
+        root, LEDGER, verb="review", worktree="bravebot-peer-gaps", why="what bravebot lacks has to be read off main"
+    )
 
 
 # The units.
@@ -437,11 +428,7 @@ def load_verify(path, unit):
     return verdicts, None
 
 
-def manifest_of(work):
-    manifest = pa.read_json(Path(work) / "manifest.json")
-    if manifest is None:
-        raise Problem(f"{work} has no manifest.json; run pending first")
-    return manifest
+manifest_of = pa.manifest_of
 
 
 def verify_paths(work, unit):

@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """The decisions pr-fix.py makes without a model, against real repositories where git decides."""
 
-import contextlib
 import importlib.util
-import io
-import os
 import shutil
 import subprocess
 import sys
@@ -18,75 +15,18 @@ spec = importlib.util.spec_from_file_location("pr_fix", HERE / "pr-fix.py")
 pr_fix = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_fix)
 
-# Nothing of the caller's git config applies: no signing key, no hooks, no default branch.
-os.environ.update(
-    GIT_CONFIG_GLOBAL=os.devnull,
-    GIT_CONFIG_NOSYSTEM="1",
-    GIT_AUTHOR_NAME="selftest",
-    GIT_AUTHOR_EMAIL="selftest@example.invalid",
-    GIT_COMMITTER_NAME="selftest",
-    GIT_COMMITTER_EMAIL="selftest@example.invalid",
-)
 
-FORK_CLONE = """\
-origin\tgit@github.com:someone/bravebot.git (fetch)
-origin\tgit@github.com:someone/bravebot.git (push)
-upstream\tgit@github.com:brave/bravebot.git (fetch)
-upstream\tgit@github.com:brave/bravebot.git (push)
-"""
-DIRECT_CLONE = """\
-origin\thttps://github.com/Brave/BraveBot (fetch)
-origin\thttps://github.com/Brave/BraveBot (push)
-lookalike\thttps://notgithub.com/brave/bravebot.git (fetch)
-"""
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def git(*args, cwd):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def quietly(step, *args):
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-        try:
-            code = step(*args)
-        except SystemExit as exit:
-            code = exit.code
-    return code, out.getvalue()
-
-
-def test_the_base_is_whichever_remote_names_brave_bravebot():
-    fork = pr_fix.github_remotes(FORK_CLONE)
-    assert fork["brave/bravebot"][0] == "upstream", fork
-    assert fork["someone/bravebot"][0] == "origin", fork
-    direct = pr_fix.github_remotes(DIRECT_CLONE)
-    assert direct["brave/bravebot"][0] == "origin", direct
-    assert len(direct) == 1, "a host that only ends in github.com is not GitHub"
-
-
-def test_a_pull_request_is_named_by_number_or_by_its_url():
-    for arg in ("806", "#806", "https://github.com/brave/bravebot/pull/806/files"):
-        assert pr_fix.pr_number(arg) == 806, arg
-    for arg in ("https://github.com/other/bravebot/pull/806", "main"):
-        code, _ = quietly(pr_fix.pr_number, arg)
-        assert code == 1, arg
-
-
-def test_a_fork_is_reached_the_way_the_base_is():
-    assert pr_fix.fork_url("a/b", "https://github.com/brave/bravebot") == "https://github.com/a/b.git"
-    assert pr_fix.fork_url("a/b", "git@github.com:brave/bravebot.git") == "git@github.com:a/b.git"
-
-
-def test_a_head_named_like_the_base_does_not_take_the_clones_own_branch():
-    assert pr_fix.local_branch("main", "main", 7) == "pr-7"
-    assert pr_fix.local_branch("fix", "main", 7) == "fix"
-
-
-def test_only_a_whole_marker_line_starts_or_ends_a_conflict():
-    text = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> 1234 (x)\nTitle\n=======\n<<<<<<<<\n"
-    assert pr_fix.marker_ranges(text) == [(2, 6)], pr_fix.marker_ranges(text)
+# The git and quietly helpers are shared with the other selftests of this pair.
+helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
+git = helpers.git
+quietly = helpers.quietly
 
 
 def sign_head(cwd):
@@ -292,35 +232,6 @@ def test_what_git_said_is_cut_to_its_error_and_leaves_the_hints_behind():
     ]
     assert pr_fix.stop_reason("") == []
     assert pr_fix.stop_reason("plain words\nmore words\n") == ["more words"], "no error line: the last line"
-
-
-def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_none():
-    with tempfile.TemporaryDirectory() as tmp:
-        tree = Path(tmp)
-        for crate in ("agent", "tui"):
-            (tree / "crates" / crate).mkdir(parents=True)
-            (tree / "crates" / crate / "Cargo.toml").write_text(f'[package]\nname = "bravebot-{crate}"\n')
-        plan = lambda *files: pr_fix.plan(tree, list(files))
-
-        assert plan("ui/src/app.ts", "docs/website/docs/index.md", "README.md", "docs/development/checks.md") == []
-        assert plan("docs/specs/labels.md") == [["make", "-k", "check-spec"]]
-        assert plan("crates/i18n/locales/fr.ftl") == [["make", "-k", "check-locales"]]
-        assert plan("Cargo.lock") == [pr_fix.LOCK_RESOLVES, ["make", "-k", "check-versions"]]
-        assert plan(".github/workflows/ci.yml") == [["make", "-k", "check-security"]]
-        assert plan("ui/package.json") == [["make", "-k", "check-versions"]]
-        assert plan("ui/pnpm-lock.yaml", "package-lock.json") == [], "no lockfile states the version"
-
-        rust = plan("crates/agent/src/lib.rs", "crates/agent/tests/exec.rs", "crates/tui/src/view.rs")
-        assert rust == [
-            ["cargo", "fmt", "--all", "--", "--check"],
-            [
-                "cargo", "clippy", "-p", "bravebot-agent", "-p", "bravebot-tui",
-                "--all-targets", "--all-features", "--", "-D", "warnings",
-            ],
-            ["cargo", "test", "-p", "bravebot-agent", "--locked", "--test", "exec"],
-            ["make", "-k", "check-spec"],
-        ], rust
-        assert plan("crates/gone/src/lib.rs") == [["make", "-k", "check-spec"]], "a deleted crate is not linted"
 
 
 def test_the_files_changed_since_the_rebase_choose_the_checks():

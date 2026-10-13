@@ -2538,6 +2538,22 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
     )
 
 
+def test_the_manifest_is_read_from_the_work_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "manifest.json").write_text('{"lanes": []}', encoding="utf-8")
+        check("a manifest in the work directory is read", collect.read_manifest(tmp) == {"lanes": []})
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            missing = collect.read_manifest(empty)
+        check(
+            "a work directory without one reads as none and says where it looked",
+            missing is None and err.getvalue() == f"no manifest at {empty / 'manifest.json'}\n",
+            err.getvalue(),
+        )
+
+
 def main():
     for test in (
         test_exception_counts,
@@ -2566,6 +2582,7 @@ def main():
         test_posting_skips_what_the_tracker_already_holds,
         test_an_assignee_reaches_the_create,
         test_a_run_writes_a_manifest_and_posts_nothing,
+        test_the_manifest_is_read_from_the_work_directory,
     ):
         print(test.__name__)
         test()

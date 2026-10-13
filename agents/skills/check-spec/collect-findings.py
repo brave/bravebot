@@ -145,6 +145,15 @@ def render(findings, manifest, reviewed):
     return "\n".join(lines)
 
 
+def read_manifest(work_dir):
+    """The parsed `manifest.json` of a work directory, or None after saying there is none."""
+    path = Path(work_dir) / "manifest.json"
+    if not path.exists():
+        print(f"no manifest at {path}", file=sys.stderr)
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", required=True)
@@ -152,11 +161,9 @@ def main():
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    manifest_path = Path(args.work_dir) / "manifest.json"
-    if not manifest_path.exists():
-        print(f"no manifest at {manifest_path}", file=sys.stderr)
+    manifest = read_manifest(args.work_dir)
+    if manifest is None:
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     findings = list(manifest.get("mechanical_findings", []))
     reviews, reviewed = load_reviews(manifest)

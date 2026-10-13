@@ -165,18 +165,20 @@ def main_ref(root):
     raise Problem("no upstream/main, origin/main or main to vet against")
 
 
-def checked_commit(root):
+def checked_commit(
+    root, ledger=LEDGER, verb="vet", worktree="bravebot-advisories", why="a verdict has to be about main"
+):
     """The main commit this tree is, refusing a tree that differs from it anywhere but the ledger."""
     ref = main_ref(root)
     tip = git(root, "rev-parse", ref)
-    remedy = f"fetch, then vet a tree at {ref}:\n  git worktree add --detach ../bravebot-advisories {ref}"
+    remedy = f"fetch, then {verb} a tree at {ref}:\n  git worktree add --detach ../{worktree} {ref}"
     if run(["git", "-C", str(root), "merge-base", "--is-ancestor", tip, "HEAD"]).returncode != 0:
         raise Problem(f"HEAD does not contain {ref} ({tip[:12]}); {remedy}")
-    changed = [p for p in git(root, "diff", "--name-only", tip, "--").splitlines() if p != LEDGER]
+    changed = [p for p in git(root, "diff", "--name-only", tip, "--").splitlines() if p != ledger]
     if changed:
         raise Problem(
             f"this tree differs from {ref} in {len(changed)} file(s) besides the ledger, "
-            f"{changed[0]} first; a verdict has to be about main, so {remedy}"
+            f"{changed[0]} first; {why}, so {remedy}"
         )
     return ref, tip
 

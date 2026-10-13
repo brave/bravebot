@@ -16,6 +16,7 @@ here does not waste somebody's afternoon, it gets a guarantee that was holding w
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -80,12 +81,16 @@ def main():
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
+    collector = importlib.util.spec_from_file_location(
+        "audit_collect", Path(__file__).resolve().parent / "collect-findings.py"
+    )
+    collect = importlib.util.module_from_spec(collector)
+    collector.loader.exec_module(collect)
+
     work_dir = Path(args.work_dir)
-    manifest_path = work_dir / "manifest.json"
-    if not manifest_path.exists():
-        print(f"no manifest at {manifest_path}", file=sys.stderr)
+    manifest = collect.read_manifest(work_dir)
+    if manifest is None:
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     candidates, problems = load_candidates(manifest)
     manifest.setdefault("mechanical_findings", []).extend(problems)
