@@ -15151,6 +15151,31 @@ mod tests {
             assert!(!rows[0].struck());
         }
 
+        /// A status that is absent or is not a string is unrecognised too, by a different road
+        /// than a word nobody knows. It has to count as outstanding, and the task has to stay on
+        /// the list rather than the whole list being refused for it.
+        #[test]
+        fn a_task_with_no_status_or_one_that_is_not_a_string_shows_as_outstanding() {
+            let (reporter, text) = call(json!({
+                "todos": [
+                    {"content": "Read the file"},
+                    {"content": "Make the change", "status": 3},
+                    {"content": "Run the tests", "status": null},
+                ]
+            }));
+
+            let rows = reporter.updates.last().expect("the list was refused");
+            assert_eq!(rows.len(), 3, "a task was dropped: {rows:?}");
+            for row in rows {
+                assert!(!row.struck(), "{:?} was struck through", row.content);
+            }
+            let shown = released(&text);
+            assert!(
+                shown.contains("0 of 3"),
+                "a task without a readable status was counted as done: {shown}"
+            );
+        }
+
         /// TODO-3. The planner reads its own list back to know what is next, so a dropped task
         /// has to be struck and counted apart from the finished ones. Folded into "done" it would
         /// say the turn achieved work it abandoned.

@@ -104,6 +104,7 @@ prose decide whether this session keeps working, and a sentence explaining that 
 `verified-by: bravebot_agent::goal::a_first_line_of_impossible_carries_why`
 `verified-by: bravebot_agent::goal::not_met_is_never_read_as_met`
 `verified-by: bravebot_agent::goal::a_sentence_about_the_condition_is_not_a_verdict`
+`verified-by: bravebot_agent::goal::a_first_line_that_only_begins_with_a_verdict_word_is_not_a_verdict`
 `verified-by: bravebot_agent::goal::a_verdict_with_nothing_after_it_still_reads`
 
 <a id="GOAL-5"></a>
