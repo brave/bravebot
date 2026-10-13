@@ -449,6 +449,88 @@ fn a_confined_program_cannot_write_outside_the_session() {
     assert!(!target.exists());
 }
 
+/// SANDBOX-14, SANDBOX-18: on macOS a stage whose program is not git cannot write a repository's
+/// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
+/// names a gitdir, and neither can git when a script starts it, while a stage whose program is git
+/// writes the configuration. git runs what those files name with no profile around it the next
+/// time anybody runs git there. The regressions it rejects are the `.git` refusal lifted for every
+/// stage, and lifted for none. The confined write beside the `.git` is the control that the stage
+/// writes the session, and each refused line run without the sandbox is the control that the file
+/// is writable.
+#[cfg(target_os = "macos")]
+#[test]
+fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("git-directory");
+    let repository = places.session.join("repo");
+    let initialised = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&repository)
+        .status();
+    if !initialised.is_ok_and(|status| status.success()) {
+        return;
+    }
+    std::fs::create_dir_all(repository.join(".git/hooks")).expect("a hooks directory");
+    std::fs::create_dir_all(repository.join(".git/modules/sub")).expect("a submodule's gitdir");
+    std::fs::write(repository.join(".git/modules/sub/config"), "").expect("its configuration");
+    std::fs::create_dir_all(places.session.join("linked")).expect("a linked work tree");
+    std::fs::write(places.session.join("linked/.git"), "gitdir: ../repo/.git\n")
+        .expect("a .git file");
+    let confinement = places.confinement();
+
+    let beside = places.run("sh -c 'printf x > repo/beside.txt'", Some(&confinement));
+    assert!(
+        beside.ended_well && repository.join("beside.txt").exists(),
+        "the stage could not write the session, so a refusal below means nothing: {beside:?}"
+    );
+
+    for (line, file) in [
+        (
+            "sh -c 'printf x > repo/.git/hooks/post-checkout'",
+            "repo/.git/hooks/post-checkout",
+        ),
+        (
+            "sh -c 'printf \"[a]\\n\\tb = c\\n\" >> repo/.git/config'",
+            "repo/.git/config",
+        ),
+        (
+            "sh -c 'git -C repo config core.hooksPath elsewhere'",
+            "repo/.git/config",
+        ),
+        (
+            "sh -c 'printf x >> repo/.git/modules/sub/config'",
+            "repo/.git/modules/sub/config",
+        ),
+        (
+            "sh -c 'printf \"gitdir: elsewhere\" > linked/.git'",
+            "linked/.git",
+        ),
+    ] {
+        let file = places.session.join(file);
+        let before = std::fs::read(&file).ok();
+        let confined = places.run(line, Some(&confinement));
+        assert!(
+            !confined.ended_well && std::fs::read(&file).ok() == before,
+            "`{line}` wrote {}: {confined:?}",
+            file.display()
+        );
+        let control = places.run(line, None);
+        assert!(
+            control.ended_well && std::fs::read(&file).ok() != before,
+            "`{line}` does not write {} without the sandbox: {control:?}",
+            file.display()
+        );
+    }
+
+    let git = places.run("git -C repo config bravebot.probe yes", Some(&confinement));
+    assert!(git.ended_well, "{git:?}");
+    let configuration =
+        std::fs::read_to_string(repository.join(".git/config")).expect("the configuration");
+    assert!(configuration.contains("probe = yes"), "{configuration}");
+}
+
 /// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
 /// where a run failed before the planner could ask. The regression it rejects is the flag never
 /// reaching the profile, so the write is refused as it is without bypass; the stage without the

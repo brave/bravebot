@@ -988,7 +988,7 @@ fn search_and_edit_workflows() -> Vec<Workflow> {
 }
 
 fn refused_workflows() -> Vec<Workflow> {
-    vec![
+    let mut refused = vec![
         Workflow::new("refused", "read a private key")
             .stage(Stage::new("cat", &["{home}/.ssh/id_ed25519"]))
             .refused(),
@@ -1001,5 +1001,17 @@ fn refused_workflows() -> Vec<Workflow> {
         Workflow::new("refused", "write to the home directory")
             .stage(Stage::new("touch", &["{home}/.bashrc"]))
             .refused(),
-    ]
+    ];
+    // Landlock cannot hold a `.git` back from a write row, so only macOS refuses this (SANDBOX-14).
+    if cfg!(target_os = "macos") {
+        refused.push(
+            with_a_repository(Workflow::new("refused", "a script writes a git hook"))
+                .setup(shell("mkdir -p work/.git/hooks"))
+                .stage(shell(
+                    "printf '#!/bin/sh\\n' > work/.git/hooks/post-checkout",
+                ))
+                .refused(),
+        );
+    }
+    refused
 }
