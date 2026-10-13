@@ -163,7 +163,9 @@ that is not in force. On Linux the network is denied by a new user and network n
 the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
 network rules are not used: they filter a TCP connect by port and not by address, and leave UDP
 open. A kernel that does not let an unprivileged user make the namespace (Ubuntu 24.04 restricts
-it by default, and many containers block it) cannot deny the network, and `doctor` says so. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+it by default, and many containers block it) cannot deny the network, and `doctor` says so. On
+Windows the network is the container's internet client capability, and a container without it is
+refused a host name lookup as well as a connection. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
 listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
@@ -220,6 +222,8 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
 `verified-by: bravebot_sandbox::windows::no_grant_lets_a_confined_process_rewrite_an_access_list`
+`verified-by: bravebot_sandbox::windows::a_container_connects_out_only_when_its_policy_asks_for_the_network`
+`verified-by: bravebot_sandbox::windows::a_container_without_the_network_cannot_look_up_a_name`
 
 <a id="SANDBOX-4"></a>
 ### SANDBOX-4: content cannot inject into the syntax a backend writes it into
@@ -1237,7 +1241,10 @@ ends the job, and the job also ends when its one handle is closed, which the bac
 process is let go of and the platform does when this process ends, a crash included. The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
 ends then too, which is when the grants it ran under are taken off. A stage the platform will not
-put in a job is not started. The stage is given a console of its own with no
+put in a job is not started. The stage is created under the gate every start of a program takes
+([RPCVIEW-8](session-view.md#RPCVIEW-8)), so a program started at the same moment holds none of its
+streams, and it inherits the three standard streams it is given and no other handle this process
+holds. The stage is given a console of its own with no
 window rather than the one this process runs in, since any process attached to a console can write
 input into it, which on the terminal's console is typing an answer to a prompt. The programs it
 starts share that console, so none of them opens a window.
@@ -1282,6 +1289,9 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
 `verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
 `verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
+`verified-by: bravebot_sandbox::windows::killing_the_process_holding_a_stage_ends_every_program_in_it`
+`verified-by: bravebot_sandbox::windows::a_stage_inherits_no_handle_but_the_streams_it_is_given`
+`verified-by: bravebot_sandbox::windows::a_stage_start_waits_for_a_channel_being_created`
 `verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
