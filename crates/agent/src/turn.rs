@@ -2847,12 +2847,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // The round a file on disk first became different from how this turn found it, where one
         // did, and whether a program has been run since the turn began.
         //
-        // Both from what dispatch did rather than from what the planner asked for, which is the
-        // opposite of the write counted above and for the opposite reason. These say what the
-        // workspace holds: a write the person declined and a write plan mode refused leave nothing to
-        // build, and a run the person declined builds nothing, so a turn counting either would tell
-        // the planner and then the person about a diff that was never made or a check that never
-        // happened.
+        // Both from what dispatch did, here and in the delegates that share this workspace, rather
+        // than from what the planner asked for, which is the opposite of the write counted above and
+        // for the opposite reason. These say what the workspace holds: a write the person declined
+        // and a write plan mode refused leave nothing to build, and a run the person declined builds
+        // nothing, so a turn counting either would tell the planner and then the person about a diff
+        // that was never made or a check that never happened.
         let mut worked = Worked::default();
         let mut said_nothing_run = false;
         // Whether a write is possible at all here, which a run offered no write tool cannot be
@@ -4521,12 +4521,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // for the reason the line above is. A delegate is named because this is the case it
                     // exists for: a build log is long, what is wanted from it is one sentence, and a
                     // checker reads the one and reports the other.
+                    //
+                    // Not while a delegate working in this workspace is still out. It may be the
+                    // checker this line points at, part way through the build, and what it ran is
+                    // counted only once it is taken back.
                     if may_run
                         && !worked.ran_a_program
                         && !said_nothing_run
                         && worked
                             .changed_at
                             .is_some_and(|at| steps >= at + ROUNDS_AFTER_WRITING_BEFORE_RUNNING)
+                        && delegates.iter().all(|working| working.checkout.is_some())
                     {
                         said_nothing_run = true;
                         conversation.push_from(Message::user(format!(

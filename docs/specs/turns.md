@@ -136,11 +136,13 @@ that line is about what the planner tried to do, and these two are about what th
 about to act on.
 
 **Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
-a file it changed and a program it ran count as the turn's, however the delegate ended, from the
-round the turn takes it back in. A delegate in a checkout of its own
+a file it changed and a program it ran count as the turn's from the round the turn takes it back
+in, whether it answered, stopped or failed. While one is still working the question waits, since
+it may be part way through the build. A delegate in a checkout of its own
 ([CHECKOUT-7](checkouts.md#CHECKOUT-7)) builds the commit the checkout holds, which has none of
-the turn's changes in it, so nothing it does there counts. A delegate still working when the
-question falls due has not been taken back, so a build it has started does not stop the question.
+the turn's changes in it, so nothing it does counts. That includes a write it makes in a directory
+the person opened beside the working directory, which a checkout leaves reachable, since the
+driver's record of a delegate's work does not say where a write landed.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
@@ -155,6 +157,7 @@ question falls due has not been taken back, so a build it has started does not s
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::the_question_waits_for_a_delegate_still_working_in_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_refused_for_a_credential_it_left_counts_as_run`
 `verified-by: bravebot_agent::turn::a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_never_built`
 

@@ -12375,6 +12375,21 @@ fn writing_then_delegating(before: String, spawn: &str) -> Vec<String> {
     replies
 }
 
+/// Serves a parent shaped by [`writing_then_delegating`] and the one delegate it starts, holding the
+/// delegate's replies until the parent has asked for its third, so the delegate is still working
+/// when the parent looks for finished work and that reply is a wait for it rather than the answer.
+fn serve_a_turn_and_its_delegate(
+    parent: (&'static str, Vec<String>),
+    delegate: (&'static str, Vec<String>),
+) -> (String, MockRequests, Arc<AtomicBool>) {
+    let order = Order::After {
+        held: delegate.0,
+        after: parent.0,
+        asked: 3,
+    };
+    serve_by_marker_in(vec![parent, delegate], order)
+}
+
 /// A program a delegate runs in the turn's own workspace is a program the turn ran, so a turn that
 /// hands its build to a checker is neither asked whether any of it runs nor reported to the person
 /// as unbuilt.
@@ -12386,7 +12401,7 @@ fn a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own() {
     let scratch = Scratch::new("delegate-ran-the-build");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
         (
             "WRITE-THEN-HAND-OFF-THE-BUILD",
             writing_then_delegating(
@@ -12404,7 +12419,7 @@ fn a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own() {
                 reply_with("the checks pass"),
             ],
         ),
-    ]);
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -12426,6 +12441,11 @@ fn a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own() {
     )
     .outcome
     .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
 
     let asked = every_request(&received);
     let parent: Vec<&String> = asked
@@ -12490,7 +12510,7 @@ fn a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_b
     let scratch = Scratch::new("delegate-wrote-never-ran");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
         (
             "HAND-OFF-THE-SLICE",
             writing_then_delegating(
@@ -12508,7 +12528,7 @@ fn a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_b
                 reply_with("wrote it"),
             ],
         ),
-    ]);
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -12530,6 +12550,11 @@ fn a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_b
     )
     .outcome
     .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
 
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("notes.txt")).ok(),
@@ -12566,7 +12591,7 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
 
     // The worker writes and is then left with nothing to answer its next request, so its run ends
     // in a failure with the file already written.
-    let (endpoint, received) = serve_by_marker(vec![
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
         (
             "HAND-OFF-A-SLICE",
             writing_then_delegating(
@@ -12581,7 +12606,7 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
                 r#"{"path":"notes.txt","contents":"first slice"}"#,
             )],
         ),
-    ]);
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -12603,6 +12628,11 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
     )
     .outcome
     .expect("the turn survives a delegate that did not");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
 
     assert!(
         reporter
@@ -12637,7 +12667,7 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
         (
             "WRITE-THEN-CHECK-APART",
             writing_then_delegating(
@@ -12655,7 +12685,7 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
                 reply_with("the checks pass"),
             ],
         ),
-    ]);
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -12680,6 +12710,11 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
     .outcome
     .expect("the turn finishes");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+
     let asked = every_request(&received);
     assert!(
         asked
@@ -12702,6 +12737,102 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
             .iter()
             .any(|said| said.contains("no command was run")),
         "the person was not told the turn's change was never built: {:?}",
+        reporter.narration
+    );
+}
+
+/// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
+/// is part way through the build when the question falls due is not told to start one.
+///
+/// The checker is held until the parent has gone past the round the question falls due without
+/// waiting for it, so a question asked on time would be asked while the build it asks for is
+/// going.
+#[test]
+fn the_question_waits_for_a_delegate_still_working_in_the_workspace() {
+    let scratch = Scratch::new("question-waits-for-the-checker");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut parent = vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"checker","task":"RUN-THE-SLOW-CHECKS"}"#,
+        ),
+    ];
+    parent.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 2)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    let past_due = parent.len();
+    parent.push(reply_with("waiting on the checker"));
+    parent.push(reply_with("done"));
+
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            ("WRITE-THEN-KEEP-GOING", parent),
+            (
+                "RUN-THE-SLOW-CHECKS",
+                vec![
+                    tool_request("run", r#"{"command":"printf checked"}"#),
+                    reply_with("the checks pass"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "RUN-THE-SLOW-CHECKS",
+            after: "WRITE-THEN-KEEP-GOING",
+            asked: past_due,
+        },
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WRITE-THEN-KEEP-GOING"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the checker was answered before the parent passed the round the question falls due"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("WRITE-THEN-KEEP-GOING") && body.contains("It exited 0.")),
+        "the checker's line never ran, so nothing here was tested"
+    );
+    assert!(
+        !asked
+            .iter()
+            .any(|body| body.contains("WRITE-THEN-KEEP-GOING")
+                && body.contains("nothing has been run")),
+        "the turn was told nothing had been run while its checker was still working"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told a change a checker built was never built: {:?}",
         reporter.narration
     );
 }
