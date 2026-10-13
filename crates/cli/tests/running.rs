@@ -772,6 +772,52 @@ fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
     );
 }
 
+/// SANDBOX-16: `doctor` says a checkout's `git.identities` is not obeyed and names an entry of the
+/// person's own that it cannot read, each with its file.
+///
+/// The settings tests check the accessors. `doctor` is the only place that turns them into lines
+/// for a person, so a missing call would leave a checkout's attempt to choose a push key, and a
+/// person's mistyped entry, without a word.
+#[test]
+fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
+    let scratch = Scratch::new("cli-running-doctor-git-identities")
+        .with_settings(r#"{"git": {"identities": {"github.com": "~/.ssh/no-owner.pub"}}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let ignored = line("git.identities in");
+    assert!(
+        ignored.contains("not obeyed")
+            && ignored.contains(&checkout.join(".bravebot").display().to_string()),
+        "a checkout's key choice went unreported: {stdout}"
+    );
+    let misshapen = line("git.identities.github.com");
+    assert!(
+        misshapen.contains("is not read") && misshapen.contains("settings.json"),
+        "an entry the person's file holds went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///

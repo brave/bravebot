@@ -6596,6 +6596,17 @@ mod tests {
             );
             assert_eq!(settings.git_identities_ignored().count(), 1, "{name}");
         }
+
+        let layers = Layers::new("identities-unread")
+            .global(r#"{"git": {"identities": {}, "sshCommand": "ssh -i x"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings
+                .unread_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            ["git.sshCommand"]
+        );
     }
 
     /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
