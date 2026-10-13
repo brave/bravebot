@@ -21,6 +21,7 @@
 //! attaches a file, and `run.reply` carries no `remember`.
 
 use crate::protocol::{ErrorCode, Failure, Request};
+use crate::turn::Kind;
 
 /// A method the host offers, and the parameters a request for it may carry.
 pub struct Operation {
@@ -48,6 +49,11 @@ pub const OFFERED: &[Operation] = &[
     },
     Operation {
         method: "session.close",
+        fields: &["session"],
+    },
+    // Takes over a session whose client has gone. The host answers it itself.
+    Operation {
+        method: "session.attach",
         fields: &["session"],
     },
     // The one answer that widens what a session may read that the host's client gives. The client
@@ -85,8 +91,25 @@ pub const OFFERED: &[Operation] = &[
     },
 ];
 
-/// The offered methods the host answers itself, which the bridge has no method for.
-pub const BY_THE_HOST: &[&str] = &["instance.info"];
+/// The offered methods the host answers itself in `Host::dispatch`, which the bridge has no method for.
+pub const BY_THE_HOST: &[&str] = &["instance.info", "session.attach"];
+
+/// The kinds of question a client of the host can answer: the ones whose reply the host offers.
+///
+/// Derived from [`OFFERED`] so that offering a reply method and being asked its question are one
+/// decision. `trust.reply` is not here: the startup question is not one a turn asks.
+pub fn answerable() -> Vec<Kind> {
+    OFFERED
+        .iter()
+        .filter_map(|operation| match operation.method {
+            "confirm.reply" => Some(Kind::Write),
+            "run.reply" => Some(Kind::Run),
+            "fetch.reply" => Some(Kind::Fetch),
+            "ask.reply" => Some(Kind::Ask),
+            _ => None,
+        })
+        .collect()
+}
 
 /// The bridge methods the host does not offer.
 ///
@@ -221,6 +244,26 @@ mod tests {
             .err()
             .expect("refused");
         assert_eq!(failure.code, ErrorCode::NotAllowed);
+    }
+
+    /// A reply method added to the offer without a kind to ask would be a question the host's
+    /// client is never put, and one removed from it would still be asked. Every offered reply is
+    /// either the startup answer or maps to a kind, and the kinds are exactly those.
+    #[test]
+    fn every_offered_reply_but_the_startup_answer_is_a_kind_a_client_is_asked() {
+        let replies: Vec<_> = OFFERED
+            .iter()
+            .map(|operation| operation.method)
+            .filter(|method| method.ends_with(".reply") && *method != "trust.reply")
+            .collect();
+        assert_eq!(
+            replies,
+            ["confirm.reply", "run.reply", "fetch.reply", "ask.reply"]
+        );
+        assert_eq!(
+            answerable(),
+            [Kind::Write, Kind::Run, Kind::Fetch, Kind::Ask]
+        );
     }
 
     #[test]

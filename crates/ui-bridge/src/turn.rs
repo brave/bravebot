@@ -459,6 +459,8 @@ pub struct BridgeConfirmer {
     cancel: bravebot_core::cancel::Cancel,
     /// Whether a plan was put to the person and not approved. See [`Self::declined_a_plan`].
     declined_a_plan: bool,
+    /// Which kinds somebody can answer now. Every kind, until a host says otherwise.
+    answerers: crate::answerers::Answerers,
 }
 
 impl BridgeConfirmer {
@@ -478,7 +480,14 @@ impl BridgeConfirmer {
             ids,
             cancel,
             declined_a_plan: false,
+            answerers: crate::answerers::Answerers::default(),
         }
+    }
+
+    /// Ask only what `answerers` says somebody can answer, and refuse the rest without showing it.
+    pub(crate) fn answerable_by(mut self, answerers: crate::answerers::Answerers) -> Self {
+        self.answerers = answerers;
+        self
     }
 
     /// Whether a plan was put to the person and came back without a yes.
@@ -508,10 +517,6 @@ impl BridgeConfirmer {
         if self.cancel.is_cancelled() {
             return None;
         }
-        // From the session's own counter, so a later turn does not reuse a number. A counter with
-        // nothing left refuses the question, like every other way of not asking.
-        let id = next_question(&self.ids)?;
-
         // Registered before the question goes out, so an answer that arrives immediately
         // has something to match against. The other order has a race the front-end wins.
         let Ok(mut pending) = self.pending.lock() else {
@@ -519,6 +524,15 @@ impl BridgeConfirmer {
             // nothing can be answered, so nothing is approved.
             return None;
         };
+        // Checked under the lock that registers the question. A controller lost after this point
+        // finds the question registered and refuses it; one lost before it is seen here. Checked
+        // anywhere else, a question could be registered between the two and wait for nobody.
+        if !self.answerers.can_answer(kind) {
+            return None;
+        }
+        // From the session's own counter, so a later turn does not reuse a number. A counter with
+        // nothing left refuses the question, like every other way of not asking.
+        let id = next_question(&self.ids)?;
         *pending = Some(Question { id, kind });
         self.emitter
             .send(Event::new(event, &self.session, data(id)));
@@ -809,3 +823,7 @@ impl bravebot_agent::servers::Asker for BridgeConfirmer {
         self.confirm_move(request) == Decision::Approve
     }
 }
+
+#[cfg(test)]
+#[path = "answering_tests.rs"]
+mod answering_tests;

@@ -100,6 +100,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             turn: 1,
             cancel,
             pending: Arc::new(Mutex::new(None)),
+            answerers: Default::default(),
             answers: receiver,
             finished,
         })

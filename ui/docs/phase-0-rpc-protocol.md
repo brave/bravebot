@@ -1500,8 +1500,16 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 
 | Method | Parameters | Result |
 |---|---|---|
-| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean }] }` |
+| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
 
-`instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that opened it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with. A session can be named only by the connection that opened it; another connection is refused with `not_allowed`, except that once the opening connection has ended any later connection may close the session.
+`instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
+
+A session has one controller, the connection that opened it or took it over, and `controlled` says whether that connection is the one being served. Another connection is refused with `not_allowed`, except that once the controller's connection has ended any later connection may close the session or take it over with `session.attach`. A connection that controls a session is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
+
+A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
+
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+
