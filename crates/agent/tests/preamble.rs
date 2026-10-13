@@ -878,9 +878,11 @@ fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
 
     for said in [
         "with a line that only reads",
+        "run by the same interpreter or runtime the program uses",
         "in a new directory inside the scratch directory",
-        "on the search path the program reads from its environment",
+        "a search path the program reads from its environment in addition to its own",
         "in single quotes",
+        "try it before asking the person",
         "say what is missing",
     ] {
         assert!(
@@ -890,10 +892,64 @@ fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
         );
     }
     assert!(
-        !preamble.text.contains("can stand in"),
+        !preamble
+            .text
+            .contains("in a new directory inside the scratch directory"),
         "a delegate was told a road that needs `run`: {}",
         preamble.text
     );
+}
+
+/// The road holds for any language, so the paragraph names none: a case named in it reads as the
+/// case it is for, and a program in another language that fails the same way is left at the error.
+#[test]
+fn the_stand_in_road_names_no_language_or_variable() {
+    let tree = Scratch::new("stand-in-names-nothing");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    let start = preamble
+        .for_a_person
+        .find("When a program fails because something it needs is missing")
+        .expect("the paragraph is there to read");
+    let paragraph = &preamble.for_a_person[start..];
+    let paragraph = &paragraph[..paragraph.find('\n').unwrap_or(paragraph.len())];
+    for named in [
+        "Python",
+        "python",
+        "PYTHONPATH",
+        "tomllib",
+        "tomli",
+        "Perl",
+        "PERL5LIB",
+        "Node",
+        "NODE_PATH",
+        "Ruby",
+        "RUBYLIB",
+        "Java",
+        "CLASSPATH",
+    ] {
+        assert!(
+            !paragraph.contains(named),
+            "the paragraph names `{named}`: {paragraph}"
+        );
+    }
 }
 
 /// A session that could not be given one has nowhere of its own to write, and a planner told
@@ -931,7 +987,9 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
         );
     }
     assert!(
-        !preamble.for_a_person.contains("can stand in"),
+        !preamble
+            .for_a_person
+            .contains("in a new directory inside the scratch directory"),
         "a session with no directory of its own was told to write a stand-in in one: {}",
         preamble.for_a_person
     );

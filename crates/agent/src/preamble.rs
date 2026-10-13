@@ -503,30 +503,31 @@ fn github_cli_guidance(present: bool) -> &'static str {
 /// only where the session has a directory of its own to write a stand-in in.
 ///
 /// A planner not told of this road asks the person to install what is missing or to edit the
-/// program. It names no language, package or variable, since text naming one case covers that case
-/// alone. For the person's own turn and not for a delegate: the road is two `run`s, and a reader is
-/// offered none.
+/// program. It names no language, package or variable, since text naming one of them covers that
+/// one alone. For the person's own turn and not for a delegate: the road is two `run`s, and a
+/// reader is offered none.
 ///
-/// A new directory inside the session's, and only that on the search path, because a directory
-/// there is searched ahead of what the program would otherwise load and the session's own holds
-/// whatever else the work put in it. In single quotes, because the line compiler reads an unquoted
-/// backslash as an escape and a Windows path is made of them.
+/// A search path read in addition to the program's own, because the assignment replaces whatever
+/// the variable held and a line cannot name the old value, so a path that stands in for a default
+/// would lose it. A new directory inside the session's, and only that on the path, because the
+/// session's own holds whatever else the work put in it. In single quotes, because the line
+/// compiler reads an unquoted backslash as an escape and a Windows path is made of them.
 fn missing_dependency_guidance(scratch: bool) -> &'static str {
     if !scratch {
         return "";
     }
-    "\nWhen a program fails because something it needs is missing from this machine, find out what \
-     is installed before asking the person to install anything or to edit the program, with a line \
-     that only reads and whose exit status is the answer. Where something installed can stand in \
-     for what is missing, write what connects the two, such as a module of the missing name that \
-     re-exports the installed one, in a new directory inside the scratch directory, and run the \
-     program again with that directory on the search path the program reads from its environment, \
-     assigned in front of it on that one line. Write the path out in full and in single quotes, \
-     since a line expands no variable and reads an unquoted backslash as an escape. Name only that \
-     directory, since whatever else the scratch directory holds would be found ahead of what the \
-     program would otherwise load. That leaves the program, the machine and the person's settings \
-     as they were. Where nothing installed can stand in, say what is missing and what provides \
-     it.\n"
+    "\nWhen a program fails because something it needs is missing from this machine, check whether \
+     something installed can stand in for it, with a line that only reads and whose exit status is \
+     the answer, run by the same interpreter or runtime the program uses. Where something can, \
+     write what connects the two, such as a module of the missing name that re-exports the \
+     installed one, in a new directory inside the scratch directory, and run the program again \
+     with that directory on a search path the program reads from its environment in addition to \
+     its own, assigned in front of it on that one line. Write the path out in full and in single \
+     quotes, since a line expands no variable and reads an unquoted backslash as an escape. Name \
+     only that directory, since whatever else the scratch directory holds would be found as well. \
+     That leaves the program, the machine and the person's settings as they were, so try it before \
+     asking the person to install anything or to edit the program. Where nothing installed can \
+     stand in, say what is missing and what provides it.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.

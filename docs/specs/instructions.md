@@ -225,13 +225,14 @@ those tools are.
 
 What to do when a program fails because something it needs is missing from this machine is said on
 the same terms, to the turn a person is watching and only where the session has a directory of its
-own. Find out what is installed, with a line that only reads and whose exit status is the answer,
-before asking the person to install anything or to edit the program. Where something installed can
-stand in, write what connects the two in a new directory inside the session's own, and run the
-program again with that directory on the search path the program reads from its environment,
-assigned in front of it on that one line, the path written out in full and in single quotes. Where
-nothing installed can stand in, say what is missing and what provides it. The paragraph names no
-language, package or variable. A session with no directory of its own is told none of this, and
+own. Check whether something installed can stand in for what is missing, with a line that only
+reads and whose exit status is the answer, run by the same interpreter or runtime the program uses.
+Where something can, write what connects the two in a new directory inside the session's own, and
+run the program again with that directory on a search path the program reads from its environment
+in addition to its own, assigned in front of it on that one line, the path written out in full and
+in single quotes. Try that before asking the person to install anything or to edit the program.
+Where nothing installed can stand in, say what is missing and what provides it. The paragraph names
+no language, package or variable. A session with no directory of its own is told none of this, and
 neither is a delegate.
 
 They do not pass `read_trusted_content`, and that is the difference between them and every other
@@ -273,13 +274,17 @@ to `fetch_url` spends a round on a name that resolves to nothing.
 
 The stand-in is stated because a planner not told of it asks the person to install what is missing
 or to edit the program. Both change the machine or the program to supply what something installed
-often already provides, as `tomli` does for the `tomllib` a Python older than 3.11 lacks. It names
-no case, because text naming one case covers that case alone. What connects the two, written in the
-session's own directory, changes neither, and goes when the session does. It goes in a directory of
-its own there, and only that directory goes on the search path, because a directory on a search
-path is searched ahead of what the program would otherwise load, and the session's directory also
-holds whatever else the work put in it, such as an archive unpacked to look inside. The assignment
-is on the one line because nothing carries over between lines. The path is written out because a
+often already provides, as `tomli` does for the `tomllib` a Python older than 3.11 lacks. The case
+it names is a program failing for something missing, and it names no language, package or variable,
+because text naming one of them covers that one alone. What connects the two, written in the
+session's own directory, changes neither, and goes when the session does. The check runs on the
+program's own interpreter because another one on the same machine can have what that one lacks. The
+search path is one read in addition to the program's own, because an assignment replaces whatever
+the variable held and a line cannot name the old value, so a path that stands in for a default would
+lose it. The stand-in goes in a directory of its own, and only that directory goes on the path,
+because the session's directory also holds whatever else the work put in it, such as an archive
+unpacked to look inside. The assignment is on the one line because nothing carries over between
+lines. The path is written out because a
 line expands no variable, and quoted because a line reads an unquoted backslash as an escape and a
 Windows path is made of them. It is gated on the directory because without one the only place to
 write the stand-in is the project. It is withheld from a delegate because the road is two `run`s and
@@ -294,6 +299,7 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
 `verified-by: bravebot_agent::preamble::a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory`
+`verified-by: bravebot_agent::preamble::the_stand_in_road_names_no_language_or_variable`
 `verified-by: bravebot_agent::confine::a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 `verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`

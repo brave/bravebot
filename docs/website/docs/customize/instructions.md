@@ -218,20 +218,20 @@ workspace would, and neither `/add-dir` nor `/cd` will take it. See
 ### Something a program needs is missing
 
 Where the session has a scratch directory, the planner is also told what to do when a program fails
-because something it needs is missing from your machine. Before asking you to install anything or to
-edit the program, it looks at what is installed, with a command that only reads and whose exit
-status answers the question. Where something installed can stand in, it writes what connects the two
-in a new directory inside the scratch directory, and runs the program again with that directory on
-the search path the program reads from its environment, set in front of it for that one command. A
-Python older than 3.11 that lacks `tomllib` but has `tomli` installed is one such case. The program,
-your machine and your settings are left as they were, and what was written goes with the session.
-Where nothing installed can stand in, the planner says what is missing and what provides it.
+because something it needs is missing from your machine. It checks whether something installed can
+stand in, with a command that only reads, runs on the program's own interpreter, and answers by its
+exit status. Where something can, it writes what connects the two in a new directory inside the
+scratch directory, and runs the program again with that directory on a search path the program reads
+from its environment in addition to its own, set in front of it for that one command. It tries this
+before asking you to install anything or to edit the program. A Python older than 3.11 that lacks
+`tomllib` but has `tomli` installed is one such case. The program, your machine and your settings
+are left as they were, and what was written goes with the session. Where nothing installed can stand
+in, the planner says what is missing and what provides it.
 
 The paragraph names no language, package or variable, so the same road is open to any of them. Only
-the new directory goes on the search path, because a directory there is searched ahead of what the
-program would otherwise load, and the scratch directory may hold other files the session put there.
-You approve each of these commands as you would any other. A session with no scratch directory is not
-told any of this, and neither is a delegate.
+the new directory goes on the search path, because the scratch directory may hold other files the
+session put there. You approve each of these commands as you would any other. A session with no
+scratch directory is not told any of this, and neither is a delegate.
 
 ### The GitHub CLI
 
