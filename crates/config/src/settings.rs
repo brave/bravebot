@@ -7180,6 +7180,86 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: SANDBOX-20 reads a managed `run.network` that is neither word as `closed`, so it
+    /// is the same floor of `workspace-write`, and a managed `sandbox.mode` of `off` beside it does
+    /// not lift it. Without it, `--sandbox off`, a person's `off` or `/sandbox off` starts programs
+    /// with no profile, and the network the pin was written to close is open. A managed file that
+    /// names no network word at all is the control: it floors nothing.
+    #[test]
+    fn a_network_pin_that_is_neither_word_refuses_off_as_a_closed_one_does() {
+        use crate::sandbox::{Choice, Floor, Refused, allowed_in_session, resolve};
+        let off_at_home =
+            Layers::new("sandbox-unreadable-network").global(r#"{"sandbox": {"mode": "off"}}"#);
+        let settings = off_at_home.read();
+        for (name, word) in [("capital", r#""Closed""#), ("boolean", "false")] {
+            let pin = pinned(
+                &format!("unreadable-network-{name}"),
+                &format!(r#"{{"run": {{"network": {word}}}}}"#),
+            );
+            assert!(pin.network_unreadable(), "{word}");
+            let pin_file = pin.path().expect("the pin's file").to_path_buf();
+            assert_eq!(
+                resolve(Some(SandboxMode::Off), &Settings::default(), &pin),
+                Err(Refused {
+                    asked: SandboxMode::Off,
+                    asked_in: None,
+                    pinned: SandboxMode::WorkspaceWrite,
+                    pinned_in: pin_file,
+                    because: Floor::Network,
+                }),
+                "{word}"
+            );
+            assert_eq!(
+                resolve(None, &settings, &pin)
+                    .map_err(|refused| (refused.asked_in, refused.because)),
+                Err((Some(off_at_home.home.join(SETTINGS_FILE)), Floor::Network)),
+                "{word}"
+            );
+            let refused =
+                allowed_in_session(SandboxMode::Off, &pin).expect_err("opens the network");
+            assert_eq!(
+                (refused.pinned, refused.because),
+                (SandboxMode::WorkspaceWrite, Floor::Network),
+                "{word}"
+            );
+            for mode in [
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::ReadOnly,
+                SandboxMode::Strict,
+            ] {
+                assert_eq!(
+                    resolve(Some(mode), &Settings::default(), &pin).map(|choice| choice.mode),
+                    Ok(mode),
+                    "{word}"
+                );
+                assert!(allowed_in_session(mode, &pin).is_ok(), "{word}");
+            }
+            assert_eq!(
+                resolve(None, &Settings::default(), &pin),
+                Ok(Choice::default()),
+                "the network pin chose a mode where it only sets a floor: {word}"
+            );
+        }
+        let off_beside = pinned(
+            "unreadable-network-and-off",
+            r#"{"run": {"network": "Closed"}, "sandbox": {"mode": "off"}}"#,
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Off), &Settings::default(), &off_beside)
+                .map_err(|refused| (refused.pinned, refused.because)),
+            Err((SandboxMode::WorkspaceWrite, Floor::Network)),
+            "a managed off lifted the floor the network word sets"
+        );
+        assert_eq!(
+            resolve(None, &Settings::default(), &off_beside).map(|choice| choice.mode),
+            Ok(SandboxMode::WorkspaceWrite)
+        );
+        let silent = pinned("no-network-word", r#"{"run": {}}"#);
+        assert!(silent.path().is_some() && !silent.network_unreadable());
+        assert!(resolve(Some(SandboxMode::Off), &Settings::default(), &silent).is_ok());
+        assert!(allowed_in_session(SandboxMode::Off, &silent).is_ok());
+    }
+
     /// SANDBOX-22: a running session is held to the floor start-up applies. The regression it
     /// rejects is the command reading no pin, which would let `/sandbox off` undo what an
     /// administrator wrote the pin to prevent.

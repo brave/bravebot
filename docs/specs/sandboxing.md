@@ -1873,6 +1873,7 @@ writable, since that directory is writable in every mode. A person who wants the
 `verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_config::settings::a_pin_that_is_not_a_mode_pins_nothing`
 `verified-by: bravebot_config::settings::a_closed_network_pin_refuses_off_and_leaves_the_rest`
+`verified-by: bravebot_config::settings::a_network_pin_that_is_neither_word_refuses_off_as_a_closed_one_does`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
 `verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
 `verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
