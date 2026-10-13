@@ -138,6 +138,7 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::resume::a_pull_request_number_leaves_only_the_session_linked_to_that_number`
 `verified-by: bravebot_tui::resume::a_pull_request_address_leaves_only_the_session_linked_to_it`
 `verified-by: bravebot_tui::resume::the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further`
+`verified-by: bravebot_tui::resume::with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
