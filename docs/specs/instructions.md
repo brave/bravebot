@@ -448,9 +448,14 @@ them, each directory is checked for trust before it is enumerated at all, and wh
 counted with the directory it was skipped from named and no skill inside it
 ([SKILL-4](skills.md#SKILL-4), [SKILL-6](skills.md#SKILL-6)).
 
-The count is what a more specific root did not go on to offer. A skill of the same name under a
-vouched root is on the list a person can see, so counting it as not loaded would contradict what is
-in front of them. A root whose every skill was covered that way is not reported at all.
+The count is what a more specific root did not go on to offer, a more specific root being one read
+after the skipped one, including a directory [INSTR-14](#INSTR-14) adds. It leaves out each entry
+with the directory name of a skill on the list from such a root. That skill is on the list a person
+can see, so counting the entry as not loaded would contradict what is in front of them. The
+untrusted root is asked only whether it holds an entry of each such name, and none of its own names
+is held or compared. A built-in skill, a skill from `~/.bravebot` and a skill from a less specific
+root leave the count as it is, and so does a skill that a more specific one of the same name took
+off the list. A root whose every skill was covered that way is not reported at all.
 
 **Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
 user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
@@ -461,6 +466,10 @@ here.
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
+`verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
+`verified-by: bravebot_agent::skills::a_skill_from_no_vouched_root_leaves_an_untrusted_entry_counted`
+`verified-by: bravebot_agent::skills::a_vouched_skill_shadowed_off_the_list_leaves_an_untrusted_entry_counted`
+`verified-by: bravebot_agent::skills::a_less_specific_vouched_root_leaves_an_untrusted_entry_counted`
 
 <a id="INSTR-14"></a>
 ### INSTR-14: a directory the session has worked in adds its own `AGENTS.md` and `.bravebot/skills`
@@ -500,6 +509,8 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
+`verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
+`verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`

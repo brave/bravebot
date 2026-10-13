@@ -107,9 +107,21 @@ fn denying(rules: &[&str]) -> bravebot_core::permissions::Permissions {
 }
 
 fn policy<'s>(sink: &'s mut RecordingSink, trusted: &[&str]) -> Policy<'s, RecordingSink> {
+    policy_distrusting(sink, trusted, &[])
+}
+
+/// A policy whose trust map vouches for `trusted` and then distrusts `distrusted` beneath it.
+fn policy_distrusting<'s>(
+    sink: &'s mut RecordingSink,
+    trusted: &[&str],
+    distrusted: &[&str],
+) -> Policy<'s, RecordingSink> {
     let mut store = TrustStore::new("/work");
     for path in trusted {
         store.trust(path);
+    }
+    for path in distrusted {
+        store.distrust(path);
     }
     Policy::begin(
         routing(),
@@ -489,6 +501,171 @@ fn a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded() {
             "1 skill in .claude/skills was not loaded: this directory is not trusted",
         ],
         "the count is not the skills the vouched root did not cover"
+    );
+}
+
+/// A directory name in an untrusted root is chosen by whoever wrote the project, so it may not
+/// decide what the person is told. Here it matches the frontmatter name of a vouched skill held in
+/// a directory of another name, and the untrusted entry is still counted: only the vouched root's
+/// own directory names are looked up in the untrusted one (SKILL-4).
+#[test]
+fn an_untrusted_entry_named_like_a_vouched_skill_is_still_counted() {
+    let scratch = Scratch::new("untrusted-entry-named-like-vouched");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".claude"),
+        "lint",
+        "lint",
+        "nobody vouched for this",
+        "body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "ci",
+        "lint",
+        "the vouched one",
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[".bravebot/skills"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(from_disk(&catalogue), ["lint"]);
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .claude/skills was not loaded: this directory is not trusted"],
+        "an untrusted directory name decided the count"
+    );
+}
+
+/// The count leaves out only what a vouched project root offered. A built-in skill and one of the
+/// person's own are on the list too, but neither is the project's skill, so an untrusted entry
+/// sharing a name with either is still one that was not loaded.
+#[test]
+fn a_skill_from_no_vouched_root_leaves_an_untrusted_entry_counted() {
+    let scratch = Scratch::new("untrusted-entry-named-like-unvouched");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "commit-style",
+        "commit-style",
+        "the user's own",
+        "body",
+    );
+    for dir in ["commit-style", "loop"] {
+        write_skill(
+            &project.join(".bravebot"),
+            dir,
+            dir,
+            "the project's",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert!(catalogue.get("loop").is_some() && catalogue.get("commit-style").is_some());
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["2 skills in .bravebot/skills were not loaded: this directory is not trusted"],
+        "a skill no vouched root offered reduced the count"
+    );
+}
+
+/// An untrusted entry is left out of the count because the skill of its directory name is on the
+/// list a person can see. A vouched skill that a more specific one of the same name replaced is not
+/// on that list, so an untrusted entry of its directory name is still one that was not loaded, even
+/// where the root that skill came from is more specific than the untrusted one.
+#[test]
+fn a_vouched_skill_shadowed_off_the_list_leaves_an_untrusted_entry_counted() {
+    let scratch = Scratch::new("untrusted-entry-named-like-shadowed");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".agents"),
+        "review",
+        "review",
+        "nobody vouched for this",
+        "body",
+    );
+    write_skill(
+        &project.join(".claude"),
+        "review",
+        "lint",
+        "shadowed",
+        "CLAUDE-BODY",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "lint",
+        "lint",
+        "the one offered",
+        "BRAVEBOT-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[".claude/skills", ".bravebot/skills"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(from_disk(&catalogue), ["lint"]);
+    assert_eq!(body_of(&catalogue, "lint"), "BRAVEBOT-BODY");
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .agents/skills was not loaded: this directory is not trusted"],
+        "a skill that is not on the list covered an untrusted entry"
+    );
+}
+
+/// A skill in an untrusted root would have replaced one of the same name from a less specific
+/// root, so the less specific one on the list is not the skill the person was missing, and the
+/// untrusted entry is still counted (INSTR-13).
+#[test]
+fn a_less_specific_vouched_root_leaves_an_untrusted_entry_counted() {
+    let scratch = Scratch::new("untrusted-entry-under-less-specific");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".agents"),
+        "lint",
+        "lint",
+        "the ported one",
+        "AGENTS-BODY",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "lint",
+        "lint",
+        "nobody vouched for this",
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[".agents/skills"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(body_of(&catalogue, "lint"), "AGENTS-BODY");
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .bravebot/skills was not loaded: this directory is not trusted"],
+        "a less specific root covered a more specific untrusted one"
     );
 }
 
@@ -1244,5 +1421,81 @@ fn a_distrusted_nested_skill_is_counted_and_not_named() {
     assert_eq!(
         told,
         ["1 skill in pkg/.bravebot/skills was not loaded: this directory is not trusted"]
+    );
+}
+
+/// A nested directory is more specific than the project, so its skill would have replaced the
+/// project's of the same name. With the nested directory distrusted, the project's skill on the
+/// list is not the one the person was missing, and the nested entry is still counted (INSTR-14).
+#[test]
+fn a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name() {
+    let scratch = Scratch::new("nested-distrusted-shadowing");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "the project's",
+        "ROOT-BODY",
+    );
+    write_skill(
+        &project.join("pkg").join(".bravebot"),
+        "fmt",
+        "fmt",
+        "the package's",
+        "PKG-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("pkg/a.rs");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy_distrusting(&mut sink, &["."], &["pkg"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(body_of(&catalogue, "fmt"), "ROOT-BODY");
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in pkg/.bravebot/skills was not loaded: this directory is not trusted"],
+        "a shallower directory's skill covered a more specific distrusted one"
+    );
+}
+
+/// The other direction. A directory the session worked in is read after the project's own skill
+/// directories, so its skill is the one on the list in place of the project's, and the project's
+/// untrusted entry of the same directory name is not counted as one the person is missing.
+#[test]
+fn a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name() {
+    let scratch = Scratch::new("nested-covers-distrusted-root");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "nobody vouched for this",
+        "ROOT-BODY",
+    );
+    write_skill(
+        &project.join("pkg").join(".bravebot"),
+        "fmt",
+        "fmt",
+        "the package's",
+        "PKG-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("pkg/a.rs");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy_distrusting(&mut sink, &["."], &[".bravebot/skills"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(body_of(&catalogue, "fmt"), "PKG-BODY");
+    assert!(
+        notices.is_empty(),
+        "an entry the nested skill covered was counted: {notices:?}"
     );
 }
