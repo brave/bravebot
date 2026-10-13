@@ -2207,6 +2207,7 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
 session-bg-bypass = /bg est refusé en contournement, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Changez de mode d'abord, ou utilisez une exécution ponctuelle.
 session-bg-option-lost = /bg est refusé, car cette session a été démarrée avec { $flag }, que la session en arrière-plan ne reçoit pas. Démarrez une session sans cette option pour utiliser /bg.
+session-bg-sandbox-moved = /bg est refusé, car /sandbox a placé cette session en mode { $mode }, et une session en arrière-plan démarre en mode { $settled }. Lancez /sandbox { $settled } d'abord pour utiliser /bg.
 session-bg-keeps-nothing-running = /bg est refusé tant qu'une boucle, un objectif ou une surveillance est en cours, car la session en arrière-plan ne l'exécuterait pas. Arrêtez-le d'abord.
 session-bg-nothing-recorded = /bg confie l'enregistrement de la session, et celle-ci n'en a pas encore. Envoyez d'abord une invite.
 session-bg-incognito = /bg est refusé dans une session incognito, qui n'écrit aucun enregistrement à confier.

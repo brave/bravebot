@@ -3704,13 +3704,15 @@ pub fn background_cannot_carry(flag: &str) {
 /// How `/bg` ends the session, or the reason it cannot (BG-2, BG-8).
 ///
 /// Everything refused here is something the background process would not carry: a mode that answers
-/// every question, an option given on the command line, which that process never receives, a loop,
-/// a goal or a watch, which the process has no way to run yet, and a session with no record, which
-/// is all it resumes from.
+/// every question, an option given on the command line, which that process never receives, a
+/// sandbox mode `/sandbox` moved away from `settled`, the one start-up chose and the background
+/// process chooses again, a loop, a goal or a watch, which the process has no way to run yet, and a
+/// session with no record, which is all it resumes from.
 fn handed_to_the_background(
     session: &Session,
     resumable: Option<bravebot_session::sessions::Resumable>,
     lost: Option<&str>,
+    settled: bravebot_sandbox::SandboxMode,
     incognito: bool,
 ) -> Result<Ended, String> {
     if !cfg!(unix) {
@@ -3721,6 +3723,14 @@ fn handed_to_the_background(
     };
     if let Some(flag) = lost {
         return Err(t!(session_bg_option_lost, flag = flag).to_string());
+    }
+    if session.sandbox_mode() != settled {
+        return Err(t!(
+            session_bg_sandbox_moved,
+            mode = session.sandbox_mode().name(),
+            settled = settled.name()
+        )
+        .to_string());
     }
     if session.looping().is_some() || session.goal().is_some() || !session.watches().is_empty() {
         return Err(t!(session_bg_keeps_nothing_running).to_string());
@@ -4602,6 +4612,7 @@ fn event_loop(
                 &session,
                 stored.to_resume(),
                 BACKGROUND_LOSES.get().map(String::as_str),
+                bravebot_config::sandbox::in_force().mode,
                 bravebot_core::incognito::engaged(),
             ) {
                 Ok(ended) => return Ok(ended),
@@ -26459,7 +26470,13 @@ mod tests {
             (editing, Mode::AcceptEdits),
             (planning, Mode::Plan),
         ] {
-            match handed_to_the_background(&session, a_record(), None, false) {
+            match handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false,
+            ) {
                 Ok(Ended::Background { left, mode }) => {
                     assert_eq!(mode, expected);
                     assert_eq!(left.directory, std::path::PathBuf::from("/work"));
@@ -26477,7 +26494,14 @@ mod tests {
         }
         let session = Session::new("none").starting_in_bypass();
         assert_eq!(
-            handed_to_the_background(&session, a_record(), None, false).unwrap_err(),
+            handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false
+            )
+            .unwrap_err(),
             t!(session_bg_bypass).to_string()
         );
     }
@@ -26490,13 +26514,79 @@ mod tests {
             return;
         }
         let session = Session::new("none");
-        let refused =
-            handed_to_the_background(&session, a_record(), Some("--no-shell"), false).unwrap_err();
+        let refused = handed_to_the_background(
+            &session,
+            a_record(),
+            Some("--no-shell"),
+            bravebot_sandbox::SandboxMode::Standard,
+            false,
+        )
+        .unwrap_err();
         assert_eq!(
             refused,
             t!(session_bg_option_lost, flag = "--no-shell").to_string()
         );
         assert!(refused.contains("--no-shell"), "{refused}");
+    }
+
+    /// BG-2, SANDBOX-22: the background process chooses its sandbox mode again from what start-up
+    /// read, so a session `/sandbox` moved to another mode is not handed over, whether to a
+    /// stricter mode or to `off`, and says which mode it would start in. One moved back to that
+    /// mode is handed over, and so is one whose start-up mode is the one it holds.
+    #[test]
+    fn the_background_command_is_refused_after_sandbox_moved_the_mode() {
+        if !cfg!(unix) {
+            return;
+        }
+        for moved in [
+            bravebot_sandbox::SandboxMode::Strict,
+            bravebot_sandbox::SandboxMode::Off,
+        ] {
+            let mut session = Session::new("none");
+            session.set_sandbox_mode(moved);
+            let refused = handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(
+                refused,
+                t!(
+                    session_bg_sandbox_moved,
+                    mode = moved.name(),
+                    settled = "standard"
+                )
+                .to_string()
+            );
+        }
+        let mut session = Session::new("none");
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Standard);
+        assert!(matches!(
+            handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false
+            ),
+            Ok(Ended::Background { .. })
+        ));
+        let mut session = Session::new("none");
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
+        assert!(matches!(
+            handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Strict,
+                false
+            ),
+            Ok(Ended::Background { .. })
+        ));
     }
 
     /// BG-2: a session with nothing recorded has nothing to hand over, and a loop, a goal or a
@@ -26508,18 +26598,39 @@ mod tests {
         }
         let session = Session::new("none");
         assert_eq!(
-            handed_to_the_background(&session, None, None, false).unwrap_err(),
+            handed_to_the_background(
+                &session,
+                None,
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false
+            )
+            .unwrap_err(),
             t!(session_bg_nothing_recorded).to_string()
         );
         assert_eq!(
-            handed_to_the_background(&session, None, None, true).unwrap_err(),
+            handed_to_the_background(
+                &session,
+                None,
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                true
+            )
+            .unwrap_err(),
             t!(session_bg_incognito).to_string()
         );
 
         let mut session = Session::new("none");
         session.start_goal("the tests pass".to_string());
         assert_eq!(
-            handed_to_the_background(&session, a_record(), None, false).unwrap_err(),
+            handed_to_the_background(
+                &session,
+                a_record(),
+                None,
+                bravebot_sandbox::SandboxMode::Standard,
+                false
+            )
+            .unwrap_err(),
             t!(session_bg_keeps_nothing_running).to_string()
         );
     }

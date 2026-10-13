@@ -2598,6 +2598,7 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
 session-bg-bypass = /bg is refused in bypass, because a session nobody is watching does not run in a mode that answers every question. Switch to another mode first, or use a one-shot run.
 session-bg-option-lost = /bg is refused because this session was started with { $flag }, which a background session does not receive. Start a session without that option to use /bg.
+session-bg-sandbox-moved = /bg is refused because /sandbox moved this session to { $mode }, and a background session starts in { $settled }. Run /sandbox { $settled } first to use /bg.
 session-bg-keeps-nothing-running = /bg is refused while a loop, a goal or a watch is running, because the background session would not run it. Stop it first.
 session-bg-nothing-recorded = /bg hands over the session's record, and this session has none yet. Send a prompt first.
 session-bg-incognito = /bg is refused in an incognito session, which writes no record to hand over.

@@ -23,7 +23,9 @@ use bravebot_sandbox::hosts::{HostRule, Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::proxy::Proxy;
-use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix, writable_without_a_request};
+use bravebot_sandbox::rules::{
+    Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
+};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
@@ -210,8 +212,7 @@ impl Confinement {
                 _ => None,
             }))
             .collect();
-        let remote = Scope::of(&step.resolved, &step.args, &step.environment)
-            == Some(Scope::Remote)
+        let remote = self.scope_of(step) == Some(Scope::Remote)
             || requested
                 .iter()
                 .any(|request| matches!(request, Requested::Scope(Scope::Remote)))
@@ -602,6 +603,11 @@ impl Confinement {
     /// own git configuration signs with ssh, so an account that does not sign sees no change, the
     /// network under a closed setting included.
     fn scope_of(&self, step: &Step) -> Option<Scope> {
+        // A scope is chosen by the file name, so a file the plan could have written must not
+        // earn `~/.aws` by being named `aws`.
+        if self.writable_by_the_plan(&step.resolved) {
+            return None;
+        }
         Scope::of(&step.resolved, &step.args, &step.environment).filter(|scope| {
             *scope != Scope::Signing
                 || self
@@ -1533,26 +1539,6 @@ fn process_environment() -> Vec<(String, String)> {
     std::env::vars().collect()
 }
 
-/// The places under `home` that a write turns into code that runs unconfined later, which a
-/// session directory at or above the home must not be able to write on macOS (SANDBOX-18): the
-/// shell startup files and the directory the launch daemon reads per-user jobs from.
-fn persistence_locations(home: &Path) -> Vec<PathBuf> {
-    [
-        ".zshenv",
-        ".zprofile",
-        ".zshrc",
-        ".zlogin",
-        ".bash_profile",
-        ".bash_login",
-        ".bashrc",
-        ".profile",
-        "Library/LaunchAgents",
-    ]
-    .iter()
-    .map(|name| home.join(name))
-    .collect()
-}
-
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
     lookup(environment, name, FOLD_CASE)
 }
@@ -1935,7 +1921,18 @@ mod tests {
                 ".bash_login",
                 ".bashrc",
                 ".profile",
+                ".zlogout",
+                ".bash_aliases",
+                ".bash_logout",
+                ".config/fish",
+                ".xprofile",
+                ".xsessionrc",
                 "Library/LaunchAgents",
+                ".config/systemd/user",
+                ".config/autostart",
+                ".config/environment.d",
+                ".gitconfig",
+                ".config/git/config",
             ] {
                 let path = Path::new(HOME).join(name);
                 assert!(
@@ -4008,6 +4005,76 @@ mod tests {
         }
         let installed = step("/usr/bin/curl", &["https://a.example"]);
         assert!(closed.egress(&installed));
+    }
+
+    /// A file the plan could have written carries no credential scope by being named `aws` or
+    /// `git`: a project's `.venv/bin/aws` would otherwise be handed `~/.aws`. The same names
+    /// installed outside the plan's directories keep their scope.
+    #[test]
+    fn a_program_the_plan_could_have_written_carries_no_scope_by_its_name() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = reading_confinement(prelude, &["/work/project"]);
+            // The remote scope's row on these platforms is the one write, since the base already
+            // reads the token files.
+            for (program, args, credential, written) in [
+                (
+                    "/work/project/.venv/bin/aws",
+                    vec!["s3", "ls"],
+                    ".aws/credentials",
+                    false,
+                ),
+                (
+                    "/work/project/bin/git",
+                    vec!["push"],
+                    ".ssh/known_hosts",
+                    true,
+                ),
+                (
+                    "/var/scratch/gh",
+                    vec!["pr", "list"],
+                    ".ssh/known_hosts",
+                    true,
+                ),
+                ("/tmp/kubectl", vec!["get", "pods"], ".kube/config", false),
+            ] {
+                let path = format!("{HOME}/{credential}");
+                let lifted = |policy: &SandboxPolicy| {
+                    if written {
+                        writes(policy, &path)
+                    } else {
+                        !refuses(policy, &path)
+                    }
+                };
+                let planted = step(program, &args);
+                let policy = confined.policy(&planted, Path::new("/work"), &[]);
+                assert!(!lifted(&policy), "{prelude:?} {program} {path}");
+                assert!(
+                    confined.describe(&[&planted]).carried.is_empty(),
+                    "{program}"
+                );
+                assert!(
+                    confined.profile(&[&planted]).contains("scopes: none)"),
+                    "{program}"
+                );
+
+                let name = program.rsplit('/').next().unwrap();
+                let installed = step(&format!("/usr/bin/{name}"), &args);
+                let policy = confined.policy(&installed, Path::new("/work"), &[]);
+                assert!(lifted(&policy), "{prelude:?} /usr/bin/{name} {path}");
+            }
+        }
+
+        let listed = confinement(&["/work/project"])
+            .with_hosts(Some(&hosts_listing(Some(&["scope-planted.example"]))));
+        let proxy = |program: &str| {
+            listed
+                .host_proxy(&step(program, &["push"]))
+                .unwrap()
+                .expect("a stage with egress is held to the proxy")
+                .addr()
+        };
+        assert_eq!(proxy("/work/project/bin/git"), proxy("/usr/bin/make"));
+        assert_ne!(proxy("/usr/bin/git"), proxy("/usr/bin/make"));
     }
 
     /// A stage with an assignment in front of it carries no remote scope, so it has no network

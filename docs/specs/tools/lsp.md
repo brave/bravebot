@@ -251,6 +251,9 @@ Before an approved launch, record a language-server coverage gap under
 [SESSION-19](../sessions.md#SESSION-19). Undo remains available and stops tracked servers before
 restoring files. Coverage warnings persist because server children may outlive shutdown.
 A declined launch leaves undo coverage unchanged.
+The question is put in every permission mode, bypass included: bypassing answers a confined line
+and not this, as it does not answer a line that asks to start with no sandbox
+([MODE-4](../permission-modes.md#MODE-4)), and a run with nobody to ask refuses the server.
 
 **Why not confined, when a stdio MCP server is.** [sandboxing.md](../sandboxing.md) says what
 confinement is for: code nobody vouched for. It says in the same breath that "a program the user
@@ -299,6 +302,7 @@ assigns. The server's sentence is not carried at all.
 `verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
 `verified-by: bravebot_lsp::server::the_prompt_says_which_servers_run_build_tooling`
 `verified-by: bravebot_lsp::server::typescript_and_python_servers_are_put_to_a_person_as_running_the_projects_code`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
@@ -653,6 +657,15 @@ net positive; the cost here is a wait of at most the bound per write.
   `.pth` files of the environment on `PATH`. The alternative is not a safer tool but no tool, since a
   server whose index never settles answers only that it is unsure. What bounds this is that the user
   is asked in those words, and that nothing about the label on the output depends on their answer.
+
+- **A confined stage can write what an approved server runs later.** A server is approved once per
+  language for the session, and a stage of `run` may write the workspace: a `build.rs`, a
+  `.cargo/config.toml`, a `tsserver.js` under `node_modules`, a `.pth` file in a virtual environment
+  inside it. A running server reruns its build tooling when such a file changes, so it runs what the
+  stage wrote with the person's access and outside the stage's profile. Asking again after a stage
+  writes would not close this, since rust-analyzer reruns `build.rs` without being restarted; closing
+  it means stopping every server after each run that writes in the workspace, at the cost of a fresh
+  index after every `cargo test` or `npm ci`.
 
 - **An index survives between sessions, and nothing prunes it.** [LSP-10](#LSP-10) keeps a cache per
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this

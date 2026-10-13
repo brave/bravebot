@@ -243,6 +243,11 @@ impl SeatbeltSandbox {
             out.push_str("(allow process-fork)\n");
         }
 
+        // Without a signal row a process cannot stop a child it started, and a test runner or a
+        // `timeout` waits on it for good. `same-sandbox` reaches what this profile started and no
+        // process outside it: `pgrp` would reach the session, which shares the process group.
+        out.push_str("(allow signal (target same-sandbox))\n");
+
         out
     }
 }
@@ -1633,6 +1638,83 @@ int main(int argc, char **argv) {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
+    /// on a child does not wait on it until it ends by itself.
+    #[test]
+    fn a_confined_process_can_signal_a_process_it_started() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_subprocesses();
+        // 143 is the status a shell reports for a child that SIGTERM ended.
+        let status = sandbox
+            .spawn(
+                OsStr::new("/bin/sh"),
+                &[
+                    "-c".into(),
+                    "sleep 5 & kill $!; wait $!; test $? -eq 143".into(),
+                ],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert!(status.success(), "the child was not stopped: {status:?}");
+    }
+
+    /// A confined process signals nothing outside its own sandbox: not a process of the account
+    /// running unconfined in the same process group, as the session does, and not a process
+    /// another stage started.
+    #[test]
+    fn a_confined_process_cannot_signal_a_process_outside_its_sandbox() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+        let mut unconfined = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let mut other_stage = sandbox
+            .spawn(
+                OsStr::new("/bin/sleep"),
+                &["30".into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+
+        for (target, whose) in [
+            (unconfined.id(), "an unconfined process"),
+            (other_stage.id(), "another stage's process"),
+        ] {
+            let status = sandbox
+                .spawn(
+                    OsStr::new("/bin/kill"),
+                    &[target.to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait");
+            assert!(!status.success(), "{whose} was signalled");
+        }
+        let unconfined_ran_on = unconfined.try_wait().expect("should poll").is_none();
+        let other_stage_ran_on = other_stage.try_wait().expect("should poll").is_none();
+        let _ = unconfined.kill();
+        let _ = unconfined.wait();
+        let _ = other_stage.kill();
+        let _ = other_stage.wait();
+        assert!(unconfined_ran_on, "the unconfined process was stopped");
+        assert!(other_stage_ran_on, "the other stage's process was stopped");
     }
 
     /// Confirms the sandbox actually runs a process, not just that a profile string

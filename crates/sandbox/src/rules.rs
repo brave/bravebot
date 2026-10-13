@@ -446,6 +446,9 @@ pub enum RequestRefusal {
     Missing,
     /// The path is at or inside a credential location the base refuses.
     CredentialLocation,
+    /// A request for writing is at, inside or above a place where a write becomes code that runs
+    /// later with no profile ([`persistence_locations`]).
+    PersistenceLocation,
     /// A refusal an `allowWrite` entry meets as well.
     Rule(Reason),
     /// The person's own `denyRead` or `denyWrite` covers the path.
@@ -457,8 +460,9 @@ pub enum RequestRefusal {
 /// The refusals of an `allowWrite` entry apply to a request for reading as well as for writing: no
 /// filesystem root, home directory or directory above it, no `~/.ssh` or state directory, no
 /// climbing, and a link is judged where it leads. A request is also refused at or inside any
-/// credential location the base refuses, which a row would otherwise lift, and where the person's
-/// own deny lists cover it. The path must exist and must not hold a wildcard.
+/// credential location the base refuses, which a row would otherwise lift, for writing at, inside
+/// or above a persistence location, and where the person's own deny lists cover it. The path must
+/// exist and must not hold a wildcard.
 pub fn judged_request(
     named: &Path,
     write: bool,
@@ -498,6 +502,13 @@ pub fn judged_request(
     {
         return Err(RequestRefusal::CredentialLocation);
     }
+    if write
+        && persistence_spellings(&home)
+            .iter()
+            .any(|location| path.starts_with(location) || location.starts_with(&path))
+    {
+        return Err(RequestRefusal::PersistenceLocation);
+    }
     if !path.exists() {
         return Err(RequestRefusal::Missing);
     }
@@ -524,8 +535,8 @@ pub fn judged_request(
 /// directory, that directory is its entries, each judged the same way, so `/`, the directories
 /// above `home`, `home` itself and each directory that holds a credential location keep their
 /// entries writable and take no new entry of their own. The refusals are each credential location,
-/// `~/.ssh` and the state directory among them, in the spelling `home` has and where its links
-/// lead. A link is not a row: it is judged where it leads, which is a row or a refusal in its own right.
+/// `~/.ssh` and the state directory among them, and each persistence location, in the spelling
+/// `home` has and where its links lead. A link is not a row: it is judged where it leads, which is a row or a refusal in its own right.
 ///
 /// Decided from the names in the directories it lists and from `home`. Nothing a program wrote or
 /// printed is among its inputs, and what the person's own `denyRead` and `denyWrite` lists cover is
@@ -534,6 +545,7 @@ pub fn writable_without_a_request(home: &Path) -> Vec<PathBuf> {
     let mut held: Vec<PathBuf> = Vec::new();
     for home in [home.to_path_buf(), resolved(home)] {
         held.extend(credential_rows(&home));
+        held.extend(persistence_locations(&home));
     }
     held.sort();
     held.dedup();
@@ -558,6 +570,52 @@ fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
 /// Each [`credential_rows`] location in the spelling it has under `home` and where its links lead.
 fn credential_spellings(home: &Path) -> Vec<PathBuf> {
     credential_rows(home)
+        .flat_map(|location| [resolved(&location), location])
+        .collect()
+}
+
+/// The places under the home directory where a write becomes code that runs later as the account
+/// with no profile around it: what a shell or an X session reads as it starts or ends, the per-user
+/// jobs launchd, systemd and a desktop session start, the variables systemd sets for every program
+/// of the account, and git's own configuration, whose `core.fsmonitor`, `core.pager`, `!` aliases
+/// and credential helpers git runs.
+const PERSISTENCE_LOCATIONS: &[&str] = &[
+    ".zshenv",
+    ".zprofile",
+    ".zshrc",
+    ".zlogin",
+    ".zlogout",
+    ".bash_profile",
+    ".bash_login",
+    ".bashrc",
+    ".bash_aliases",
+    ".bash_logout",
+    ".profile",
+    ".config/fish",
+    ".xprofile",
+    ".xsessionrc",
+    "Library/LaunchAgents",
+    ".config/systemd/user",
+    ".config/autostart",
+    ".config/environment.d",
+    ".gitconfig",
+    ".config/git/config",
+];
+
+/// Each place under `home` that a stage is refused writing wherever a row would otherwise reach it
+/// (SANDBOX-18, SANDBOX-28). They are read as the rest of the home directory is.
+pub fn persistence_locations(home: &Path) -> Vec<PathBuf> {
+    PERSISTENCE_LOCATIONS
+        .iter()
+        .map(|name| home.join(name))
+        .collect()
+}
+
+/// Each [`persistence_locations`] place in the spelling it has under `home` and where its links
+/// lead, since a shell startup file is often a link into a repository of dotfiles.
+fn persistence_spellings(home: &Path) -> Vec<PathBuf> {
+    persistence_locations(home)
+        .into_iter()
         .flat_map(|location| [resolved(&location), location])
         .collect()
 }
@@ -1436,7 +1494,7 @@ mod tests {
         ] {
             fs::create_dir_all(home.join(directory)).unwrap();
         }
-        fs::write(home.join(".gitconfig"), "").unwrap();
+        fs::write(home.join(".editorconfig"), "").unwrap();
         fs::create_dir_all(top.join("beside")).unwrap();
         let home = home.canonicalize().unwrap();
         let top = top.canonicalize().unwrap();
@@ -1447,7 +1505,7 @@ mod tests {
         for written in [
             top.join("beside/new.txt"),
             home.join("project/new.txt"),
-            home.join(".gitconfig"),
+            home.join(".editorconfig"),
             home.join(".config/other/new.txt"),
         ] {
             assert!(granted(&written), "{} is not writable", written.display());
@@ -1471,6 +1529,108 @@ mod tests {
                 whole.display()
             );
         }
+    }
+
+    /// What a stage writes without a request leaves out each place where a write becomes code that
+    /// runs later with no profile: a shell startup file, a per-user job, git's own configuration,
+    /// present or not, and where a link to one leads. A file beside each stays writable, so the
+    /// refusal is of the place and not of the directory holding it.
+    #[test]
+    #[cfg(unix)]
+    fn what_is_written_without_a_request_leaves_out_where_a_write_runs_later() {
+        let top = fresh("unasked-persistence");
+        let home = top.join("home");
+        for directory in [
+            "Library/LaunchAgents",
+            "Library/Other",
+            ".config/systemd/user",
+            ".config/git",
+            ".config/fish",
+            "dotfiles",
+        ] {
+            fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for file in [
+            ".zshrc",
+            ".gitconfig",
+            ".config/git/ignore",
+            "dotfiles/bashrc",
+            "dotfiles/README",
+        ] {
+            fs::write(home.join(file), "").unwrap();
+        }
+        std::os::unix::fs::symlink(home.join("dotfiles/bashrc"), home.join(".bashrc")).unwrap();
+        let home = home.canonicalize().unwrap();
+
+        let rows = writable_without_a_request(&home);
+        let granted = |path: &Path| rows.iter().any(|row| path.starts_with(row));
+
+        for refused in [
+            home.join(".zshrc"),
+            home.join(".gitconfig"),
+            home.join(".bashrc"),
+            home.join("dotfiles/bashrc"),
+            home.join(".zlogin"),
+            home.join("Library/LaunchAgents/job.plist"),
+            home.join(".config/systemd/user/job.service"),
+            home.join(".config/autostart/job.desktop"),
+            home.join(".config/git/config"),
+            home.join(".config/fish/config.fish"),
+        ] {
+            assert!(!granted(&refused), "{} is writable", refused.display());
+        }
+        for written in [
+            home.join("Library/Other/new.txt"),
+            home.join(".config/git/ignore"),
+            home.join("dotfiles/README"),
+        ] {
+            assert!(granted(&written), "{} is not writable", written.display());
+        }
+    }
+
+    /// A request to write a persistence location, a place inside one or a directory holding one is
+    /// refused, a link being judged where it leads, and a request to read one is not: they are read
+    /// as the rest of the home is. The bypass rows above are what such a request would be granted,
+    /// so the two must refuse the same places.
+    #[test]
+    #[cfg(unix)]
+    fn a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not() {
+        let home = fresh("request-persistence-home");
+        for directory in [".config/git", ".config/fish/functions", "dotfiles"] {
+            fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for file in [
+            ".zshrc",
+            ".config/git/config",
+            "dotfiles/bashrc",
+            "notes.txt",
+        ] {
+            fs::write(home.join(file), "").unwrap();
+        }
+        std::os::unix::fs::symlink(home.join("dotfiles/bashrc"), home.join(".bashrc")).unwrap();
+        let home = home.canonicalize().unwrap();
+        let rules = Rules::none();
+        let ask =
+            |named: &str, write| judged_request(&home.join(named), write, Some(&home), &rules);
+
+        for named in [
+            ".zshrc",
+            ".bashrc",
+            "dotfiles",
+            ".config/git",
+            ".config/git/config",
+            ".config/fish/functions",
+        ] {
+            assert_eq!(
+                ask(named, true),
+                Err(RequestRefusal::PersistenceLocation),
+                "{named}"
+            );
+        }
+        for named in [".zshrc", ".config/git/config", "dotfiles"] {
+            assert!(ask(named, false).is_ok(), "{named} cannot be read");
+        }
+        assert!(ask("notes.txt", true).is_ok());
     }
 
     /// A write row above a location the base refuses is not a way to write there.
