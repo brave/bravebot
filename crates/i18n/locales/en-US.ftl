@@ -1692,7 +1692,7 @@ reach-key-listed = { $number }. { $owner }: { $key }, chosen { $date }
 reach-key-default = whichever key ssh tries first
 reach-key-usage = /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
 reach-key-refused-number = no key is numbered { $number }
-reach-key-removed = forgotten: the key for { $owner }. The next run prompt for a push there asks again where more than one key could be offered.
+reach-key-removed = forgotten: the key for { $owner }. The next run prompt for a git command that reaches it asks again, where it could offer more than one key.
 run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
@@ -1735,7 +1735,7 @@ run-keep-reach-where = it is written down here:
 run-keep-reach-undo = /reach lists what is remembered, and /reach remove <number> forgets one
 run-keep-reach = remember the reach
 run-keep-reach-always = remember it for every session
-run-key-choice-explained = { $first }-{ $last }: run it, and have ssh offer that key first for { $owner }, in this push and in every session after it:
+run-key-choice-explained = { $first }-{ $last }: run it, and from now on have ssh offer that key first whenever git reaches { $owner }:
 run-key-choice-default = leave the key to ssh, which offers your keys in order, and stop asking
 run-key-choice-yes = y runs it with whichever key ssh tries first, and asks again next time
 run-key-choice-undo = /reach keys lists the keys chosen, and /reach keys remove <number> forgets one
@@ -3513,3 +3513,4 @@ doctor-push-not-recognised = no account on { $host } has this key (Permission de
 doctor-push-unanswered = { $host } gave no answer for this key
 doctor-push-chosen = Chosen
 doctor-push-chosen-by = git.identities names this key for the owner
+doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it

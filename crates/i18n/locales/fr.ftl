@@ -1479,7 +1479,7 @@ reach-key-listed = { $number }. { $owner } : { $key }, choisie le { $date }
 reach-key-default = la clé que ssh essaie en premier
 reach-key-usage = /reach keys liste la clé ssh choisie à une demande d'exécution pour chaque propriétaire, et /reach keys remove <numéro> en oublie une.
 reach-key-refused-number = aucune clé n'est numérotée { $number }
-reach-key-removed = oubliée : la clé pour { $owner }. La prochaine demande d'exécution pour un push vers ce propriétaire redemande, là où plus d'une clé pourrait être proposée.
+reach-key-removed = oubliée : la clé pour { $owner }. La prochaine demande d'exécution d'une commande git qui l'atteint redemande, là où elle pourrait proposer plus d'une clé.
 run-filesystem-rules = vos propres règles de système de fichiers s'appliquent à ces programmes : { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
@@ -1522,7 +1522,7 @@ run-keep-reach-undo =
     /reach liste ce qui est retenu, et /reach remove <numéro> en oublie un
 run-keep-reach = retenir l'accès
 run-keep-reach-always = le retenir pour toute session
-run-key-choice-explained = { $first }-{ $last } : l'exécuter, et faire proposer d'abord cette clé par ssh pour { $owner }, dans ce push et dans toute session suivante :
+run-key-choice-explained = { $first }-{ $last } : l'exécuter, et désormais faire proposer d'abord cette clé par ssh chaque fois que git atteint { $owner } :
 run-key-choice-default = laisser le choix de la clé à ssh, qui propose vos clés dans l'ordre, et ne plus demander
 run-key-choice-yes = y l'exécute avec la clé que ssh essaie en premier, et redemande la prochaine fois
 run-key-choice-undo = /reach keys liste les clés choisies, et /reach keys remove <numéro> en oublie une
@@ -3065,3 +3065,4 @@ doctor-push-not-recognised = aucun compte sur { $host } n'a cette clé (Permissi
 doctor-push-unanswered = { $host } n'a donné aucune réponse pour cette clé
 doctor-push-chosen = Choisie
 doctor-push-chosen-by = git.identities nomme cette clé pour le propriétaire
+doctor-push-chosen-at-prompt = vous avez choisi cette clé pour le propriétaire à une demande d'exécution ; /reach keys dans le client en terminal la liste et l'oublie

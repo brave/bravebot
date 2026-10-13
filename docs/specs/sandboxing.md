@@ -916,21 +916,22 @@ those an `IdentityFile` line of the person's ssh configuration names, each judge
 is, outside every directory the plan may write included. It does so for a line whose `git` stages
 that carry the remote scope by their argv and are decided by nothing all name one host and owner,
 where there are two to nine such keys, and in a session that may write to its state directory. A
-stage is decided by nothing where no entry names its owner and no choice was made for it. `1` to
-the last number runs the line with that key offered first, and `0` runs it with the key left to
-ssh. Either writes the choice for the host and owner to `reach.jsonl` in the state directory, and it
-then decides, as an entry would, every later stage whose argv names an ssh address of that owner,
-in every session and checkout, without asking again. `y` runs the line as it was and remembers
-nothing. The digits wait for the rows naming the keys and the file to have been on the screen, a
-digit past the last number answers nothing, and the layer that acts on the answer reads the digit
-against the list it made rather than against what was drawn, so no front end can choose a key it
-was not shown. An entry decides over a choice, and a chosen key that is no longer one a stage may be
-given leaves the owner decided by nothing, so the prompt asks again. The run prompt names a chosen
-key, or that the key was left to ssh, with the owner and the day it was chosen. `/reach keys` lists
-the choices and `/reach keys remove <number>` forgets one. The plain interface and the desktop number
-no keys. A choice is read wherever the session has a state directory, a session with nobody to ask
-included: it adds no row, since every key the prompt numbers is one the remote scope already reads,
-and it only changes which of them ssh offers first.
+stage is decided by nothing where no entry names its owner and no choice was made for it. `1` to the
+last number runs the line with that key offered first, and `0` runs it with the key left to ssh.
+Either writes the choice for the host and owner to `reach.jsonl` in the state directory, and it then
+decides, as an entry would, every later stage whose argv names an ssh address of that owner, in
+every session and checkout, without asking again. `y` runs the line as it was and remembers nothing.
+The digits wait for the rows naming the keys and the file to have been on the screen, a digit past
+the last number answers nothing, and the layer that acts on the answer reads the digit against the
+list it made rather than against what was drawn, so no front end can choose a key it was not shown.
+An entry decides over a choice, and a chosen key that is no longer one a stage may be given, or that
+ssh could no longer offer, leaves the owner decided by nothing, so the prompt asks again. The run
+prompt names a chosen key, or that the key was left to ssh, with the owner and the day it was
+chosen. `/reach keys` lists the choices and `/reach keys remove <number>` forgets one. The plain
+interface and the desktop number no keys. A choice is read wherever the session has a state
+directory, a session with nobody to ask included: it adds no row, since a choice applies only to a
+key ssh could offer, which the remote scope already reads, and it only changes which of them ssh
+offers first.
 
 `bravebot doctor --push-identity [<host>/<owner>]` asks which account each key pushes as. It takes
 every public key a stage with the remote scope could be offered, the ones at ssh's default names and
@@ -944,7 +945,8 @@ neither names another. The greeting is bytes from a remote host: it is read for 
 GitHub spells one, letters, digits and `-` up to 39, and nothing else of it is kept. The login and
 the comparison are shown on the person's screen and nowhere else. They never choose a key, never
 reach a stage, a prompt, the planner or the trace, and the key marked as chosen is the one
-`git.identities` names, whatever any host said.
+`git.identities` names, or failing an entry the one the person chose at a run prompt, whatever any
+host said.
 
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
@@ -1222,6 +1224,8 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_cli::push_identity::each_key_reports_the_login_its_own_connection_got`
 `verified-by: bravebot_cli::push_identity::a_key_no_account_has_is_shown_as_not_recognised`
 `verified-by: bravebot_cli::push_identity::the_chosen_key_is_the_one_the_settings_named_not_the_one_that_greeted`
+`verified-by: bravebot_cli::push_identity::a_key_chosen_at_a_run_prompt_is_marked_as_chosen_there`
+`verified-by: bravebot_cli::running::doctor_push_identity_marks_the_key_chosen_at_a_run_prompt`
 `verified-by: bravebot_cli::running::doctor_push_identity_reports_the_login_each_key_gets`
 `verified-by: bravebot_cli::running::doctor_push_identity_refuses_an_argument_that_is_not_a_host_and_owner`
 `verified-by: bravebot_cli::running::a_configured_git_identity_reaches_only_the_matching_run_stage`
@@ -1568,10 +1572,11 @@ an address that is not ssh, and over ssh whichever key ssh tried first. Each cas
 line is said once. It then says that where GitHub refused a push for permission the key offered may
 belong to an account that cannot write to the repository, and where it refused the login no key
 offered is registered, that a retry offers the same key, and that only the person chooses the key:
-at the run prompt, where ssh could offer more than one key and none was chosen for the owner, or
-with the entry shape and the file it goes in. It says that `/reach keys` lists the keys chosen at a
-prompt and `/reach keys remove <number>` forgets one, so that the next prompt asks again, and that
-in either case the planner asks the person rather than retrying. The text names no host, owner, address or key path and reads nothing a
+at the run prompt of the terminal interface, where ssh could offer more than one key and none was
+chosen for the owner, or with the entry shape and the file it goes in. It says that in the terminal
+interface `/reach keys` lists the keys chosen at a prompt and `/reach keys remove <number>` forgets
+one, so that the next prompt asks again, and that in either case the planner asks the person rather
+than retrying. The text names no host, owner, address or key path and reads nothing a
 program printed, so the same words follow a rejected push and a typo, which is why each part of it
 says the case it is about. A line with no such step says none of it.
 

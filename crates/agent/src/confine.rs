@@ -520,8 +520,8 @@ impl Confinement {
     /// This confinement with the keys the person chose at earlier run prompts, from the record of
     /// reach (SANDBOX-16).
     #[must_use]
-    pub fn with_chosen_keys(mut self, chosen: &[ChosenKey]) -> Self {
-        self.chosen_keys = chosen.to_vec();
+    pub fn with_chosen_keys(mut self, chosen: Vec<ChosenKey>) -> Self {
+        self.chosen_keys = chosen;
         self
     }
 
@@ -543,8 +543,10 @@ impl Confinement {
     /// never from the repository's configuration, which a clone or a stage may have written. An
     /// entry in the settings decides wherever there is one, a key it names that is refused
     /// included. A key is offered only where it is a public key file in the person's home outside
-    /// every directory the plan may write ([`Confinement::offerable`]), and a chosen key that is
-    /// no longer one leaves the owner unchosen, so the prompt asks again.
+    /// every directory the plan may write ([`Confinement::offerable`]). A chosen key must also
+    /// still be one ssh could offer, as the prompt that numbered it judged ([`candidate_public_keys`]),
+    /// so that a choice lends no file the remote scope does not read; one that is no longer leaves
+    /// the owner unchosen, and the prompt asks again.
     fn identified(&self, step: &Step) -> Option<Identified> {
         let home = self.home.as_deref()?;
         let is_git = step.resolved.file_name() == Some(OsStr::new("git"));
@@ -568,22 +570,20 @@ impl Confinement {
             return Some(Identified::Unchosen);
         };
         let Some(written) = &held.key else {
-            return Some(Identified::Chosen {
-                chosen: held.clone(),
-                command: None,
-            });
+            return Some(Identified::LeftToSsh(held.clone()));
         };
         Some(
             match written
                 .to_str()
                 .and_then(|written| self.offerable(written, home))
+                .filter(|(_, key)| candidate_public_keys(home).contains(key))
             {
                 Some((command, key)) => Identified::Chosen {
                     chosen: ChosenKey {
                         key: Some(key),
                         ..held.clone()
                     },
-                    command: Some(command),
+                    command,
                 },
                 None => Identified::Unchosen,
             },
@@ -832,7 +832,9 @@ impl Confinement {
                         .collect();
                     let identity = match self.identified(step) {
                         Some(Identified::Key { key, .. }) => Some(Offered::Configured(key)),
-                        Some(Identified::Chosen { chosen, .. }) => Some(Offered::Chosen(chosen)),
+                        Some(Identified::Chosen { chosen, .. } | Identified::LeftToSsh(chosen)) => {
+                            Some(Offered::Chosen(chosen))
+                        }
                         _ => None,
                     };
                     (toolchain.is_some() || scope.is_some() || network || !remembered.is_empty())
@@ -1156,21 +1158,15 @@ impl Confinement {
                 IDENTITY_CHOSEN_SENTENCE,
             ),
             (
-                decided.iter().any(|held| {
-                    matches!(
-                        held,
-                        Identified::Chosen {
-                            command: Some(_),
-                            ..
-                        }
-                    )
-                }),
+                decided
+                    .iter()
+                    .any(|held| matches!(held, Identified::Chosen { .. })),
                 IDENTITY_PICKED_SENTENCE,
             ),
             (
                 decided
                     .iter()
-                    .any(|held| matches!(held, Identified::Chosen { command: None, .. })),
+                    .any(|held| matches!(held, Identified::LeftToSsh(_))),
                 IDENTITY_PICKED_DEFAULT_SENTENCE,
             ),
             (
@@ -1684,13 +1680,12 @@ enum Identified {
     /// The argv names an ssh address, and this is the key the person's `git.identities` names for
     /// its owner, with the `GIT_SSH_COMMAND` that offers it.
     Key { key: PathBuf, command: String },
-    /// The argv names an ssh address, no entry names its owner, and this is what the person chose
-    /// for it at an earlier run prompt, with the `GIT_SSH_COMMAND` that offers the key where they
-    /// chose one rather than leaving it to ssh.
-    Chosen {
-        chosen: ChosenKey,
-        command: Option<String>,
-    },
+    /// The argv names an ssh address, no entry names its owner, and this is the key the person
+    /// chose for it at an earlier run prompt, with the `GIT_SSH_COMMAND` that offers it.
+    Chosen { chosen: ChosenKey, command: String },
+    /// The argv names an ssh address, no entry names its owner, and the person chose at an earlier
+    /// run prompt to leave the key to ssh.
+    LeftToSsh(ChosenKey),
     /// The argv names an ssh address, and nothing names a key that can be read for its owner.
     Unchosen,
     /// The argv names no ssh address: a remote given by name, or another transport.
@@ -1702,10 +1697,7 @@ impl Identified {
     fn key(&self) -> Option<&Path> {
         match self {
             Self::Key { key, .. } => Some(key),
-            Self::Chosen {
-                chosen: ChosenKey { key: Some(key), .. },
-                command: Some(_),
-            } => Some(key),
+            Self::Chosen { chosen, .. } => chosen.key.as_deref(),
             _ => None,
         }
     }
@@ -1713,11 +1705,7 @@ impl Identified {
     /// The `GIT_SSH_COMMAND` the stage starts with, where it is given a key.
     fn command(&self) -> Option<&str> {
         match self {
-            Self::Key { command, .. } => Some(command),
-            Self::Chosen {
-                command: Some(command),
-                ..
-            } => Some(command),
+            Self::Key { command, .. } | Self::Chosen { command, .. } => Some(command),
             _ => None,
         }
     }
@@ -1751,12 +1739,13 @@ const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, th
      may belong to an account that cannot write to the repository, and where it refused the login, \
      no key offered is registered. ssh offers an agent's keys in order and GitHub accepts the first \
      one any account holds, so a retry offers the same key. Only the person chooses the key, for a \
-     git step whose argv names the ssh address: at its run prompt, which offers the public keys ssh \
-     could use where there is more than one and no key was chosen for the owner, or with an entry \
+     git step whose argv names the ssh address: at its run prompt in the terminal interface, which \
+     offers the public keys ssh could use where there is more than one and no key was chosen for \
+     the owner, or with an entry \
      `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
-     ~/.bravebot/settings.json. `/reach keys` lists the keys chosen at a prompt and `/reach keys \
-     remove <number>` forgets one, so the next prompt asks again. In either case ask them rather \
-     than retrying.";
+     ~/.bravebot/settings.json. In the terminal interface `/reach keys` lists the keys chosen at a \
+     prompt and `/reach keys remove <number>` forgets one, so the next prompt asks again. In either \
+     case ask them rather than retrying.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
@@ -6607,9 +6596,10 @@ mod tests {
     /// SANDBOX-16: a key the person chose at a run prompt is offered by a push to that owner's
     /// address and no other, leaving the key to ssh starts the stage as it was while the prompt
     /// still says who decided it, a `git.identities` entry for the owner decides over a choice
-    /// whatever it names, and a chosen key the plan could have written is not offered. The
-    /// regressions it rejects are a choice applied to every owner, a choice outranking the
-    /// person's settings, and a remembered path read without being judged again.
+    /// whatever it names, and a chosen key the plan could have written, or one ssh could no longer
+    /// offer, is not offered. The regressions it rejects are a choice applied to every owner, a
+    /// choice outranking the person's settings, and a remembered path read without being judged
+    /// again, which would lend a stage a file the remote scope does not read.
     #[test]
     #[cfg(unix)]
     fn a_key_chosen_at_a_prompt_is_offered_for_its_owner_and_an_entry_in_the_settings_wins() {
@@ -6624,7 +6614,7 @@ mod tests {
 
         let picked = places
             .confinement(&[])
-            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+            .with_chosen_keys(vec![places.chosen("acme", Some(&work))]);
         if let Some(set) = ssh_command_of(&picked, &push, &places) {
             assert_eq!(set, offers(&work));
         }
@@ -6639,7 +6629,7 @@ mod tests {
 
         let left = places
             .confinement(&[])
-            .with_chosen_keys(&[places.chosen("acme", None)]);
+            .with_chosen_keys(vec![places.chosen("acme", None)]);
         if let Some(set) = ssh_command_of(&left, &push, &places) {
             assert_eq!(set, None);
         }
@@ -6650,23 +6640,38 @@ mod tests {
 
         let settled = places
             .confinement(&[("github.com/acme", "~/.ssh/id_ed25519")])
-            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+            .with_chosen_keys(vec![places.chosen("acme", Some(&work))]);
         if let Some(set) = ssh_command_of(&settled, &push, &places) {
             assert_eq!(set, offers(&default));
         }
         let refused = places
             .confinement(&[("github.com/acme", "~/.ssh/missing.pub")])
-            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+            .with_chosen_keys(vec![places.chosen("acme", Some(&work))]);
         assert_eq!(refused.identified(&push), Some(Identified::Unchosen));
 
         let planted = places.session.join("planted.pub");
         let written = places
             .confinement(&[])
-            .with_chosen_keys(&[places.chosen("acme", Some(&planted))]);
+            .with_chosen_keys(vec![places.chosen("acme", Some(&planted))]);
         if let Some(set) = ssh_command_of(&written, &push, &places) {
             assert_eq!(set, None);
         }
         assert_eq!(written.identified(&push), Some(Identified::Unchosen));
+
+        let spare = places.home.join(".ssh/spare.pub");
+        let unnamed = places
+            .confinement(&[])
+            .with_chosen_keys(vec![places.chosen("acme", Some(&spare))]);
+        if let Some(set) = ssh_command_of(&unnamed, &push, &places) {
+            assert_eq!(set, None, "a key ssh could not offer was offered");
+        }
+        assert!(
+            !reads(
+                &unnamed.policy(&push, &places.session, &[]),
+                spare.to_str().unwrap()
+            ),
+            "a key ssh could not offer was lent"
+        );
     }
 
     /// SANDBOX-16: a run prompt offers a choice of key for the one owner a line's push leaves to
@@ -6721,7 +6726,7 @@ mod tests {
                 "a key was chosen",
                 unasked
                     .clone()
-                    .with_chosen_keys(&[places.chosen("acme", None)]),
+                    .with_chosen_keys(vec![places.chosen("acme", None)]),
                 vec![&push],
             ),
             (
@@ -6786,11 +6791,11 @@ mod tests {
         let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
         let picked = places
             .confinement(&[])
-            .with_chosen_keys(&[places.chosen("acme", Some(&places.work_key()))])
+            .with_chosen_keys(vec![places.chosen("acme", Some(&places.work_key()))])
             .profile(&[&push]);
         let left = places
             .confinement(&[])
-            .with_chosen_keys(&[places.chosen("acme", None)])
+            .with_chosen_keys(vec![places.chosen("acme", None)])
             .profile(&[&push]);
         for (line, holds) in [
             (&picked, IDENTITY_PICKED_SENTENCE),

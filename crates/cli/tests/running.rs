@@ -1364,8 +1364,57 @@ fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() 
 #[cfg(unix)]
 #[test]
 fn doctor_push_identity_reports_the_login_each_key_gets() {
+    let stdout = doctor_push_identity_in(
+        "cli-running-doctor-push-identity",
+        r#"{"git": {"identities": {"github.com/netzenbot": "~/.ssh/bot.pub"}}}"#,
+        None,
+    );
+    let line = |key: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(key))
+            .unwrap_or_else(|| panic!("no line for {key}: {stdout}"))
+            .to_string()
+    };
+    assert!(
+        line("id_ed25519.pub").contains("SHA256:fpided25519"),
+        "{stdout}"
+    );
+    assert!(line("id_ed25519.pub").contains("bbondy"), "{stdout}");
+    assert!(line("bot.pub").contains("SHA256:fpbot"), "{stdout}");
+    assert!(line("bot.pub").contains("netzenbot"), "{stdout}");
+    assert!(stdout.contains("git.identities names this key"), "{stdout}");
+}
+
+/// SANDBOX-16 over the process: with no `git.identities` entry for the owner, the key the person
+/// chose at a run prompt is the one marked, read from the record of reach in this process. Rejects
+/// a report that reads the settings alone, which shows no key chosen while every push offers one.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_marks_the_key_chosen_at_a_run_prompt() {
+    let stdout = doctor_push_identity_in(
+        "cli-running-doctor-push-identity-chosen",
+        "{}",
+        Some("bot.pub"),
+    );
+    assert!(
+        stdout.contains("you chose this key for the owner at a run prompt"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("git.identities names this key"),
+        "{stdout}"
+    );
+}
+
+/// What `doctor --push-identity github.com/netzenbot` prints in a home holding the public keys
+/// `id_ed25519` and `bot`, the second named by `~/.ssh/config`, with `settings` as the person's
+/// settings and `chosen` the key a run prompt kept for the owner. A `ssh` that answers by the key it
+/// was offered stands in for GitHub: netzenbot for `bot.pub`, bbondy for any other.
+#[cfg(unix)]
+fn doctor_push_identity_in(name: &str, settings: &str, chosen: Option<&str>) -> String {
     use std::os::unix::fs::PermissionsExt;
-    let scratch = Scratch::new("cli-running-doctor-push-identity");
+    let scratch = Scratch::new(name);
     let home = scratch.path.join("home");
     let tools = scratch.path.join("tools");
     std::fs::create_dir_all(home.join(".ssh")).unwrap();
@@ -1379,11 +1428,16 @@ fn doctor_push_identity_reports_the_login_each_key_gets() {
         .unwrap();
     }
     std::fs::write(home.join(".ssh/config"), "IdentityFile ~/.ssh/bot\n").unwrap();
-    std::fs::write(
-        home.join(".bravebot/settings.json"),
-        r#"{"git": {"identities": {"github.com/netzenbot": "~/.ssh/bot.pub"}}}"#,
-    )
-    .unwrap();
+    std::fs::write(home.join(".bravebot/settings.json"), settings).unwrap();
+    if let Some(chosen) = chosen {
+        let line = serde_json::json!({
+            "action": "allow",
+            "key_for": "github.com/netzenbot",
+            "key": home.join(".ssh").join(chosen).to_str().expect("a key path that is text"),
+            "allowed": "2026-10-13",
+        });
+        std::fs::write(home.join(".bravebot/reach.jsonl"), format!("{line}\n")).unwrap();
+    }
     let script = |name: &str, body: &str| {
         let path = tools.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -1413,21 +1467,7 @@ exit 1"#,
 
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    let line = |key: &str| {
-        stdout
-            .lines()
-            .find(|line| line.contains(key))
-            .unwrap_or_else(|| panic!("no line for {key}: {stdout}"))
-            .to_string()
-    };
-    assert!(
-        line("id_ed25519.pub").contains("SHA256:fpided25519"),
-        "{stdout}"
-    );
-    assert!(line("id_ed25519.pub").contains("bbondy"), "{stdout}");
-    assert!(line("bot.pub").contains("SHA256:fpbot"), "{stdout}");
-    assert!(line("bot.pub").contains("netzenbot"), "{stdout}");
-    assert!(stdout.contains("git.identities names this key"), "{stdout}");
+    stdout
 }
 
 /// SANDBOX-16 over the argument list: an argument that is not `<host>/<owner>` is refused before
@@ -3136,6 +3176,7 @@ fn a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage() {
         let scratch = Scratch::new(name)
             .with_settings(&settings_for(&gateway))
             .with_file(".ssh/work.pub", "ssh-ed25519 AAAA\n")
+            .with_file(".ssh/config", "IdentityFile ~/.ssh/work\n")
             .with_file(
                 "bin/git",
                 "#!/bin/sh\n[ \"$1\" = push ] || exit 1\nprintf '%s\\n' \"${GIT_SSH_COMMAND-unset}\"\n",

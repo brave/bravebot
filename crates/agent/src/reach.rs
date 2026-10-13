@@ -325,7 +325,7 @@ pub struct ChosenKey {
 impl ChosenKey {
     /// The host and owner as a `git.identities` entry names them.
     pub fn owner(&self) -> String {
-        format!("{}/{}", self.address.host, self.address.owner)
+        self.address.entry_name()
     }
 
     /// The key as a person reads it: the file, or the words for ssh's own choice.
@@ -363,7 +363,7 @@ impl WrittenKey {
     }
 
     fn into_chosen(self) -> Option<(Action, ChosenKey)> {
-        let (host, owner) = self.key_for.split_once('/')?;
+        let address = Address::from_entry_name(&self.key_for)?;
         let key = match self.key {
             Some(key) => {
                 let key = PathBuf::from(key);
@@ -375,7 +375,7 @@ impl WrittenKey {
         Some((
             self.action,
             ChosenKey {
-                address: Address::spelled(host, owner)?,
+                address,
                 key,
                 allowed: self.allowed,
             },

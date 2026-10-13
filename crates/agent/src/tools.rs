@@ -2112,9 +2112,9 @@ impl<'a> Tools<'a> {
             }
             _ => Vec::new(),
         };
-        // Read wherever there is a record, as `git.identities` is: a chosen key adds no row, since
-        // every key a prompt offers is one the remote scope reads already, and it only narrows
-        // which of them ssh offers first.
+        // Read wherever there is a record, as `git.identities` is: a choice adds no row, since it
+        // applies only to a key ssh could offer, which the remote scope reads already, and it only
+        // narrows which of them ssh offers first.
         let chosen_keys = self
             .home
             .map(|home| crate::reach::Store::new(home).chosen_keys())
@@ -2122,7 +2122,7 @@ impl<'a> Tools<'a> {
         Some(
             confinement
                 .with_grants(grants)
-                .with_chosen_keys(&chosen_keys),
+                .with_chosen_keys(chosen_keys),
         )
     }
 

@@ -368,10 +368,10 @@ does not offer them.
 
 ### The ssh key chosen for an owner
 
-Where a push names an ssh address of an owner no `git.identities` entry names, and ssh could offer
+Where a `git` command names an ssh address of an owner no `git.identities` entry names, and ssh could offer
 more than one of your keys, the run prompt numbers them and a digit chooses one, or `0` leaves the
 key to ssh ([configuration](../customize/configuration.md#gitidentities)). The choice is kept in the
-same file and decides later pushes to that owner.
+same file and decides later `git` commands that reach that owner.
 
 ```
 /reach keys                                 # list the key chosen for each owner, numbered

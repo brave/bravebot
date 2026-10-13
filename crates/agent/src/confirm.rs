@@ -369,7 +369,7 @@ pub struct KeyChoice {
 impl KeyChoice {
     /// The host and owner as a `git.identities` entry names them.
     pub fn owner(&self) -> String {
-        format!("{}/{}", self.address.host, self.address.owner)
+        self.address.entry_name()
     }
 }
 
