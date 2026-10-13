@@ -214,9 +214,17 @@ kernel parses, or the single command line a platform's process creation takes in
 Either is quoted rather than interpreted, so a confinement built from a hostile path still applies
 and a program is asked for what the caller asked for.
 
+On Windows an argument holding `*` or `?` is quoted, since a program built with a wildcard runtime
+expands one left unquoted. `cmd.exe` reads its line by rules of its own rather than the ones the
+quoting is written for, so a `cmd.exe` line is refused where the two readings differ: an argument
+holds a quotation mark, an operator, `%`, `!`, a line end or one of the delimiters `,` `;` `=`, or
+the first argument after `/c`, `/k` or `/r` is written quoted and another follows it. One argument
+after the switch is the line `cmd.exe` is asked to run, and it starts.
+
 **Why.** A grant list assembled from paths would otherwise be a place where a filename decides what
 the sandbox permits, and a command line assembled from arguments a place where one decides what the
-confined program is told to do.
+confined program is told to do. `cmd.exe` drops the outer quotation marks of a line that starts with
+one and acts on what it finds outside the rest, so no quoting holds for it.
 
 `verified-by: bravebot_sandbox::macos::paths_cannot_inject_profile_syntax`
 `verified-by: bravebot_sandbox::macos::a_profile_containing_a_hostile_path_still_applies`
@@ -230,6 +238,11 @@ confined program is told to do.
 `verified-by: bravebot_sandbox::windows::an_empty_argument_is_still_an_argument`
 `verified-by: bravebot_sandbox::windows::an_argument_that_needs_no_quoting_is_written_as_it_is`
 `verified-by: bravebot_sandbox::windows::an_argument_cmd_would_act_on_stays_quoted`
+`verified-by: bravebot_sandbox::windows::an_argument_holding_a_wildcard_reaches_the_program_unexpanded`
+`verified-by: bravebot_sandbox::windows::cmd_is_refused_an_argument_it_would_read_as_its_own_syntax`
+`verified-by: bravebot_sandbox::windows::cmd_is_refused_a_quoted_first_argument_after_its_switch_with_another_after_it`
+`verified-by: bravebot_sandbox::windows::cmd_starts_where_it_reads_the_line_as_it_was_written`
+`verified-by: bravebot_agent::confine::a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened`
 
 <a id="SANDBOX-5"></a>
 ### SANDBOX-5: capabilities report what the kernel actually enforces, and never more

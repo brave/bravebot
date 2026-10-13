@@ -199,7 +199,7 @@ impl Sandbox for AppContainerSandbox {
         environment: Environment,
     ) -> std::result::Result<ConfinedChild, SandboxError> {
         let (program, args) = text_of(program, args)?;
-        let capabilities = self.prepare(&program, policy)?;
+        let capabilities = self.prepare(&program, &args, policy)?;
         start(
             &self.sid,
             &capabilities,
@@ -220,7 +220,7 @@ impl Sandbox for AppContainerSandbox {
         environment: Environment,
     ) -> std::result::Result<ConfinedChild, SandboxError> {
         let (program, args) = text_of(program, args)?;
-        let capabilities = self.prepare(&program, policy)?;
+        let capabilities = self.prepare(&program, &args, policy)?;
         start(
             &self.sid,
             &capabilities,
@@ -239,12 +239,13 @@ impl AppContainerSandbox {
     fn prepare(
         &self,
         program: &str,
+        args: &[String],
         policy: &SandboxPolicy,
     ) -> std::result::Result<Vec<Sid>, SandboxError> {
         if let Some(refusal) = refusal_for(policy) {
             return Err(refusal);
         }
-        if let Some(refusal) = refusal_for_program(program) {
+        if let Some(refusal) = refusal_for_program(program, args) {
             return Err(refusal);
         }
 

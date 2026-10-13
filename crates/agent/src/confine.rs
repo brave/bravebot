@@ -1253,9 +1253,14 @@ pub(crate) fn begin(
     }
     #[cfg(windows)]
     {
-        if let Some(refusal) =
-            bravebot_sandbox::windows::refusal_for_program(&command.get_program().to_string_lossy())
-        {
+        use bravebot_sandbox::windows::{refusal_for_program, text_of};
+
+        let args: Vec<std::ffi::OsString> = command.get_args().map(OsStr::to_os_string).collect();
+        let refusal = match text_of(command.get_program(), &args) {
+            Ok((program, args)) => refusal_for_program(&program, &args),
+            Err(refusal) => Some(refusal),
+        };
+        if let Some(refusal) = refusal {
             return Err(ExecError::NotConfined {
                 program: step.program.clone(),
                 detail: refusal.to_string(),
