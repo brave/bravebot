@@ -192,14 +192,14 @@ and one for fitting that to the tool set. A refusal is as much a record as a per
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
 
 <a id="TRACE-7"></a>
-### TRACE-7: the trail names the mode a turn began in and what answered each prompt
+### TRACE-7: the trail names the mode a turn or a manifest run began in and what answered each prompt
 
-Each turn records the permission mode it began with ([permission-modes.md](permission-modes.md)) by
-its name, before any tool is called. When the policy decides a command or a write is to be put to
-the person, a second entry under `approval` says what answered: the mode that answered in their
-place and so drew nothing, or no mode, which leaves it to whatever confirms (a person, or nothing that
-can ask). The entries before it that end in "asking" say what the policy decided, and they read as
-a person having been asked.
+Each turn and each manifest run ([manifest.md](manifest.md)) records the permission mode it began
+with ([permission-modes.md](permission-modes.md)) by its name, before any tool is called. When the
+policy decides a command or a write is to be put to the person, a second entry under `approval`
+says what answered: the mode that answered in their place and so drew nothing, or no mode, which
+leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
+in "asking" say what the policy decided, and they read as a person having been asked.
 
 Other prompts a mode answers, such as a fetch or a server start, are not named here.
 
@@ -213,6 +213,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 
 `verified-by: bravebot_agent::turn::a_turn_records_the_mode_it_began_with`
 `verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
+`verified-by: bravebot_agent::manifest::a_manifest_run_records_the_mode_it_began_with`
+`verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

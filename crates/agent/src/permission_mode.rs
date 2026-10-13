@@ -94,6 +94,17 @@ impl PermissionMode {
         self == Self::Bypass
     }
 
+    /// Whether this request's prompt is answered yes without being drawn.
+    ///
+    /// A line that asked to start with no sandbox is the exception: the permission mode never
+    /// widens the sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that
+    /// line, so it goes to the person in this mode as in every other. [`Confining::confirm_run`]
+    /// and the trail's record of who answered both ask this, so the record cannot credit the mode
+    /// with a prompt it passed on (TRACE-7).
+    pub fn answers_this_run_unasked(self, request: &RunRequest) -> bool {
+        self.answers_a_run_unasked() && !request.unconfined
+    }
+
     /// Whether a write the policy would ask about is answered without drawing a prompt.
     ///
     /// A write that would create a credential is the exception in accept-edits: the diff shows the
@@ -328,10 +339,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        // Not a line that asked to start with no sandbox: the permission mode never widens the
-        // sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that line, so it
-        // goes to the person in this mode as in every other.
-        if self.mode.get().answers_a_run_unasked() && !request.unconfined {
+        if self.mode.get().answers_this_run_unasked(request) {
             RunDecision::approve()
         } else {
             self.inner.confirm_run(request)

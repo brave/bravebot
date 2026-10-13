@@ -3725,7 +3725,7 @@ fn a_turn_records_the_mode_it_began_with() {
 #[test]
 fn an_approval_names_what_answered_it() {
     use bravebot_agent::PermissionMode;
-    let answers = |mode: PermissionMode, tool: &str, arguments: &str| -> Vec<String> {
+    let answers_in = |mode: PermissionMode, tool: &str, arguments: &str, confined: bool| {
         let scratch = Scratch::new("names-what-answered");
         std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
         let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -3735,6 +3735,7 @@ fn an_approval_names_what_answered_it() {
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        let seen = asked.seen.clone();
         let mut confirmer = bravebot_agent::Confining::new(&mut asked, mode, false);
 
         turns::run_with_trust(
@@ -3745,14 +3746,16 @@ fn an_approval_names_what_answered_it() {
             // is what puts the write to somebody in a tree that would otherwise not ask.
             &Task::new("do it")
                 .with_permissions(rules(&[], &["Edit(notes.md)"], &[]))
-                .with_permission_mode(mode),
+                .with_permission_mode(mode)
+                .with_confined_runs(confined),
             &mut confirmer,
             &mut sink,
             trusting_the_workspace(),
         )
         .expect("turn runs");
 
-        sink.events()
+        let answered = sink
+            .events()
             .iter()
             .filter_map(|event| match event {
                 Event::GatePassed {
@@ -3765,7 +3768,13 @@ fn an_approval_names_what_answered_it() {
                 }
                 _ => None,
             })
-            .collect()
+            .collect::<Vec<String>>();
+        // How many runs reached the person, so a trail can be held to what happened.
+        let shown = seen.lock().unwrap().len();
+        (answered, shown)
+    };
+    let answers = |mode: PermissionMode, tool: &str, arguments: &str| {
+        answers_in(mode, tool, arguments, false).0
     };
 
     let run = ("run", r#"{"command":"touch marker.txt"}"#);
@@ -3795,6 +3804,19 @@ fn an_approval_names_what_answered_it() {
         answers(PermissionMode::AcceptEdits, run.0, run.1),
         ["no mode answered, left to the confirmer"]
     );
+
+    // A line that asked to start with no sandbox is put to the person under bypass as under every
+    // other mode (SANDBOX-22), so the trail must not say bypass answered it.
+    let unconfined = ("run", r#"{"command":"touch marker.txt","unconfined":true}"#);
+    for mode in [PermissionMode::Bypass, PermissionMode::Ask] {
+        let (answered, shown) = answers_in(mode, unconfined.0, unconfined.1, true);
+        assert_eq!(
+            answered,
+            ["no mode answered, left to the confirmer"],
+            "an unconfined run under {mode:?}"
+        );
+        assert_eq!(shown, 1, "an unconfined run under {mode:?} reached nobody");
+    }
 
     // Accepting edits does not answer a write that would create a credential: the prompt is still
     // drawn, so the trail must not say a mode answered it. Bypass does answer it.
