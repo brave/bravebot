@@ -941,8 +941,8 @@ fn the_stand_in_road_names_no_language_or_variable() {
             "the paragraph describes a case with `{described}`: {paragraph}"
         );
     }
-    // Compared in lower case, by the start of a word, so a variable named after a language
-    // (`PYTHONPATH`) is found as the language is, and by its underscore, so any other is.
+    // Compared in lower case, by the start of a word, so a variable named after a language is
+    // found as the language is, and by its underscore, so any other is.
     for word in paragraph.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
         let word = word.to_lowercase();
         assert!(
