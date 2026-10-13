@@ -145,6 +145,9 @@ pub fn compose_in<S: Sink>(
     preamble
         .for_a_person
         .push_str(github_cli_guidance(github_cli));
+    preamble
+        .for_a_person
+        .push_str(missing_module_guidance(workspace.scratch().is_some()));
 
     let mut standing = Prompt::default();
     // Neither file is read in a safe session. What the command line named is the person's words for
@@ -494,6 +497,36 @@ fn github_cli_guidance(present: bool) -> &'static str {
      same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
      redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
      without asking the network: where it fails for that reason, fetch_url is the way.\n"
+}
+
+/// What to do when a Python program fails for a module its interpreter lacks, said only where the
+/// session has a directory of its own to write the stand-in in.
+///
+/// A planner not told of this road looks for a newer interpreter, finds none, and asks the person
+/// to install one or edit the program. For the person's own turn and not for a delegate: the road
+/// is two `run`s, and a reader is offered none.
+///
+/// A new directory inside the session's, and only that on `PYTHONPATH`, because a directory there
+/// is imported from ahead of the standard library and the session's own holds whatever else the
+/// work put in it. In single quotes, because the line compiler reads an unquoted backslash as an
+/// escape and a Windows path is made of them.
+fn missing_module_guidance(scratch: bool) -> &'static str {
+    if !scratch {
+        return "";
+    }
+    "\nWhen a Python program fails because a module is missing, such as `tomllib` on a Python older \
+     than 3.11, check whether an installed package provides the same module under another name, \
+     with a line that only reads and whose exit status is the answer, such as `python3 -c 'import \
+     tomli'` run with the interpreter the program uses. Where one does, write a module of the \
+     missing name in a new directory inside the scratch directory that re-exports the package, \
+     such as `tomllib.py` holding `from tomli import *`, and run the program again with \
+     `PYTHONPATH=` and that directory's path in front of it on that one line. Write the path out \
+     in full and in single quotes, since a line expands no variable and reads an unquoted \
+     backslash as an escape. Name only that directory, since whatever else the scratch directory \
+     holds would be imported ahead of the standard library. That leaves the program, the machine \
+     and the person's settings as they were, so try it before asking the person to install \
+     something or edit the program. Where nothing installed provides the module, say which module \
+     is missing and what provides it.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.

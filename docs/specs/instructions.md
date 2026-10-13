@@ -223,6 +223,15 @@ and is offered neither road, no `fetch_url` at all and no `run` without the capa
 ([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
 those tools are.
 
+What to do when a Python program fails because a module is missing is said on the same terms, to
+the turn a person is watching and only where the session has a directory of its own. Check, with a
+line that only reads and whose exit status is the answer, whether an installed package provides the
+same module under another name. Where one does, write a module of the missing name that re-exports
+the package in a new directory inside the session's own, and run the program again with
+`PYTHONPATH` set to that directory's path, written out in full and in single quotes, in front of it
+on that one line. Where nothing installed provides it, say which module is missing and what
+provides it. A session with no directory of its own is told none of this, and neither is a delegate.
+
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
 and the rest comes from the kernel and this process's own environment, which is the provenance
@@ -260,12 +269,29 @@ whoever is asking, and a delegate that may run one can use it. What is withheld 
 sentence choosing between two tools, one of which a delegate never has: a delegate told to fall back
 to `fetch_url` spends a round on a name that resolves to nothing.
 
+The stand-in for a missing module is stated because a planner not told of it looks for a newer
+interpreter, finds none, and asks the person to install one or edit the program. Both change the
+machine or the program to supply what an installed package often already provides, such as `tomli`
+for the `tomllib` a Python older than 3.11 lacks. A module of the missing name in the session's own
+directory changes neither, and goes when the session does. It goes in a directory of its own there,
+and only that directory goes on the path, because a directory on `PYTHONPATH` is imported from ahead
+of the standard library, and the session's directory also holds whatever else the work put in it,
+such as an archive unpacked to look inside. The assignment is on the one line because nothing
+carries over between lines. The path is written out because a line expands no variable, and quoted
+because a line reads an unquoted backslash as an escape and a Windows path is made of them. It is
+gated on the directory because without one the only place to write the module is the project. It is
+withheld from a delegate because the road is two `run`s and a reader is offered none. Nothing here
+is a decision the driver takes on a program's output: the check is answered by an exit status
+([RUN-13](tools/run.md#RUN-13)), and what the planner does with it is the planner's.
+
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`
 `verified-by: bravebot_agent::preamble::whether_the_tree_is_a_git_repository_is_said_either_way`
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
+`verified-by: bravebot_agent::preamble::a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory`
+`verified-by: bravebot_agent::confine::a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 `verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`
 `verified-by: bravebot_agent::preamble::a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one`

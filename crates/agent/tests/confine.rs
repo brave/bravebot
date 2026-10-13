@@ -148,11 +148,21 @@ impl Places {
     }
 
     fn run(&self, line: &str, confinement: Option<&Confinement>) -> exec::Ran {
+        self.run_given(line, confinement, None)
+    }
+
+    /// [`Places::run`] for a session that was given `scratch` as its own directory.
+    fn run_given(
+        &self,
+        line: &str,
+        confinement: Option<&Confinement>,
+        scratch: Option<&Path>,
+    ) -> exec::Ran {
         exec::run_plan_observed(
             &self.plan(line),
             &Cancel::new(),
             exec::LIMIT,
-            None,
+            scratch,
             None,
             confinement,
             &mut |_| Ok(()),
@@ -293,6 +303,60 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     assert!(
         !read(".ssh/id_ed25519", &asked(Scope::Aws)).ended_well,
         "a request for aws read a private key"
+    );
+}
+
+/// INSTR-9 tells the planner to stand in for a missing Python module with one written in a
+/// directory inside the session's own and named, quoted, on the line's `PYTHONPATH`. The
+/// regressions it rejects are a confinement that refuses reading the session's directory or drops
+/// the assignment, so the road the planner is told to take fails under the sandbox, and a stage
+/// given the session's directory on its `PYTHONPATH` whatever the line says, which puts whatever
+/// the work left there ahead of every program's own modules. A module of the same name at the top
+/// of the session's directory stands for that: the named line imports the stand-in and not it, and
+/// the line with no assignment imports neither. The unconfined line is the control that Python
+/// finds the stand-in at all.
+#[cfg(unix)]
+#[test]
+fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("stand-in-module");
+    if bravebot_agent::programs::resolve("python3", &places.session).is_none() {
+        return;
+    }
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    let stand_in = own.join("stand-in");
+    std::fs::create_dir(&stand_in).expect("a directory for the stand-in");
+    std::fs::write(
+        stand_in.join("bravebot_stand_in.py"),
+        "from json import *\n",
+    )
+    .expect("a module");
+    std::fs::write(
+        own.join("bravebot_stand_in.py"),
+        "def dumps(_):\n    return 'left in the session directory'\n",
+    )
+    .expect("a module left beside it");
+    let program = "python3 -c 'import bravebot_stand_in; print(bravebot_stand_in.dumps([1]))'";
+    let named = format!("PYTHONPATH='{}' {program}", stand_in.display());
+    let confinement =
+        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
+            .expect("a platform with a base");
+
+    let control = places.run_given(&named, None, Some(&own));
+    let confined = places.run_given(&named, Some(&confinement), Some(&own));
+    let unnamed = places.run_given(program, Some(&confinement), Some(&own));
+
+    assert_eq!(control.stdout, "[1]\n", "unconfined: {control:?}");
+    assert!(
+        confined.ended_well && confined.stdout == "[1]\n",
+        "the module was not imported with the assignment: {confined:?}"
+    );
+    assert!(
+        !unnamed.ended_well && unnamed.stdout.is_empty(),
+        "a module was imported with no assignment on the line: {unnamed:?}"
     );
 }
 
