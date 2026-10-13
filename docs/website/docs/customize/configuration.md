@@ -972,6 +972,16 @@ lend: a path that is not a regular `*.pub` file, one inside another credential l
 `~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
 either.
 
+Without an entry for the owner, the terminal interface asks instead. Where a `git` command such as a
+push names an ssh address of an owner nothing has chosen a key for, and ssh could offer two to nine
+of your public keys (the ones at ssh's default names and the ones an `IdentityFile` line in
+`~/.ssh/config` names), the run prompt numbers them. Press a key's number to run the command with
+that key offered first, or `0` to leave the key to ssh. Either answer is kept in
+`~/.bravebot/reach.jsonl` and decides every later `git` command that reaches that owner over ssh, in
+every session, as an entry would; `y` runs the command without choosing, and the next prompt asks
+again. An entry in your settings decides over a kept answer. `/reach keys` lists the answers kept,
+and `/reach keys remove <number>` forgets one. The plain interface and the desktop app do not ask.
+
 ### `download.maxBytes`
 
 ```json

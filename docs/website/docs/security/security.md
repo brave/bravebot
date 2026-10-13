@@ -60,6 +60,10 @@ the repository's own configuration. On those commands it replaces a `GIT_SSH_COM
 `core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
 workspace can set it.
 
+Without an entry for the owner, the run prompt in the terminal interface numbers the public keys
+your own ssh files name and asks which one to offer, once per owner, and keeps the answer in
+`~/.bravebot/reach.jsonl`. An entry still decides over a kept answer.
+
 On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
 `docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the

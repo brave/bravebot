@@ -2112,7 +2112,18 @@ impl<'a> Tools<'a> {
             }
             _ => Vec::new(),
         };
-        Some(confinement.with_grants(grants))
+        // Read wherever there is a record, as `git.identities` is: a choice adds no row, since it
+        // applies only to a key ssh could offer, which the remote scope reads already, and it only
+        // narrows which of them ssh offers first.
+        let chosen_keys = self
+            .home
+            .map(|home| crate::reach::Store::new(home).chosen_keys())
+            .unwrap_or_default();
+        Some(
+            confinement
+                .with_grants(grants)
+                .with_chosen_keys(chosen_keys),
+        )
     }
 
     /// Where this turn's credential findings are written, and under whose name.
@@ -8152,7 +8163,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // No confinement at all for a line the planner asked to run with none: its stages start as
     // they do under the mode `off`, for this line only, and the next line is built from the
     // session's mode again.
-    let confinement = tools
+    let mut confinement = tools
         .confinement()
         .filter(|_| !unconfined)
         .map(|confinement| confinement.with_requested(&requested));
@@ -8234,6 +8245,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
                 .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
             unconfined,
+            // Offered where the answer can be written down, for the reason `reach_record` is: a
+            // choice the next session forgets is a question asked again on every push.
+            key_choice: tools
+                .home
+                .zip(tools.remembering)
+                .filter(|_| crate::reach::may_be_added_to())
+                .zip(confinement.as_ref())
+                .and_then(|((home, _), confinement)| {
+                    confinement.key_choice(&plan.steps(), crate::reach::Store::new(home).path())
+                })
+                .map(Box::new),
         };
         // Read before the question is put, for the reason a write's is.
         let mode = tools.permission_mode.get();
@@ -8285,6 +8307,29 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 tools.workspace.root(),
                 &crate::reach::today(),
             );
+        }
+        // The key the person chose for the owner this line's push leaves to ssh (SANDBOX-16). Read
+        // against the candidates this layer listed, so a front end answering with a key the prompt
+        // never offered, or answering where it offered none, chooses nothing. It applies to this
+        // line's stages and is remembered for the lines after it.
+        if let (Some(choice), Some(answer), Some(home)) =
+            (&request.key_choice, answer.key, tools.home)
+        {
+            let key = match answer {
+                crate::confirm::KeyAnswer::Candidate(at) => {
+                    choice.candidates.get(at).cloned().map(Some)
+                }
+                crate::confirm::KeyAnswer::SshDefault => Some(None),
+            };
+            if let Some(key) = key {
+                let chosen = crate::reach::ChosenKey {
+                    address: choice.address.clone(),
+                    key,
+                    allowed: crate::reach::today(),
+                };
+                crate::reach::Store::new(home).choose_key(&chosen);
+                confinement = confinement.map(|confinement| confinement.with_chosen_key(chosen));
+            }
         }
         // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
         // policy is asked again rather than the drawing being read back: a front end answering

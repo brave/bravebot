@@ -1397,6 +1397,7 @@ fn the_window_refuses_an_unconfined_run_without_asking() {
 
     let (decision, asked) = confirm_run_with_an_approving_window(RunRequest {
         unconfined: true,
+        key_choice: None,
         ..a_run()
     });
     assert!(!asked, "a card was drawn for it");

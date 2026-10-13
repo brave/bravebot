@@ -9,9 +9,9 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, Intent,
-    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
-    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
-    WriteRequest,
+    KeyAnswer, ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+    RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+    WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::reach::Lasting;
@@ -745,6 +745,11 @@ pub enum RunAnswer {
     KeepReach,
     /// Run it, and remember the same scopes for every session started in this checkout.
     KeepReachEverySession,
+    /// Run it with the key a digit chose offered first, and remember that choice for the owner
+    /// ([SANDBOX-16]).
+    ///
+    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
+    ChooseKey(KeyAnswer),
     Reject,
     /// Refuse the run and stop the turn that asked for it.
     Interrupt,
@@ -763,6 +768,7 @@ impl RunAnswer {
             RunAnswer::KeepReachEverySession => {
                 RunDecision::approve_and_keep_reach(Lasting::EverySession)
             }
+            RunAnswer::ChooseKey(answer) => RunDecision::approve_with_key(answer),
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
         }
     }
@@ -778,6 +784,7 @@ impl RunAnswer {
             | RunAnswer::ApproveAndRecordFamily
             | RunAnswer::KeepReach
             | RunAnswer::KeepReachEverySession
+            | RunAnswer::ChooseKey(_)
             | RunAnswer::Reject => false,
             RunAnswer::Interrupt => true,
         }
@@ -837,6 +844,12 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('e' | 'E') if request.offers_to_keep_reach() => {
             Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
         }
+        // Bound only to the digits the prompt numbered, for the reason `r` is: each writes a
+        // standing choice, and the key it names is read against the acting layer's own list.
+        KeyCode::Char(digit @ '0'..='9') => digit
+            .to_digit(10)
+            .and_then(|digit| request.key_answer_for(digit))
+            .map(|answer| RunResponse::Answer(RunAnswer::ChooseKey(answer))),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up | KeyCode::Char('k') => Some(RunResponse::Scroll(-1)),
         KeyCode::Down | KeyCode::Char('j') => Some(RunResponse::Scroll(1)),
@@ -881,6 +894,8 @@ struct RunDrawn {
     family_unread: usize,
     /// Rows saying what `m` and `e` remember, not on the screen yet.
     reach_unread: usize,
+    /// Rows naming the keys a digit chooses and what choosing one remembers, not on the screen yet.
+    key_unread: usize,
 }
 
 impl RunDrawn {
@@ -894,6 +909,7 @@ impl RunDrawn {
             RunAnswer::ApproveAndRecord => self.record_unread,
             RunAnswer::ApproveAndRecordFamily => self.family_unread,
             RunAnswer::KeepReach | RunAnswer::KeepReachEverySession => self.reach_unread,
+            RunAnswer::ChooseKey(_) => self.key_unread,
         };
         self.whole && self.unread == 0 && grant_unread == 0
     }
@@ -1221,6 +1237,7 @@ fn draw_run(
     let mut record = 0..0;
     let mut family = 0..0;
     let mut reach = 0..0;
+    let mut key = 0..0;
 
     // What `a` would actually grant, in as many words. It is two things, not one, and the second
     // is the one nothing else in the interface would tell them: what the command prints stops
@@ -1434,6 +1451,51 @@ fn draw_run(
         reach.end = measure(&lines);
     }
 
+    // The keys a digit chooses between for the owner this push leaves to ssh, numbered as the
+    // digits are, with what `y` does instead and where the choice is written. The owner is the
+    // host and account the argv names, which the plan above already shows.
+    if let Some(choice) = &request.key_choice {
+        lines.push(Line::raw(""));
+        key.start = measure(&lines);
+        lines.extend(indented(
+            t!(
+                run_key_choice_explained,
+                first = "1",
+                last = choice.candidates.len().to_string(),
+                owner = choice.owner()
+            ),
+            Style::default().fg(theme::muted()),
+            inside.width as usize,
+        ));
+        for (at, candidate) in choice.candidates.iter().enumerate() {
+            lines.push(Line::from(Span::styled(
+                format!("       {}  {}", at + 1, candidate.display()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("       0  {}", t!(run_key_choice_default)),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_key_choice_yes)),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_keep_reach_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", choice.record.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_key_choice_undo)),
+            Style::default().fg(theme::muted()),
+        )));
+        key.end = measure(&lines);
+    }
+
     // What answers a line whose arguments differ from one run to the next, since no key on this
     // screen does. Drawn only where the person has already answered a prompt for this binary under
     // other arguments, so it is not a sentence every prompt carries. It names the file rather than
@@ -1497,12 +1559,16 @@ fn draw_run(
         record_unread: shown.unseen(record),
         family_unread: shown.unseen(family),
         reach_unread: shown.unseen(reach),
+        key_unread: shown.unseen(key),
     };
 
     // Said in place of how far there is to scroll while a key waits on it, since what the person
     // needs to know then is why the key does nothing.
-    let waiting =
-        drawn.always_unread + drawn.record_unread + drawn.family_unread + drawn.reach_unread;
+    let waiting = drawn.always_unread
+        + drawn.record_unread
+        + drawn.family_unread
+        + drawn.reach_unread
+        + drawn.key_unread;
     let hint = if drawn.unread > 0 {
         Line::styled(
             format!("   {}", t!(run_unseen, count = drawn.unread)),
@@ -1595,6 +1661,25 @@ fn run_keys(
                 key,
                 Style::default()
                     .fg(colour(answer, theme::running()))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            key_spans.push(Span::raw(format!(" {label}    ")));
+        }
+    }
+    // Every digit waits on the same rows, so the first key's state is every key's.
+    if let Some(choice) = &request.key_choice {
+        let live_colour = colour(
+            RunAnswer::ChooseKey(KeyAnswer::SshDefault),
+            theme::running(),
+        );
+        for (keys, label) in [
+            (format!("1-{}", choice.candidates.len()), t!(run_key_choose)),
+            ("0".to_string(), t!(run_key_leave)),
+        ] {
+            key_spans.push(Span::styled(
+                keys,
+                Style::default()
+                    .fg(live_colour)
                     .add_modifier(Modifier::BOLD),
             ));
             key_spans.push(Span::raw(format!(" {label}    ")));
@@ -3878,6 +3963,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
@@ -4528,7 +4614,9 @@ mod tests {
                     toolchain: None,
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
                     reaches: Vec::new(),
-                    identity: Some("/home/someone/.ssh/work.pub".into()),
+                    identity: Some(bravebot_agent::confirm::Offered::Configured(
+                        "/home/someone/.ssh/work.pub".into(),
+                    )),
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4608,6 +4696,67 @@ mod tests {
         assert!(drawn.contains("can read this machine"), "{drawn}");
         assert!(drawn.contains("can write a repository's hooks"), "{drawn}");
         assert!(drawn.contains("/home/someone/project"), "{drawn}");
+    }
+
+    /// SANDBOX-16: a run prompt for a push whose key the person chose at an earlier prompt names the
+    /// owner and the day it was chosen, and the key where one was chosen. A person reading it can
+    /// tell a key they chose, which `/reach keys remove` forgets, from one their `git.identities`
+    /// names.
+    #[test]
+    fn a_run_prompt_names_the_owner_and_the_day_of_a_key_chosen_at_an_earlier_prompt() {
+        let drawn_with = |key: Option<&str>| {
+            let mut request = a_run(false);
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                writes_git_directories: false,
+                directories: vec!["/home/someone/project".into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: vec![bravebot_agent::Carried {
+                    program: "git".into(),
+                    toolchain: None,
+                    scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                    reaches: Vec::new(),
+                    identity: Some(bravebot_agent::confirm::Offered::Chosen(
+                        bravebot_agent::reach::ChosenKey {
+                            address: bravebot_sandbox::scope::Address::spelled(
+                                "github.com",
+                                "acme",
+                            )
+                            .expect("an address"),
+                            key: key.map(Into::into),
+                            allowed: "2026-10-13".to_string(),
+                        },
+                    )),
+                    network: false,
+                    remembered: Vec::new(),
+                }],
+            });
+            rendered_run(&request)
+        };
+
+        let chosen = drawn_with(Some("/home/someone/.ssh/work.pub"));
+        assert!(
+            chosen.contains(
+                "git has ssh offer the key /home/someone/.ssh/work.pub first, which you chose for github.com/acme on 2026-10-13"
+            ),
+            "{chosen}"
+        );
+        assert!(!chosen.contains("git.identities names"), "{chosen}");
+
+        let left_to_ssh = drawn_with(None);
+        assert!(
+            left_to_ssh.contains(
+                "git leaves the key to ssh, which offers your keys in order, as you chose for github.com/acme on 2026-10-13"
+            ),
+            "{left_to_ssh}"
+        );
+        assert!(
+            !left_to_ssh.contains("has ssh offer the key"),
+            "{left_to_ssh}"
+        );
     }
 
     /// A prompt for a session whose network is closed says so, and names the stage that keeps it,
@@ -4997,6 +5146,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
@@ -5113,6 +5263,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
@@ -5185,6 +5336,7 @@ mod tests {
 
         let request = RunRequest {
             unconfined: true,
+            key_choice: None,
             ..recordable()
         };
         let drawn = rendered_run(&request);
@@ -5279,6 +5431,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),
@@ -5587,6 +5740,7 @@ mod tests {
         let no_record = RunRequest {
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             ..a_run_keeping_remote()
         };
         let no_request = a_run_asking_for(Vec::new());
@@ -5681,6 +5835,172 @@ mod tests {
             "cargo, loopback is not remembered".to_string(),
             t!(run_keep_reach).to_string(),
             t!(run_keep_reach_always).to_string(),
+        ] {
+            assert!(drawn.contains(&wanted), "{wanted:?} was not drawn: {drawn}");
+        }
+    }
+
+    /// A run prompt for a push to `github.com/acme` that offers a choice between two keys.
+    fn a_run_offering_two_keys() -> RunRequest {
+        let mut request = RunRequest::from_pipeline(
+            &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                "git",
+                ["push", "git@github.com:acme/widgets.git"]
+                    .map(String::from)
+                    .to_vec(),
+            )]),
+            &["/usr/bin/git".into()],
+            "/home/someone/project",
+        );
+        request.key_choice = Some(Box::new(bravebot_agent::confirm::KeyChoice {
+            address: bravebot_sandbox::scope::Address::spelled("github.com", "acme")
+                .expect("an address"),
+            candidates: vec![
+                "/home/someone/.ssh/id_ed25519.pub".into(),
+                "/home/someone/.ssh/work.pub".into(),
+            ],
+            record: "/home/someone/.bravebot/reach.jsonl".into(),
+        }));
+        request
+    }
+
+    /// SANDBOX-16: each digit the prompt numbered runs the line with that key chosen, `0` leaves the
+    /// key to ssh, and a digit past the last key, or any digit at a prompt that numbered none,
+    /// answers nothing. The answer vouches for nothing and records no line, and no other answer
+    /// carries a key. The regressions it rejects are a digit off by one, which pushes as the other
+    /// account and remembers that, and a digit bound where nothing was numbered.
+    #[test]
+    fn the_key_digits_choose_only_the_keys_the_prompt_numbered() {
+        use bravebot_agent::confirm::KeyAnswer;
+        let request = a_run_offering_two_keys();
+        for (digit, answer) in [
+            ('1', KeyAnswer::Candidate(0)),
+            ('2', KeyAnswer::Candidate(1)),
+            ('0', KeyAnswer::SshDefault),
+        ] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char(digit)), &request),
+                Some(RunResponse::Answer(RunAnswer::ChooseKey(answer))),
+                "{digit}"
+            );
+            let decision = RunAnswer::ChooseKey(answer).decision();
+            assert!(decision.approved());
+            assert_eq!(decision.key, Some(answer));
+            assert!(!decision.remember && !decision.record && !decision.record_family);
+            assert_eq!(decision.remember_reach, None);
+            assert!(!RunAnswer::ChooseKey(answer).stops_the_turn());
+        }
+        for digit in ['3', '9'] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char(digit)), &request),
+                None,
+                "{digit}"
+            );
+        }
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('n')), &request),
+            Some(RunResponse::Answer(RunAnswer::Reject))
+        );
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('j')), &request),
+            Some(RunResponse::Scroll(1))
+        );
+        for request in [a_run(false), a_run_keeping_remote()] {
+            for digit in '0'..='9' {
+                assert_eq!(
+                    run_answer_for(press(KeyCode::Char(digit)), &request),
+                    None,
+                    "`{digit}` answered a prompt that numbered no key"
+                );
+            }
+            let drawn = fully_rendered_run(&request);
+            assert!(!drawn.contains(t!(run_key_choose)), "{drawn}");
+        }
+        for answer in [
+            RunAnswer::Approve,
+            RunAnswer::ApproveAlways,
+            RunAnswer::ApproveAndRecord,
+            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::KeepReach,
+            RunAnswer::KeepReachEverySession,
+            RunAnswer::Reject,
+            RunAnswer::Interrupt,
+        ] {
+            assert_eq!(answer.decision().key, None, "{answer:?}");
+        }
+    }
+
+    /// SANDBOX-16, PROMPT-4: the digits wait for the rows naming the keys and what choosing one
+    /// remembers, and `y` and `n` do not.
+    #[test]
+    fn the_key_digits_wait_for_the_rows_naming_the_keys() {
+        use bravebot_agent::confirm::KeyAnswer;
+        let seen = RunDrawn {
+            whole: true,
+            ..RunDrawn::default()
+        };
+        let unread = RunDrawn {
+            key_unread: 1,
+            ..seen
+        };
+        for answer in [KeyAnswer::Candidate(0), KeyAnswer::SshDefault] {
+            assert!(seen.takes(RunAnswer::ChooseKey(answer)));
+            assert!(!unread.takes(RunAnswer::ChooseKey(answer)), "{answer:?}");
+        }
+        assert!(unread.takes(RunAnswer::Approve));
+        assert!(unread.takes(RunAnswer::Reject));
+
+        // Paged through on a short terminal, a digit is taken only once each key it could choose
+        // and the place the choice is written have been drawn.
+        let request = a_run_offering_two_keys();
+        let mut shown = RowsShown::default();
+        let (mut scroll, mut read, mut waited) = (0, String::new(), false);
+        loop {
+            let (rows, drawn) = run_screen(&request, (80, 14), scroll, &mut shown);
+            read.push_str(&box_text(&rows));
+            let digit = drawn
+                .response_to(press(KeyCode::Char('2')), &request)
+                .is_some();
+            if digit {
+                for wanted in [
+                    "/home/someone/.ssh/id_ed25519.pub",
+                    "/home/someone/.ssh/work.pub",
+                    "/home/someone/.bravebot/reach.jsonl",
+                ] {
+                    assert!(
+                        read.contains(wanted),
+                        "`2` was taken before {wanted} was drawn"
+                    );
+                }
+                break;
+            }
+            if drawn
+                .response_to(press(KeyCode::Char('y')), &request)
+                .is_some()
+            {
+                waited = true;
+            }
+            assert!(scroll < drawn.furthest, "paged to the end: {rows:#?}");
+            scroll = paged_down(&drawn, &request, scroll);
+        }
+        assert!(waited, "no draw took `y` alone, so nothing here waited");
+    }
+
+    /// SANDBOX-16: the prompt names the owner, each key by the digit that chooses it, leaving the key
+    /// to ssh, what `y` does instead, and where the choice is written, and draws the keys.
+    #[test]
+    fn a_prompt_offering_a_key_choice_names_each_key_and_where_the_choice_is_written() {
+        let drawn = fully_rendered_run(&a_run_offering_two_keys());
+        for wanted in [
+            "github.com/acme".to_string(),
+            "1  /home/someone/.ssh/id_ed25519.pub".to_string(),
+            "2  /home/someone/.ssh/work.pub".to_string(),
+            format!("0  {}", t!(run_key_choice_default)),
+            t!(run_key_choice_yes).to_string(),
+            "/home/someone/.bravebot/reach.jsonl".to_string(),
+            t!(run_key_choice_undo).to_string(),
+            format!("1-2 {}", t!(run_key_choose)),
+            format!("0 {}", t!(run_key_leave)),
         ] {
             assert!(drawn.contains(&wanted), "{wanted:?} was not drawn: {drawn}");
         }
