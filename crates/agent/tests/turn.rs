@@ -19535,6 +19535,73 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
     }
 }
 
+/// VET-1: where a processor's output came from is said to the person as the file the processor
+/// was given, and the planner's own sentence for what it expects is drawn as it wrote it. The
+/// planner's copy of that origin names references, which mean nothing to the person asked.
+#[test]
+fn a_processors_output_is_vetted_under_the_file_it_was_made_from() {
+    let scratch = Scratch::new("vet-processor-output");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("config.py"), "RAW-CONTENTS\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![
+            reply_with(r#"{"verdict": "safe", "reason": "plain text"}"#),
+            reply_with(r#"{"verdict": "safe", "reason": "plain text"}"#),
+        ],
+        vec![
+            tool_request("read_file", r#"{"path":"config.py"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"return the whole file"}"#,
+            ),
+            processor_reply("PROCESSED CONTENTS"),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:3","expects":"the file, tidied"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("tidy the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        // Nobody vouched for the file, so reading it hands the planner a reference.
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    assert!(request.content.contains("PROCESSED CONTENTS"));
+    assert!(
+        request.origin.contains("config.py"),
+        "the person was not told which file: {}",
+        request.origin
+    );
+    assert!(
+        !request.origin.contains("ref:"),
+        "the person was shown a reference name: {}",
+        request.origin
+    );
+    assert_eq!(request.expects, "the file, tidied");
+}
+
 /// The whole of it, end to end: the planner is holding something it may not read, asks to be
 /// shown it, a confined check reads the content and says one word about it, the person is shown
 /// the bytes and that word, agrees, and the bytes reach the planner's context.
