@@ -2920,6 +2920,16 @@ pub(crate) fn writes_a_file(name: &str) -> bool {
     )
 }
 
+/// Whether the sandbox mode keeps the file tools from writing, as it keeps programs (SANDBOX-22).
+///
+/// A turn that confines nothing has no mode in force, which is why `confine_runs` is read too.
+pub(crate) fn sandbox_refuses_writes(
+    confine_runs: bool,
+    sandbox: bravebot_sandbox::SandboxMode,
+) -> bool {
+    confine_runs && sandbox == bravebot_sandbox::SandboxMode::ReadOnly
+}
+
 /// Whether a call by this name runs a program.
 pub(crate) fn runs_a_program(name: &str) -> bool {
     strip_namespace(name) == "run"
@@ -3443,6 +3453,18 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             Produced::problem(
                 "refused: the session is in plan mode, so writing is refused however the user would \
                  have answered. Do not retry; say what you would change and why.",
+            )
+        }
+        // Before the permission mode is reached, so accepting edits and bypassing, which answer the
+        // write prompt, cannot hand back what `read-only` withholds from programs (SANDBOX-22).
+        writing
+            if sandbox_refuses_writes(tools.confine_runs, tools.sandbox)
+                && writes_a_file(writing) =>
+        {
+            Produced::problem(
+                "refused: the sandbox mode is read-only, so nothing is written to the session's \
+                 files whatever the user would have answered; nothing was asked. Do not retry; say \
+                 what you would change and why. Only the user can choose another sandbox mode.",
             )
         }
         // A tool the offer holds and has not loaded is not offered, so naming it is a mistake
@@ -10033,6 +10055,18 @@ fn wants_checkout<'a>(
             format!(
                 "refused: {whose}you already work in a checkout, which the delegates you start \
                  share"
+            ),
+        ));
+    }
+    // Making one writes `worktrees/<id>/` under the repository's `.git` (CHECKOUT-5), which is the
+    // project `read-only` keeps every writer out of (SANDBOX-22).
+    if sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        return Err((
+            CheckoutRefusal::ReadOnlySandbox,
+            format!(
+                "refused: {whose}the sandbox mode is read-only, and making a checkout writes into \
+                 the repository's .git, so no checkout was made; only the user can choose another \
+                 sandbox mode"
             ),
         ));
     }

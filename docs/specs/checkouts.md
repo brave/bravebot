@@ -296,7 +296,9 @@ Each checkout takes a number of its own, `c1`, `c2` and on through the session, 
 keeps. A delegate's number will not do: it is a path from the turn
 ([DELEGATE-13](delegation.md#DELEGATE-13)), so every turn has its own `d1`.
 
-Making a checkout asks nobody, and writes nothing into the working tree.
+Making a checkout asks nobody, and writes nothing into the working tree. Under the sandbox mode
+`read-only` no checkout is made and the spawn is refused, since the entry under `.git` is a write
+to the project that mode keeps every writer out of ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 
 **Why not `git worktree add`.** git runs what the repository names as it checks a tree out: a
 `post-checkout` hook, a `core.fsmonitor` program, a filter driver. `read_git` starts no program for
@@ -321,6 +323,7 @@ highest it brings back ([CHECKOUT-16](#CHECKOUT-16)).
 `verified-by: bravebot_agent::git::a_worktrees_link_declines_the_checkout`
 `verified-by: bravebot_agent::git::a_link_target_holding_a_nul_is_written_with_an_underscore`
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
+`verified-by: bravebot_agent::turn::under_read_only_a_spawn_asking_for_a_checkout_makes_none`
 
 <a id="CHECKOUT-6"></a>
 ### CHECKOUT-6: a checkout lives under the state directory, keyed by the workspace

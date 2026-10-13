@@ -33644,6 +33644,101 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
     }
 }
 
+/// SANDBOX-22, CHECKOUT-5: under `read-only` a spawn asking for a checkout is refused, because
+/// making one writes `worktrees/<id>/` under the repository's `.git`, and bypassing, which approves
+/// the spawn, does not make it. The control is the same spawn under `workspace-write`, where the
+/// trail records the checkout made, so the fixture is one a checkout can be made of. The control's
+/// checkout is gone by the end of its turn, since its delegate wrote nothing in it (CHECKOUT-15),
+/// so the trail is what each arm is read from.
+#[test]
+fn under_read_only_a_spawn_asking_for_a_checkout_makes_none() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let spawn_under = |name: &str, sandbox| {
+        let scratch = Scratch::new(&format!("checkout-{name}"));
+        let home = Scratch::new(&format!("checkout-{name}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "ASK-FOR-A-CHECKOUT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"WORK-IN-IT","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("WORK-IN-IT", vec![reply_with("worked")]),
+        ]);
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut approving = RecordingConfirmer::approving();
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("ASK-FOR-A-CHECKOUT")
+                .with_home(Some(home.path.clone()))
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            &mut bravebot_agent::Confining::new(
+                &mut approving,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            ),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+        let entries = scratch.path.join(".git").join("worktrees").exists();
+        (
+            every_request(&received),
+            checkouts_under(&home.path),
+            entries,
+            sink,
+        )
+    };
+
+    let made = |trail: &RecordingSink| {
+        checkout_events(trail)
+            .iter()
+            .any(|(_, detail)| detail.starts_with("made "))
+    };
+
+    let (_, _, _, trail) = spawn_under("read-only-control", WorkspaceWrite);
+    assert!(made(&trail), "the control made no checkout");
+
+    let (asked, left, entries, trail) = spawn_under("read-only-held", ReadOnly);
+    assert!(!made(&trail), "a checkout was made under read-only");
+    assert!(
+        left.is_empty(),
+        "a checkout was left under read-only: {left:?}"
+    );
+    assert!(!entries, "an entry was written under the repository's .git");
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("the sandbox mode is read-only, and making a checkout")),
+        "the planner was not told why"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("\"worked\"")),
+        "a delegate started"
+    );
+    assert!(
+        trail.recorded().any(|(_, event)| matches!(
+            event,
+            Event::GateBlocked { gate: "delegate", reason, .. }
+                if reason.contains("refused for its checkout: read-only-sandbox;")
+        )),
+        "the trail does not record the refusal's cause"
+    );
+}
+
 /// CHECKOUT-3. A delegate in a checkout cannot ask for another.
 #[test]
 fn a_delegate_in_a_checkout_is_refused_another() {
@@ -50916,6 +51011,92 @@ fn under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not() {
         read.contains("approved") && !read.contains("refused"),
         "a request to read was refused: {read}"
     );
+}
+
+/// SANDBOX-22, MODE-2, MODE-4: under `read-only` the file tools write nothing in any mode that
+/// would have let the write through, accepting edits and bypassing among them. The workspace is
+/// trusted, so no write raises a prompt and the refusal cannot be one a confirmer gave. The control
+/// is the same turn under `workspace-write`, where `write_file` and `edit_file` land, so a refusal
+/// that came from anything but the sandbox mode fails the control. Each tool is its own call,
+/// because a mode held in one of them would leave the others as the way round it.
+#[test]
+fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
+    use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    const REFUSED: &str = "the sandbox mode is read-only, so nothing is written";
+    let turn_under = |name: &str, sandbox, mode| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("notes.md"), "keep\nold\ntail\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("write_file", r#"{"path":"created.md","contents":"hi"}"#),
+            tool_request_2(
+                "edit_file",
+                r#"{"path":"notes.md","old_text":"old","new_text":"new"}"#,
+            ),
+            tool_request_2(
+                "download_url",
+                r#"{"url":"http://127.0.0.1:9/notes","path":"fetched.md"}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let task = Task::new("write the notes")
+            .with_confined_runs(true)
+            .with_sandbox_mode(sandbox)
+            .with_permission_mode(mode);
+        let mut recording = RecordingConfirmer::approving();
+        let mut confirmer = bravebot_agent::Confining::new(&mut recording, mode, false);
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut confirmer,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        let told = every_request(&received)
+            .last()
+            .map(|body| body.matches(REFUSED).count())
+            .unwrap_or_default();
+        (
+            scratch.path.join("created.md").exists(),
+            std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+            scratch.path.join("fetched.md").exists(),
+            told,
+        )
+    };
+
+    for mode in [Ask, AcceptEdits, Bypass] {
+        let (created, notes, _, told) = turn_under(
+            &format!("read-only-tools-control-{}", mode.name()),
+            WorkspaceWrite,
+            mode,
+        );
+        assert!(created, "{mode:?}: the control did not write");
+        assert_eq!(
+            notes, "keep\nnew\ntail\n",
+            "{mode:?}: the control did not edit"
+        );
+        assert_eq!(told, 0, "{mode:?}: the control was refused for read-only");
+
+        let (created, notes, fetched, told) = turn_under(
+            &format!("read-only-tools-held-{}", mode.name()),
+            ReadOnly,
+            mode,
+        );
+        assert!(!created, "{mode:?}: write_file wrote under read-only");
+        assert_eq!(
+            notes, "keep\nold\ntail\n",
+            "{mode:?}: edit_file edited under read-only"
+        );
+        assert!(!fetched, "{mode:?}: download_url saved under read-only");
+        assert_eq!(
+            told, 3,
+            "{mode:?}: each of the three calls was not refused for the mode"
+        );
+    }
 }
 
 /// PATHREQ-7, TRUST-10, MODE-4: in bypass mode a granted path is also open to the file tools, as

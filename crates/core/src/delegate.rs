@@ -1070,6 +1070,8 @@ pub enum CheckoutRefusal {
     Reader,
     /// The run already works in a checkout, which its delegates share.
     AlreadyInCheckout,
+    /// The sandbox mode is `read-only`, and a checkout writes an entry into the repository.
+    ReadOnlySandbox,
     /// The directory for checkouts would sit inside the working directory.
     InsideWorkingDirectory,
     /// A directory opened beside the working directory holds the working directory.
@@ -1090,6 +1092,7 @@ impl CheckoutRefusal {
             Self::UnknownIsolation => "unknown-isolation",
             Self::Reader => "reader-has-no-checkout",
             Self::AlreadyInCheckout => "already-in-a-checkout",
+            Self::ReadOnlySandbox => "read-only-sandbox",
             Self::InsideWorkingDirectory => "inside-working-directory",
             Self::OpenedHoldsWorkingDirectory(_) => "opened-directory-holds-working-directory",
             Self::OpenedHoldsCheckouts(_) => "opened-directory-holds-checkouts",
