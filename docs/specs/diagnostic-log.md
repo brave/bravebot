@@ -45,14 +45,17 @@ it true of the call site written next year.
 ### DIAG-2: a run's log is a private file under the state directory, and the oldest are removed
 
 Each process writes its own file under `logs/` in the state directory, readable by its owner alone
-in a directory readable by its owner alone. Ten files are kept: making a new one removes the oldest
-of those this program made, never the one just made, and leaves any other file in the directory
-alone.
+in a directory readable by its owner alone. A `logs/` that is a link is stepped over rather than
+followed, as every writer into the state directory steps over one, so the directory it leads to
+keeps its mode and the file written there is still its owner's alone. Ten files are kept: making a
+new one removes the oldest of those this program made, never the one just made, and leaves any
+other file in the directory alone.
 
 **Why.** The directory grows with every run otherwise, and the files name the hosts a person
 talks to, which is theirs to share and nobody else's to read.
 
 `verified-by: bravebot_diag::lib::the_log_and_its_directory_are_private`
+`verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_log_directory`
 `verified-by: bravebot_diag::lib::retention_keeps_the_newest_and_leaves_foreign_files`
 `verified-by: bravebot_diag::lib::the_file_being_written_survives_retention_when_the_clock_is_behind`
 `verified-by: bravebot_cli::running::a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log`

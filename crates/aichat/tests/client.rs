@@ -2022,7 +2022,7 @@ static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn a_retry_is_written_to_the_diagnostic_log() {
     let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("a scratch directory");
-    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
 
     for (streaming, base_ms) in [(false, 7), (true, 11)] {
         let reply = if streaming {

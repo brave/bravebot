@@ -83,13 +83,15 @@ than followed, for the same reason: the bound is a comparison of paths, so it sa
 sits and nothing about where it leads, and somebody who keeps their sessions on a synced volume and
 links the directory into place has put the target outside what this was given.
 
-One helper does this for the crates that can share one. The crate that imports a subscription and
-the language server client both sit below the crate holding that helper, as
+One helper does this for the crates that can share one. The crate that imports a subscription, the
+language server client and the diagnostic log all sit below the crate holding that helper, as
 [layering.md](layering.md) records, so each keeps its own copy of the modes rather than inverting a
-dependency for four lines. Either can be the first to write, which is the case that made the mode of
-a directory holding prompt history a matter of which subsystem ran first. The language server client
-narrows the two directories it owns and not the state directory above them, since what that is set
-to belongs to whichever subsystem created it.
+dependency for four lines. Any of them can be the first to write, which is the case that made the
+mode of a directory holding prompt history a matter of which subsystem ran first. The language
+server client narrows the two directories it owns and not the state directory above them, since
+what that is set to belongs to whichever subsystem created it. The diagnostic log narrows the state
+directory as well as `logs/`, because a run that fails before anything else is written has a log
+line as its only write, and a state directory an older build left open would stay open after it.
 
 The installer creates the directory too, before the program has run once, so it asks for the same
 modes. A directory left at the umask by an install would otherwise stand until the next write went
@@ -119,6 +121,10 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_lsp::server::the_cache_is_created_reachable_only_by_its_owner`
 `verified-by: bravebot_lsp::server::a_cache_left_open_by_an_earlier_run_is_narrowed`
 `verified-by: bravebot_lsp::server::narrowing_does_not_follow_a_link_out_of_the_cache`
+`verified-by: bravebot_diag::lib::a_state_directory_left_open_is_narrowed_and_nothing_above_it`
+`verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_log_directory`
+`verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_state_directory`
+`verified-by: bravebot_cli::running::the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads`
 
 <a id="STATE-2"></a>
 ### STATE-2: a machine whose platform names no profile directory has no state directory rather than a guessed one

@@ -210,7 +210,7 @@ fn main() -> ExitCode {
     match take_log_level(&mut args) {
         Ok(level) => bravebot_diag::configure(
             level.unwrap_or(bravebot_diag::Level::Error),
-            log_directory(),
+            bravebot_agent::home::writable(),
         ),
         Err(complaint) => {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
@@ -745,12 +745,6 @@ fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>
     }
     *args = kept;
     Ok(named)
-}
-
-/// Where this process's diagnostic log goes, or `None` when it writes none: an incognito session,
-/// and a machine with no home to keep one in.
-fn log_directory() -> Option<PathBuf> {
-    bravebot_agent::home::writable().map(|home| home.join(bravebot_diag::DIRECTORY))
 }
 
 /// Take `--sandbox <mode>` out of the arguments, answering with the mode it named.

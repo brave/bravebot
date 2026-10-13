@@ -3133,7 +3133,7 @@ mod tests {
         };
         let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("a scratch directory");
-        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
         for (streaming, base_ms) in [(false, 7), (true, 11)] {
             let config = config();
             let egress = Egress::new();

@@ -10561,6 +10561,40 @@ fn the_recorded_lines_are_private_and_end_with_the_terminal() {
     assert!(left.is_empty(), "the terminal closed and left {left:?}");
 }
 
+/// SHELLINT-2, STATE-1. A person who keeps the state directory or the shell directory on a synced
+/// volume and links it into place has put the volume outside what the hook was given, so the
+/// directory the link leads to keeps the mode its owner set. The directory that is not a link is
+/// still narrowed.
+#[cfg(unix)]
+#[test]
+fn the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let mode = |p: &Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+    let open_up = |p: &Path| {
+        std::fs::create_dir_all(p).expect("create");
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    };
+
+    let linked_state = Scratch::new("cli-running-shell-init-linked-state");
+    let synced = linked_state.path.join("synced");
+    open_up(&synced);
+    open_up(&synced.join("shell"));
+    symlink(&synced, linked_state.path.join(".bravebot")).expect("link the state directory");
+    a_bash_session(&linked_state, &["echo recorded"]);
+    assert_eq!(mode(&synced), 0o755, "the linked state directory's target");
+    assert_eq!(mode(&synced.join("shell")), 0o700, "the shell directory");
+
+    let linked_shell = Scratch::new("cli-running-shell-init-linked-shell");
+    let state = linked_shell.path.join(".bravebot");
+    let synced = linked_shell.path.join("synced-shell");
+    open_up(&state);
+    open_up(&synced);
+    symlink(&synced, state.join("shell")).expect("link the shell directory");
+    a_bash_session(&linked_shell, &["echo recorded"]);
+    assert_eq!(mode(&synced), 0o755, "the linked shell directory's target");
+    assert_eq!(mode(&state), 0o700, "the state directory");
+}
+
 /// SHELLINT-3. With the variable set, the shell records nothing, the run is started incognito, and
 /// the variable is read at each command so setting it after the hook was sourced still stops it.
 #[cfg(unix)]
