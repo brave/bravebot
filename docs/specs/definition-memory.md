@@ -7,6 +7,8 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
   - crates/agent/src/memory.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs

@@ -9,6 +9,8 @@ governs:
   - crates/lsp/src/server.rs
   - crates/agent/src/lsp.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
   - crates/tui/src/app.rs
 guards:
   - symbol: Operation::parse

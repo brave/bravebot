@@ -7,6 +7,8 @@ governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
   - crates/agent/src/programs.rs
   - crates/core/src/command.rs
   - crates/core/src/pure.rs
