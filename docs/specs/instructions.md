@@ -278,7 +278,8 @@ installed can often already provide. It describes no case: it says what to do wh
 for something missing, and names no language, package or variable, because text naming one of them
 covers that one alone. What connects the two, written in the session's own directory, changes
 neither the machine nor the program, and goes when the session does. The check runs on the
-program's own interpreter because another one on the same machine can have what that one lacks. The
+program's own interpreter or runtime because another one on the same machine can have what that one
+lacks. The
 search path is one read in addition to the program's own, because an assignment replaces whatever
 the variable held and a line cannot name the old value, so a path that stands in for a default would
 lose it. The stand-in goes in a directory of its own, and only that directory goes on the path,

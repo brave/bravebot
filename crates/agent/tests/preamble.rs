@@ -891,13 +891,16 @@ fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
             preamble.for_a_person
         );
     }
-    assert!(
-        !preamble
-            .text
-            .contains("in a new directory inside the scratch directory"),
-        "a delegate was told a road that needs `run`: {}",
-        preamble.text
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.text.contains(said),
+            "a delegate was told a road that needs `run`, by `{said}`: {}",
+            preamble.text
+        );
+    }
 }
 
 /// The road holds for anything a program can be missing, so the paragraph describes no case. A case
@@ -932,25 +935,28 @@ fn the_stand_in_road_names_no_language_or_variable() {
         .expect("the paragraph is there to read");
     let paragraph = &preamble.for_a_person[start..];
     let paragraph = &paragraph[..paragraph.find('\n').unwrap_or(paragraph.len())];
-    for described in [
-        "`",
-        "such as",
-        "for example",
-        "for instance",
-        "e.g.",
-        "Python",
-        "Perl",
-        "Ruby",
-        "Node",
-        "Java",
-        "Rust",
-        "Lua",
-        "PHP",
-    ] {
+    for described in ["`", "such as", "for example", "for instance", "e.g."] {
         assert!(
             !paragraph.contains(described),
             "the paragraph describes a case with `{described}`: {paragraph}"
         );
+    }
+    // Compared in lower case, by the start of a word, so a variable named after a language
+    // (`PYTHONPATH`) is found as the language is, and by its underscore, so any other is.
+    for word in paragraph.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        let word = word.to_lowercase();
+        assert!(
+            !word.contains('_'),
+            "the paragraph names a variable, `{word}`: {paragraph}"
+        );
+        for language in [
+            "python", "perl", "ruby", "node", "java", "rust", "lua", "php",
+        ] {
+            assert!(
+                !word.starts_with(language),
+                "the paragraph names a language, `{word}`: {paragraph}"
+            );
+        }
     }
 }
 
@@ -988,13 +994,17 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
             preamble.text
         );
     }
-    assert!(
-        !preamble
-            .for_a_person
-            .contains("in a new directory inside the scratch directory"),
-        "a session with no directory of its own was told to write a stand-in in one: {}",
-        preamble.for_a_person
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.for_a_person.contains(said),
+            "a session with no directory of its own was told to write a stand-in in one, by \
+             `{said}`: {}",
+            preamble.for_a_person
+        );
+    }
 }
 
 /// A condition waiting on something outside the session is the case a goal handles worst if the

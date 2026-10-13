@@ -219,13 +219,13 @@ workspace would, and neither `/add-dir` nor `/cd` will take it. See
 
 Where the session has a scratch directory, the planner is also told what to do when a program fails
 because something it needs is missing from your machine. It checks whether something installed can
-stand in, with a command that only reads, runs on the program's own interpreter, and answers by its
-exit status. Where something can, it writes what connects the two in a new directory inside the
-scratch directory, and runs the program again with that directory on a search path the program reads
-from its environment in addition to its own, set in front of it for that one command. It tries this
-before asking you to install anything or to edit the program. The program, your machine and your
-settings are left as they were, and what was written goes with the session. Where nothing installed
-can stand in, the planner says what is missing and what provides it.
+stand in, with a command that only reads, runs on the program's own interpreter or runtime, and
+answers by its exit status. Where something can, it writes what connects the two in a new directory
+inside the scratch directory, and runs the program again with that directory on a search path the
+program reads from its environment in addition to its own, set in front of it for that one command.
+It tries this before asking you to install anything or to edit the program. The program, your
+machine and your settings are left as they were, and what was written goes with the session. Where
+nothing installed can stand in, the planner says what is missing and what provides it.
 
 The paragraph names no language, package or variable, so the same road is open to any of them. Only
 the new directory goes on the search path, because the scratch directory may hold other files the
