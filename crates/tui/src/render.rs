@@ -767,11 +767,16 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
+    highlight_selection(frame, session);
+
+    laid
+}
+
+/// Paint the selection, where there is one, over what the frame already holds.
+fn highlight_selection(frame: &mut Frame, session: &Session) {
     if let Some(selection) = &session.selection {
         crate::select::highlight(frame.buffer_mut(), selection);
     }
-
-    laid
 }
 
 /// Draw the thumbnails side by side, leftmost first, each only where it fits whole.

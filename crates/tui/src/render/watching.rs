@@ -12,7 +12,7 @@ use crate::state::{Delegate, Laid, Output, Session, Watched};
 use crate::theme;
 
 use super::transcript::{assistant_lines, draw_transcript};
-use super::{QUARANTINE_BAR, TURN_MARKER, dim, marked_rows, one_line};
+use super::{QUARANTINE_BAR, TURN_MARKER, dim, highlight_selection, marked_rows, one_line};
 
 /// Draw the delegate view: the list of them, or the one somebody opened.
 ///
@@ -43,9 +43,7 @@ pub(super) fn draw_watching(frame: &mut Frame, session: &Session) -> Laid {
     let laid = draw_transcript(frame, areas[1], session);
     draw_watching_footer(frame, areas[2], session);
 
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
 
     laid
 }
@@ -136,9 +134,7 @@ fn draw_aside(
     frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
     Laid::default()
 }
 
@@ -240,9 +236,7 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
     frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
     Laid::default()
 }
 
@@ -473,9 +467,7 @@ fn draw_delegate_list(frame: &mut Frame, session: &Session) -> Laid {
         layout[2],
     );
 
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
 
     laid
 }

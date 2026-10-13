@@ -12,8 +12,8 @@ use crate::keybindings::Keybindings;
 use crate::state::{Laid, Session};
 use crate::theme;
 
-use super::dim;
 use super::transcript::draw_transcript;
+use super::{dim, highlight_selection};
 
 /// Draw the scroller: the transcript, and one row saying what the keys are.
 ///
@@ -43,9 +43,7 @@ pub(super) fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
         draw_scroller_help(frame, frame.area(), session);
     }
 
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
 
     laid
 }
