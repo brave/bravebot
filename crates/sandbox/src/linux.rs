@@ -498,7 +498,8 @@ mod tests {
     use crate::hosts::HostList;
     use crate::proxy::{Proxy, ProxyConfig};
     use crate::testutil::{
-        capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
+        a_directory_for_sockets, arrived, capturing_stdout, listening_in, nothing_attached,
+        printed_by, variable_names_received_by,
     };
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
@@ -2203,6 +2204,90 @@ mod tests {
              witness stopped for a reason of its own"
         );
         drop(outside);
+    }
+
+    /// Landlock counts a connect to a socket that has a path as a write, so a socket is reached
+    /// under a write grant and not under a read grant, and a refusal of a write or of a read
+    /// beneath a write grant holds for a connect too, since the write row is spread around it.
+    /// The macOS profile holds the same rule, so the two backends agree on which sockets a stage
+    /// reaches: the agent `SSH_AUTH_SOCK` names, a Docker daemon's.
+    ///
+    /// One witness connects to every socket and the assertions are on which listeners a
+    /// connection arrived at. The socket under the write grant is what makes the refusals mean
+    /// anything: a witness that reached nothing would pass every one of them.
+    #[test]
+    fn a_socket_with_a_path_is_reached_under_a_write_grant_and_not_under_a_read_grant_or_a_refusal()
+    {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs(
+            "a connect to a socket that has a path",
+            PATH_SOCKET_ABI_VERSION,
+            "7.1+",
+        ) {
+            return;
+        }
+
+        // A socket directly in a directory spread around a refusal is granted as a file of its
+        // own, so each listener here is in a directory of its own.
+        let scratch = a_directory_for_sockets(&[
+            "read",
+            "write/open",
+            "write/unwritable",
+            "write/unreadable",
+        ]);
+        let listening = |dir: &str| listening_in(&scratch.join(dir));
+        let (readable, readable_listener) = listening("read");
+        let (writable, writable_listener) = listening("write/open");
+        let (unwritable, unwritable_listener) = listening("write/unwritable");
+        let (unreadable, unreadable_listener) = listening("write/unreadable");
+
+        let policy = loadable_policy()
+            .allow_read(&scratch)
+            .allow_write(scratch.join("write"))
+            .deny_write(scratch.join("write/unwritable"))
+            .deny_read(scratch.join("write/unreadable"));
+        let witness = "import socket, sys\n\
+                       for path in sys.argv[1:]:\n\
+                       \x20   try:\n\
+                       \x20       socket.socket(socket.AF_UNIX).connect(path)\n\
+                       \x20   except OSError:\n\
+                       \x20       pass\n";
+        let mut arguments: Vec<OsString> = vec!["-c".into(), witness.into()];
+        arguments.extend(
+            [&readable, &writable, &unwritable, &unreadable].map(|path| path.clone().into()),
+        );
+        sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &policy,
+                nothing_attached(),
+                Environment::Empty,
+            )
+            .expect("python starts under the policy")
+            .wait()
+            .expect("should wait");
+
+        assert!(
+            arrived(&writable_listener),
+            "a socket under a write grant was refused"
+        );
+        assert!(
+            !arrived(&readable_listener),
+            "a socket under a read grant was reached"
+        );
+        assert!(
+            !arrived(&unwritable_listener),
+            "a socket inside a refusal of writes beneath a write grant was reached"
+        );
+        assert!(
+            !arrived(&unreadable_listener),
+            "a socket inside a refusal of reads beneath a write grant was reached"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A confined process leads a session of its own, so it has no controlling terminal to push
