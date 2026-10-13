@@ -293,6 +293,8 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A checkout of a bare name a branch and a tag can share, rather than a `refs/` ref | mechanical | error |
 | A required context naming no job, or a job running a check that no context requires | mechanical | error |
 | A clause at `verified-by: none` | mechanical | warning |
+| A confirmer method, a remembered set or a trust question with no row in the register, an entry naming a row the table lacks, one member listed twice or a list in another spec, a cell left empty, or a row naming no test or a test that does not exist | mechanical | error |
+| A register entry for a question or a set that is no longer declared | mechanical | warning |
 | A label built with more trust than its inputs had | lane, then verifier | error |
 | A decision taken from a released value | lane, then verifier | error |
 | A clause a conforming implementation can satisfy and still break the rule | lane, then verifier | error |

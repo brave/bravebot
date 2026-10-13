@@ -10,6 +10,32 @@ governs:
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/Diff.tsx
 documented-by: docs/website/docs/security/permissions.md
+kept_in:
+  - Confirmer::confirm_write: one effect; credential writes agreed to for the session; credential writes remembered past the session
+  - Confirmer::confirm_run: one effect; programs vouched for; lines remembered past the session; run prompts drawn; reach kept from a run
+  - Confirmer::confirm_read_output: one effect; auto-vetting
+  - Confirmer::confirm_vetted_read: one effect; auto-vetting
+  - Confirmer::confirm_fetch: one effect
+  - Confirmer::confirm_server: language servers started
+  - Confirmer::confirm_manifest: one effect
+  - Confirmer::confirm_vouch: the trust map
+  - Confirmer::confirm_exposing_read: files sent despite a credential
+  - Confirmer::confirm_tool_list: MCP tool lists approved
+  - Confirmer::confirm_mcp_call: one effect; standing answers to an MCP tool
+  - Confirmer::confirm_move: MCP server moves
+  - Confirmer::confirm_path: paths reached
+  - Confirmer::confirm_host: hosts answered
+  - Confirmer::ask_user: answers to the planner's questions
+  - Confirmer::interjection: nothing
+  - Answers::trust: the trust map
+  - Answers::programs: programs vouched for
+  - Answers::servers: language servers started
+  - Answers::asked_about: run prompts drawn
+  - Answers::exposed: files sent despite a credential; credential writes agreed to for the session
+  - Answers::rules: granted rules
+  - trust_prompt::ask: the trust map; a kept answer to the startup question
+  - trust_prompt::ask_named: the trust map
+  - trust_prompt::ask_granted: granted rules
 ---
 
 ## Scope
@@ -19,17 +45,17 @@ answer grants, and what one answer must never be taken for. `ask_user`, where th
 a question, is [tools/ask-user.md](tools/ask-user.md) and is a different thing: these prompts are the system asking
 permission.
 
-There are eight: the startup trust question, a directory a settings file asked for, a read of a file
-nobody vouched for, a write or edit, a run, reading what a run printed, being shown one quarantined
-slot a check has read, and the plan a manifest run is about to walk.
+Which prompts there are, and where the answer to each is kept, is the register in
+[PROMPT-11](#PROMPT-11).
 
-A ninth is proposed and not built: sending a message to another background session
-([session-messages.md](session-messages.md#MSG-3)). The count and the mode paragraph below read
+One more is proposed and not built: sending a message to another background session
+([session-messages.md](session-messages.md#MSG-3)). The register and the mode paragraph below read
 without it until it is.
 
-The last of the eight is the only one about a whole run rather than about one thing at the moment it is due. It
-can be, because that mode fixes every step while the task string is still the only input
-([manifest.md](manifest.md#MANIFEST-10)). Everything below applies to it as it does to the rest.
+The plan a manifest run is about to walk is the only prompt about a whole run rather than about one
+thing at the moment it is due. It can be, because that mode fixes every step while the task string is
+still the only input ([manifest.md](manifest.md#MANIFEST-10)). Everything below applies to it as it
+does to the rest.
 
 ## What every prompt owes the reader
 
@@ -406,6 +432,49 @@ approving something nobody looked at.
 `verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_runs_without_asking`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 
+<a id="PROMPT-11"></a>
+### PROMPT-11: every place an answer is kept is in the register, with what it is kept under
+
+An answer is kept under a key, and a later effect whose key matches is let through without asking.
+Every place that keeps one is a row of the table below. A row says which question fills it, what
+that question showed, what the answer is kept under, and how long it lasts, and it cites the tests
+that pin what it says. Every question the system asks lands in at least one row, and a question or a
+place to keep answers that is new has its row before it lands.
+
+**Kept under** is what a later effect has to match to go unasked. Anything **Shown** that the key does
+not hold is something one answer covers in every version of it, so where a key holds less than its
+prompt showed the row says what it leaves out.
+
+| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |
+|---|---|---|---|---|---|
+| one effect | a write or an edit, a run, reading what a program printed, being shown one quarantined slot, a fetch, the plan, a call to a server's tool, and removing a checkout something was done in | what each prompt shows ([PROMPT-1](#PROMPT-1)) | the exact value the approval was given for, by its own bytes ([PROMPT-5](#PROMPT-5)) | the one effect; it is never written down | `verified-by: bravebot_core::policy::an_endorsement_cannot_be_replayed` `verified-by: bravebot_core::policy::an_approval_for_one_url_does_not_fetch_another` `verified-by: bravebot_core::policy::an_approval_to_read_output_cannot_be_replayed` `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed` |
+| the trust map | `y` at the startup question, at the question about a directory a settings file asked for, and at the offer to vouch for a quarantined file; `/add-dir` | the directory, or the file with a preview and what the check said | the path as text, made absolute, and not its bytes; a rule covers that path and every path below it, a whole segment at a time | the session; it is in the session record and comes back with `--resume` | `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only` `verified-by: bravebot_core::trust::one_added_directory_does_not_cover_a_sibling` `verified-by: bravebot_core::trust::a_yes_for_one_project_does_not_follow_a_move_to_another` |
+| a kept answer to the startup question | `r` at the startup question | the directory | the directory's path and the identity the filesystem gives the directory there, so one made again at the same path is asked about | every later session started in that directory or below the root of its git worktree, until it is withdrawn | `verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other` `verified-by: bravebot_agent::trusted::another_directory_at_the_same_path_is_asked_about` |
+| granted rules | `y` at the question naming every allow rule a checkout's settings propose | each rule's text and the settings file it is in | the rule's text, the settings file's path and the root of the workspace it was granted in | a file every later session of the terminal reads in that workspace | `verified-by: bravebot_agent::granted::a_rule_edited_since_it_was_granted_is_not_granted` `verified-by: bravebot_agent::granted::a_grant_for_one_file_is_not_a_grant_for_another` `verified-by: bravebot_agent::granted::a_rule_granted_in_one_workspace_is_not_granted_in_another` |
+| programs vouched for | `a` at the run prompt | each step's arguments, the binary it resolved to, and the directory | each step's resolved binary by its path's bytes, the name that started it, its exact arguments, and the directory, matched exactly. A line that sets a variable, writes through a redirection, feeds input from a reference, releases private data, asks for a credential scope or runs unconfined is not offered the key | the session; it is in the session record and comes back with `--resume` | `verified-by: bravebot_core::programs::vouching_in_one_tree_says_nothing_about_the_same_command_in_another` `verified-by: bravebot_core::programs::two_binaries_differing_only_in_unrenderable_bytes_are_different_programs` `verified-by: bravebot_core::policy::vouching_for_one_command_does_not_cover_another_of_the_same_program` |
+| lines remembered past the session | `r` and `f` at the run prompt | as for `a`, and the file the answer is recorded in | each step's name, resolved binary, the name that started it, every argument, its environment and where its streams go, how the steps are joined, and the directory. With `f`, the one number a table in the source lists is left free | a file every session of the terminal started in that directory reads, fresh or resumed | `verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list` `verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_name_onto_a_different_binary` `verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line` `verified-by: bravebot_agent::remembered::a_line_answered_in_one_directory_does_not_answer_in_another` |
+| run prompts drawn | every run prompt | the line | the line as it was asked about. It grants nothing: a later prompt for the same binary under other arguments reads it only to say that a settings file is what ends the asking | the session; it is written nowhere | `verified-by: bravebot_core::programs::asking_about_a_line_vouches_for_nothing` `verified-by: bravebot_core::policy::a_line_asked_about_is_not_thereby_vouched_for_or_remembered` |
+| reach kept from a run | `m` and `e` at the run prompt for a line that asked for a credential scope | the programs, the scopes, how long each lasts, and the file the record is written to | each program and operation word among the line's stages, with each scope, read only, bound to the checkout unless the scope table gives that program the scope. It vouches for no program, and the line is still asked about | `m`, the session; `e`, a file every later session in the checkout reads | `verified-by: bravebot_agent::reach::a_kept_request_binds_to_a_checkout_unless_the_table_gives_the_program_the_scope` `verified-by: bravebot_agent::turn::keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only` |
+| credential writes agreed to for the session | the standing key at a write prompt whose scan found a credential | the path, the body, and what the scan found | the file the write resolved to. It answers the scan's question only; the write is still asked about | the session; it is written nowhere | `verified-by: bravebot_agent::turn::always_for_a_credential_write_covers_that_file_and_no_other` |
+| credential writes remembered past the session | the recording key at the same prompt | as above | the file the write resolved to, in the record of the directory | a file every later session started in that directory reads | `verified-by: bravebot_agent::turn::remembering_a_credential_write_covers_later_sessions_in_that_directory_only` |
+| files sent despite a credential | `y` at the question about a vouched file the scan found a credential in | the file's name, and each finding with its kind, where it is, and a masked value | the file's name from the root, or from an added directory's full path, as text. Not its bytes | the session; it is written nowhere and does not come back with `--resume` ([credential-protection.md](credential-protection.md#known-costs)) | `verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving` `verified-by: bravebot_agent::turn::agreeing_to_one_files_key_in_history_is_not_agreeing_to_anothers` |
+| language servers started | `y` at the question about starting a language server | the program it resolved to, its arguments, and the tree it would index | the language, or a digest of a declared server's name, command, arguments, extensions, environment and options, for the root it was started in | the session, as a running process; a no is not kept | `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next` `verified-by: bravebot_lsp::server::a_changed_declaration_is_asked_about_again` |
+| MCP tool lists approved | the question about the tools a server offers | every tool, with its description | a digest of the server's declaration and one of the list as drawn | a yes, in a file every later session reads while the declaration resolves the same way; a no, for the session | `verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again` `verified-by: bravebot_config::mcp::a_vouched_list_lasts_as_long_as_its_declaration_resolves` |
+| standing answers to an MCP tool | answer 2 at a call to a server's tool | the tool and every argument | the server's alias, the tool, and the project. Not the arguments, which the answer leaves free, and not what the alias is declared as | a file every later session reads, until it is forgotten | `verified-by: bravebot_config::mcp::a_standing_answer_reaches_one_tool_of_one_server_in_one_project` |
+| MCP server moves | `y` at the question about a remote server whose request was redirected | where the server was declared, where the reply points, the host it reaches, and the warning | the server's declaration, rewritten to the new destination only while it is still the declaration that was asked about | the settings file, for every later session; the session alone where the session writes nothing | `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else` `verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session` |
+| paths reached | `y` at the question about letting programs reach one more path | the path | the path it resolved to. A later request for a path already held is asked about like the first | the session; it is written nowhere | `verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended` |
+| hosts answered | the question about hosts programs asked for and were refused | the hosts | each host's name, for a yes and for a no | the session; it is written nowhere | `verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept` `verified-by: bravebot_agent::workspace::host_answers_are_shared_remembered_and_lifted_by_a_yes` |
+| answers to the planner's questions | a series of questions the planner asks | each question and its choices | every field of the question, each with its length, its tag and its choices included | the live session; it is written nowhere, and a resumed session asks again | `verified-by: bravebot_core::ask::no_question_can_spell_the_key_of_another` `verified-by: bravebot_tui::ask::a_series_answered_entirely_from_memory_asks_nothing` |
+| auto-vetting | the standing key at a vetting or output prompt whose check completed and found nothing | the bytes, where they came from, and what the check said | nothing about any one slot. It turns on the mode in which a later slot whose check finds nothing reaches the planner unasked | a file every later session reads, fresh or resumed, until it is turned off | `verified-by: bravebot_tui::state::pressing_the_standing_key_turns_vetting_on_for_the_session` `verified-by: bravebot_tui::persist::a_recorded_answer_about_vetting_outlives_the_session_that_gave_it` |
+| the permission mode | no question: the mode key, `/plan`, or starting a session that bypasses every check | the mode's name | nothing about any one effect. It answers in advance every prompt the mode reaches ([permission-modes.md](permission-modes.md)) | the sitting it was chosen in; it is not in the session record | `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode` `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read` |
+| the sandbox mode | `y` at the question `/sandbox off` asks; `/sandbox` naming any other mode asks nothing | that programs `run` starts will have no profile, so nothing confines what they read, write or reach, and the mode a no keeps | nothing about any one run. Every program a later turn starts runs with no profile | the process; `/resume` hands it to the session it starts | `verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode` `verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode` |
+
+**Why.** A yes about one thing comes to cover another when the key it is kept under holds less than
+the prompt showed, or is relative to something that later moves. Each of those has been fixed where
+it was found, and none of the fixes made the next prompt say what its answer is kept under. A row has
+to be written before a question lands, so what the key holds is decided where a reviewer reads it,
+and the audit can hold the code to it.
+
 <a id="PROMPT-9"></a>
 ### PROMPT-9: where nobody can be asked, the answer is no
 
@@ -415,12 +484,12 @@ question, and it refuses to promote a slot however the check that read it answer
 model is not a person having read something. A plan is refused too, so a manifest run with nobody to ask stops before its first step
 rather than walking a program nobody read.
 
-A person may answer these eight in advance, for a session or for a run, by choosing a mode:
+A person may answer these prompts in advance, for a session or for a run, by choosing a mode:
 [permission-modes.md](permission-modes.md) is what each mode answers and what asking for one costs.
 That is somebody's own standing answer rather than a default, and no mode answers a question the
 planner posed, since that asks for information rather than consent.
 
-`--vet` ([vetting.md](vetting.md#CHECK-11)) is such an answer in advance, and to one of the eight
+`--vet` ([vetting.md](vetting.md#CHECK-11)) is such an answer in advance, and to one of them
 only: with it, a check that completes and finds nothing promotes the one slot the planner asked to
 be shown, and nothing else about a run nobody is watching changes. Without it a check on that path
 is a model call whose word ends in the refusal above. The closed channel keeps refusing either way:
