@@ -16,6 +16,7 @@ governs:
   - crates/sandbox/src/proxy.rs
   - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
+  - crates/cli/src/push_identity.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
@@ -896,6 +897,20 @@ file, as it names an entry whose name is not `<host>/<owner>` or whose value is 
 refuse, all but the one about the directories the plan may write, which it has no session to know.
 A key beside `identities` in the block is reported as unread.
 
+`bravebot doctor --push-identity [<host>/<owner>]` asks which account each key pushes as. It takes
+every public key a stage with the remote scope could be offered, the ones at ssh's default names and
+the ones an `IdentityFile` line of the person's ssh configuration names, and runs `ssh -T -i <key>
+-o IdentitiesOnly=yes git@<host>` once for each, so the host answers for that key alone. Each key
+is printed with its fingerprint and the login the greeting names, or that no account on the host
+has it (`Permission denied (publickey)`), or that the host did not answer, and a login is compared
+with the owner, which is the argument or the address of `origin` in the directory it ran in. It
+runs only when asked, since a hardware key waits for a touch, and the host is `github.com` where
+neither names another. The greeting is bytes from a remote host: it is read for a login spelled as
+GitHub spells one, letters, digits and `-` up to 39, and nothing else of it is kept. The login and
+the comparison are shown on the person's screen and nowhere else. They never choose a key, never
+reach a stage, a prompt, the planner or the trace, and the key marked as chosen is the one
+`git.identities` names, whatever any host said.
+
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
 agent's socket, and never the private key. The signing scope reads that file and the stage may write
@@ -1163,6 +1178,14 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_config::git_identities::a_key_beside_identities_is_reported_as_unread`
 `verified-by: bravebot_config::settings::only_the_persons_own_files_choose_a_key_for_an_owner`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read`
+`verified-by: bravebot_sandbox::scope::candidate_keys_are_the_default_names_and_the_named_ones_once_each`
+`verified-by: bravebot_cli::push_identity::a_greeting_and_a_refusal_are_told_apart`
+`verified-by: bravebot_cli::push_identity::a_login_that_is_not_spelled_as_one_is_not_shown`
+`verified-by: bravebot_cli::push_identity::each_key_reports_the_login_its_own_connection_got`
+`verified-by: bravebot_cli::push_identity::a_key_no_account_has_is_shown_as_not_recognised`
+`verified-by: bravebot_cli::push_identity::the_chosen_key_is_the_one_the_settings_named_not_the_one_that_greeted`
+`verified-by: bravebot_cli::running::doctor_push_identity_reports_the_login_each_key_gets`
+`verified-by: bravebot_cli::running::doctor_push_identity_refuses_an_argument_that_is_not_a_host_and_owner`
 `verified-by: bravebot_cli::running::a_configured_git_identity_reaches_only_the_matching_run_stage`
 `verified-by: bravebot_agent::confine::an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other`
 `verified-by: bravebot_agent::confine::no_entry_leaves_a_remote_stage_as_it_was`

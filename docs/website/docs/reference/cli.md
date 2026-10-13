@@ -22,6 +22,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot doctor --sandbox-check              Run everyday workflows under the sandbox and report which work
+  bravebot doctor --push-identity [<host>/<owner>]  Ask GitHub which account each of your ssh keys pushes as
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
@@ -51,6 +52,7 @@ Usage:
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
+| `bravebot doctor --push-identity [<host>/<owner>]` | print each ssh public key's fingerprint and the GitHub login that key pushes as |
 | `bravebot bug-report` | write a text file to attach to a bug report ([below](#bug-report)) |
 | `bravebot update` | print the command that updates this copy, and run nothing ([below](#update)) |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |

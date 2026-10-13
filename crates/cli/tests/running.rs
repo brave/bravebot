@@ -1305,6 +1305,97 @@ fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() 
     assert!(!scratch.path.join(".bravebot/doctor-sandbox").exists());
 }
 
+/// SANDBOX-16 over the process: `doctor --push-identity` asks once per public key, offering that
+/// key and no other, and prints the login each answer names beside the key's fingerprint. A `ssh`
+/// that answers by the key it was offered stands in for GitHub, so two keys of two accounts show two
+/// logins, and the key `git.identities` names for the owner is marked.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_reports_the_login_each_key_gets() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cli-running-doctor-push-identity");
+    let home = scratch.path.join("home");
+    let tools = scratch.path.join("tools");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+    std::fs::create_dir_all(&tools).unwrap();
+    for name in ["id_ed25519", "bot"] {
+        std::fs::write(
+            home.join(format!(".ssh/{name}.pub")),
+            "ssh-ed25519 AAAA c\n",
+        )
+        .unwrap();
+    }
+    std::fs::write(home.join(".ssh/config"), "IdentityFile ~/.ssh/bot\n").unwrap();
+    std::fs::write(
+        home.join(".bravebot/settings.json"),
+        r#"{"git": {"identities": {"github.com/netzenbot": "~/.ssh/bot.pub"}}}"#,
+    )
+    .unwrap();
+    let script = |name: &str, body: &str| {
+        let path = tools.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // The arguments are `-lf <file>`, and the answer is built from the file's name.
+    script(
+        "ssh-keygen",
+        r#"echo "256 SHA256:fp$(basename "$2" .pub | tr -d _) comment (ED25519)""#,
+    );
+    // The arguments are `-T -i <file> -o IdentitiesOnly=yes -o ConnectTimeout=15 git@host`.
+    script(
+        "ssh",
+        r#"case "$3" in
+  *bot.pub) echo "Hi netzenbot! You've successfully authenticated, but GitHub does not provide shell access." >&2 ;;
+  *) echo "Hi bbondy! You've successfully authenticated, but GitHub does not provide shell access." >&2 ;;
+esac
+exit 1"#,
+    );
+    let path = format!("{}:/usr/bin:/bin", tools.display());
+
+    let output = bravebot(
+        &home,
+        &[("PATH", &path)],
+        &["doctor", "--push-identity", "github.com/netzenbot"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let line = |key: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(key))
+            .unwrap_or_else(|| panic!("no line for {key}: {stdout}"))
+            .to_string()
+    };
+    assert!(
+        line("id_ed25519.pub").contains("SHA256:fpided25519"),
+        "{stdout}"
+    );
+    assert!(line("id_ed25519.pub").contains("bbondy"), "{stdout}");
+    assert!(line("bot.pub").contains("SHA256:fpbot"), "{stdout}");
+    assert!(line("bot.pub").contains("netzenbot"), "{stdout}");
+    assert!(stdout.contains("git.identities names this key"), "{stdout}");
+}
+
+/// SANDBOX-16 over the argument list: an argument that is not `<host>/<owner>` is refused before
+/// any key is read or any connection is made.
+#[test]
+fn doctor_push_identity_refuses_an_argument_that_is_not_a_host_and_owner() {
+    let scratch = Scratch::new("cli-running-doctor-push-identity-argument");
+
+    for arguments in [
+        &["doctor", "--push-identity", "netzenbot"][..],
+        &["doctor", "--push-identity", "github.com/a", "extra"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+        assert!(stderr.contains("BB1002"), "{stderr}");
+    }
+}
+
 /// NET-8 over the status rather than the line: a proxy variable naming no route ends `doctor` on the
 /// configuration error, as a certificate path holding nothing does. A machine whose only way out is
 /// a mistyped `HTTPS_PROXY` is misconfigured, and a CI job checking a fleet reads the status rather
