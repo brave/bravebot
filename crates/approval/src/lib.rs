@@ -28,8 +28,9 @@ pub const QUARANTINE_BAR: &str = "\u{2503}";
 /// answering whatever was in front of them at the end of it, which is not the question that was
 /// asked.
 ///
-/// A command's output is not capped ([`output_lines`]), since a yes releases every byte of it to
-/// the planner and a line counted rather than shown would be approved unread.
+/// A command's output and the text of a vetted read are not capped ([`output_lines`],
+/// [`vet_lines`]), since a yes releases every byte of either to the planner and a line counted
+/// rather than shown would be approved unread.
 pub const MOST_CONTENT_LINES: usize = 40;
 
 /// Replace control characters, so shown text cannot move the cursor or recolour the screen.
@@ -56,7 +57,7 @@ pub fn printable(text: &str) -> String {
 /// The margin is on every row, for the reason [`QUARANTINE_BAR`] is on every row of a block: a
 /// caption above the block could be imitated by the block's own first line, and a margin cannot.
 /// The cap is because a question has to be readable as one: a person scrolled past a thousand
-/// lines of output is answering whatever is in front of them at the end of it.
+/// lines is answering whatever is in front of them at the end of it.
 pub fn quarantined(content: &str) -> Vec<String> {
     let mut rows = Vec::new();
     let mut counted = content.lines();
@@ -330,6 +331,9 @@ pub struct Vet<'a> {
 }
 
 /// The lines a vetted read is read before approving.
+///
+/// Every line of the text, because a yes releases all of it to the planner (VET-1), as it does a
+/// command's output.
 pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
     let mut lines = vec![
         printable(vet.summary),
@@ -352,7 +356,7 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
                 lines.push(t!(vet_pdf_hidden_text).to_string());
             }
         }
-        None => lines.extend(quarantined(vet.content)),
+        None => lines.extend(quarantined_in_full(vet.content)),
     }
     lines
 }
