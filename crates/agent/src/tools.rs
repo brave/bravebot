@@ -3596,7 +3596,8 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
 
 /// The answer to a call that was held and not run (TURN-9): the driver's sentence in place of a
 /// result, shown to the person as a failed call.
-pub fn refused_without_running<R: Reporter>(
+pub fn refused_without_running<S: Sink, R: Reporter>(
+    policy: &mut Policy<'_, S>,
     reporter: &mut R,
     call: &ToolCall,
     text: String,
@@ -3604,10 +3605,18 @@ pub fn refused_without_running<R: Reporter>(
     let name = strip_namespace(&call.function.name).to_string();
     let verb = crate::report::verb_for(&name);
     let produced = Produced::problem(text);
-    reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+    // The reason the planner gave is drawn on both lines, as `dispatch` draws it: a call that is
+    // held is still one the person watching reads, and arguments that are not JSON have none.
+    let why = why_of(policy, &name, &call.arguments().unwrap_or(Value::Null));
+    reporter.tool_started(
+        Activity::running(verb, "")
+            .of_tool(&name)
+            .saying_why(why.clone()),
+    );
     reporter.tool_finished(
         Activity::running(verb, "")
             .of_tool(&name)
+            .saying_why(why)
             .failed(produced.note.clone()),
     );
     output_of(produced, call.id.clone(), name)
@@ -7523,7 +7532,8 @@ fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) ->
 ///
 /// `path` is routing: it decides what a program can touch, so it is read through the planner
 /// argument gate and judged by the rules an `allowWrite` entry meets. `why` is content, drawn for
-/// the person and recorded, and decides nothing. The reach is held by the workspace for the session
+/// the person and recorded, and decides nothing: it is read through the display release alone, and a
+/// call without one is asked about like any other. The reach is held by the workspace for the session
 /// and written nowhere, and the directory is not marked trusted, unless the mode that answers every
 /// question granted it: that opens the directory for the file tools too (PATHREQ-7).
 fn request_path<S: Sink, C: Confirmer>(
@@ -7544,12 +7554,6 @@ fn request_path<S: Sink, C: Confirmer>(
         Some(Value::Bool(write)) => *write,
         Some(_) => return Produced::problem("error: 'write' must be true or false"),
     };
-    let Some(why) = named_argument(arguments, WHY) else {
-        return Produced::problem(
-            "error: 'why' is required: say what the programs need the path for",
-        );
-    };
-
     if !path_requests_accepted(policy, tools) {
         return Produced::problem(NOT_ACCEPTING_PATHS);
     }
@@ -7572,27 +7576,15 @@ fn request_path<S: Sink, C: Confirmer>(
              nothing was asked.",
         );
     }
-    if let Err(denial) = policy.before_action(
-        "request_path",
-        WHY,
-        bravebot_core::event::Role::Content,
-        &why,
-    ) {
-        return Produced::problem(format!("refused: {denial}"));
-    }
-    let reason: String = why
-        .declassify(&policy.authorise_content_release("request_path", WHY))
+    // Drawn and recorded, and decided on by nothing: a call without a reason asks the person all the
+    // same (TOOL-5), and the screen is the one to say whether there is anything to draw.
+    let reason: String = why_of(policy, "request_path", arguments)
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(LONGEST_PATH_REASON)
         .collect::<String>()
         .trim()
         .to_string();
-    if reason.is_empty() {
-        return Produced::problem(
-            "error: 'why' is required: say what the programs need the path for",
-        );
-    }
 
     let judged = judged_request(
         std::path::Path::new(&path),
@@ -11810,6 +11802,7 @@ mod tests {
         }
 
         offer_advisor(&mut offered);
+        offer_tool_loader(&mut offered, &["server:tool".to_string()]);
 
         for tool in offered {
             let name = &tool.function.name;
@@ -11826,6 +11819,51 @@ mod tests {
                 parameters["required"]
             );
         }
+    }
+
+    /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
+    /// as `dispatch` draws every other call (TOOL-5). A held call announced with no reason, or
+    /// one drawn only on its first line, leaves the refusal with nothing of what the call was for;
+    /// a call whose arguments are not JSON, or that gave none, is drawn with an empty reason.
+    #[test]
+    fn a_held_call_is_drawn_with_the_reason_the_planner_gave() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let drawn = |arguments: &str| {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "c1",
+                "type": "function",
+                "function": { "name": "read_file", "arguments": arguments },
+            }))
+            .unwrap();
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            refused_without_running(&mut policy, &mut reporter, &call, "held".to_string());
+            let why = |rows: &[Activity]| rows.iter().map(|a| a.why.clone()).collect::<Vec<_>>();
+            (why(&reporter.started), why(&reporter.finished))
+        };
+
+        assert_eq!(
+            drawn(r#"{"path":"a.txt","why":"to find the sentinel"}"#),
+            (
+                vec!["to find the sentinel".to_string()],
+                vec!["to find the sentinel".to_string()]
+            )
+        );
+        let none = (vec![String::new()], vec![String::new()]);
+        assert_eq!(drawn(r#"{"path":"a.txt"}"#), none);
+        assert_eq!(drawn("not json"), none);
     }
 
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
