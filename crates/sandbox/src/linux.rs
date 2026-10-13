@@ -473,13 +473,19 @@ impl LandlockSandbox {
 
                 // A path the caller named is granted at the exec, or the exec is refused
                 // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
-                // asked of it is that it is still there.
+                // asked of it is that it is still a directory: one that has gone, or become a
+                // file, leaves every entry with nothing to grant.
                 for path in readable
                     .above_a_refusal
                     .iter()
                     .chain(&writable.above_a_refusal)
                 {
-                    PathFd::new(path).map_err(|e| Error::other(format!("landlock: {e}")))?;
+                    if !std::fs::metadata(path).is_ok_and(|found| found.is_dir()) {
+                        return Err(Error::other(format!(
+                            "landlock: {} is no longer a directory",
+                            path.display()
+                        )));
+                    }
                 }
 
                 ruleset = ruleset
@@ -1804,7 +1810,8 @@ mod tests {
     /// The rows are opened before the fork and the rules are built after it, so a row can go away
     /// in between. A row the caller named that is gone at the exec is a process running under less
     /// than the policy with nothing saying so (SANDBOX-6), whether the row is granted whole or, above
-    /// a refusal, as its entries. Each case starts while its row is there, so the refusal is the
+    /// a refusal, as its entries. A row above a refusal that has become a file is as gone, since
+    /// none of its entries can be granted. Each case starts while its row is there, so the refusal is the
     /// missing row's and not the program's or the policy's, and each names its row in one list
     /// alone, because a check over one list leaves the other silently narrowing.
     #[test]
@@ -1820,34 +1827,45 @@ mod tests {
                 "a read row granted whole",
                 lists.clone().allow_read(&named),
                 &named,
+                false,
             ),
             (
                 "a write row granted whole",
                 lists.clone().allow_write(&named),
                 &named,
+                false,
             ),
             (
                 "a read row granted whole, with no refusal",
                 loadable_policy().allow_read(&named),
                 &named,
+                false,
             ),
             (
                 "a write row granted whole, with no refusal",
                 loadable_policy().allow_write(&named),
                 &named,
+                false,
             ),
-            ("a read row above a refusal", lists.clone(), &listed),
+            ("a read row above a refusal", lists.clone(), &listed, false),
+            (
+                "a read row above a refusal that becomes a file",
+                lists.clone(),
+                &listed,
+                true,
+            ),
             (
                 "a write row above a refusal",
                 loadable_policy()
                     .allow_write(&written)
                     .deny_write(written.join("kept")),
                 &written,
+                false,
             ),
         ];
 
         let mut wrong = Vec::new();
-        for (case, policy, row) in &cases {
+        for (case, policy, row, becomes_a_file) in &cases {
             let command = || {
                 for directory in [&listed, &named, &written] {
                     std::fs::create_dir_all(directory).expect("the directory is creatable");
@@ -1870,9 +1888,15 @@ mod tests {
             }
             let mut gone = command();
             std::fs::remove_dir_all(row).expect("the row is removable");
+            if *becomes_a_file {
+                std::fs::write(row, "").expect("the file is writable");
+            }
             let after = gone.stdin(std::process::Stdio::null()).status();
             if after.is_ok() {
                 wrong.push(format!("{case}: started after the row went: {after:?}"));
+            }
+            if row.is_file() {
+                std::fs::remove_file(row).expect("the file is removable");
             }
         }
 

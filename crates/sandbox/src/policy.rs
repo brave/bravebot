@@ -454,7 +454,7 @@ fn enumerate<'a>(
             }
             continue;
         }
-        let spread = spread_around(row, refused, &mut enumeration.listed);
+        let spread = list_around(row, refused, &mut enumeration.listed);
         if !listed {
             enumeration.above_a_refusal.push(row.clone());
             spread.map_err(|error| {
@@ -561,9 +561,7 @@ pub struct Resolution {
 ///
 /// A directory with no refusal beneath it is one row. One with a refusal beneath it, present or
 /// not, is each of its entries, descended into the same way, so only the entries on the way to a
-/// refusal are listed. A failure to list `path` itself, at its start or part of the way through,
-/// is the error, with the entries listed before it already in `granted`. An entry this cannot
-/// list contributes nothing, since a process that could not list it has no entries to name.
+/// refusal are listed ([`list_around`]).
 pub(crate) fn spread_around(
     path: &Path,
     refused: &[PathBuf],
@@ -573,8 +571,28 @@ pub(crate) fn spread_around(
         granted.push(path.to_path_buf());
         return Ok(());
     }
+    list_around(path, refused, granted)
+}
+
+/// The entries of `path` as [`spread_around`] makes them, for a `path` with a refusal beneath it.
+///
+/// A failure to list `path` itself, at its start or at an entry, is the error, after every entry
+/// that could be read is in `granted`. An entry this cannot list contributes nothing, since a
+/// process that could not list it has no entries to name.
+fn list_around(
+    path: &Path,
+    refused: &[PathBuf],
+    granted: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    let mut failed = None;
     for entry in fs::read_dir(path)? {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failed.get_or_insert(error);
+                continue;
+            }
+        };
         let child = entry.path();
         let is_a_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
         if is_a_link || refused.contains(&child) {
@@ -582,7 +600,7 @@ pub(crate) fn spread_around(
         }
         let _ = spread_around(&child, refused, granted);
     }
-    Ok(())
+    failed.map_or(Ok(()), Err)
 }
 
 /// The rows of `paths` that are on disk, appending the rest to `omitted`.
