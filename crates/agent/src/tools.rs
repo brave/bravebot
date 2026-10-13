@@ -9709,6 +9709,13 @@ fn spawn_processor<S: Sink>(
         None => None,
     };
 
+    // The planner's words, at the label of the context it wrote them in, so an instruction
+    // written after private content was let out for the planner is private and refused.
+    let instruction = match policy.adopt_model_output("spawn_processor", instruction) {
+        Ok(instruction) => instruction,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
     let spec = match policy.before_processor(&origin, &reads, &instruction, about, tools.slots) {
         Ok(spec) => spec,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),

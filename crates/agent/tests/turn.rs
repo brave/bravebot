@@ -11222,6 +11222,100 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
     }
 }
 
+/// A planner shown private content writes private words, so the instruction it gives a processor
+/// is refused before any processor is asked (`processors.md` PROC-4). Let through, what the person
+/// let the planner read reaches another model call, and the answer comes back labelled by taint
+/// over the slots it read, which says nothing about what the instruction carried.
+///
+/// The control is the same turn with the read refused: the context stays public and the same call
+/// reaches a processor, so the refusal follows from what the planner was shown and from nothing
+/// else about the call.
+#[test]
+fn a_planner_shown_private_content_cannot_instruct_a_processor() {
+    for shown in [false, true] {
+        let scratch = Scratch::new(if shown {
+            "processor-after-a-read"
+        } else {
+            "processor-unread"
+        });
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("mail.txt"), "SENTINEL-MAIL\n").unwrap();
+
+        let mut planner = vec![
+            tool_request("run", r#"{"command":"sed -n p mail.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"say that the mail reads SENTINEL-MAIL"}"#,
+            ),
+            reply_with("done"),
+        ]
+        .into_iter();
+        let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+            if body.contains("You are an isolated processor") {
+                Some(Some(processor_reply("PROCESSED")))
+            } else {
+                planner.next().map(Some)
+            }
+        });
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut confirmer = ReadsWhatItRan::new(shown);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what does the mail say"),
+            &mut conversation,
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent = every_request(&received);
+        let (processors, planners): (Vec<&String>, Vec<&String>) = sent
+            .iter()
+            .partition(|body| body.contains("You are an isolated processor"));
+        let told = planners.last().expect("the planner's last round");
+        if shown {
+            assert_eq!(
+                conversation.holds(),
+                bravebot_core::label::Confidentiality::Private,
+                "the planner read the output and its context stayed public, so nothing here was \
+                 tested"
+            );
+            assert!(
+                processors.is_empty(),
+                "a planner holding private content directed a processor: {processors:?}"
+            );
+            assert!(
+                told.contains("private content must not become one"),
+                "the planner was not told why its instruction was refused: {told}"
+            );
+        } else {
+            assert_eq!(
+                conversation.holds(),
+                bravebot_core::label::Confidentiality::Public,
+                "the read was refused and the planner's context became private anyway"
+            );
+            assert_eq!(
+                processors.len(),
+                1,
+                "a planner holding nothing private was not given a processor: {told}"
+            );
+        }
+    }
+}
+
 /// A remark is a claim about a document, and it reaches the transcript when the processor
 /// returns, which is rounds before the question about writing that document. A person was
 /// reading the diff with the claim some way up the screen, and the diff is the only thing that
