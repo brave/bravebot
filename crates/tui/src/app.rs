@@ -2495,14 +2495,15 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Undo => {
+                let (trust, programs, language_servers) = answers.what_a_rewind_takes_back();
                 rewind(
                     &mut session,
                     &mut conversation,
-                    &mut answers.trust,
-                    &mut answers.programs,
+                    trust,
+                    programs,
                     &mut stored,
                     &workspace,
-                    &mut answers.servers,
+                    language_servers,
                     1,
                 );
                 needs_draw = true;
@@ -2512,16 +2513,20 @@ fn event_loop(
                     list_rewind_points(&mut session);
                 } else {
                     match turns.parse::<usize>() {
-                        Ok(steps) if steps > 0 => rewind(
-                            &mut session,
-                            &mut conversation,
-                            &mut answers.trust,
-                            &mut answers.programs,
-                            &mut stored,
-                            &workspace,
-                            &mut answers.servers,
-                            steps,
-                        ),
+                        Ok(steps) if steps > 0 => {
+                            let (trust, programs, language_servers) =
+                                answers.what_a_rewind_takes_back();
+                            rewind(
+                                &mut session,
+                                &mut conversation,
+                                trust,
+                                programs,
+                                &mut stored,
+                                &workspace,
+                                language_servers,
+                                steps,
+                            )
+                        }
                         _ => session.note(t!(session_rewind_needs_a_number)),
                     }
                 }
@@ -3098,8 +3103,8 @@ fn event_loop(
                         &mut stored,
                     )?;
                     // Taken apart with no `..`, so an answer a turn learns to remember does not
-                    // build until it has a place in `answers`, where `/cd`, `/clear` and `/branch`
-                    // decide it.
+                    // build until it has a place in `answers`, where `/cd`, `/clear`, `/branch`,
+                    // `/undo` and `/rewind` decide it.
                     let Continued {
                         conversation: next,
                         trust,
@@ -4849,10 +4854,10 @@ impl Rules {
 
 /// The answers the event loop itself keeps past the prompt that gave them.
 ///
-/// One value so that `/cd`, `/clear` and `/branch` each take it apart with no `..`: a set added here
-/// does not build until each says whether it is kept, reset, rebased or read again. The mode, vetting
-/// and the MCP servers are the `Session`'s, and the directories `/add-dir` opened are the
-/// `Workspace`'s, so no pattern reaches them.
+/// One value so that `/cd`, `/clear`, `/branch`, `/undo` and `/rewind` each take it apart with no
+/// `..`: a set added here does not build until each says whether it is kept, reset, rebased or read
+/// again. The mode, vetting and the MCP servers are the `Session`'s, and the directories `/add-dir`
+/// opened are the `Workspace`'s, so no pattern reaches them.
 struct Answers {
     trust: TrustStore,
     programs: TrustedPrograms,
@@ -4930,6 +4935,30 @@ impl Answers {
         *asked_about = AskedAbout::new();
         // And nothing agreed to be shown, and no file agreed to hold a secret, for the same reason.
         *exposed = bravebot_core::credentials::Exposed::new();
+    }
+
+    /// The answers [`rewind`] reaches, for `/undo` and `/rewind` (SESSION-19). It meets the map with
+    /// the point's, returns the programs to the point's and stops the servers. The others are kept.
+    fn what_a_rewind_takes_back(
+        &mut self,
+    ) -> (
+        &mut TrustStore,
+        &mut TrustedPrograms,
+        &mut Option<LanguageServers>,
+    ) {
+        let Answers {
+            trust,
+            programs,
+            servers,
+            // Kept: it grants nothing.
+            asked_about: _,
+            // Kept: CRED-13 and CRED-15 give a file agreed to be shown or to hold a secret the
+            // session's lifetime, and no rewind point holds one.
+            exposed: _,
+            // Kept: read for the root, which a rewind does not move.
+            rules: _,
+        } = self;
+        (trust, programs, servers)
     }
 }
 
@@ -24946,6 +24975,85 @@ mod tests {
             "the new session kept a file agreed to be shown"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// SESSION-19: undoing a turn takes back the program vouched for in it and stops the servers.
+    /// It keeps a file agreed to be shown or to hold a secret, which CRED-13 and CRED-15 give the
+    /// session's lifetime, and the run prompts drawn, which grant nothing.
+    #[test]
+    fn undoing_a_turn_takes_back_its_programs_and_keeps_the_files_agreed_to() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-answers");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), &root);
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+
+        let prompt = "run the checks";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &stored,
+        );
+        session.rewind.open(point, prompt.to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        give_answers(&mut answers, &root);
+        let key = root.join("deploy/key.pem");
+        answers.exposed.allow_creating(&key);
+        conversation.push(Message::assistant("done"));
+        session.complete("done", vec![], 10);
+        session.record_turn(start, &conversation);
+        let asked_about = answers.asked_about.clone();
+
+        let (trust, programs, servers) = answers.what_a_rewind_takes_back();
+        rewind(
+            &mut session,
+            &mut conversation,
+            trust,
+            programs,
+            &mut stored,
+            &workspace,
+            servers,
+            1,
+        );
+
+        assert_eq!(session.turns, 0, "the turn was not undone");
+        assert_eq!(
+            answers.programs,
+            TrustedPrograms::new(),
+            "the rewind kept a program vouched for in the turn it undid"
+        );
+        assert!(
+            answers.servers.is_none(),
+            "the rewind kept the servers running"
+        );
+        assert!(
+            answers.exposed.holds(".env"),
+            "the rewind forgot a file agreed to be shown"
+        );
+        assert!(
+            answers.exposed.allows_creating(&key),
+            "the rewind forgot a file agreed to hold a secret"
+        );
+        assert_eq!(
+            answers.asked_about, asked_about,
+            "the rewind forgot the run prompts drawn"
+        );
     }
 
     /// SESSION-31, CHECKOUT-16: a fork carries no checkout, so a branch while the session keeps one
