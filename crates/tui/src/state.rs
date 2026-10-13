@@ -2682,15 +2682,15 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
-        // A delegate announces its own phases while the turn waits on another, and none of them
-        // ends that wait.
-        if self.attributed_to.is_none() {
-            self.waiting_on = None;
-        }
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
-        // one that has been thrown away, so the tail starts empty.
-        self.streaming.clear();
+        // one that has been thrown away, so the tail starts empty. A delegate announces its own
+        // phases while the planner writes and while the turn waits on another, and none of them
+        // ends that reply or that wait.
+        if self.attributed_to.is_none() {
+            self.waiting_on = None;
+            self.streaming.clear();
+        }
         self.drop_composing();
     }
 
@@ -2804,6 +2804,12 @@ impl Session {
     /// This side may: the text has been released, and a blank line in a transcript is a
     /// presentation question.
     pub fn narrate(&mut self, text: impl Into<String>) {
+        // A delegate says a great deal on its way to an answer and none of it is the turn's. What
+        // it concluded arrives as the report, which is the sentence its block ends on. Nor is it
+        // the end of the reply the planner may be writing meanwhile, so the tail stays up.
+        if self.attributed_to.is_some() {
+            return;
+        }
         // Cleared first, and whatever the text turns out to be. This is the same words the tail
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
@@ -2812,11 +2818,6 @@ impl Session {
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
         if text.trim().is_empty() {
-            return;
-        }
-        // A delegate says a great deal on its way to an answer and none of it is the turn's. What
-        // it concluded arrives as the report, which is the sentence its block ends on.
-        if self.attributed_to.is_some() {
             return;
         }
         self.transcript.push(Entry::assistant(text, Vec::new()));
@@ -8550,6 +8551,53 @@ mod tests {
                 session.composing,
                 Some("Write"),
                 "a delegate's work took back the call the turn is writing"
+            );
+        }
+
+        /// The planner goes on writing while a delegate works, and a delegate starting a round or
+        /// saying something is not the planner's round ending. Taken down for it, the words already
+        /// drawn left the screen and came back whole when the planner's round did end.
+        #[test]
+        fn a_delegates_round_leaves_the_reply_the_turn_is_writing() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            let id = spawn(&mut session, "explore", "look around");
+
+            session.reporting_for(None);
+            session.streaming("Meanwhile I will ");
+            // A delegate's request sent again throws away the delegate's words, not the turn's.
+            session.reporting_for(Some(id));
+            session.set_phase(Phase::Planning);
+            session.set_phase(Phase::Reconnecting);
+            session.reporting_for(None);
+            assert_eq!(
+                session.reply_so_far(),
+                "Meanwhile I will ",
+                "a delegate's phase took down the reply the turn is writing"
+            );
+
+            // A delegate's round that said nothing ends the delegate's round, not the turn's.
+            session.streaming("check ");
+            session.reporting_for(Some(id));
+            session.narrate("Reading the parser.");
+            session.narrate("");
+            session.reporting_for(None);
+            assert_eq!(
+                session.reply_so_far(),
+                "Meanwhile I will check ",
+                "a delegate's narration took down the reply the turn is writing"
+            );
+
+            session.streaming("the config.");
+            session.narrate("Meanwhile I will check the config.");
+            assert!(
+                session.streaming.is_empty(),
+                "the turn's own round left its tail up"
+            );
+            assert_eq!(
+                session.transcript.last().expect("an entry").text,
+                "Meanwhile I will check the config."
             );
         }
 

@@ -149,6 +149,7 @@ because it is one release however many pieces it arrives in.
 `verified-by: bravebot_tui::state::the_finished_round_takes_over_from_the_reply_that_was_arriving`
 `verified-by: bravebot_tui::state::a_reply_that_was_arriving_is_taken_down_however_the_round_ends`
 `verified-by: bravebot_tui::state::a_round_starting_afresh_starts_from_an_empty_tail`
+`verified-by: bravebot_tui::state::a_delegates_round_leaves_the_reply_the_turn_is_writing`
 `verified-by: bravebot_agent::turn::the_reply_reaches_the_interface_while_it_is_being_written`
 `verified-by: bravebot_agent::turn::showing_a_reply_as_it_arrives_is_recorded_once_for_the_round`
 
