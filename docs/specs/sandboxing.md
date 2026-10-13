@@ -163,7 +163,9 @@ that is not in force. On Linux the network is denied by a new user and network n
 the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
 network rules are not used: they filter a TCP connect by port and not by address, and leave UDP
 open. A kernel that does not let an unprivileged user make the namespace (Ubuntu 24.04 restricts
-it by default, and many containers block it) cannot deny the network, and `doctor` says so. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+it by default, and many containers block it) cannot deny the network, and `doctor` says so. On
+Windows the network is the container's internet client capability, and a container without it is
+refused a host name lookup as well as a connection. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
 listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
@@ -220,6 +222,8 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
 `verified-by: bravebot_sandbox::windows::no_grant_lets_a_confined_process_rewrite_an_access_list`
+`verified-by: bravebot_sandbox::windows::a_container_connects_out_only_when_its_policy_asks_for_the_network`
+`verified-by: bravebot_sandbox::windows::a_container_without_the_network_cannot_look_up_a_name`
 
 <a id="SANDBOX-4"></a>
 ### SANDBOX-4: content cannot inject into the syntax a backend writes it into

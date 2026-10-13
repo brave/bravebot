@@ -18,6 +18,7 @@ use bravebot_sandbox::{
 };
 use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -276,6 +277,113 @@ fn a_program_writes_inside_its_grants_and_not_outside() {
     let (code, _) = write(&withheld);
     assert_ne!(code, Some(0), "a write outside the grants succeeded");
     assert!(!withheld.join("made").exists());
+}
+
+/// `curl.exe` in the system directory, which every container reads without an entry of its own.
+fn curl() -> String {
+    let root = std::env::var_os("SystemRoot").expect("the system directory is named");
+    Path::new(&root)
+        .join("System32")
+        .join("curl.exe")
+        .display()
+        .to_string()
+}
+
+/// What `curl` ends with when it could not resolve the host, and when it could not connect.
+const CURL_COULD_NOT_RESOLVE: i32 = 6;
+const CURL_COULD_NOT_CONNECT: i32 = 7;
+
+/// The host the tests below reach, which CI reached to fetch this source. A machine that cannot
+/// connect to it directly, without a proxy, fails them rather than skipping them, as a machine
+/// that cannot make a container does.
+const OUTSIDE: &str = "github.com";
+
+/// What `curl` ends with fetching `url` under `policy`, and what it printed.
+///
+/// The proxy is refused in the argument vector and the configuration file left unread, so a
+/// machine whose environment names a proxy has both halves of a test measure the same route.
+fn fetched(
+    sandbox: &AppContainerSandbox,
+    url: &str,
+    policy: &SandboxPolicy,
+) -> (Option<i32>, String) {
+    run(
+        sandbox,
+        &curl(),
+        &[
+            "-q",
+            "-sS",
+            "--noproxy",
+            "*",
+            "-m",
+            "20",
+            "-o",
+            "fetched",
+            url,
+        ],
+        policy,
+    )
+    .expect("curl starts")
+}
+
+/// One of the addresses `OUTSIDE` names, looked up by this process rather than in a container.
+fn an_outside_address() -> SocketAddr {
+    (OUTSIDE, 80)
+        .to_socket_addrs()
+        .expect("this machine looks up the host")
+        .find(SocketAddr::is_ipv4)
+        .expect("the host has an IPv4 address")
+}
+
+/// Fetch `url` from a container granted the network, which has to succeed for the rest to mean
+/// anything, and then from the same base without it, which has to end with `refused`.
+fn reached_only_with_the_network(name: &str, url: &str, refused: i32) {
+    let sandbox = sandbox();
+    let allowed = the_base(name);
+    let denied = allowed.clone().without_network_egress();
+    assert!(allowed.allow_network && !denied.allow_network);
+
+    let (code, printed) = fetched(&sandbox, url, &allowed);
+    assert_eq!(
+        code,
+        Some(0),
+        "a container granted the network did not reach {url}, so nothing below means anything: \
+         {printed}"
+    );
+
+    let (code, printed) = fetched(&sandbox, url, &denied);
+    assert_eq!(
+        code,
+        Some(refused),
+        "a container denied the network did not end as curl ends when refused: {printed}"
+    );
+}
+
+/// SANDBOX-3 on Windows: a container connects out only when its policy asks for the network. The
+/// regressions it rejects: a token built with the internet client capability whatever the policy
+/// asked for, which is egress no record shows, and one built without it, which is every stage
+/// that needs the network failing. Both halves connect to the same address, so the refused half
+/// is a connection the container was denied and not a host that was not there. A container is
+/// refused the loopback interface whatever its capabilities, so the address is outside this
+/// machine.
+#[test]
+fn a_container_connects_out_only_when_its_policy_asks_for_the_network() {
+    let url = format!("http://{}/", an_outside_address());
+    reached_only_with_the_network("egress", &url, CURL_COULD_NOT_CONNECT);
+}
+
+/// SANDBOX-3 on Windows: a container without the network is refused a host name lookup as well as
+/// a connection. A lookup is a request the resolver sends out for the program, so a name that
+/// carries data reaches whoever answers for that name. The regression it rejects: a container
+/// that looks names up without the capability, which `curl` reports as a connection refused
+/// rather than a host it could not resolve.
+#[test]
+fn a_container_without_the_network_cannot_look_up_a_name() {
+    reached_only_with_the_network(
+        "lookup",
+        &format!("http://{OUTSIDE}/"),
+        CURL_COULD_NOT_RESOLVE,
+    );
 }
 
 /// The regression it rejects: an empty base that leaves a program unable to start. SANDBOX-3
