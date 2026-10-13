@@ -44,6 +44,18 @@ fn proxy_listener() -> &'static std::net::TcpListener {
     })
 }
 
+/// Whether a connection reaches the listener within `wait`.
+fn connected_within(listener: &std::net::TcpListener, wait: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if listener.accept().is_ok() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
 /// Point HOME at a scratch directory for the duration of the closure.
 fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -743,6 +755,50 @@ fn a_session_that_records_asks_for_a_newer_version_when_the_record_is_old() {
         assert!(
             connected,
             "an ordinary session with an old record did not ask"
+        );
+    });
+}
+
+/// UPDATE-6: a launch whose stamp cannot be written does not ask the registry.
+///
+/// The stamp is what holds the next launch back for the hour, so a request made without one is
+/// made again by every launch after it. A directory holds the record's name, so the rename onto it
+/// fails whoever runs the test, where a read-only directory is made writable again by its owner and
+/// stops nothing run as root. The temporary file left beside it shows the launch reached the write
+/// before the silence is measured, and the same home asks once the name is free, so the silence is
+/// the request held back and not a thread yet to run or a listener nothing reaches.
+#[test]
+fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
+    with_temp_home("update-unstamped", || {
+        let directory = store::directory().expect("a home");
+        let record = directory.join("update-check");
+        let temporary = directory.join("update-check.tmp");
+        std::fs::create_dir_all(&record).expect("take the record's name");
+        let running = std::env::current_exe().expect("the test binary");
+        std::fs::write(
+            directory.join("installed-by"),
+            format!("{}\n", running.display()),
+        )
+        .expect("seed the installation");
+        let listener = proxy_listener();
+        while listener.accept().is_ok() {}
+
+        bravebot_tui::update::at_startup(None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !temporary.is_file() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(temporary.is_file(), "the launch never reached the write");
+        assert!(
+            !connected_within(listener, std::time::Duration::from_millis(1500)),
+            "the registry was asked though the stamp could not be written"
+        );
+
+        std::fs::remove_dir(&record).expect("free the record's name");
+        bravebot_tui::update::at_startup(None);
+        assert!(
+            connected_within(listener, std::time::Duration::from_secs(10)),
+            "with the name free the same launch did not ask, so the silence above proves nothing"
         );
     });
 }
