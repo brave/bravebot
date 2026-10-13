@@ -17749,7 +17749,8 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 /// `workspace-write`, which lands, and a read of a file outside the session under `read-only`, which
 /// succeeds. The session is opened outside the temporary directory, which every mode leaves writable.
 /// The regressions it rejects are a `read-only` that writes the session and one that stops reading
-/// the machine.
+/// the machine. A refused redirect exits 1 under bash and 2 under dash, so the refused write is
+/// asserted as a failed step and not as one status.
 #[test]
 fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
@@ -17788,7 +17789,7 @@ fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
         "the control did not write the session: {control}"
     );
     assert!(
-        refused.contains("exited 1") && !written_under_read_only,
+        refused.contains("It failed: step 1 exited") && !written_under_read_only,
         "read-only let a program write the session: {refused}"
     );
     assert!(refused.contains("Confinement:"), "{refused}");
