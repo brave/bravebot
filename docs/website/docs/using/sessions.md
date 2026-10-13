@@ -252,7 +252,9 @@ The title says which session a terminal holds. The info panel says the rest: pre
 - the model you chose and the effort level in force,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
-  each cut from the left where it is long so the number at the end stays in view,
+  each cut from the left where it is long so the number at the end stays in view. A GitHub pull
+  request or issue address is shown as `brave/bravebot#1975` and is still a link to the address in
+  a terminal that supports links,
 - how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
   cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
