@@ -1713,6 +1713,24 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 }
 
+/// What a key does to the suggestion in the empty box, if one is on offer (INPUT-43).
+///
+/// Tab or Right, pressed bare, moves it into the box as text; the key is spent doing so and the
+/// line is not otherwise edited. Any other key takes the suggestion away and is then read as it
+/// always was, so typing over an empty box is no different with one on offer. A modifier pressed
+/// on its own is not a key anybody typed, and leaves it standing. `None` where the key goes on.
+fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    session.suggestion()?;
+    if matches!(key.code, KeyCode::Tab | KeyCode::Right) && key.modifiers.is_empty() {
+        session.accept_suggestion();
+        return Some(Action::None);
+    }
+    if !matches!(key.code, KeyCode::Modifier(_)) {
+        session.dismiss_suggestion();
+    }
+    None
+}
+
 /// Interpret a key press against the session.
 ///
 /// Separated from the loop so it can be tested without a terminal.
@@ -1735,6 +1753,12 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // narrowing a list rather than being typed into a box nobody can see.
     if session.searching_history() {
         return history_search_key(session, key);
+    }
+
+    // After the modes above, which claim every key of their own, and before anything that edits the
+    // line: a suggestion is taken by Tab or Right, and any other key removes it (INPUT-43).
+    if let Some(action) = suggestion_key(session, key) {
+        return action;
     }
 
     // After the modes above, which claim every key of their own, and before everything that reads
@@ -4230,6 +4254,7 @@ fn event_loop(
         session.keep_jobs_between_turns();
     }
     session.adopt_prompt_files(crate::prompt_files::directory());
+    session.adopt_suggestions(settings.suggestions() == Some(true));
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -4318,6 +4343,8 @@ fn event_loop(
     let mut needs_draw = true;
     let mut drawn_at = Instant::now();
     let mut face_held = crate::avatar::look_now();
+    // The request for a suggestion that has gone out and not yet answered, if one has (INPUT-43).
+    let mut suggesting: Option<Suggesting> = None;
 
     loop {
         // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
@@ -4336,6 +4363,10 @@ fn event_loop(
         session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
+        // A suggestion the box has stopped being empty for is dropped, and one whose request has
+        // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
+        session.settle_suggestion();
+        needs_draw |= take_suggestion(&mut session, &mut stored, &mut suggesting);
         // Before the frame rather than after it, so the first frame of an open panel names the
         // session, and a name that changed by any path reaches the panel without waiting for a key.
         needs_draw |= session.identify(
@@ -4400,7 +4431,12 @@ fn event_loop(
                             face_held = held;
                             needs_draw = true;
                         }
-                        let wait = wait_for_a_key(opening, crate::indicator::stilled());
+                        let mut wait = wait_for_a_key(opening, crate::indicator::stilled());
+                        // Short while a suggestion is on its way, so it is drawn as it arrives
+                        // rather than at the next key.
+                        if suggesting.is_some() {
+                            wait = wait.min(FRAME);
+                        }
                         // Through the reader rather than the terminal, so a run is seen whole.
                         if !input::poll(wait)? {
                             continue;
@@ -5083,6 +5119,10 @@ fn event_loop(
                 } else {
                     Wrote::ThePerson
                 };
+                // Whatever was offered is not the next prompt any more. An answer still on its way
+                // is for a state that has passed, and is dropped when the chain's own request
+                // replaces it below.
+                session.dismiss_suggestion();
                 let mut sending = Some((prompt, whose));
                 while let Some((prompt, wrote)) = sending {
                     // Here as well as at the top of the outer loop, which no turn in this chain
@@ -5194,6 +5234,9 @@ fn event_loop(
                         Ok(carrying_on)
                     })?;
                 }
+                // After the last turn of the chain, which is the only one the person is about to
+                // answer.
+                suggesting = suggest_next(&session, config, &conversation, &answers.trust);
             }
             Action::Run(line) | Action::RunPrivately(line) => {
                 // Shell effects have no file-tool journal, but older edits can still be undone.
@@ -5238,6 +5281,129 @@ fn event_loop(
             Action::Cancel | Action::SendNow | Action::None | Action::Redraw => {}
             // Settled into a `Submit` or a note ahead of this match.
             Action::Address(..) => {}
+        }
+    }
+}
+
+/// A request for a follow-up suggestion that has gone out on a thread of its own (INPUT-43).
+struct Suggesting {
+    answer: mpsc::Receiver<Suggested>,
+}
+
+/// What the request for a suggestion came back with.
+struct Suggested {
+    /// The suggestion, where the answer was inside the counts the instruction asked for.
+    text: Option<String>,
+    tokens: u64,
+    events: Vec<Stamped>,
+}
+
+/// Whether a turn that just ended is followed by a request for a suggestion (INPUT-43).
+///
+/// Every input is something the driver already knows: the setting, the mode, how the turn ended and
+/// what else is waiting. Nothing the model wrote is read to decide it.
+fn suggestion_is_due(
+    on: bool,
+    incognito: bool,
+    mode: bravebot_agent::PermissionMode,
+    ending: Option<bravebot_agent::Ending>,
+    carrying_on: bool,
+) -> bool {
+    on && !incognito
+        && mode != bravebot_agent::PermissionMode::Plan
+        && matches!(ending, Some(bravebot_agent::Ending::Done))
+        && !carrying_on
+}
+
+/// Ask for the next prompt when the turn that ended is one to follow, without waiting for it.
+///
+/// The exchange is forked here, on the thread that holds it, and only the request crosses to the
+/// worker, as an aside's does: nothing the worker does can reach the conversation.
+fn suggest_next(
+    session: &Session,
+    config: &Config,
+    conversation: &Conversation,
+    trust: &TrustStore,
+) -> Option<Suggesting> {
+    let carrying_on = session.looping().is_some() || session.watch_is_firing();
+    if !suggestion_is_due(
+        session.suggests(),
+        bravebot_core::incognito::engaged(),
+        session.permission_mode(),
+        session.finished.as_ref().map(|finished| finished.ending),
+        carrying_on,
+    ) {
+        return None;
+    }
+    let asking = bravebot_agent::aside::Question::suggest(conversation);
+    let config = config.clone();
+    let trust = trust.clone();
+    let session_model = session.model().map(str::to_string);
+    let (send, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let egress = Egress::new();
+        let mut sink = Trail::new();
+        // The model `summaryModel` names where it names one, which is the cost boundary the
+        // setting is for. One that cannot be used is no suggestion, and not a note: nobody asked.
+        let done =
+            bravebot_agent::compact::side_request_model(&config, &egress, session_model.as_deref())
+                .ok()
+                .and_then(|model| {
+                    turn::aside(
+                        &config,
+                        &egress,
+                        asking,
+                        Some(model.as_ref()),
+                        &mut bravebot_agent::report::IgnoreReports,
+                        &mut sink,
+                        trust,
+                        |_written| {},
+                    )
+                    .ok()
+                });
+        let (text, tokens) = match done {
+            Some(answered) => (
+                bravebot_agent::aside::suggestion(&answered.shown),
+                answered.usage.total(),
+            ),
+            None => (None, 0),
+        };
+        let _ = send.send(Suggested {
+            text,
+            tokens,
+            events: sink.events().to_vec(),
+        });
+    });
+    Some(Suggesting { answer })
+}
+
+/// Take the answer to a request for a suggestion, if it has come, and say whether the screen
+/// changed (INPUT-43).
+///
+/// What the request cost is charged and its trail kept whether or not the suggestion is offered:
+/// the request went out either way.
+fn take_suggestion(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    suggesting: &mut Option<Suggesting>,
+) -> bool {
+    let Some(waiting) = suggesting else {
+        return false;
+    };
+    match waiting.answer.try_recv() {
+        Ok(done) => {
+            *suggesting = None;
+            session.charge_suggestion(done.tokens);
+            stored.append_audit(session.turns, &done.events);
+            if let Some(text) = done.text {
+                session.offer_suggestion(text);
+            }
+            true
+        }
+        Err(mpsc::TryRecvError::Empty) => false,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            *suggesting = None;
+            false
         }
     }
 }
@@ -29343,6 +29509,306 @@ mod tests {
             e.speaker,
             crate::state::Speaker::Failure | crate::state::Speaker::Stopped
         )));
+    }
+
+    use bravebot_agent::{Ending, PermissionMode};
+
+    fn offered(text: &str) -> Session {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        session.offer_suggestion(text.to_string());
+        session
+    }
+
+    fn pressed(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// INPUT-43: Tab and Right move the suggestion into the box as text, and nothing sends it.
+    #[test]
+    fn tab_and_right_move_the_suggestion_into_the_box_and_send_nothing() {
+        for code in [KeyCode::Tab, KeyCode::Right] {
+            let mut session = offered("run the tests again");
+            assert_eq!(handle_key(&mut session, pressed(code)), Action::None);
+            assert_eq!(session.input(), "run the tests again");
+            assert_eq!(session.suggestion(), None);
+        }
+    }
+
+    /// a suggestion that begins with a slash is only text once taken, and Enter is what runs
+    /// it. Taking it must not run the command.
+    #[test]
+    fn a_suggestion_that_begins_with_a_slash_is_text_until_enter() {
+        let mut session = offered("/clear the old notes");
+        assert_eq!(
+            handle_key(&mut session, pressed(KeyCode::Tab)),
+            Action::None
+        );
+        assert_eq!(session.input(), "/clear the old notes");
+    }
+
+    /// Any other key removes it, and the key is then read as it always was.
+    #[test]
+    fn any_other_key_removes_the_suggestion_and_still_types() {
+        let mut session = offered("run the tests again");
+        handle_key(&mut session, pressed(KeyCode::Char('x')));
+        assert_eq!(session.suggestion(), None);
+        assert_eq!(session.input(), "x");
+
+        let mut session = offered("run the tests again");
+        handle_key(&mut session, pressed(KeyCode::Esc));
+        assert_eq!(session.suggestion(), None);
+        assert_eq!(session.input(), "");
+        // And Tab, with nothing on offer, takes nothing into the box.
+        handle_key(&mut session, pressed(KeyCode::Tab));
+        assert_eq!(session.input(), "");
+    }
+
+    /// A modifier pressed on its own is not a key anybody typed.
+    #[test]
+    fn a_modifier_on_its_own_leaves_the_suggestion_standing() {
+        let mut session = offered("run the tests again");
+        handle_key(
+            &mut session,
+            pressed(KeyCode::Modifier(
+                ratatui::crossterm::event::ModifierKeyCode::LeftShift,
+            )),
+        );
+        assert_eq!(session.suggestion(), Some("run the tests again"));
+    }
+
+    /// A suggestion is not offered where the setting is off, where something has been typed, or
+    /// where the session is not idle, and one that goes stale is dropped.
+    #[test]
+    fn a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on() {
+        let mut off = Session::new("none");
+        off.offer_suggestion("run the tests again".to_string());
+        assert_eq!(off.suggestion(), None);
+
+        let mut typed = Session::new("none");
+        typed.adopt_suggestions(true);
+        handle_key(&mut typed, pressed(KeyCode::Char('a')));
+        typed.offer_suggestion("run the tests again".to_string());
+        assert_eq!(typed.suggestion(), None);
+
+        let mut working = Session::new("none");
+        working.adopt_suggestions(true);
+        working.status = Status::Working;
+        working.offer_suggestion("run the tests again".to_string());
+        assert_eq!(working.suggestion(), None);
+
+        let mut stale = offered("run the tests again");
+        stale.status = Status::Working;
+        stale.settle_suggestion();
+        assert_eq!(stale.suggestion(), None);
+    }
+
+    /// The request is made after a turn that answered, with the setting on, and in none of the
+    /// places the issue lists.
+    #[test]
+    fn a_suggestion_is_asked_for_only_after_a_turn_that_answered() {
+        let done = Some(Ending::Done);
+        let ask = PermissionMode::Ask;
+        assert!(suggestion_is_due(true, false, ask, done, false));
+        assert!(!suggestion_is_due(false, false, ask, done, false));
+        assert!(!suggestion_is_due(true, true, ask, done, false));
+        assert!(!suggestion_is_due(
+            true,
+            false,
+            PermissionMode::Plan,
+            done,
+            false
+        ));
+        assert!(!suggestion_is_due(true, false, ask, None, false));
+        assert!(!suggestion_is_due(
+            true,
+            false,
+            ask,
+            Some(Ending::Stopped { attempts: None }),
+            false
+        ));
+        assert!(!suggestion_is_due(true, false, ask, done, true));
+    }
+
+    /// The request's cost is in the session's total and in the figure for the turn it followed.
+    #[test]
+    fn a_suggestions_cost_is_charged_to_the_session() {
+        let mut session = Session::new("none");
+        session.charge_suggestion(120);
+        assert_eq!(session.tokens, 120);
+        assert_eq!(session.spend_by_turn().get(&0).copied(), Some(120));
+    }
+
+    fn a_store_for(name: &str) -> (std::path::PathBuf, bravebot_session::sessions::Handle) {
+        let root = crate::test_profile::project(name);
+        std::fs::create_dir_all(&root).unwrap();
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        (root, stored)
+    }
+
+    fn a_request_in_flight() -> (Option<Suggesting>, mpsc::Sender<Suggested>) {
+        let (worker, answer) = mpsc::channel();
+        (Some(Suggesting { answer }), worker)
+    }
+
+    fn what_the_request_did(text: Option<&str>, tokens: u64) -> Suggested {
+        Suggested {
+            text: text.map(str::to_string),
+            tokens,
+            events: vec![bravebot_session::audit::Stamped {
+                at: 1,
+                from: None,
+                event: bravebot_core::event::Event::GatePassed {
+                    gate: "file_read",
+                    detail: "suggestion".into(),
+                },
+            }],
+        }
+    }
+
+    fn a_session_that_suggests() -> Session {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        session
+    }
+
+    /// INPUT-43: an answer that comes back is charged to the session, its trail is kept, and the
+    /// suggestion is in the box. The screen is then redrawn and the request is not waited on again.
+    #[test]
+    fn an_answered_request_is_charged_recorded_and_offered() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-answered");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+
+        assert!(take_suggestion(&mut session, &mut stored, &mut suggesting));
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 120);
+        assert_eq!(session.suggestion(), Some("run the tests again"));
+        let trail = bravebot_session::sessions::audit_of(&root, stored.id());
+        assert_eq!(trail[&session.turns].len(), 1);
+    }
+
+    /// The request went out whatever it returned, so an answer outside the counts costs the same
+    /// and leaves the same trail, and puts nothing in the box.
+    #[test]
+    fn an_answer_that_is_not_usable_is_still_charged_and_recorded() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-unusable");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        worker.send(what_the_request_did(None, 30)).unwrap();
+
+        take_suggestion(&mut session, &mut stored, &mut suggesting);
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 30);
+        assert_eq!(session.suggestion(), None);
+        let trail = bravebot_session::sessions::audit_of(&root, stored.id());
+        assert_eq!(trail[&session.turns].len(), 1);
+    }
+
+    /// A request that has not been answered yet changes nothing and is still waited on, so the
+    /// answer is taken when it comes.
+    #[test]
+    fn a_request_not_yet_answered_is_waited_on() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (_root, mut stored) = a_store_for("suggestion-pending");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+
+        assert!(!take_suggestion(&mut session, &mut stored, &mut suggesting));
+        assert!(suggesting.is_some());
+        assert_eq!(session.tokens, 0);
+        assert_eq!(session.suggestion(), None);
+
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+        assert!(take_suggestion(&mut session, &mut stored, &mut suggesting));
+        assert_eq!(session.suggestion(), Some("run the tests again"));
+    }
+
+    /// A worker that ends without answering leaves nothing to wait for, and nothing to charge or
+    /// record.
+    #[test]
+    fn a_worker_that_ends_without_answering_is_forgotten() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-disconnected");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        drop(worker);
+
+        assert!(!take_suggestion(&mut session, &mut stored, &mut suggesting));
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 0);
+        assert_eq!(session.suggestion(), None);
+        assert!(bravebot_session::sessions::audit_of(&root, stored.id()).is_empty());
+    }
+
+    /// An answer that comes after the person began typing is a guess about a state that has
+    /// passed. It is not put in the box, what was typed is kept, and the request is still charged.
+    #[test]
+    fn an_answer_that_arrives_after_typing_is_charged_and_not_offered() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (_root, mut stored) = a_store_for("suggestion-after-typing");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        handle_key(&mut session, pressed(KeyCode::Char('a')));
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+
+        take_suggestion(&mut session, &mut stored, &mut suggesting);
+
+        assert_eq!(session.tokens, 120);
+        assert_eq!(session.suggestion(), None);
+        assert_eq!(session.input(), "a");
+    }
+
+    /// No request goes out where the setting is off, before any turn has ended, or after one that
+    /// did not answer. The worker of a request that did go out cannot be driven without a model,
+    /// so these are the cases that return before it starts.
+    #[test]
+    fn no_request_is_made_where_the_setting_is_off_or_no_turn_answered() {
+        let config = a_config_needing_no_sign_in();
+        let conversation = Conversation::new();
+        let trust = TrustStore::new(workspace_for_test().root());
+
+        let mut off = Session::new("none");
+        off.complete("done", vec![], 10);
+        assert!(suggest_next(&off, &config, &conversation, &trust).is_none());
+
+        let before_any_turn = a_session_that_suggests();
+        assert!(suggest_next(&before_any_turn, &config, &conversation, &trust).is_none());
+
+        let mut failed = a_session_that_suggests();
+        failed.fail(
+            "safe failure",
+            Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
+        assert!(suggest_next(&failed, &config, &conversation, &trust).is_none());
     }
 }
 

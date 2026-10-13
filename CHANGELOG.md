@@ -11,6 +11,7 @@
  - Added `/branch [name]`, which copies the running session and moves onto the copy, and says how to resume the original. ([#1511](https://github.com/brave/bravebot/issues/1511))
  - Added `apply_checkout` and `/checkouts apply <n>`, which bring the files a delegate wrote in a kept checkout back to the working directory, one question each. The question says when the working directory's file was written since the checkout was made. ([#1050](https://github.com/brave/bravebot/issues/1050))
  - Added an info panel beside the transcript on a terminal 100 columns wide or more, toggled with `ctrl-x` or `/panel`. It shows the session, goal, links, context, started servers and plan, and is kept open or closed for the next session. ([#1220](https://github.com/brave/bravebot/issues/1220))
+ - Added a `suggestions` setting, off by default, which shows the next prompt the model expects you to type, dimmed in the empty box. Tab or Right moves it into the box; nothing sends it. ([#1585](https://github.com/brave/bravebot/issues/1585))
  - Added `/jobs`, which lists the background jobs of the turn, and `/jobs stop <name>`, which stops one. ([#1127](https://github.com/brave/bravebot/issues/1127))
  - Added `/copy [n]`, which puts the latest reply, or the one n back, on the clipboard exactly as the transcript holds it. ([#1327](https://github.com/brave/bravebot/issues/1327))
  - Added an optional `[focus]` to `/compact`, which tells the summariser what the summary must keep. ([#1325](https://github.com/brave/bravebot/issues/1325))

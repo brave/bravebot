@@ -467,6 +467,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -769,6 +770,20 @@ least three turns recaps itself once, as `/recap` does, and not again until anot
 It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
+
+### `suggestions`
+
+```json
+{ "suggestions": true }
+```
+
+Off by default. With `true`, once a turn has ended with a reply, the model `summaryModel` names (the
+session's own where it names none) is asked for the next prompt you are likely to type, and the
+box shows it dimmed where the invitation was. Tab or Right moves it into the box as text you can
+edit; nothing sends it, and a suggestion that begins with `/` is only text until you press Enter.
+Any other key removes it. Each one is a request that costs tokens, charged to the session and shown
+by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
+was stopped. Only the boolean `true` turns it on.
 
 ### `terminalTitle`
 

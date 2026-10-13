@@ -2805,9 +2805,9 @@ fn lead_for(index: usize, shell: bool, private: bool) -> &'static str {
 /// The caret keeps its place rather than being drawn past the words, because the box is empty and
 /// that is where the first character will land. Dimmed so it reads as an absence of text rather
 /// than as text somebody has to clear.
-fn placeholder_spans(colour: Color) -> Vec<Span<'static>> {
+fn placeholder_spans(colour: Color, words: &str) -> Vec<Span<'static>> {
     let block = Style::default().fg(colour).add_modifier(Modifier::REVERSED);
-    let mut characters = placeholder().chars();
+    let mut characters = words.chars();
     let first: String = characters.by_ref().take(1).collect();
     vec![
         Span::styled(first, block),
@@ -3000,7 +3000,12 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             lead_for(0, session.shell, session.shell_private()),
             Style::default().fg(colour),
         )];
-        spans.extend(placeholder_spans(colour));
+        // A suggestion takes the invitation's place, drawn the same way: dimmed, with the caret on
+        // its first character, since that is where the first character typed would land.
+        spans.extend(placeholder_spans(
+            colour,
+            session.suggestion().unwrap_or(placeholder()),
+        ));
         vec![Line::from(spans)]
     } else {
         lines
@@ -11149,5 +11154,65 @@ mod tests {
             drawn[1].trim(),
             "session:abc-123  2 days ago · up to 8000 characters · fix the build"
         );
+    }
+
+    fn drawn(session: &Session) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// INPUT-43: a suggestion takes the invitation's place in the empty box, and the invitation
+    /// comes back when it goes.
+    #[test]
+    fn a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation() {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        assert!(drawn(&session).contains(placeholder()));
+
+        session.offer_suggestion("run the tests again".to_string());
+        let with = drawn(&session);
+        assert!(with.contains("run the tests again"), "{with}");
+        assert!(!with.contains(placeholder()), "{with}");
+
+        session.dismiss_suggestion();
+        assert!(drawn(&session).contains(placeholder()));
+    }
+
+    /// The suggestion is dimmed as the invitation is: the cell after the first character wears the
+    /// style the invitation's does, and the first one is the caret's block.
+    #[test]
+    fn a_suggestion_is_dimmed_as_the_invitation_is() {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        let styles = |session: &Session| {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+            let row = (0..buffer.area.height)
+                .find(|&y| buffer[(0, y)].symbol() == "│")
+                .expect("the box has a row");
+            (buffer[(3, row)].style(), buffer[(4, row)].style())
+        };
+        let (invited_first, invited_rest) = styles(&session);
+        session.offer_suggestion("run the tests again".to_string());
+        let (offered_first, offered_rest) = styles(&session);
+        assert_eq!(offered_first, invited_first);
+        assert_eq!(offered_rest, invited_rest);
+        assert_ne!(offered_first, offered_rest);
     }
 }

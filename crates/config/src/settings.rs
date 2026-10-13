@@ -157,6 +157,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "suggestions",
     "summaryModel",
     "terminalTitle",
     "tui",
@@ -286,6 +287,8 @@ pub struct Settings {
     defer_mcp_tools_above: Option<u64>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
+    /// What the top-level `suggestions` key said, if it said a boolean.
+    suggestions: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
     /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
@@ -1069,6 +1072,10 @@ impl Settings {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            suggestions: match root.get("suggestions") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             update_check: match root.get("updateCheck") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
@@ -1270,6 +1277,16 @@ impl Settings {
     /// somebody who wrote something else.
     pub fn terminal_title(&self) -> Option<bool> {
         self.terminal_title
+    }
+
+    /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
+    ///
+    /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
+    /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
+    /// [`Settings::terminal_title`], and for the opposite reason: a suggestion is a request that
+    /// spends, so a value read loosely could spend for somebody who wrote something else.
+    pub fn suggestions(&self) -> Option<bool> {
+        self.suggestions
     }
 
     /// Whether the settings in force let the startup screen check for a newer release, if they said.
@@ -1582,6 +1599,7 @@ impl Settings {
             && self.limit.is_none()
             && self.defer_mcp_tools_above.is_none()
             && self.terminal_title.is_none()
+            && self.suggestions.is_none()
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
             && self.vetting.is_none()
@@ -1749,6 +1767,7 @@ impl Settings {
                     .then_some("deferMcpToolsAbove"),
             )
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
+            .chain(self.suggestions.is_some().then_some("suggestions"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(
                 self.away_summary_enabled
@@ -5744,6 +5763,29 @@ mod tests {
             .global(r#"{"awaySummaryEnabled": false}"#)
             .read();
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
+    /// `"true"` read as true would spend for somebody who wrote something else.
+    #[test]
+    fn only_a_boolean_turns_suggestions_on() {
+        for (written, expected) in [
+            (r#"{"suggestions": true}"#, Some(true)),
+            (r#"{"suggestions": false}"#, Some(false)),
+            (r#"{"suggestions": "true"}"#, None),
+            (r#"{"suggestions": 1}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).suggestions(),
+                expected,
+                "{written}"
+            );
+        }
+
+        let settings = Settings::parse(r#"{"suggestions": true}"#);
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["suggestions"]);
+        assert!(!settings.is_empty());
     }
 
     #[test]

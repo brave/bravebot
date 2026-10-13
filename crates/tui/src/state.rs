@@ -1523,6 +1523,10 @@ pub struct Session {
     /// session never does: there a job still ends with the turn that started it. Dropping the
     /// value kills whatever is running, so the session ending or being cleared ends them.
     kept_jobs: Option<bravebot_agent::tools::SessionJobs>,
+    /// Whether the `suggestions` setting is on for this session (INPUT-43).
+    suggesting: bool,
+    /// The next prompt the model proposed, drawn in the empty box until a key takes or drops it.
+    suggestion: Option<String>,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -2042,6 +2046,8 @@ impl Session {
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
+            suggesting: false,
+            suggestion: None,
             // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
             // key reaches bypass from there unless a layer made it unreachable (MODE-5).
             permission_mode: bravebot_agent::LiveMode::default(),
@@ -9913,6 +9919,73 @@ impl Session {
         let changed = self.identity != identity;
         self.identity = identity;
         changed && self.panel
+    }
+
+    /// Turn follow-up suggestions on or off for the session, from the `suggestions` setting
+    /// (INPUT-43). Read once at startup, so what is paid for does not change under a turn.
+    pub fn adopt_suggestions(&mut self, on: bool) {
+        self.suggesting = on;
+        if !on {
+            self.suggestion = None;
+        }
+    }
+
+    /// Whether the session asks for a suggestion when a turn ends.
+    pub fn suggests(&self) -> bool {
+        self.suggesting
+    }
+
+    /// The suggestion on offer in the empty box, if there is one.
+    pub fn suggestion(&self) -> Option<&str> {
+        self.suggestion.as_deref()
+    }
+
+    /// Put `text` in the empty box as a suggestion, where the box is still empty and idle.
+    ///
+    /// A suggestion that arrives after the person has begun typing, or sent something, is not
+    /// offered: it was a guess about a state that has passed.
+    pub fn offer_suggestion(&mut self, text: String) {
+        if self.suggesting
+            && self.status == Status::Idle
+            && self.input.is_empty()
+            && !self.shell
+            && !self.searching_history()
+        {
+            self.suggestion = Some(text);
+        }
+    }
+
+    /// Take the suggestion away, for a key that is not the one that accepts it.
+    pub fn dismiss_suggestion(&mut self) {
+        self.suggestion = None;
+    }
+
+    /// Drop a suggestion the box has stopped being empty for, or the session stopped being idle for.
+    pub fn settle_suggestion(&mut self) {
+        if self.suggestion.is_some() && (!self.input.is_empty() || self.status != Status::Idle) {
+            self.suggestion = None;
+        }
+    }
+
+    /// Move the suggestion into the box as text to edit. Nothing sends it, and one that begins
+    /// with `/` is words in the box like any other until Enter is pressed on it (CMD-1).
+    ///
+    /// Whether there was one to take.
+    pub fn accept_suggestion(&mut self) -> bool {
+        match self.suggestion.take() {
+            Some(text) if self.input.is_empty() => {
+                self.set_input(text);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
+    /// figures and still in the session's total, as an aside is.
+    pub fn charge_suggestion(&mut self, tokens: u64) {
+        self.tokens += tokens;
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
     }
 
     /// Keep the session's background jobs between turns (RUN-15).
