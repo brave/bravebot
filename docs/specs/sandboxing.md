@@ -1336,10 +1336,11 @@ none of them has nothing to refuse. `/add-dir`,
 person is not shown a session directory the stage would be refused for.
 
 A stage's program is git where the file it resolved to, with its links followed, is named `git` and
-is not inside a directory the session was opened on, the scratch directory or the temporary
-directory. A script, `make`, `npm`, `gh` or any other program is not git, and git started by one
-runs under that stage's profile. The lift changes a profile only on macOS, the one platform that
-holds a `.git` back ([SANDBOX-14](#SANDBOX-14)).
+lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
+([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
+would leave no git anywhere. A script, `make`, `npm`, `gh` or any other program is not git, and git
+started by one runs under that stage's profile. The lift changes a profile only on macOS, the one
+platform that holds a `.git` back ([SANDBOX-14](#SANDBOX-14)).
 
 Every input is the compiled step a person read, the session's own directories or the process's own
 environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
@@ -1354,8 +1355,10 @@ stage because an install script, a `make` target or a test runs code the person 
 a hook it writes, or a `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, `!` alias or
 `credential.helper` it sets in `.git/config`, runs with the person's whole access the next time
 they run git there, in a terminal, an editor, or a later stage that carries the remote scope and
-the agent socket ([SANDBOX-16](#SANDBOX-16)). The program is judged by the file it resolved to,
-as a scope is, so a `git` a stage could have written earns nothing by its name. A git stage keeps
+the agent socket ([SANDBOX-16](#SANDBOX-16)). It is kept beneath every write row and not only the
+session's directories, because a repository made in the temporary directory or a cache can be moved
+into a session directory whole. The program is judged by the file it resolved to and by whether a
+stage could have put it there, so a `git` a stage wrote earns nothing by its name. A git stage keeps
 the hooks and the configuration too: `git init` and `git clone` write both from the templates, and
 `git remote add`, `git push -u` and a checkout that tracks a remote branch write the configuration,
 so a refusal there is a git that does not work. A program installed inside the
@@ -1377,11 +1380,18 @@ to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
 **What the `.git` rule costs.** What git starts runs under the git stage's profile: a hook, a
 filter, the command `git bisect run` is given, an editor, a pager and a credential helper may each
 write the repository's hooks and configuration, so a pre-commit hook that runs the project's own
-linters reaches them. A program that runs git itself is refused the write on macOS: `gh pr
-checkout`, `gh repo clone`, `npm version`, a `make` target or a script that commits, and `cargo
-new` outside a repository fail there, and the planner is told to run git as a step of its own
-([SANDBOX-19](#SANDBOX-19)). A `core.hooksPath` that points into the work tree makes files every
-stage writes into hooks. On Linux and Windows nothing holds a `.git` back, so every stage there may
+linters reaches them, and so does a program the line's own arguments or assignments name for git to
+start (`GIT_EDITOR`, `--exec-path`, `rebase -x`). A program that makes or changes a repository
+itself is refused the write on macOS: `gh pr checkout`, `gh repo clone`, `npm version`, a `make`
+target or a script that commits, `cargo new` outside a repository, a `cargo` fetch of a `git`
+dependency, an npm `github:` package, a pip `git+` requirement, SwiftPM's checkouts and a test that
+makes a fixture repository fail there. So does git reached through another program, `timeout`, `env` or a version manager's
+shim that resolves to that manager. The planner is told to run git as a step of its own
+([SANDBOX-19](#SANDBOX-19)), and a person can let one line start with no sandbox
+([SANDBOX-29](#SANDBOX-29)). A redirection on the line is opened by this process rather than by the
+stage, so `> .git/config` written on the line itself is not refused. A `core.hooksPath` that points into the work tree makes files every stage writes into hooks,
+and a bare repository in a toolchain cache, cargo's under `~/.cargo/git/db` and Go's under its module
+cache, has a configuration every stage writes and a later fetch reads. On Linux and Windows nothing holds a `.git` back, so every stage there may
 write a repository's hooks and configuration, and the confirmation does not say so. Landlock holds
 a path back from a write row only by listing the directory above it entry by entry, which leaves
 that directory without the right to make an entry directly in it: held back from a session
@@ -1442,9 +1452,9 @@ files for reading, the caches of the toolchain a program belongs to and the cred
 command names. It says that a path outside those is refused by the operating system as `Operation
 not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
 `--add-dir`). On macOS, in both modes that confine, the description and the sentence after a failed
-step also say that a `.git` in those directories is written only by a step whose program is git, so
-a program that runs git to commit, check out or clone is refused that write and git is run as a step
-of its own ([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
+step also say that a step whose program is not git cannot write any `.git`, so a program that runs
+git to commit, check out or clone is refused that write and git is run as a step of its own
+([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its

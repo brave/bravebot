@@ -1006,6 +1006,7 @@ fn refused_workflows() -> Vec<Workflow> {
     if cfg!(target_os = "macos") {
         refused.push(
             with_a_repository(Workflow::new("refused", "a script writes a git hook"))
+                .setup(shell("mkdir -p work/.git/hooks"))
                 .stage(shell(
                     "printf '#!/bin/sh\\n' > work/.git/hooks/post-checkout",
                 ))

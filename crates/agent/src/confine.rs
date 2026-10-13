@@ -346,13 +346,6 @@ impl Confinement {
         }
     }
 
-    /// Whether the file a step resolved to is git, the one program whose stage writes a `.git`
-    /// (SANDBOX-14, SANDBOX-18). Keyed on the file as a scope is, so a file the plan could have
-    /// written is not git by being named `git`.
-    fn is_git(&self, resolved: &Path) -> bool {
-        resolved.file_name() == Some(OsStr::new("git")) && !self.writable_by_the_plan(resolved)
-    }
-
     fn writable_by_the_plan(&self, file: &Path) -> bool {
         let file = canonical(file);
         self.roots
@@ -789,9 +782,6 @@ impl Confinement {
         } else {
             base(self.prelude, &self.temporary, None, self.home.as_deref())
         };
-        if self.is_git(resolved) {
-            policy = policy.allow_git_directory_writes();
-        }
         if self.prelude == Prelude::MacOs
             && self.reads_the_machine()
             && let Some(cache) = &self.user_cache
@@ -931,6 +921,18 @@ impl Confinement {
                 false => bravebot_sandbox::programs::keep_out(&row.path),
             }
         }
+        // The rows bypass gives without a request are the whole machine, so counting them would
+        // leave no git anywhere; a git under one of them alone keeps the lift (SANDBOX-18).
+        let planted: Vec<&Path> = policy
+            .writable
+            .iter()
+            .filter(|row| !unasked.contains(&row.path) || held.contains(&row.path))
+            .map(|row| row.path.as_path())
+            .collect();
+        let policy = match is_git(resolved, &planted) {
+            true => policy.allow_git_directory_writes(),
+            false => policy,
+        };
         policy.starting_in(directory)
     }
 
@@ -1464,9 +1466,9 @@ const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a p
 
 /// Said to the planner on macOS, whose profile refuses a write to a `.git` from every step whose
 /// program is not git (SANDBOX-14), in the description and after a failed step alike.
-const MACOS_GIT_SENTENCE: &str = " On macOS a `.git` in those directories is written only by a \
-     step whose program is `git`: a script, `make`, `npm`, `gh` or any other program that runs \
-     git to commit, check out or clone is refused that write, so run git as a step of its own.";
+const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` cannot write any \
+     `.git`: a script, `make`, `npm`, `gh` or any other program that runs git to commit, check out \
+     or clone is refused that write, so run git as a step of its own.";
 
 /// Said after the closed network on macOS, where loopback is also how a line connects to a port of
 /// this machine.
@@ -1736,6 +1738,17 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
 
 fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// Whether the file a step resolved to is git, the one program whose stage writes a `.git`
+/// (SANDBOX-14, SANDBOX-18): a file named `git` beneath none of `planted`, the rows a stage may
+/// write, so a file a stage could have put there is not git by being named `git`.
+fn is_git(resolved: &Path, planted: &[&Path]) -> bool {
+    let file = canonical(resolved);
+    resolved.file_name() == Some(OsStr::new("git"))
+        && !planted
+            .iter()
+            .any(|row| file.starts_with(row) || file.starts_with(canonical(row)))
 }
 
 /// Whether one of `a` and `b` is the other or lies inside it, comparing components without regard
@@ -2249,12 +2262,12 @@ mod tests {
     }
 
     /// SANDBOX-14, SANDBOX-18: a step writes a `.git` only where the file it resolved to is git, on
-    /// every platform and in both modes that confine, so an install script, a build or a test
+    /// Linux and macOS and in both modes that confine, so an install script, a build or a test
     /// cannot plant a hook or a configuration that git runs later with no profile around it. The
     /// regressions it rejects: the lift given to every step, keyed on the name the line used
     /// rather than the file, matched on a prefix (`git-lfs`), or earned by a file named `git` that
-    /// a stage could have written in a session directory, the scratch directory or the temporary
-    /// directory.
+    /// a stage could have written in a session directory, the scratch directory, the temporary
+    /// directory or a toolchain cache.
     #[test]
     fn only_a_step_whose_program_is_git_writes_a_git_directory() {
         let lifted = |confined: &Confinement, step: Step| {
@@ -2287,6 +2300,7 @@ mod tests {
                 ("/work/project/tools/git", vec!["commit"]),
                 ("/var/scratch/git", vec!["commit"]),
                 ("/tmp/git", vec!["commit"]),
+                ("/home/person/.cargo/registry/git", vec!["commit"]),
             ] {
                 assert!(
                     !lifted(&confined, step(program, &args)),
@@ -2297,13 +2311,10 @@ mod tests {
 
         // A policy that lists what a step reads is built by another branch, so the lift is held
         // there too.
-        for confined in [
-            reading_confinement(Prelude::MacOs, &["/work/project"]).with_mode(SandboxMode::Strict),
-            confinement(&["/work/project"]),
-        ] {
-            assert!(lifted(&confined, step("/usr/bin/git", &["commit"])));
-            assert!(!lifted(&confined, named_git.clone()));
-        }
+        let strict =
+            reading_confinement(Prelude::MacOs, &["/work/project"]).with_mode(SandboxMode::Strict);
+        assert!(lifted(&strict, step("/usr/bin/git", &["commit"])));
+        assert!(!lifted(&strict, named_git));
     }
 
     /// No step that names no credential reaches any file in the account's home, whatever program

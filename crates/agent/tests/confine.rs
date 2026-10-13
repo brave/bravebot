@@ -453,9 +453,10 @@ fn a_confined_program_cannot_write_outside_the_session() {
 /// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
 /// names a gitdir, and neither can git when a script starts it, while a stage whose program is git
 /// writes the configuration. git runs what those files name with no profile around it the next
-/// time anybody runs git there. The regression it rejects is the `.git` refusal lifted for every
-/// stage. The confined write beside the `.git` is the control that the stage writes the session,
-/// and each refused line run without the sandbox is the control that the file is writable.
+/// time anybody runs git there. The regressions it rejects are the `.git` refusal lifted for every
+/// stage, and lifted for none. The confined write beside the `.git` is the control that the stage
+/// writes the session, and each refused line run without the sandbox is the control that the file
+/// is writable.
 #[cfg(target_os = "macos")]
 #[test]
 fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
@@ -471,6 +472,7 @@ fn only_git_writes_a_repositorys_hooks_and_configuration_on_macos() {
     if !initialised.is_ok_and(|status| status.success()) {
         return;
     }
+    std::fs::create_dir_all(repository.join(".git/hooks")).expect("a hooks directory");
     std::fs::create_dir_all(repository.join(".git/modules/sub")).expect("a submodule's gitdir");
     std::fs::write(repository.join(".git/modules/sub/config"), "").expect("its configuration");
     std::fs::create_dir_all(places.session.join("linked")).expect("a linked work tree");
