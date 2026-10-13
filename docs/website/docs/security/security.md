@@ -59,6 +59,9 @@ as one of them. A remote given by name, such as `origin`, is not matched, becaus
 the repository's own configuration. On those commands it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or
 `core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
 workspace can set it.
+Without an entry for the owner, the run prompt in the terminal interface numbers the public keys
+your own ssh files name and asks which one, once per owner, and keeps the answer in
+`~/.bravebot/reach.jsonl`.
 
 On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,

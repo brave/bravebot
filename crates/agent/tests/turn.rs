@@ -18984,6 +18984,7 @@ fn a_standing_answer_to_a_request_remembers_nothing() {
         record: true,
         record_family: false,
         remember_reach: None,
+        key: None,
     });
     let seen = person.seen.clone();
     let control = scoped_run_remembering(
@@ -19129,6 +19130,148 @@ fn keeping_a_request_for_every_session_is_read_by_another_session() {
         result.reach_elsewhere.len(),
         1,
         "another session did not read the grant"
+    );
+}
+
+/// A profile directory outside the temporary directory, which the plan may write, holding the
+/// public halves of a key at one of ssh's default names and of `work`, which the ssh configuration
+/// names: two keys ssh could offer.
+fn a_profile_with_two_keys(name: &str) -> std::path::PathBuf {
+    let profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-scratch")
+        .join(format!("turn-two-keys-{name}"));
+    let _ = std::fs::remove_dir_all(&profile);
+    std::fs::create_dir_all(profile.join(".ssh")).expect("an .ssh");
+    for key in ["id_ed25519.pub", "work.pub"] {
+        std::fs::write(profile.join(".ssh").join(key), "ssh-ed25519 AAAA\n").expect("a key");
+    }
+    std::fs::write(profile.join(".ssh/config"), "IdentityFile ~/.ssh/work\n").expect("config");
+    std::fs::canonicalize(profile).expect("canonical profile")
+}
+
+/// One turn running a push to an ssh address of `acme`, in a session with `profile` as its home
+/// and its record of reach under `state`, answered with `answer`. Returns the planner's request
+/// holding the result and what the prompt was asked.
+fn a_push_answered(
+    name: &str,
+    profile: &std::path::Path,
+    state: &std::path::Path,
+    answer: bravebot_agent::RunDecision,
+) -> (String, Vec<bravebot_agent::RunRequest>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": "git push ssh://git@127.0.0.1:1/acme/widgets.git" })
+                .to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let mut person = AskedAboutRuns::answering(answer);
+    let seen = person.seen.clone();
+    let task = Task::new("push it")
+        .with_profile(Some(profile.to_path_buf()))
+        .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite)
+        .with_home(Some(state.to_path_buf()))
+        .remembering(Some("a-session".to_string()));
+    let outcome = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        no_programs(&scratch.path),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.outcome.as_ref().expect("the turn runs");
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let seen = seen.lock().unwrap().clone();
+    (second, seen)
+}
+
+/// SANDBOX-16: a key chosen with a digit at the run prompt is the key that push offers, is
+/// written down for the owner, and is what the next turn's push offers without asking again;
+/// an answer naming a key the prompt did not number writes nothing. Run through `run`, so the
+/// acting layer, the record and `Tools::confinement` reading it back are all on the path. The
+/// regressions it rejects are a choice remembered but not applied to the line it was made at, a
+/// choice written but not read back, and a front end choosing a key nobody was shown.
+#[test]
+fn a_key_chosen_at_the_run_prompt_is_offered_and_remembered_and_one_not_numbered_is_not() {
+    use bravebot_agent::confirm::{KeyAnswer, Offered};
+    if cannot_confine_here() {
+        return;
+    }
+    let profile = a_profile_with_two_keys("chosen");
+    let state = Scratch::new("key-choice-state");
+    let (default, work) = (
+        profile.join(".ssh/id_ed25519.pub"),
+        profile.join(".ssh/work.pub"),
+    );
+
+    let (said, seen) = a_push_answered(
+        "key-choice-first",
+        &profile,
+        &state.path,
+        bravebot_agent::RunDecision::approve_with_key(KeyAnswer::Candidate(1)),
+    );
+    let choice = seen[0]
+        .key_choice
+        .as_ref()
+        .expect("the prompt offered a choice");
+    assert_eq!(choice.candidates, [default.clone(), work.clone()]);
+    assert_eq!(choice.owner(), "127.0.0.1/acme");
+    let chosen = bravebot_agent::reach::Store::new(&state.path).chosen_keys();
+    assert_eq!(chosen.len(), 1, "{chosen:?}");
+    assert_eq!(chosen[0].key.as_deref(), Some(work.as_path()));
+    assert_eq!(chosen[0].owner(), "127.0.0.1/acme");
+    let result = message_from(&said, "Result of run");
+    assert!(
+        result.contains("the key the person chose for that address's owner at a run prompt"),
+        "the line the key was chosen at did not offer it: {result}"
+    );
+
+    let (_, seen) = a_push_answered(
+        "key-choice-second",
+        &profile,
+        &state.path,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(seen[0].key_choice, None, "the person was asked again");
+    let carried = &seen[0].confined.as_ref().expect("confined").carried;
+    assert_eq!(
+        carried[0].identity,
+        Some(Offered::Chosen(chosen[0].clone())),
+        "the next push did not offer the chosen key"
+    );
+
+    let unnumbered = Scratch::new("key-choice-unnumbered-state");
+    let (said, seen) = a_push_answered(
+        "key-choice-unnumbered",
+        &profile,
+        &unnumbered.path,
+        bravebot_agent::RunDecision::approve_with_key(KeyAnswer::Candidate(7)),
+    );
+    assert!(
+        seen[0].key_choice.is_some(),
+        "no choice was offered, so this proves nothing"
+    );
+    assert!(
+        bravebot_agent::reach::Store::new(&unnumbered.path)
+            .chosen_keys()
+            .is_empty(),
+        "a key the prompt did not number was written down"
+    );
+    assert!(
+        message_from(&said, "Result of run").contains("offered whichever key ssh tried first"),
+        "{said}"
     );
 }
 

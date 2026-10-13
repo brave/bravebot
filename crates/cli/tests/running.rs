@@ -3113,6 +3113,80 @@ fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
     }
 }
 
+/// SANDBOX-16: a key chosen at a run prompt reaches the git process `run` starts in a session
+/// that puts no prompt to anybody, as a `git.identities` entry does, and a key chosen for another
+/// owner does not. The record is read by `Tools::confinement` in this process, which a test that
+/// hands the chosen keys to the confinement directly would pass with that read dropped. A fake git
+/// records its environment without contacting a remote.
+#[cfg(unix)]
+#[test]
+fn a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping chosen key run-stage test: confinement is unavailable");
+        return;
+    }
+    for (name, owner) in [
+        ("cli-running-chosen-key-matching", "acme"),
+        ("cli-running-chosen-key-other", "other"),
+    ] {
+        let gateway =
+            a_gateway_asking_to_run("git push git@example.invalid:acme/widgets.git > identity.txt");
+        let scratch = Scratch::new(name)
+            .with_settings(&settings_for(&gateway))
+            .with_file(".ssh/work.pub", "ssh-ed25519 AAAA\n")
+            .with_file(
+                "bin/git",
+                "#!/bin/sh\n[ \"$1\" = push ] || exit 1\nprintf '%s\\n' \"${GIT_SSH_COMMAND-unset}\"\n",
+            );
+        let key = scratch.path.join(".ssh/work.pub");
+        let scratch = scratch.with_state(
+            "reach.jsonl",
+            &format!(
+                "{}\n",
+                serde_json::json!({
+                    "action": "allow",
+                    "key_for": format!("example.invalid/{owner}"),
+                    "key": key.to_str().expect("a key path that is text"),
+                    "allowed": "2026-10-13",
+                })
+            ),
+        );
+        std::fs::set_permissions(
+            scratch.path.join("bin/git"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("make fake git executable");
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", &path));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[
+                "--dangerously-skip-permissions",
+                "-p",
+                "record the push identity",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{name}: {stdout}{stderr}");
+        let actual =
+            std::fs::read_to_string(project.join("identity.txt")).unwrap_or_else(|error| {
+                panic!("{name}: git did not record its identity: {error}; {stdout}{stderr}")
+            });
+        let expected = match owner {
+            "acme" => format!("ssh -i '{}' -o IdentitiesOnly=yes\n", key.display()),
+            _ => "unset\n".to_string(),
+        };
+        assert_eq!(actual, expected, "{name}: {stdout}{stderr}");
+    }
+}
+
 /// SANDBOX-24: a person's `sandbox.network.allowedHosts` reaches the programs `run` starts as a
 /// proxy variable, and a run with no list reaches none.
 ///

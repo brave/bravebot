@@ -1656,6 +1656,8 @@ run-carries-docker = { $program } also reads your docker credentials in ~/.docke
 run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
 run-carries-identity = { $program } has ssh offer the key { $path } first, which your git.identities names for the owner of this address, and after it only keys your ssh configuration names
+run-carries-identity-chosen = { $program } has ssh offer the key { $path } first, which you chose for { $owner } on { $date }, and after it only keys your ssh configuration names
+run-carries-identity-chosen-default = { $program } leaves the key to ssh, which offers your keys in order, as you chose for { $owner } on { $date }
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
@@ -1665,7 +1667,7 @@ run-carries-remembered = { $sentence } (remembered for this command, allowed { $
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
 # The /reach command: what it lists, what it says it did, and why it did nothing.
-reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one. /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
 reach-none = no reach is remembered for any command
 reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
 reach-access-reads = reads
@@ -1685,6 +1687,12 @@ reach-refused-workspace = this directory cannot be told apart from another made 
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }
+reach-key-none = no ssh key is chosen for any owner
+reach-key-listed = { $number }. { $owner }: { $key }, chosen { $date }
+reach-key-default = whichever key ssh tries first
+reach-key-usage = /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
+reach-key-refused-number = no key is numbered { $number }
+reach-key-removed = forgotten: the key for { $owner }. The next run prompt for a push there asks again where more than one key could be offered.
 run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
@@ -1727,6 +1735,12 @@ run-keep-reach-where = it is written down here:
 run-keep-reach-undo = /reach lists what is remembered, and /reach remove <number> forgets one
 run-keep-reach = remember the reach
 run-keep-reach-always = remember it for every session
+run-key-choice-explained = { $first }-{ $last }: run it, and have ssh offer that key first for { $owner }, in this push and in every session after it:
+run-key-choice-default = leave the key to ssh, which offers your keys in order, and stop asking
+run-key-choice-yes = y runs it with whichever key ssh tries first, and asks again next time
+run-key-choice-undo = /reach keys lists the keys chosen, and /reach keys remove <number> forgets one
+run-key-choose = offer that key
+run-key-leave = leave it to ssh
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined

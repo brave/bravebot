@@ -366,6 +366,18 @@ planner asked for is not remembered, and a line with a `NAME=value` in front of 
 program started with an option such as `git -C dir push`, is not offered either key. The desktop app
 does not offer them.
 
+### The ssh key chosen for an owner
+
+Where a push names an ssh address of an owner no `git.identities` entry names, and ssh could offer
+more than one of your keys, the run prompt numbers them and a digit chooses one, or `0` leaves the
+key to ssh ([configuration](../customize/configuration.md#gitidentities)). The choice is kept in the
+same file and decides later pushes to that owner.
+
+```
+/reach keys                                 # list the key chosen for each owner, numbered
+/reach keys remove 1                        # forget the first, so the next prompt asks again
+```
+
 ## `/sandbox [<mode>]`
 
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a

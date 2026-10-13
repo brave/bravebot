@@ -11,9 +11,9 @@
 //! Nothing a program printed, and no value the model supplied, reaches a row. The inputs are the
 //! compiled [`Step`], which a person read, and the session's own directories.
 
-use crate::confirm::{Carried, Confined, Remembered};
+use crate::confirm::{Carried, Confined, KeyChoice, Offered, Remembered};
 use crate::exec::ExecError;
-use crate::reach::{Grant, Reached};
+use crate::reach::{ChosenKey, Grant, Reached};
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
@@ -28,8 +28,8 @@ use bravebot_sandbox::rules::{
     Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
 };
 use bravebot_sandbox::scope::{
-    Reach, Requested, Scope, environment_reach, identity_key, requested_reach, ssh_address,
-    ssh_command,
+    Reach, Requested, Scope, candidate_public_keys, environment_reach, identity_key,
+    requested_reach, ssh_address, ssh_command,
 };
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
@@ -94,6 +94,8 @@ pub struct Confinement {
     /// The key the person chose for each owner's repositories (`git.identities`), offered by a
     /// `git` stage whose argv names an ssh address of that owner (SANDBOX-16).
     identities: Identities,
+    /// The key the person chose at a run prompt for an owner `identities` names nothing for.
+    chosen_keys: Vec<ChosenKey>,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -156,6 +158,7 @@ impl Confinement {
             host_grants: Vec::new(),
             requested: Vec::new(),
             identities: Identities::default(),
+            chosen_keys: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
         }
@@ -514,13 +517,34 @@ impl Confinement {
         self
     }
 
-    /// What `git.identities` decides for `step`, or `None` for a step that is not `git` carrying
-    /// the remote scope by its argv.
+    /// This confinement with the keys the person chose at earlier run prompts, from the record of
+    /// reach (SANDBOX-16).
+    #[must_use]
+    pub fn with_chosen_keys(mut self, chosen: &[ChosenKey]) -> Self {
+        self.chosen_keys = chosen.to_vec();
+        self
+    }
+
+    /// This confinement with `chosen` in place of whatever was chosen before for its host and
+    /// owner, for the line the person chose it at.
+    #[must_use]
+    pub fn with_chosen_key(mut self, chosen: ChosenKey) -> Self {
+        self.chosen_keys
+            .retain(|held| !held.address.same_as(&chosen.address));
+        self.chosen_keys.push(chosen);
+        self
+    }
+
+    /// What `git.identities`, or failing an entry there a choice made at an earlier run prompt,
+    /// decides for `step`, or `None` for a step that is not `git` carrying the remote scope by its
+    /// argv.
     ///
     /// The address is read from the argv, which the planner wrote and the person approved, and
-    /// never from the repository's configuration, which a clone or a stage may have written. The key
-    /// is a public key file in the person's home ([`identity_key`]) outside every directory the plan
-    /// may write, since a key there would be one the plan chose.
+    /// never from the repository's configuration, which a clone or a stage may have written. An
+    /// entry in the settings decides wherever there is one, a key it names that is refused
+    /// included. A key is offered only where it is a public key file in the person's home outside
+    /// every directory the plan may write ([`Confinement::offerable`]), and a chosen key that is
+    /// no longer one leaves the owner unchosen, so the prompt asks again.
     fn identified(&self, step: &Step) -> Option<Identified> {
         let home = self.home.as_deref()?;
         let is_git = step.resolved.file_name() == Some(OsStr::new("git"));
@@ -530,16 +554,92 @@ impl Confinement {
         let Some(address) = ssh_address(&step.args) else {
             return Some(Identified::NoAddress);
         };
-        let chosen = self
-            .identities
-            .for_address(&address)
-            .and_then(|entry| identity_key(&entry.key, home))
+        if let Some(entry) = self.identities.for_address(&address) {
+            return Some(match self.offerable(&entry.key, home) {
+                Some((command, key)) => Identified::Key { key, command },
+                None => Identified::Unchosen,
+            });
+        }
+        let Some(held) = self
+            .chosen_keys
+            .iter()
+            .find(|held| held.address.same_as(&address))
+        else {
+            return Some(Identified::Unchosen);
+        };
+        let Some(written) = &held.key else {
+            return Some(Identified::Chosen {
+                chosen: held.clone(),
+                command: None,
+            });
+        };
+        Some(
+            match written
+                .to_str()
+                .and_then(|written| self.offerable(written, home))
+            {
+                Some((command, key)) => Identified::Chosen {
+                    chosen: ChosenKey {
+                        key: Some(key),
+                        ..held.clone()
+                    },
+                    command: Some(command),
+                },
+                None => Identified::Unchosen,
+            },
+        )
+    }
+
+    /// The key `written` names, with the `GIT_SSH_COMMAND` that offers it, where a stage may be
+    /// given it: a public key file in the person's home ([`identity_key`]) outside every directory
+    /// the plan may write, since a key there would be one the plan chose.
+    fn offerable(&self, written: &str, home: &Path) -> Option<(String, PathBuf)> {
+        identity_key(written, home)
             .filter(|key| !self.writable_by_the_plan(key))
-            .and_then(|key| Some((ssh_command(&key)?, key)));
-        Some(match chosen {
-            Some((command, key)) => Identified::Key { key, command },
-            None => Identified::Unchosen,
-        })
+            .and_then(|key| Some((ssh_command(&key)?, key)))
+    }
+
+    /// The key a run prompt may ask the person to choose for `steps`, written down at `record`, or
+    /// `None` where it asks nothing (SANDBOX-16).
+    ///
+    /// Asked where every `git` step of the line that carries the remote scope by its argv and is
+    /// left unchosen names one host and owner, no `git.identities` entry names that owner, and ssh
+    /// could offer between two and [`KEY_CHOICES`] public keys: those at its default names and those
+    /// an `IdentityFile` line of the person's ssh configuration names, judged as an entry's key is.
+    /// The candidates come from the person's own files and the address from the argv, so nothing a
+    /// program or a repository wrote is among the inputs.
+    pub fn key_choice(&self, steps: &[&Step], record: &Path) -> Option<KeyChoice> {
+        let home = self.home.as_deref()?;
+        let mut asked: Option<bravebot_sandbox::scope::Address> = None;
+        for step in steps {
+            if self.identified(step) != Some(Identified::Unchosen) {
+                continue;
+            }
+            let address = ssh_address(&step.args)?;
+            if self.identities.for_address(&address).is_some() {
+                continue;
+            }
+            match &asked {
+                Some(held) if !held.same_as(&address) => return None,
+                Some(_) => {}
+                None => asked = Some(address),
+            }
+        }
+        let address = asked?;
+        let candidates: Vec<PathBuf> = candidate_public_keys(home)
+            .into_iter()
+            .filter(|key| {
+                key.to_str()
+                    .is_some_and(|key| self.offerable(key, home).is_some())
+            })
+            .collect();
+        (2..=KEY_CHOICES)
+            .contains(&candidates.len())
+            .then(|| KeyChoice {
+                address,
+                candidates,
+                record: record.to_path_buf(),
+            })
     }
 
     /// Whether a request can be applied: the rows of both kinds are under the account's home.
@@ -731,7 +831,8 @@ impl Confinement {
                         })
                         .collect();
                     let identity = match self.identified(step) {
-                        Some(Identified::Key { key, .. }) => Some(key),
+                        Some(Identified::Key { key, .. }) => Some(Offered::Configured(key)),
+                        Some(Identified::Chosen { chosen, .. }) => Some(Offered::Chosen(chosen)),
                         _ => None,
                     };
                     (toolchain.is_some() || scope.is_some() || network || !remembered.is_empty())
@@ -873,7 +974,7 @@ impl Confinement {
                         policy = policy.allow_read(reach.path);
                     }
                 }
-                if let Some(Identified::Key { key, .. }) = self.identified(step) {
+                if let Some(key) = self.identified(step).as_ref().and_then(Identified::key) {
                     policy = policy.allow_read(key);
                 }
                 if matches!(scope, Scope::Remote | Scope::Signing)
@@ -1036,8 +1137,8 @@ impl Confinement {
     /// nothing where no step is `git` carrying the remote scope by its argv.
     ///
     /// Fixed text chosen by what [`Confinement::identified`] decided for each step, which reads the
-    /// argv and the person's settings and nothing a program printed. It names no host, owner or
-    /// path.
+    /// argv, the person's settings and their choices at run prompts, and nothing a program printed.
+    /// It names no host, owner or path.
     fn identity_sentence(&self, steps: &[&Step]) -> String {
         let decided: Vec<Identified> = steps
             .iter()
@@ -1053,6 +1154,24 @@ impl Confinement {
                     .iter()
                     .any(|held| matches!(held, Identified::Key { .. })),
                 IDENTITY_CHOSEN_SENTENCE,
+            ),
+            (
+                decided.iter().any(|held| {
+                    matches!(
+                        held,
+                        Identified::Chosen {
+                            command: Some(_),
+                            ..
+                        }
+                    )
+                }),
+                IDENTITY_PICKED_SENTENCE,
+            ),
+            (
+                decided
+                    .iter()
+                    .any(|held| matches!(held, Identified::Chosen { command: None, .. })),
+                IDENTITY_PICKED_DEFAULT_SENTENCE,
             ),
             (
                 decided.contains(&Identified::Unchosen),
@@ -1291,10 +1410,8 @@ impl Confinement {
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
-        let chosen = match self.identified(step) {
-            Some(Identified::Key { command, .. }) => Some(command),
-            _ => None,
-        };
+        let identified = self.identified(step);
+        let chosen = identified.as_ref().and_then(Identified::command);
         let environment = overlay(
             effective_environment(command),
             proxied
@@ -1564,22 +1681,66 @@ const GIT_SSH_COMMAND: &str = "GIT_SSH_COMMAND";
 /// What [`Confinement::identified`] decided for one `git` stage carrying the remote scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Identified {
-    /// The argv names an ssh address, and this is the key the person chose for its owner, with the
-    /// `GIT_SSH_COMMAND` that offers it.
+    /// The argv names an ssh address, and this is the key the person's `git.identities` names for
+    /// its owner, with the `GIT_SSH_COMMAND` that offers it.
     Key { key: PathBuf, command: String },
-    /// The argv names an ssh address, and no entry names a key that can be read for its owner.
+    /// The argv names an ssh address, no entry names its owner, and this is what the person chose
+    /// for it at an earlier run prompt, with the `GIT_SSH_COMMAND` that offers the key where they
+    /// chose one rather than leaving it to ssh.
+    Chosen {
+        chosen: ChosenKey,
+        command: Option<String>,
+    },
+    /// The argv names an ssh address, and nothing names a key that can be read for its owner.
     Unchosen,
     /// The argv names no ssh address: a remote given by name, or another transport.
     NoAddress,
 }
 
+impl Identified {
+    /// The key the stage reads and ssh offers first, where there is one.
+    fn key(&self) -> Option<&Path> {
+        match self {
+            Self::Key { key, .. } => Some(key),
+            Self::Chosen {
+                chosen: ChosenKey { key: Some(key), .. },
+                command: Some(_),
+            } => Some(key),
+            _ => None,
+        }
+    }
+
+    /// The `GIT_SSH_COMMAND` the stage starts with, where it is given a key.
+    fn command(&self) -> Option<&str> {
+        match self {
+            Self::Key { command, .. } => Some(command),
+            Self::Chosen {
+                command: Some(command),
+                ..
+            } => Some(command),
+            _ => None,
+        }
+    }
+}
+
+/// The most keys a run prompt numbers for the person to choose between, one digit each.
+const KEY_CHOICES: usize = 9;
+
 const IDENTITY_CHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address had ssh \
      offer first the key the person's git.identities setting names for that address's owner, and \
      after it only the keys their ssh configuration names for the host.";
 
+const IDENTITY_PICKED_SENTENCE: &str = " A git step whose argv named an ssh address had ssh offer \
+     first the key the person chose for that address's owner at a run prompt, and after it only the \
+     keys their ssh configuration names for the host.";
+
+const IDENTITY_PICKED_DEFAULT_SENTENCE: &str = " A git step whose argv named an ssh address \
+     offered whichever key ssh tried first, as the person chose for that address's owner at a run \
+     prompt.";
+
 const IDENTITY_UNCHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address offered \
-     whichever key ssh tried first, since the person's git.identities setting names no readable \
-     public key for that address's owner.";
+     whichever key ssh tried first, since neither the person's git.identities setting nor a choice \
+     of theirs at a run prompt names a readable public key for that address's owner.";
 
 const IDENTITY_NO_ADDRESS_SENTENCE: &str = " A git step that named its remote by name, such as \
      `origin`, or by an address that is not ssh, was given no key by git.identities, which applies \
@@ -1589,10 +1750,13 @@ const IDENTITY_NO_ADDRESS_SENTENCE: &str = " A git step that named its remote by
 const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, the key ssh offered \
      may belong to an account that cannot write to the repository, and where it refused the login, \
      no key offered is registered. ssh offers an agent's keys in order and GitHub accepts the first \
-     one any account holds, so a retry offers the same key. Only the person chooses the key, with \
-     an entry `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
-     ~/.bravebot/settings.json, which applies to a git step whose argv names the ssh address, so in \
-     either case ask them for one rather than retrying.";
+     one any account holds, so a retry offers the same key. Only the person chooses the key, for a \
+     git step whose argv names the ssh address: at its run prompt, which offers the public keys ssh \
+     could use where there is more than one and no key was chosen for the owner, or with an entry \
+     `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
+     ~/.bravebot/settings.json. `/reach keys` lists the keys chosen at a prompt and `/reach keys \
+     remove <number>` forgets one, so the next prompt asks again. In either case ask them rather \
+     than retrying.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
@@ -6154,6 +6318,37 @@ mod tests {
         fn work_key(&self) -> PathBuf {
             self.home.join(".ssh/work.pub")
         }
+
+        /// The same home with a key at one of ssh's default names too, and a configuration naming
+        /// `work` and a key in the session directory, so ssh could offer two keys a stage may be
+        /// given and one it may not.
+        fn with_two_keys(name: &str) -> Self {
+            let places = Self::new(name);
+            std::fs::write(places.default_key(), "ssh-ed25519 BBBB\n").expect("key file");
+            std::fs::write(
+                places.home.join(".ssh/config"),
+                format!(
+                    "Host *\n  IdentityFile ~/.ssh/work\n  IdentityFile {}\n",
+                    places.session.join("planted").display()
+                ),
+            )
+            .expect("ssh configuration");
+            places
+        }
+
+        fn default_key(&self) -> PathBuf {
+            self.home.join(".ssh/id_ed25519.pub")
+        }
+
+        /// What the person chose at a prompt for `github.com/<owner>`.
+        fn chosen(&self, owner: &str, key: Option<&Path>) -> ChosenKey {
+            ChosenKey {
+                address: bravebot_sandbox::scope::Address::spelled("github.com", owner)
+                    .expect("an address"),
+                key: key.map(Path::to_path_buf),
+                allowed: "2026-10-13".to_string(),
+            }
+        }
     }
 
     /// The `GIT_SSH_COMMAND` a stage is started with, from a process environment that sets none,
@@ -6216,8 +6411,8 @@ mod tests {
         ));
         let described = confined.describe(&[&mapped]);
         assert_eq!(
-            described.carried[0].identity.as_deref(),
-            Some(key.as_path())
+            described.carried[0].identity,
+            Some(Offered::Configured(key.clone()))
         );
         assert!(
             described
@@ -6407,5 +6602,213 @@ mod tests {
             1,
             "{both}"
         );
+    }
+
+    /// SANDBOX-16: a key the person chose at a run prompt is offered by a push to that owner's
+    /// address and no other, leaving the key to ssh starts the stage as it was while the prompt
+    /// still says who decided it, a `git.identities` entry for the owner decides over a choice
+    /// whatever it names, and a chosen key the plan could have written is not offered. The
+    /// regressions it rejects are a choice applied to every owner, a choice outranking the
+    /// person's settings, and a remembered path read without being judged again.
+    #[test]
+    #[cfg(unix)]
+    fn a_key_chosen_at_a_prompt_is_offered_for_its_owner_and_an_entry_in_the_settings_wins() {
+        let places = IdentityPlaces::with_two_keys("chosen");
+        let (work, default) = (places.work_key(), places.default_key());
+        let push = step("/usr/bin/git", &["push", "git@github.com:Acme/widgets.git"]);
+        let other = step(
+            "/usr/bin/git",
+            &["push", "git@github.com:other/widgets.git"],
+        );
+        let offers = |key: &Path| Some(format!("ssh -i '{}' -o IdentitiesOnly=yes", key.display()));
+
+        let picked = places
+            .confinement(&[])
+            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+        if let Some(set) = ssh_command_of(&picked, &push, &places) {
+            assert_eq!(set, offers(&work));
+        }
+        assert_eq!(
+            picked.describe(&[&push]).carried[0].identity,
+            Some(Offered::Chosen(places.chosen("acme", Some(&work))))
+        );
+        if let Some(set) = ssh_command_of(&picked, &other, &places) {
+            assert_eq!(set, None);
+        }
+        assert_eq!(picked.identified(&other), Some(Identified::Unchosen));
+
+        let left = places
+            .confinement(&[])
+            .with_chosen_keys(&[places.chosen("acme", None)]);
+        if let Some(set) = ssh_command_of(&left, &push, &places) {
+            assert_eq!(set, None);
+        }
+        assert_eq!(
+            left.describe(&[&push]).carried[0].identity,
+            Some(Offered::Chosen(places.chosen("acme", None)))
+        );
+
+        let settled = places
+            .confinement(&[("github.com/acme", "~/.ssh/id_ed25519")])
+            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+        if let Some(set) = ssh_command_of(&settled, &push, &places) {
+            assert_eq!(set, offers(&default));
+        }
+        let refused = places
+            .confinement(&[("github.com/acme", "~/.ssh/missing.pub")])
+            .with_chosen_keys(&[places.chosen("acme", Some(&work))]);
+        assert_eq!(refused.identified(&push), Some(Identified::Unchosen));
+
+        let planted = places.session.join("planted.pub");
+        let written = places
+            .confinement(&[])
+            .with_chosen_keys(&[places.chosen("acme", Some(&planted))]);
+        if let Some(set) = ssh_command_of(&written, &push, &places) {
+            assert_eq!(set, None);
+        }
+        assert_eq!(written.identified(&push), Some(Identified::Unchosen));
+    }
+
+    /// SANDBOX-16: a run prompt offers a choice of key for the one owner a line's push leaves to
+    /// ssh, numbering the keys ssh could offer that a stage may be given, defaults first. It offers
+    /// none where an entry names the owner, a key was already chosen, the remote is named by name,
+    /// two owners are left to ssh, ssh could offer only one key, or more keys than there are
+    /// digits. The regressions it rejects are a question asked of a person who already answered it,
+    /// a choice of one, a key the plan could have written put on the list, and one choice spread
+    /// over two owners.
+    #[test]
+    #[cfg(unix)]
+    fn the_prompt_offers_a_key_choice_only_for_one_owner_left_to_ssh_with_two_keys_or_more() {
+        let places = IdentityPlaces::with_two_keys("choice");
+        let record = places.home.join("reach.jsonl");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let again = step(
+            "/usr/bin/git",
+            &["fetch", "ssh://git@github.com/ACME/tools.git"],
+        );
+        let other = step(
+            "/usr/bin/git",
+            &["push", "git@github.com:other/widgets.git"],
+        );
+        let unasked = places.confinement(&[]);
+
+        let choice = unasked
+            .key_choice(&[&push, &again], &record)
+            .expect("a choice of two keys");
+        assert_eq!(choice.candidates, [places.default_key(), places.work_key()]);
+        assert_eq!(choice.owner(), "github.com/acme");
+        assert_eq!(choice.record, record);
+        assert!(
+            places
+                .confinement(&[("github.com/other", "~/.ssh/work")])
+                .key_choice(&[&push, &other], &record)
+                .is_some(),
+            "an owner the settings name took the choice away from the one they do not"
+        );
+
+        for (why, confined, steps) in [
+            (
+                "an entry names the owner",
+                places.confinement(&[("github.com/acme", "~/.ssh/work")]),
+                vec![&push],
+            ),
+            (
+                "an entry names a key it refuses",
+                places.confinement(&[("github.com/acme", "~/.ssh/missing.pub")]),
+                vec![&push],
+            ),
+            (
+                "a key was chosen",
+                unasked
+                    .clone()
+                    .with_chosen_keys(&[places.chosen("acme", None)]),
+                vec![&push],
+            ),
+            (
+                "two owners are left to ssh",
+                unasked.clone(),
+                vec![&push, &other],
+            ),
+        ] {
+            assert_eq!(confined.key_choice(&steps, &record), None, "{why}");
+        }
+        for by_name in [
+            step("/usr/bin/git", &["push", "origin", "main"]),
+            step(
+                "/usr/bin/git",
+                &["status", "git@github.com:acme/widgets.git"],
+            ),
+        ] {
+            assert_eq!(
+                unasked.key_choice(&[&by_name], &record),
+                None,
+                "{:?}",
+                by_name.args
+            );
+        }
+
+        let one = IdentityPlaces::new("choice-one");
+        std::fs::write(one.home.join(".ssh/config"), "IdentityFile ~/.ssh/work\n").expect("config");
+        assert_eq!(
+            one.confinement(&[]).key_choice(&[&push], &record),
+            None,
+            "one key"
+        );
+
+        let many = IdentityPlaces::new("choice-many");
+        let mut config = String::new();
+        for at in 0..=KEY_CHOICES {
+            std::fs::write(
+                many.home.join(format!(".ssh/k{at}.pub")),
+                "ssh-ed25519 CCCC\n",
+            )
+            .expect("key file");
+            config.push_str(&format!("IdentityFile ~/.ssh/k{at}\n"));
+        }
+        std::fs::write(many.home.join(".ssh/config"), config).expect("config");
+        assert_eq!(
+            many.confinement(&[]).key_choice(&[&push], &record),
+            None,
+            "more keys than digits"
+        );
+    }
+
+    /// SANDBOX-19: a failed line whose push offered the key the person chose at a run prompt says
+    /// so, and one whose push the person left to ssh says that, each in its own fixed text and
+    /// neither naming the owner, the repository or the key. The regression it rejects is a chosen
+    /// key reported as no choice at all, which sends the planner to ask the person a question they
+    /// have answered.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_step_says_where_the_key_was_chosen_at_a_prompt() {
+        let places = IdentityPlaces::with_two_keys("picked-sentence");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+        let picked = places
+            .confinement(&[])
+            .with_chosen_keys(&[places.chosen("acme", Some(&places.work_key()))])
+            .profile(&[&push]);
+        let left = places
+            .confinement(&[])
+            .with_chosen_keys(&[places.chosen("acme", None)])
+            .profile(&[&push]);
+        for (line, holds) in [
+            (&picked, IDENTITY_PICKED_SENTENCE),
+            (&left, IDENTITY_PICKED_DEFAULT_SENTENCE),
+        ] {
+            for sentence in [
+                IDENTITY_CHOSEN_SENTENCE,
+                IDENTITY_PICKED_SENTENCE,
+                IDENTITY_PICKED_DEFAULT_SENTENCE,
+                IDENTITY_UNCHOSEN_SENTENCE,
+                IDENTITY_NO_ADDRESS_SENTENCE,
+            ] {
+                assert_eq!(says(line, sentence), sentence == holds, "{line}");
+            }
+            assert!(says(line, IDENTITY_SENTENCE), "{line}");
+            for named in ["acme", "widgets", ".ssh/work"] {
+                assert!(!line.contains(named), "{named} is in {line}");
+            }
+        }
     }
 }
