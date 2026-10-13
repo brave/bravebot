@@ -9,6 +9,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/session_import.rs
+  - crates/cli/src/background.rs
 documented-by: docs/website/docs/customize/configuration.md
 ---
 

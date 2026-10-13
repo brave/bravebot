@@ -8066,6 +8066,29 @@ fn a_claude_code_session_is_copied_once_and_only_when_asked() {
     assert!(said(&output).1.contains("No Claude Code session"));
 }
 
+/// A directory named for `sessions import` or `sessions search` that is a regular file is refused
+/// as an argument error, by both commands, and nothing is read from it.
+#[test]
+fn sessions_import_and_search_refuse_a_directory_that_is_a_file() {
+    let home = Scratch::new("sessions-not-a-directory");
+    let file = home.path.join("plain.txt");
+    std::fs::write(&file, "not a directory").expect("write the file");
+    let typed = file.to_str().expect("utf-8");
+    let workspace = format!("workspace:{typed}");
+
+    for arguments in [
+        vec!["sessions", "import", "claude-code", "--project", typed],
+        vec!["sessions", "search", &workspace, "text"],
+    ] {
+        let output = bravebot(&home.path, &[], &arguments);
+        let (out, err) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {err}");
+        assert!(err.contains("is not a directory"), "{arguments:?}: {err}");
+        assert!(err.contains(typed), "{arguments:?}: {err}");
+        assert_eq!(out, "", "{arguments:?}");
+    }
+}
+
 /// SESSION-33: a script finds past sessions by what was said in them and gets ids and titles back.
 /// A tool result and an imported session are not searched, `since:` limits by age, `workspace:`
 /// names the directory, and no match exits 1 with nothing on stdout.
