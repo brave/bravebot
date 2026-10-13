@@ -374,10 +374,12 @@ impl SandboxPolicy {
     /// as well. A refusal that is not on disk still shapes the rows, so a directory made there
     /// during the run is outside every grant.
     ///
-    /// Without a refusal this is [`SandboxPolicy::readable`].
-    pub fn readable_by_enumeration(&self) -> Vec<PathBuf> {
+    /// Without a refusal this is [`SandboxPolicy::readable`]. A row above a refusal that cannot be
+    /// listed is the error, naming the row: none of what it grants is among the rows, and the row
+    /// is a path the caller named (SANDBOX-6).
+    pub fn readable_by_enumeration(&self) -> std::io::Result<Vec<PathBuf>> {
         if self.unreadable.is_empty() {
-            return self.readable.clone();
+            return Ok(self.readable.clone());
         }
         self.around_the_refusals(self.readable.iter())
     }
@@ -390,10 +392,12 @@ impl SandboxPolicy {
     /// the refusals the way [`SandboxPolicy::readable_by_enumeration`] spreads a read row, which
     /// leaves the directory itself without the right to make an entry directly in it.
     ///
-    /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`].
-    pub fn writable_by_enumeration(&self) -> Vec<PathBuf> {
+    /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`]. A row above a
+    /// refusal that cannot be listed is the error, as in
+    /// [`SandboxPolicy::readable_by_enumeration`].
+    pub fn writable_by_enumeration(&self) -> std::io::Result<Vec<PathBuf>> {
         if self.unreadable.is_empty() && self.unwritable.is_empty() {
-            return self.writable.iter().map(|row| row.path.clone()).collect();
+            return Ok(self.writable.iter().map(|row| row.path.clone()).collect());
         }
         let withdrawn = with_their_resolved_spelling(&self.unwritable);
         let mut refused = with_their_resolved_spelling(&self.unreadable);
@@ -405,23 +409,26 @@ impl SandboxPolicy {
             if withdrawn.contains(row) {
                 continue;
             }
-            spread_around(row, &refused, &mut granted);
+            spread_around(row, &refused, &mut granted).map_err(|e| unlisted(row, e))?;
         }
         granted.sort();
         granted.dedup();
-        granted
+        Ok(granted)
     }
 
-    fn around_the_refusals<'a>(&self, rows: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
+    fn around_the_refusals<'a>(
+        &self,
+        rows: impl Iterator<Item = &'a PathBuf>,
+    ) -> std::io::Result<Vec<PathBuf>> {
         let refused = with_their_resolved_spelling(&self.unreadable);
 
         let mut granted: Vec<PathBuf> = Vec::new();
         for row in rows {
-            spread_around(row, &refused, &mut granted);
+            spread_around(row, &refused, &mut granted).map_err(|e| unlisted(row, e))?;
         }
         granted.sort();
         granted.dedup();
-        granted
+        Ok(granted)
     }
 
     /// Whether this policy would confine anything at all.
@@ -440,6 +447,14 @@ impl SandboxPolicy {
                     .iter()
                     .any(|row| names_a_filesystem_root(&row.path)))
     }
+}
+
+/// The error listing `row` gave, saying which row it was.
+fn unlisted(row: &Path, error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(
+        error.kind(),
+        format!("failed to list {}: {error}", row.display()),
+    )
 }
 
 /// `paths` and, for each that is on disk, where it leads, so a refusal written as a link is
@@ -519,27 +534,30 @@ pub struct Resolution {
 ///
 /// A directory with no refusal beneath it is one row. One with a refusal beneath it, present or
 /// not, is each of its entries, descended into the same way, so only the entries on the way to a
-/// refusal are listed. A directory this cannot list contributes nothing, since a process that
+/// refusal are listed. A failure to list `path` itself is the error, since nothing `path` grants
+/// is then among the rows. An entry this cannot list contributes nothing, since a process that
 /// could not list it has no entries to name.
-pub(crate) fn spread_around(path: &Path, refused: &[PathBuf], granted: &mut Vec<PathBuf>) {
+pub(crate) fn spread_around(
+    path: &Path,
+    refused: &[PathBuf],
+    granted: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     if !refused
         .iter()
         .any(|refusal| refusal.starts_with(path) && refusal != path)
     {
         granted.push(path.to_path_buf());
-        return;
+        return Ok(());
     }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
+    for entry in fs::read_dir(path)?.flatten() {
         let child = entry.path();
         let is_a_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
         if is_a_link || refused.contains(&child) {
             continue;
         }
-        spread_around(&child, refused, granted);
+        let _ = spread_around(&child, refused, granted);
     }
+    Ok(())
 }
 
 fn keep_the_paths_that_are_there(paths: &[PathBuf], omitted: &mut Vec<PathBuf>) -> Vec<PathBuf> {
@@ -1350,7 +1368,7 @@ mod tests {
         let policy = SandboxPolicy::strict().allow_read("/").allow_read("/usr");
 
         assert_eq!(
-            policy.readable_by_enumeration(),
+            policy.readable_by_enumeration().expect("each row lists"),
             vec![PathBuf::from("/"), PathBuf::from("/usr")]
         );
     }
@@ -1365,7 +1383,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = policy.readable_by_enumeration().expect("each row lists");
 
         let mut expected = vec![
             top.join("bin"),
@@ -1387,7 +1405,7 @@ mod tests {
             .deny_read(top.join("home/.ssh"))
             .allow_read(top.join("home/.ssh/config"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = policy.readable_by_enumeration().expect("each row lists");
 
         assert!(rows.contains(&top.join("home/.ssh/config")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/.ssh")), "{rows:?}");
@@ -1413,7 +1431,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = policy.readable_by_enumeration().expect("each row lists");
 
         assert!(!rows.contains(&top.join("home/leads-to-aws")), "{rows:?}");
         assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
@@ -1430,7 +1448,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("etc/aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = policy.readable_by_enumeration().expect("each row lists");
 
         assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
@@ -1445,7 +1463,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.kube"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = policy.readable_by_enumeration().expect("each row lists");
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(rows.contains(&top.join("home/.aws")), "{rows:?}");
@@ -1464,7 +1482,7 @@ mod tests {
             .allow_write(top.join("etc"))
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.writable_by_enumeration();
+        let rows = policy.writable_by_enumeration().expect("each row lists");
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
@@ -1488,7 +1506,7 @@ mod tests {
             .deny_write(top.join("home/docs"))
             .deny_write(top.join("etc"));
 
-        let rows = policy.writable_by_enumeration();
+        let rows = policy.writable_by_enumeration().expect("each row lists");
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/docs")), "{rows:?}");
@@ -1502,7 +1520,46 @@ mod tests {
             !rows.contains(&top.join("etc")),
             "a row at the refused path was kept: {rows:?}"
         );
-        assert_eq!(policy.readable_by_enumeration(), vec![top.clone()]);
+        assert_eq!(
+            policy.readable_by_enumeration().expect("each row lists"),
+            vec![top.clone()]
+        );
+    }
+
+    /// The regression it rejects: a row the caller named above a refusal left out of the rows
+    /// when it cannot be listed, which grants none of it while the policy reads as applied
+    /// (SANDBOX-6). The row is a file, which no account can list. An entry on the way to a refusal
+    /// is not a row anybody named, so one that cannot be listed adds nothing and is no error:
+    /// failing over it would refuse a stage over whatever else was changing that directory.
+    #[test]
+    fn a_named_row_above_a_refusal_that_cannot_be_listed_is_an_error_naming_it() {
+        let top = a_directory_of_this_tests_own("sandbox-policy-unlistable");
+        let named = top.join("notes");
+        fs::write(&named, "notes").expect("a file");
+
+        let read = SandboxPolicy::strict()
+            .allow_read(&named)
+            .deny_read(named.join("inside"));
+        let write = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(&named)
+            .deny_write(named.join("inside"));
+        for error in [
+            read.readable_by_enumeration().expect_err("a read row"),
+            write.writable_by_enumeration().expect_err("a write row"),
+        ] {
+            assert!(
+                error.to_string().contains(&named.display().to_string()),
+                "the error has to name the row: {error}"
+            );
+        }
+
+        let entry = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(&top)
+            .deny_read(named.join("inside"));
+        assert!(entry.readable_by_enumeration().is_ok());
+        assert!(entry.writable_by_enumeration().is_ok());
     }
 
     #[test]
@@ -1512,7 +1569,7 @@ mod tests {
             .allow_write("/work");
 
         assert_eq!(
-            policy.writable_by_enumeration(),
+            policy.writable_by_enumeration().expect("each row lists"),
             vec![PathBuf::from("/tmp"), PathBuf::from("/work")]
         );
     }

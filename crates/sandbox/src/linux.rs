@@ -398,9 +398,28 @@ impl LandlockSandbox {
         }
 
         // A refusal is made by listing: Landlock grants a directory with everything beneath it.
-        let enumerated = !policy.unreadable.is_empty() || !policy.unwritable.is_empty();
-        let readable = policy.readable_by_enumeration();
-        let writable = policy.writable_by_enumeration();
+        let unlistable = |e: std::io::Error| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the policy names a path above a refusal that cannot be listed ({e}); refusing \
+                 rather than confining to less than it asked for"
+            ),
+        };
+        let readable = policy.readable_by_enumeration().map_err(unlistable)?;
+        let writable = policy.writable_by_enumeration().map_err(unlistable)?;
+        // A row the policy named is granted at the exec or the exec is refused (SANDBOX-6). An
+        // entry a listing produced is not a path anybody named, and is left out there when its
+        // name has gone, as a listed row is when the policy is opened above.
+        let (named_readable, listed_readable): (Vec<_>, Vec<_>) = readable
+            .into_iter()
+            .partition(|path| policy.readable.contains(path));
+        let (named_writable, listed_writable): (Vec<_>, Vec<_>) =
+            writable.into_iter().partition(|path| {
+                policy
+                    .writable
+                    .iter()
+                    .any(|row| !row.listed && row.path == *path)
+            });
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -436,40 +455,33 @@ impl LandlockSandbox {
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
-                // An entry that went away between the listing and here has nothing to grant, and
-                // the rules are added as they are built so a large directory holds one
+                // The listed rules are added as they are built, so a large directory holds one
                 // descriptor at a time and not one for each entry.
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &readable,
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &named_readable,
+                        AccessFs::from_read(HANDLED_ABI),
+                    )?)
+                    .and_then(|r| {
+                        r.add_rules(path_beneath_rules(
+                            &listed_readable,
                             AccessFs::from_read(HANDLED_ABI),
                         ))
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                } else if !readable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &readable,
-                            AccessFs::from_read(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                }
+                    })
+                    .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
 
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &writable,
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &named_writable,
+                        AccessFs::from_all(HANDLED_ABI),
+                    )?)
+                    .and_then(|r| {
+                        r.add_rules(path_beneath_rules(
+                            &listed_writable,
                             AccessFs::from_all(HANDLED_ABI),
                         ))
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                } else if !writable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &writable,
-                            AccessFs::from_all(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                }
+                    })
+                    .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
 
                 let status = ruleset
                     .restrict_self()
@@ -1761,6 +1773,141 @@ mod tests {
                 );
             }
             other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// The rows are opened before the fork and the rules are built after it, so a row can go away
+    /// in between. In a policy with a refusal the rules are built from a listing, and a row the
+    /// caller named that gets no rule there is a process running under less than the policy with
+    /// nothing saying so (SANDBOX-6). The same command starts while the row is there, so the
+    /// refusal is the missing row's and not the program's or the policy's. Both lists, because a
+    /// check over one of them leaves the other silently narrowing.
+    #[test]
+    fn a_named_row_gone_between_the_check_and_the_exec_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-named-row-at-exec");
+        std::fs::create_dir_all(top.join("listed/refused"))
+            .expect("the refused directory is creatable");
+        let named = top.join("named");
+        let lists = a_policy_with_a_refusal_beneath(&top.join("listed"));
+
+        for policy in [
+            lists.clone().allow_read(&named),
+            lists.clone().allow_write(&named),
+        ] {
+            let command = || {
+                std::fs::create_dir_all(&named).expect("the named directory is creatable");
+                sandbox
+                    .command(
+                        OsStr::new("/bin/true"),
+                        &[],
+                        &policy,
+                        &Environment::Inherited,
+                    )
+                    .expect("the row is there when the policy is opened")
+            };
+
+            let started = command()
+                .stdin(std::process::Stdio::null())
+                .status()
+                .expect("the program starts while the row is there");
+            assert_eq!(started.code(), Some(0));
+
+            let mut gone = command();
+            std::fs::remove_dir(&named).expect("the named directory is removable");
+            let refused = gone.stdin(std::process::Stdio::null()).status();
+            assert!(
+                refused.is_err(),
+                "a named row with no rule at the exec must refuse the exec: {refused:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// An entry a listing produced is not a path anybody named, so one that goes away between the
+    /// listing and the exec has nothing to grant and the program starts, as does a row the caller
+    /// passed as listed. Refusing the exec over either would make starting a program depend on
+    /// whatever else was changing the directory, which is what a backend refusing every path that
+    /// has no rule at the exec does. Both lists.
+    #[test]
+    fn an_entry_listed_before_the_exec_and_gone_by_it_is_left_out() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-entry-at-exec");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        let entry = top.join("entry");
+
+        for policy in [
+            a_policy_with_a_refusal_beneath(&top),
+            a_policy_with_a_refusal_beneath(&top).allow_write(&top),
+            a_policy_with_a_refusal_beneath(&top).allow_write_listed(&entry),
+        ] {
+            std::fs::create_dir_all(&entry).expect("the entry is creatable");
+            let mut command = sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    &policy,
+                    &Environment::Inherited,
+                )
+                .expect("the entry is there when the policy is opened");
+            std::fs::remove_dir(&entry).expect("the entry is removable");
+
+            let started = command
+                .stdin(std::process::Stdio::null())
+                .status()
+                .expect("an entry gone by the exec leaves nothing to grant, so the program starts");
+            assert_eq!(started.code(), Some(0));
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A row the caller named above a refusal is granted as the entries a listing of it finds, so
+    /// one that cannot be listed would be granted as nothing while the policy reads as applied.
+    /// It is refused before a process exists, naming the row. The row is a file, which no account
+    /// can list, so the test does not depend on a mode that root ignores. Both lists.
+    #[test]
+    fn a_named_row_above_a_refusal_that_cannot_be_listed_is_refused() {
+        let top = a_temporary_directory("bravebot-landlock-unlistable-row");
+        let named = top.join("notes");
+        std::fs::write(&named, "notes").expect("the file is writable");
+
+        for policy in [
+            loadable_policy()
+                .allow_read(&named)
+                .deny_read(named.join("inside")),
+            loadable_policy()
+                .allow_read(&top)
+                .allow_write(&named)
+                .deny_write(named.join("inside")),
+        ] {
+            let err = LandlockSandbox
+                .spawn(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect_err("a named row that cannot be listed must refuse the policy");
+
+            match err {
+                SandboxError::SetupFailed { mechanism, detail } => {
+                    assert_eq!(mechanism, "landlock");
+                    assert!(
+                        detail.contains(&named.display().to_string()),
+                        "the refusal has to name the row: {detail}"
+                    );
+                }
+                other => panic!("expected SetupFailed naming the row, got: {other:?}"),
+            }
         }
 
         let _ = std::fs::remove_dir_all(&top);

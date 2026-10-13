@@ -551,7 +551,9 @@ pub fn writable_without_a_request(home: &Path) -> Vec<PathBuf> {
     held.dedup();
     let held = with_their_resolved_spelling(&held);
     let mut rows = Vec::new();
-    spread_around(Path::new("/"), &held, &mut rows);
+    // Each row is an entry a listing produced and not a path anybody named, so a root that cannot
+    // be listed leaves none.
+    let _ = spread_around(Path::new("/"), &held, &mut rows);
     rows.sort();
     rows.dedup();
     rows
