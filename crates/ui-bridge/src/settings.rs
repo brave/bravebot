@@ -86,6 +86,7 @@ fn ignored(settings: &Settings) -> Vec<Value> {
     ));
     ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
+    ignored.extend(named("style", settings.style_ignored().collect()));
     ignored.extend(named("references", settings.references_ignored().collect()));
     ignored
 }
@@ -235,6 +236,20 @@ mod tests {
             vec![json!({ "name": "advisorModel", "path": project })]
         );
         assert_eq!(settings.advisor_model(), Some("home/advisor"));
+    }
+
+    #[test]
+    fn a_project_files_style_is_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"style":"concise"}"#),
+            Some(r#"{"style":"project-style"}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "style", "path": project })]
+        );
+        assert_eq!(settings.style(), Some("concise"));
     }
 
     fn vetting_layers(

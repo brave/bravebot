@@ -377,7 +377,7 @@ gate and reads each import through it, so nothing untrusted decides what is read
 
 `/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
 or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
-pick lasts for the session and is not stored, so a resumed session starts with none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
+pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
 compared whole against the built-in list and the person's own files, and nothing a person types after
 `/style` reaches the prompt.
 
@@ -409,9 +409,9 @@ from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the open
 this program or by the person, typed or kept in the person's own configuration, and that nothing
 read from a project reaches that place.
 
-**Known costs.** Only the terminal interface has `/style`. Styles are not read from a project, there
-and there is no `style` setting. Each needs the trust map or the
-settings layers to say who may name a style, and none is built.
+**Known costs.** Only the terminal interface has `/style` and reads the `style` setting. Styles are
+not read from a project: that needs the trust map to say who may put words in the opening, and none
+is built.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
@@ -424,6 +424,9 @@ settings layers to say who may name a style, and none is built.
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_style`
+`verified-by: bravebot_config::settings::a_style_that_is_blank_or_not_a_string_names_nothing`
+`verified-by: bravebot_tui::app::a_style_the_settings_name_is_in_force_from_the_first_turn_and_a_wrong_name_is_said`
 `verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
