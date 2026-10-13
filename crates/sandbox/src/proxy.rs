@@ -3,15 +3,16 @@
 //!
 //! The confinement backends filter by address and port, so a stage is told the one loopback port
 //! to reach and this proxy decides on the host name. It decides from the destination named in a
-//! `CONNECT` request line and from nothing else: not a header, not a reply, not a byte of what
-//! the tunnel carries. TLS is not terminated, so an allowed tunnel is two byte streams copied
-//! into each other without being read, and a request that is not a `CONNECT` is refused.
+//! `CONNECT` request line and the addresses that name resolves to, and from nothing else: not a
+//! header, not a reply, not a byte of what the tunnel carries. TLS is not terminated, so an
+//! allowed tunnel is two byte streams copied into each other without being read, and a request
+//! that is not a `CONNECT` is refused.
 //! `docs/specs/sandboxing.md` ([SANDBOX-24]) decides the rest.
 //!
 //! [SANDBOX-24]: ../../../docs/specs/sandboxing.md
 
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -23,7 +24,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::hosts::{HostList, Refusal, Verdict, recordable};
+use crate::address::is_public;
+use crate::hosts::{HostList, Refusal, Verdict, normalise, recordable};
 
 /// The ports a tunnel may be opened to unless a caller says otherwise.
 pub const DEFAULT_PORTS: &[u16] = &[443, 80];
@@ -245,7 +247,7 @@ fn accept_on<S: Peer>(
         let _ = thread::Builder::new()
             .name("allowed-hosts-tunnel".into())
             .spawn(move || {
-                let _ = serve(stream, &config, &decisions);
+                let _ = serve(stream, &config, &decisions, resolve);
             });
     }
 }
@@ -328,16 +330,18 @@ impl Peer for UnixStream {
     }
 }
 
-fn serve<C: Peer>(mut client: C, config: &ProxyConfig, decisions: &Mutex<Log>) -> io::Result<()> {
+fn serve<C: Peer>(
+    mut client: C,
+    config: &ProxyConfig,
+    decisions: &Mutex<Log>,
+    resolve: impl FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>>,
+) -> io::Result<()> {
     client.set_read_limit(Some(HEAD_TIMEOUT))?;
     let (head, rest) = read_head(&mut client)?;
     let Some((host, port)) = connect_target(&head) else {
         return client.write_all(NOT_A_TUNNEL);
     };
-    let mut verdict = config.list.decide(&host);
-    if verdict.is_allowed() && !config.ports.contains(&port) {
-        verdict = Verdict::Refused(Refusal::Port);
-    }
+    let (verdict, addresses) = decide(config, &host, port, resolve);
     if let Ok(mut log) = decisions.lock() {
         match log.kept.len() < MAX_KEPT {
             true => log.kept.push(Decision {
@@ -350,7 +354,10 @@ fn serve<C: Peer>(mut client: C, config: &ProxyConfig, decisions: &Mutex<Log>) -
     if !verdict.is_allowed() {
         return client.write_all(REFUSAL);
     }
-    let Some(upstream) = open(&host, port) else {
+    let Some(upstream) = addresses
+        .iter()
+        .find_map(|address| TcpStream::connect_timeout(address, CONNECT_TIMEOUT).ok())
+    else {
         return client.write_all(UNREACHABLE);
     };
     client.set_read_limit(None)?;
@@ -397,11 +404,47 @@ fn connect_target(head: &[u8]) -> Option<(String, u16)> {
     (!host.is_empty()).then(|| (host.to_string(), port))
 }
 
-fn open(host: &str, port: u16) -> Option<TcpStream> {
-    (host, port)
-        .to_socket_addrs()
-        .ok()?
-        .find_map(|addr| TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok())
+/// What the list decides for a tunnel to `host` on `port`, and the addresses it may be opened to.
+///
+/// A name the list allows is resolved once, and the addresses returned are the ones that lookup
+/// gave, so the addresses checked are the addresses connected to. An answer holding any address
+/// that is not public is refused unless an exact entry names that address: the public half of a
+/// mixed answer is trusted only as far as the server that wrote the other half. A request naming
+/// an address that is not public and that no entry covers is refused as not public rather than as
+/// not listed, so it is never put to the person. The address is read from the host as the list
+/// compares it, since a trailing dot or a space would otherwise leave the request not listed and
+/// recorded as the bare address, and a yes to that would list it.
+fn decide(
+    config: &ProxyConfig,
+    host: &str,
+    port: u16,
+    resolve: impl FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>>,
+) -> (Verdict, Vec<SocketAddr>) {
+    let refused = |refusal| (Verdict::Refused(refusal), Vec::new());
+    let admitted = |address: IpAddr| is_public(address) || config.list.names_address(address);
+    match config.list.decide(host) {
+        Verdict::Refused(Refusal::NotListed)
+            if normalise(host)
+                .parse::<IpAddr>()
+                .is_ok_and(|address| !is_public(address)) =>
+        {
+            refused(Refusal::NotPublic)
+        }
+        Verdict::Allowed(_) if !config.ports.contains(&port) => refused(Refusal::Port),
+        Verdict::Allowed(rule) => match resolve(host, port) {
+            Ok(addresses) if !addresses.iter().all(|address| admitted(address.ip())) => {
+                refused(Refusal::NotPublic)
+            }
+            Ok(addresses) => (Verdict::Allowed(rule), addresses),
+            Err(_) => (Verdict::Allowed(rule), Vec::new()),
+        },
+        verdict => (verdict, Vec::new()),
+    }
+}
+
+/// The addresses the system resolver gives for `host`.
+fn resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    Ok((host, port).to_socket_addrs()?.collect())
 }
 
 /// Copies each stream into the other until both have finished. Nothing is parsed.
@@ -535,7 +578,10 @@ mod tests {
     /// Sends a `CONNECT` and returns the status line and the stream, read up to the end of the
     /// reply head.
     fn connect(proxy: &Proxy, target: &str) -> (String, io::BufReader<TcpStream>) {
-        let mut stream = TcpStream::connect(proxy.addr()).unwrap();
+        request(TcpStream::connect(proxy.addr()).unwrap(), target)
+    }
+
+    fn request(mut stream: TcpStream, target: &str) -> (String, io::BufReader<TcpStream>) {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -577,6 +623,202 @@ mod tests {
         let proxy = proxy_for(&["127.0.0.1"], &["127.0.0.1"], vec![server.port()]);
         let (status, _) = connect(&proxy, &format!("127.0.0.1:{}", server.port()));
         assert!(status.starts_with("HTTP/1.1 403"), "{status}");
+    }
+
+    fn config_for(allowed: &[&str]) -> ProxyConfig {
+        let (list, invalid) = HostList::parse(allowed.iter().copied(), []);
+        assert!(invalid.is_empty());
+        ProxyConfig {
+            list,
+            ports: vec![443],
+        }
+    }
+
+    /// A resolver that gives `addresses` for any name.
+    fn answering(
+        addresses: &[&str],
+    ) -> impl FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + use<> {
+        let addresses = addresses
+            .iter()
+            .map(|text| text.parse().expect("a socket address"))
+            .collect();
+        move |_, _| Ok(addresses)
+    }
+
+    /// Serves one `CONNECT` for `target` with `resolve` answering in place of the system resolver,
+    /// and returns the status line, the stream and the decisions taken.
+    fn serve_resolving(
+        config: ProxyConfig,
+        target: &str,
+        resolve: impl FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+    ) -> (String, io::BufReader<TcpStream>, Vec<Decision>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let log = Arc::new(Mutex::new(Log::default()));
+        let shared = log.clone();
+        thread::spawn(move || serve(server, &config, &shared, resolve));
+        let (status, stream) = request(client, target);
+        let kept = log.lock().unwrap().kept.clone();
+        (status, stream, kept)
+    }
+
+    /// A listed name that the system resolves to loopback is refused, with the bytes every refusal
+    /// is, although a server listens on the port asked for. The regression it rejects is the
+    /// proxy connecting to whatever a listed name resolves to.
+    #[test]
+    fn a_listed_name_that_resolves_to_loopback_is_refused() {
+        let (server, _handle) = echo_server();
+        let proxy = proxy_for(&["localhost"], &[], vec![server.port()]);
+        let (status, _) = connect(&proxy, &format!("localhost:{}", server.port()));
+        assert!(status.starts_with("HTTP/1.1 403"), "{status}");
+        assert_eq!(
+            proxy.decisions()[0].verdict,
+            Verdict::Refused(Refusal::NotPublic)
+        );
+    }
+
+    /// A name a wildcard allows is refused when its server answers with an address that is not
+    /// public, in each class: loopback, link-local with the metadata address, private,
+    /// unique-local, and an IPv4 address inside an IPv6 one. A public answer is kept. The
+    /// regressions it rejects: no check of the answer, a check that misses a class or reads a
+    /// mapped address as IPv6, and one that refuses every answer.
+    #[test]
+    fn a_name_the_list_allows_is_refused_when_it_resolves_to_an_address_that_is_not_public() {
+        let config = config_for(&["*.github.io"]);
+        for answer in [
+            "127.0.0.1:443",
+            "[::1]:443",
+            "169.254.169.254:443",
+            "[fe80::1]:443",
+            "10.0.0.1:443",
+            "172.16.0.1:443",
+            "192.168.1.1:443",
+            "[fd00::1]:443",
+            "[::ffff:127.0.0.1]:443",
+            "[::ffff:169.254.169.254]:443",
+            "[::ffff:10.0.0.1]:443",
+        ] {
+            assert_eq!(
+                decide(&config, "attacker.github.io", 443, answering(&[answer])),
+                (Verdict::Refused(Refusal::NotPublic), Vec::new()),
+                "{answer}"
+            );
+        }
+        let (verdict, addresses) = decide(
+            &config,
+            "pages.github.io",
+            443,
+            answering(&["185.199.108.153:443"]),
+        );
+        assert!(verdict.is_allowed());
+        assert_eq!(addresses, ["185.199.108.153:443".parse().unwrap()]);
+    }
+
+    /// An answer that mixes public addresses with one that is not public refuses the name. The
+    /// regression it rejects is a proxy that drops the address that is not public and connects to
+    /// the rest, trusting the server that wrote both.
+    #[test]
+    fn one_address_that_is_not_public_among_public_ones_refuses_the_name() {
+        let config = config_for(&["*.github.io"]);
+        let mixed = answering(&["185.199.108.153:443", "169.254.169.254:443"]);
+        assert_eq!(
+            decide(&config, "attacker.github.io", 443, mixed),
+            (Verdict::Refused(Refusal::NotPublic), Vec::new())
+        );
+    }
+
+    /// An address that is not public is reached when an exact entry names it, by a name resolving
+    /// to it or by the address itself, and not when only a wildcard covers its text. The
+    /// regressions it rejects: refusing every address that is not public, which takes away the
+    /// local service a person listed, and a wildcard such as `*.0.0.1` counting as a listing.
+    #[test]
+    fn an_address_an_exact_entry_names_is_reached_although_it_is_not_public() {
+        let listed = config_for(&["*.github.io", "127.0.0.1"]);
+        for answer in ["127.0.0.1:443", "[::ffff:127.0.0.1]:443"] {
+            let (verdict, addresses) =
+                decide(&listed, "pages.github.io", 443, answering(&[answer]));
+            assert!(verdict.is_allowed(), "{answer}");
+            assert_eq!(addresses, [answer.parse().unwrap()]);
+        }
+        assert!(decide(&listed, "127.0.0.1", 443, resolve).0.is_allowed());
+        assert_eq!(
+            decide(
+                &listed,
+                "pages.github.io",
+                443,
+                answering(&["127.0.0.2:443"])
+            )
+            .0,
+            Verdict::Refused(Refusal::NotPublic)
+        );
+
+        let wildcard = config_for(&["*.0.0.1"]);
+        assert_eq!(
+            decide(&wildcard, "127.0.0.1", 443, resolve).0,
+            Verdict::Refused(Refusal::NotPublic)
+        );
+    }
+
+    /// A request naming an address that is not public, which no entry covers, is refused as not
+    /// public and not as not listed, so `onUnlisted: ask` never puts it to the person, however the
+    /// address is spelled for the list to read it; a public one is still not listed. Neither is
+    /// resolved. The regression it rejects is a program asking for the metadata address, plainly or
+    /// with a trailing dot, and a yes to the prompt making it reachable.
+    #[test]
+    fn a_request_naming_an_address_that_is_not_public_is_refused_as_not_public() {
+        let config = config_for(&["a.example"]);
+        let unasked = |_: &str, _: u16| -> io::Result<Vec<SocketAddr>> {
+            panic!("a refused host was resolved")
+        };
+        for host in [
+            "169.254.169.254",
+            "169.254.169.254.",
+            "\t10.0.0.1",
+            "127.0.0.1",
+            "::1",
+            "fd00::1",
+        ] {
+            assert_eq!(
+                decide(&config, host, 443, unasked),
+                (Verdict::Refused(Refusal::NotPublic), Vec::new()),
+                "{host}"
+            );
+        }
+        assert_eq!(
+            decide(&config, "8.8.8.8", 443, unasked).0,
+            Verdict::Refused(Refusal::NotListed)
+        );
+    }
+
+    /// The tunnel is opened to the address the one lookup gave and was checked, which here is the
+    /// only place the name leads, and a listing that stops naming that address refuses it. The
+    /// regressions it rejects: a second lookup between the check and the connection, which an
+    /// answer that changes would pass, and a refusal `serve` does not act on.
+    #[test]
+    fn the_tunnel_is_opened_to_the_address_that_was_checked() {
+        let (server, _handle) = echo_server();
+        let answer = server.to_string();
+
+        let (status, mut stream, decisions) = serve_resolving(
+            config_for(&["*.github.io", "127.0.0.1"]),
+            "pages.github.io:443",
+            answering(&[&answer]),
+        );
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        assert!(decisions[0].verdict.is_allowed());
+        stream.get_mut().write_all(b"through").unwrap();
+        let mut echoed = [0u8; 7];
+        stream.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"through");
+
+        let (status, _, decisions) = serve_resolving(
+            config_for(&["*.github.io"]),
+            "pages.github.io:443",
+            answering(&[&answer]),
+        );
+        assert!(status.starts_with("HTTP/1.1 403"), "{status}");
+        assert_eq!(decisions[0].verdict, Verdict::Refused(Refusal::NotPublic));
     }
 
     #[test]

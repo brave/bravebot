@@ -31,7 +31,11 @@ that use what it withholds then fail under the sandbox:
 
 - `{"sandbox": {"network": {"allowedHosts": ["registry.npmjs.org"]}}}` holds a program to the hosts
   listed, with GitHub added for a `git` or `gh` command that talks to a remote and its own registry
-  added for `cargo`, `npm`, `pip` and `go`. Other hosts are refused. An allowed host can still
+  added for `cargo`, `npm`, `pip` and `go`. Other hosts are refused, and so is a listed name that
+  resolves to this machine, a private network or the cloud metadata address, unless each such
+  address is an entry of its own. An entry cannot be an IPv6 address, so `localhost`, which most
+  machines also resolve to `::1`, is refused; list `127.0.0.1` and ask for that.
+  An allowed host can still
   receive what a program read, such as a package it publishes to that registry, and on macOS a
   certificate check can fetch from the address the certificate names.
 - `{"sandbox": {"filesystem": {"denyRead": ["~/.npmrc", "~/Library/Keychains/login.keychain-db"]}}}`
