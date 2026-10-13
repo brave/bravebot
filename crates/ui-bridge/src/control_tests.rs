@@ -33,17 +33,14 @@ fn open(
     running: Option<Running>,
 ) -> String {
     bridge.mint(Open {
-        project: project.to_path_buf(),
-        state: Arc::new(Mutex::new(State::fresh(TrustStore::new(project)))),
-        answered_trust,
-        keeping: None,
         running,
-        model: None,
-        watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-        auto_vetting: false,
-        definition: None,
-        permission_mode: PermissionMode::Ask.into(),
-        sandbox: None,
+        ..Open::opened(
+            project.to_path_buf(),
+            State::fresh(TrustStore::new(project)),
+            answered_trust,
+            None,
+            false,
+        )
     })
 }
 
