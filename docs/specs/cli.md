@@ -1310,8 +1310,12 @@ carries the record's id in `session`, and carries `null` where the run wrote non
 
 `--resume <id>` and `--continue` given with a task, in either order (`-p "task" --resume <id>` and
 `--resume <id> -p "task"`), run the task as one more turn over that record's conversation and write
-the record back with the turn added. Everything else in the record stays as it was read. The run is
-a one-shot run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
+the record back with the turn added. The turn adds a rewind point behind the ones the record held,
+as a turn in a session does ([SESSION-19](sessions.md#SESSION-19)), so `/undo` in the session
+resumed next takes back this turn alone, on disk and in the conversation. A program the turn runs,
+and a language server the session started, is recorded on each of those points as something a
+rewind cannot put back. Everything else in the record stays as it was read. The run is a one-shot
+run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
 session's person vouched for in the trust map comes back, as it does in a session. The commands
 they vouched for do not, and the record keeps them for the session that is next resumed
 interactively.
@@ -1362,6 +1366,7 @@ process that holds the record is known.
 `verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
+`verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
 
 <a id="CLI-26"></a>
 ### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run

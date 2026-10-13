@@ -1575,6 +1575,9 @@ pub struct Continuation<'a> {
     pub ends: usize,
     /// Where the prompt entered the recounted conversation, where the turn said.
     pub prompt_at: Option<usize>,
+    /// The turns a rewind can go back to once this one is added, oldest first: the record's own
+    /// and the one opened before this turn.
+    pub rewind: &'a [RewindPoint],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -2038,9 +2041,14 @@ impl Handle {
     /// Add one turn to the record this session was resumed from, and write it back.
     ///
     /// Everything the turn did not touch is written as it was read: the asides, the task lists, the
-    /// timings, the rewind points, the vouched-for programs and the checkouts. A front end that
-    /// rebuilt the record from the pieces it holds would have to hold all of them, and a one-shot
-    /// run holds none, so rebuilding would erase what an interactive session recorded.
+    /// timings, the vouched-for programs and the checkouts. A front end that rebuilt the record
+    /// from the pieces it holds would have to hold all of them, and a one-shot run holds none, so
+    /// rebuilding would erase what an interactive session recorded.
+    ///
+    /// The rewind points are replaced by `next.rewind` ([SESSION-19](sessions.md#SESSION-19)).
+    /// Left as read, the newest would be the one opened before the record's previous turn, and an
+    /// undo would take the conversation back past both turns while putting back only the earlier
+    /// one's files.
     ///
     /// Whether the turn is entered in the display history follows the record: one that keeps a
     /// history gains the turn, and one that never kept one is not given boundaries now
@@ -2067,6 +2075,14 @@ impl Handle {
         record.model = Some(next.model.to_string());
         record.conversation = next.conversation.clone();
         record.trust = Some(stored_rules(next.trust));
+        // Read before the points are replaced: an older record carries the warning only in them.
+        let warned = record.server_children_may_run();
+        record.rewind = next
+            .rewind
+            .iter()
+            .map(|point| StoredRewind::of(point, &self.project))
+            .collect();
+        record.server_children_may_run = warned || record.server_children_may_run();
         record.updated = now();
         record.branch = self.branch.clone();
         record.build = Some(self.build.clone());
@@ -3853,6 +3869,7 @@ mod tests {
             begins: 0,
             ends: 0,
             prompt_at: None,
+            rewind: &[],
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
@@ -5482,6 +5499,7 @@ mod tests {
                 begins: 2,
                 ends: 4,
                 prompt_at: Some(3),
+                rewind: &[],
             },
         );
 
@@ -5534,12 +5552,67 @@ mod tests {
                 begins: 0,
                 ends: 2,
                 prompt_at: Some(0),
+                rewind: &[],
             },
         ));
 
         let after = load(&root, handle.id()).expect("the record is still there");
         assert_eq!(after.turns, 2);
         assert!(after.history.is_none());
+    }
+
+    /// SESSION-19: a record written before the language-server warning was kept beside the points
+    /// carries it only in them, and a continuation replaces them. The warning moves out first, or
+    /// every later undo would leave unmentioned a server's children that may still be writing.
+    #[test]
+    fn continuing_a_record_keeps_a_server_warning_only_its_replaced_points_carried() {
+        use bravebot_agent::rewind::CoverageGap;
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-continue-record-server-warning");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let mut record = load(&root, handle.id()).expect("the record was written");
+        let mut warned = a_stored_point(vec![]);
+        warned.coverage = Some(StoredCoverage {
+            version: 2,
+            paths: Vec::new(),
+            gaps: Some([CoverageGap::LanguageServer].into()),
+        });
+        record.rewind = vec![warned];
+        record.server_children_may_run = false;
+        let directory = handle.directory().expect("a sessions directory");
+        assert!(handle.write(&directory, &record));
+        let record = load(&root, handle.id()).expect("the record is still there");
+        assert!(!record.server_children_may_run && record.server_children_may_run());
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let replacing = [a_stored_point(vec![]).into_point(&root)];
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert!(resumed.save_continuation(
+            record,
+            Continuation {
+                conversation: &snapshot,
+                prompt: "next",
+                tokens: 1,
+                model: "m",
+                trust: &TrustStore::new("/work"),
+                begins: 0,
+                ends: 2,
+                prompt_at: Some(0),
+                rewind: &replacing,
+            },
+        ));
+
+        let after = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(after.rewind.len(), 1);
+        assert!(
+            !after.rewind[0]
+                .coverage_gaps()
+                .contains(&CoverageGap::LanguageServer)
+        );
+        assert!(after.server_children_may_run);
     }
 
     /// A host that owns its records puts them in a directory of its own, so a terminal or a window

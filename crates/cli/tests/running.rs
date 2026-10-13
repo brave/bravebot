@@ -10194,6 +10194,223 @@ fn a_task_continuing_the_latest_session_adds_a_turn_to_its_record() {
     );
 }
 
+/// A gateway whose model does what the task it was just given names: `WRITE-NOTES` overwrites
+/// `notes.txt`, `WRITE-PLAN` creates `plan.txt` and `RUN-ECHO` runs `echo hello`, and once the
+/// call's result is in the conversation it says it is done. Any other task gets a reply and no call.
+fn a_gateway_doing_what_each_task_names() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let request: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        let last = request["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .cloned()
+            .unwrap_or_default();
+        let task = match last["role"] == "user" {
+            true => last["content"].to_string(),
+            false => String::new(),
+        };
+        let call = |name: &str, arguments: serde_json::Value| {
+            serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":name,"arguments":arguments.to_string()}}]},
+                "finish_reason":"tool_calls"}]})
+        };
+        let frame = if task.contains("WRITE-NOTES") {
+            call(
+                "write_file",
+                serde_json::json!({"path": "notes.txt", "contents": "the model's notes\n"}),
+            )
+        } else if task.contains("WRITE-PLAN") {
+            call(
+                "write_file",
+                serde_json::json!({"path": "plan.txt", "contents": "the model's plan\n"}),
+            )
+        } else if task.contains("RUN-ECHO") {
+            call(
+                "run",
+                serde_json::json!({"command": "echo hello", "why": "say hello"}),
+            )
+        } else {
+            serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]})
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// Where the record named `id` is under `scratch`'s home.
+fn the_record_file(scratch: &Scratch, id: &str) -> PathBuf {
+    let records = scratch.path.join(".bravebot").join("sessions");
+    std::fs::read_dir(&records)
+        .expect("a run created the sessions directory")
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).expect("a project directory"))
+        .flatten()
+        .find(|file| file.file_name().to_string_lossy() == format!("{id}.json"))
+        .unwrap_or_else(|| panic!("no record named {id} under {records:?}"))
+        .path()
+}
+
+/// The record named `id` under `scratch`'s home, as it is on disk.
+fn the_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(the_record_file(scratch, id)).expect("read the record"))
+        .expect("a record is JSON")
+}
+
+/// Run a task that may write or start a program, in `project`, and return the session its result
+/// object names.
+fn a_writing_run(scratch: &Scratch, project: &Path, arguments: &[&str]) -> String {
+    let mut all = vec![
+        "--json",
+        "--dangerously-skip-permissions",
+        "--trust-workspace",
+    ];
+    all.extend_from_slice(arguments);
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(&scratch.path, project, &environment, &all);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    session_of(&stdout).unwrap_or_else(|| panic!("no session in {stdout}"))
+}
+
+/// CLI-25 and SESSION-19: a continued task leaves a point to rewind it to, behind the points the
+/// record already held. Without one the newest point is the one before the record's previous turn,
+/// and an undo in the session resumed next takes the conversation back past both turns while
+/// putting back only the earlier turn's files.
+///
+/// Each point holds the record as it stood before its task and what that task wrote over, which
+/// is what lets an undo move the conversation and the files back together. The notes are vouched
+/// for, so their bytes are kept, and the plan did not exist, so its point removes it.
+#[test]
+fn a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-rewind").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(project.join("notes.txt"), "the person's notes\n").expect("write the notes");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let first = the_record(&scratch, &id);
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "WRITE-NOTES", "--continue"]),
+        id
+    );
+    let second = the_record(&scratch, &id);
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]),
+        id
+    );
+    let third = the_record(&scratch, &id);
+
+    assert_eq!(third["turns"], 3);
+    let points = third["rewind"].as_array().expect("a list of points");
+    assert_eq!(points.len(), 2, "{points:#?}");
+    for (point, before, prompt) in [
+        (&points[0], &first, "WRITE-NOTES"),
+        (&points[1], &second, "WRITE-PLAN"),
+    ] {
+        assert_eq!(point["prompt"], prompt);
+        for field in ["turns", "tokens", "spend", "conversation"] {
+            assert_eq!(point[field], before[field], "{prompt}: {field}");
+        }
+    }
+    let wrote_over = |point: &serde_json::Value| {
+        point["wrote_over"]
+            .as_array()
+            .expect("a list of backups")
+            .iter()
+            .map(|backup| {
+                (
+                    backup["path"].clone(),
+                    backup["before"].clone(),
+                    backup["bytes"].clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        wrote_over(&points[0]),
+        // "the person's notes\n"
+        [(
+            "notes.txt".into(),
+            "bytes".into(),
+            "dGhlIHBlcnNvbidzIG5vdGVzCg==".into()
+        )]
+    );
+    assert_eq!(
+        wrote_over(&points[1]),
+        [("plan.txt".into(), "nothing".into(), serde_json::Value::Null)]
+    );
+}
+
+/// SESSION-19: a language server's children may outlive it and still write, so a point a continued
+/// task opens after the session started one carries that warning, including where the record kept
+/// it only beside its points, as it does once an undo has consumed the point that carried it. The
+/// desktop's undo reads the warning off the points, so a point written without it would let that
+/// undo report a complete restore.
+#[test]
+fn a_continued_task_after_a_language_server_warns_on_the_point_it_opens() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-server-warning").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let mut record = the_record(&scratch, &id);
+    assert_eq!(record["rewind"], serde_json::json!([]));
+    record["server_children_may_run"] = serde_json::Value::Bool(true);
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&record).expect("a record serialises"),
+    )
+    .expect("write the record back");
+    a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]);
+    let after = the_record(&scratch, &id);
+
+    assert_eq!(
+        after["rewind"][0]["coverage"]["gaps"],
+        serde_json::json!(["language-server"]),
+        "{after:#?}"
+    );
+    assert_eq!(after["server_children_may_run"], true);
+}
+
+/// SESSION-19: a program a continued task runs is a gap in what a rewind can put back, on the point
+/// opened for that task and on the record's own points, since an undo going back past any of them
+/// leaves whatever the program did. A point that recorded nothing would report a complete restore.
+#[cfg(unix)]
+#[test]
+fn a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-command-gap").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let gaps = |point: &serde_json::Value| point["coverage"]["gaps"].clone();
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]);
+    let second = the_record(&scratch, &id);
+    assert_eq!(gaps(&second["rewind"][0]), serde_json::json!([]));
+    a_writing_run(&scratch, &project, &["-p", "RUN-ECHO", "--continue"]);
+    let third = the_record(&scratch, &id);
+
+    let points = third["rewind"].as_array().expect("a list of points");
+    assert_eq!(points.len(), 2, "{points:#?}");
+    for point in points {
+        assert_eq!(gaps(point), serde_json::json!(["command"]), "{point:#?}");
+    }
+}
+
 /// CLI-25 and CLI-3: piped input stays a reference across the continuation. The planner is never
 /// handed the bytes, in the first run or the follow-up, and the follow-up is told the reference it
 /// holds no longer names anything, which is what a record written without the quarantine says.
