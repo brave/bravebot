@@ -123,7 +123,10 @@ as well as what is under it. Four anchors decide where a pattern begins:
 | `x` or `./x` | the workspace |
 
 A single leading slash is therefore **not** the filesystem root. A specifier with no slash in it is
-a name and matches at any depth, so `Read(.env)` and `Read(**/.env)` are one rule. Relative and
+a name and matches at any depth, so `Read(.env)` and `Read(**/.env)` are one rule, while one written
+from `./` stays at the top of the workspace in every list ([PERM-4](#PERM-4)). The checkout's two
+files start a `/x` rule at the workspace however they were reached, `--settings` naming one of them
+included. Relative and
 absolute patterns are separate namespaces and neither reaches into the other: a pattern is matched
 against the path as a gate holds it, which is relative for a file in the project and in full for one
 outside, and a rule written one way says nothing about the other. A `/x` rule is in the namespace of
@@ -211,6 +214,7 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_agent::permissions::a_checkouts_slash_rule_starts_at_the_workspace`
 `verified-by: bravebot_config::settings::a_slash_rule_starts_at_the_workspace_in_a_checkouts_file_and_beside_any_other`
 `verified-by: bravebot_config::settings::a_slash_rule_starting_inside_the_workspace_is_spelled_from_it`
+`verified-by: bravebot_config::settings::a_checkouts_file_named_on_the_command_line_still_starts_at_the_workspace`
 `verified-by: bravebot_agent::turn::a_single_slash_deny_in_the_project_file_refuses_a_read_of_the_file_it_names`
 `verified-by: bravebot_agent::turn::a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit`
 `verified-by: bravebot_agent::turn::a_single_slash_ask_rule_in_the_project_file_asks_before_a_write`

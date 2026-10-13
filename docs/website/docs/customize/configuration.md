@@ -1129,7 +1129,8 @@ pattern begins:
 | `x` or `./x` | the workspace |
 
 So a single leading slash is **not** the filesystem root. A specifier with no slash in it is a name
-and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule. Relative and
+and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule; one written from
+`./` stays at the top of the workspace. Relative and
 absolute patterns are separate namespaces and neither reaches into the other. A `/x` rule that
 starts inside the workspace is a relative one, so `Read(/secrets/**)` in a project's
 `.bravebot/settings.json` is the same rule as `Read(./secrets/**)`.

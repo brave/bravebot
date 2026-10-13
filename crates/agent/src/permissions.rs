@@ -6,12 +6,13 @@
 //!
 //! # Why the anchors are what they are
 //!
-//! A `~/` rule points at the user's home directory. A `/` rule points at the directory the
-//! settings file sits in, which is `~/.bravebot`: Claude Code anchors a single leading slash at
-//! the settings source rather than at the filesystem root, so a rule written in a user-level file
-//! means something inside that file's own directory. That is a trap worth reproducing rather than
-//! improving on, because somebody who has read those docs will write `//` when they mean the root,
-//! and quietly meaning something else here would be worse than agreeing.
+//! A `~/` rule points at the user's home directory. A `/` rule that reaches this module as written
+//! points at the directory the person's settings file sits in, which is `~/.bravebot`; the settings
+//! crate has already respelled one from any other layer (PERM-3). Claude Code anchors a single
+//! leading slash at the settings source rather than at the filesystem root, so a rule written in a
+//! user-level file means something inside that file's own directory. That is a trap worth
+//! reproducing rather than improving on, because somebody who has read those docs will write `//`
+//! when they mean the root, and quietly meaning something else here would be worse than agreeing.
 
 use crate::granted::Proposed;
 use bravebot_config::{PermissionLists, Settings};

@@ -784,6 +784,9 @@ impl Settings {
         let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
+        // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
+        // spelled relative to (PERM-3).
+        let workspace = cwd.map(resolved);
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -915,7 +918,10 @@ impl Settings {
                 &mut git_identities_ignored,
                 &mut git_identities_misshapen,
             );
-            let anchor = slash_anchor(&path, !own && !named_here, cwd);
+            // One of the checkout's two files is one however the command line reached it, so naming
+            // it does not move where its rules start.
+            let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
+            let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
@@ -2927,27 +2933,42 @@ fn separates(character: char) -> bool {
     character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
 }
 
+/// `path` as the filesystem resolves it, or made absolute where it cannot be resolved.
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `file` is one of the two settings files the checkout at `cwd` keeps, however it was
+/// spelled.
+fn is_a_checkouts_file(file: &Path, cwd: Option<&Path>) -> bool {
+    let Some(cwd) = cwd else { return false };
+    let file = resolved(file);
+    [project_settings_file(cwd), local_settings_file(cwd)]
+        .iter()
+        .any(|layer| resolved(layer) == file)
+}
+
 /// Where a `/x` rule in the settings file at `file` starts, spelled as the specifier `/` is
 /// respelled to ([PERM-3](../../../docs/specs/permissions.md#PERM-3)).
 ///
-/// A checkout's own two files start at `workspace`, and any other file at the directory it is in.
-/// A start that is the workspace or inside it is spelled from `.`, as a gate holds a file there,
-/// and any other in full from `//`. Both are made absolute first, since a named file may have been
-/// spelled relative to the working directory.
+/// A checkout's own two files start at `workspace`, which is already [`resolved`], and any other
+/// file at the directory it is in. A start that resolves to the workspace or somewhere inside it is
+/// spelled from `.`, as a gate holds a file there, and any other in full from `//`. Resolved for the
+/// comparison because a link, a `..` or another spelling of the same directory names the same
+/// place, and comparing the text would answer about the spelling.
 fn slash_anchor(file: &Path, a_checkouts_file: bool, workspace: Option<&Path>) -> String {
-    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let workspace = workspace.map(absolute);
-    let start = match (a_checkouts_file, &workspace) {
-        (true, Some(workspace)) => workspace.clone(),
-        _ => absolute(file)
+    let start = match (a_checkouts_file, workspace) {
+        (true, Some(workspace)) => workspace.to_path_buf(),
+        _ => std::path::absolute(file)
+            .unwrap_or_else(|_| file.to_path_buf())
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default(),
     };
-    match workspace
-        .as_deref()
-        .and_then(|workspace| start.strip_prefix(workspace).ok())
-    {
+    let resolved_start = resolved(&start);
+    match workspace.and_then(|workspace| resolved_start.strip_prefix(workspace).ok()) {
         Some(below) => std::iter::once(".".into())
             .chain(
                 below
@@ -4541,10 +4562,23 @@ mod tests {
         );
     }
 
+    /// PERM-3: naming one of the checkout's own files on the command line reads it in the named
+    /// file's place, and its `/x` rules still start at the workspace, so which way the file was
+    /// reached does not move what its rules are about.
+    #[test]
+    fn a_checkouts_file_named_on_the_command_line_still_starts_at_the_workspace() {
+        let settings = Layers::new("slash-rule-named-project")
+            .project(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
+            .naming_the_project_layer()
+            .read();
+        assert_eq!(settings.permissions().deny, ["Read(./secrets/**)"]);
+    }
+
     /// PERM-3: a `/x` rule whose start is inside the workspace is spelled from the workspace, since
     /// a gate holds a file there by its relative name and a full path would never meet it. A named
-    /// file in a subdirectory starts there, and the person's own file starts at its directory where
-    /// a session works in a directory above it, in `allow` as in `deny`.
+    /// file in a subdirectory starts there however its path was spelled, and the person's own file
+    /// starts at its directory where a session works in a directory above it, in `allow` as in
+    /// `deny`.
     #[test]
     fn a_slash_rule_starting_inside_the_workspace_is_spelled_from_it() {
         let layers = Layers::new("slash-rule-inside-the-workspace");
@@ -4552,14 +4586,21 @@ mod tests {
         let named = layers.cwd.join("tooling").join("bravebot.json");
         std::fs::create_dir_all(&state).unwrap();
         std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(layers.cwd.join("sub")).unwrap();
         std::fs::write(
             state.join(SETTINGS_FILE),
             r#"{"permissions": {"deny": ["Read(/secrets/**)"], "allow": ["Read(/open/**)"]}}"#,
         )
         .unwrap();
         std::fs::write(&named, r#"{"permissions": {"ask": ["Edit(/notes.md)"]}}"#).unwrap();
+        let through_a_parent = layers
+            .cwd
+            .join("sub")
+            .join("..")
+            .join("tooling")
+            .join("bravebot.json");
 
-        let settings = Settings::layered(Some(state), Some(&layers.cwd), Some(&named));
+        let settings = Settings::layered(Some(state), Some(&layers.cwd), Some(&through_a_parent));
         let rules = settings.permissions();
         assert_eq!(rules.deny, ["Read(./state/secrets/**)"]);
         assert_eq!(rules.ask, ["Edit(./tooling/notes.md)"]);

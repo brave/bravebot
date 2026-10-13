@@ -3431,11 +3431,13 @@ fn a_single_slash_deny_in_the_project_file_refuses_a_read_of_the_file_it_names()
 
 /// PERM-3, PERM-7: the local file is a checkout's file too, and `Edit(/private/**)` there stops
 /// both tools that change a file, each asked for by its relative name. One turn per tool, so a
-/// refusal of one cannot stand in for the other.
+/// refusal of one cannot stand in for the other, and each has to be the rule's: a call that failed
+/// for a reason of its own would leave the file as it was too.
 #[test]
 fn a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit() {
     let scratch = Scratch::new("permissions-slash-deny-local-write");
     let mut changed = Vec::new();
+    let mut not_the_rule = Vec::new();
     for (tool, arguments) in [
         (
             "edit_file",
@@ -3452,7 +3454,7 @@ fn a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit() {
             r#"{"permissions": {"deny": ["Edit(/private/**)"]}}"#,
             false,
         );
-        let _ = run_calls_under(
+        let bodies = run_calls_under(
             &workspace,
             permissions,
             trusting_the_workspace(),
@@ -3461,57 +3463,71 @@ fn a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit() {
         let left = std::fs::read_to_string(workspace.root().join("private/canary.txt")).unwrap();
         if left != "CANARY-top" {
             changed.push((tool, left));
+        } else if !bodies.iter().any(|body| body.contains("deny rule")) {
+            not_the_rule.push(tool);
         }
     }
     assert!(
         changed.is_empty(),
         "a single-slash Edit deny did not stop {changed:?}"
     );
+    assert!(
+        not_the_rule.is_empty(),
+        "{not_the_rule:?} left the file alone without the planner being told a rule refused"
+    );
 }
 
 /// PERM-3: `ask` is respelled with `deny`, so `Edit(/private/**)` there still puts a write by the
-/// relative name to the person, in a workspace they vouched for, where nothing else would ask.
+/// relative name to the person, in a workspace they vouched for. The same write under an ask rule
+/// about another directory is not asked about, so the question is the rule's.
 #[test]
 fn a_single_slash_ask_rule_in_the_project_file_asks_before_a_write() {
     let scratch = Scratch::new("permissions-slash-ask-project-write");
-    let (workspace, permissions) = rules_a_project_writes(
-        &scratch,
-        ".bravebot/settings.json",
-        r#"{"permissions": {"ask": ["Edit(/private/**)"]}}"#,
-        false,
-    );
-    let (endpoint, _received) = serve_sequence(vec![
-        tool_request_2(
-            "write_file",
-            r#"{"path":"private/canary.txt","contents":"replaced"}"#,
-        ),
-        reply_with("understood"),
-    ]);
-    let config = config_for(&endpoint);
-    let egress = bravebot_net::Egress::new();
-    let mut sink = RecordingSink::new();
-    let mut recording = RecordingConfirmer::rejecting();
-    turns::run_with_trust(
-        &config,
-        &egress,
-        &workspace,
-        &Task::new("replace the canary").with_permissions(permissions),
-        &mut recording,
-        &mut sink,
-        trusting_the_workspace(),
-    )
-    .expect("turn runs");
+    let write_under = |rule: &str| {
+        let (workspace, permissions) = rules_a_project_writes(
+            &scratch,
+            ".bravebot/settings.json",
+            &format!(r#"{{"permissions": {{"ask": ["{rule}"]}}}}"#),
+            false,
+        );
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                r#"{"path":"private/canary.txt","contents":"replaced"}"#,
+            ),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut recording = RecordingConfirmer::rejecting();
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("replace the canary").with_permissions(permissions),
+            &mut recording,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        let left = std::fs::read_to_string(workspace.root().join("private/canary.txt")).unwrap();
+        (recording.seen.len(), left)
+    };
 
+    let (asked, left) = write_under("Edit(/private/**)");
     assert_eq!(
-        recording.seen.len(),
-        1,
+        asked, 1,
         "a write a single-slash ask rule covers went ahead without asking"
     );
     assert_eq!(
-        std::fs::read_to_string(workspace.root().join("private/canary.txt")).unwrap(),
-        "CANARY-top",
+        left, "CANARY-top",
         "the write went ahead after the person said no"
     );
+
+    let (asked, left) = write_under("Edit(/elsewhere/**)");
+    assert_eq!(asked, 0, "a write no rule covers was asked about");
+    assert_eq!(left, "replaced", "a write no rule covers did not land");
 }
 
 /// PERM-3: a file the command line named starts a `/x` rule at its own directory, and one inside
