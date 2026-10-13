@@ -11827,6 +11827,8 @@ mod tests {
     /// a call whose arguments are not JSON, or that gave none, is drawn with an empty reason.
     #[test]
     fn a_held_call_is_drawn_with_the_reason_the_planner_gave() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
         let drawn = |arguments: &str| {
