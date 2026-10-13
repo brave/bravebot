@@ -2454,9 +2454,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
-    tokens: &mut u64,
-    output_tokens: &mut u64,
-    cached: &mut Cached,
+    account: &mut crate::outcome::Spent,
     wait: bool,
     waits: &mut crate::timing::DelegateWait,
     spent: &mut crate::timing::Elapsed,
@@ -2553,9 +2551,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
-                *tokens += delegated.usage.total();
-                *output_tokens += delegated.usage.completion_tokens;
-                cached.add(delegated.usage.cached);
+                account.add_usage(delegated.usage);
 
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
@@ -2650,9 +2646,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 (note, body, false, Some(reported), from)
             }
             Err(_) => {
-                *tokens += partial.tokens;
-                *output_tokens += partial.output_tokens;
-                cached.add(partial.cached);
+                account.add_spent(&partial);
                 // The same comparison the answering arm makes, on the same two driver-held counts.
                 // A delegate that spent its whole budget and then failed to answer is the common
                 // way the bound is reached rather than a corner of it, and the planner told only
@@ -3935,26 +3929,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
         let mut may_call_tools = true;
-        let mut tokens = 0u64;
-        // Tracked apart from the total because it is what the live count reports. Adding a round's
-        // output to a running total that also holds prompt tokens would make the figure jump by the
-        // size of the re-sent history every round.
-        let mut output_tokens = 0u64;
+        // What this turn's requests did, summed from zero: not what the session has done, which the
+        // session adds up itself. `output_tokens` is tracked apart from the total because it is what
+        // the live count reports, and adding a round's output to a running total that also holds
+        // prompt tokens would make the figure jump by the size of the re-sent history every round.
+        // `context_tokens` is seeded from the conversation rather than starting at zero. A session
+        // is many turns, and a figure that began again with each one would only notice a
+        // conversation growing inside a single long turn: fifty short turns would fill the context
+        // with nothing watching.
+        let mut account = crate::outcome::Spent {
+            context_tokens: conversation.last_request_tokens(),
+            ..Default::default()
+        };
         // What the indicator last said the turn had written, which the next round counts on from.
         let mut shown_before = 0u64;
-        // Summed over the turn like the total, and starting from zero with it: this says what this
-        // turn's requests did, not what the session has done, and the session adds its turns up itself.
-        let mut cached = Cached::default();
         // What checking the servers' lists spent is this turn's, since this turn is what asked.
         if let Some((_, usage)) = &mcp {
-            tokens += usage.total();
-            output_tokens += usage.completion_tokens;
-            cached.add(usage.cached);
+            account.add_usage(*usage);
         }
-        // Seeded from the conversation rather than starting at zero. A session is many turns, and a
-        // figure that began again with each one would only notice a conversation growing inside a
-        // single long turn: fifty short turns would fill the context with nothing watching.
-        let mut context_tokens = conversation.last_request_tokens();
         // Cleared only by a failure. A summary that could not be made once will not be made on the
         // next round either, and a turn should not spend a request per round finding that out.
         let mut may_compact = true;
@@ -4043,9 +4035,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         &mut policy,
                         conversation,
                         &mut reporter,
-                        &mut tokens,
-                        &mut output_tokens,
-                        &mut cached,
+                        &mut account,
                         false,
                         &mut waits,
                         &mut spent,
@@ -4053,11 +4043,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     )?;
 
                     reporter.spent(crate::outcome::Spent {
-                        tokens,
-                        output_tokens,
-                        context_tokens,
-                        cached,
                         timing: spent.finish(),
+
+                        ..account
                     });
 
                     // And whatever exited while it was running, for the same reason and in the same place:
@@ -4086,7 +4074,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         let mut asking = crate::confirm::Timed::new(&mut confirmer);
                         let held = crate::spend_limit::hold(
                             &task.spend_limit,
-                            task.spent_before + tokens,
+                            task.spent_before + account.tokens,
                             steps,
                             &mut policy,
                             &mut asking,
@@ -4102,7 +4090,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // compared is the last round's, so this is one round late by construction, which is why
                     // the budget sits below any window rather than at it.
                     let mut shortened = false;
-                    if refused.is_some() || may_compact && context_tokens >= config.context_budget {
+                    if refused.is_some()
+                        || may_compact && account.context_tokens >= config.context_budget
+                    {
                         reporter.phase(Phase::Compacting);
                         let mut chat = crate::processor::Chat {
                             config,
@@ -4129,30 +4119,21 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         if let Err(error) = &summary
                             && let Some(usage) = error.completed_usage()
                         {
-                            tokens += usage.total();
-                            output_tokens += usage.completion_tokens;
-                            cached.add(usage.cached);
+                            account.add_usage(usage);
                             reporter.spent(crate::outcome::Spent {
-                                tokens,
-                                output_tokens,
-                                context_tokens,
-                                cached,
                                 timing: spent.finish(),
+                                ..account
                             });
                         }
                         match summary {
                             Ok(Some(done)) => {
                                 shortened = true;
-                                tokens += done.usage.total();
-                                output_tokens += done.usage.completion_tokens;
-                                cached.add(done.usage.cached);
+                                account.add_usage(done.usage);
                                 // The figure measured the conversation the summary replaced.
                                 reporter.spent(crate::outcome::Spent {
-                                    tokens,
-                                    output_tokens,
                                     context_tokens: 0,
-                                    cached,
                                     timing: spent.finish(),
+                                    ..account
                                 });
                                 reporter.narration(format!(
                                 "the conversation was getting long, so {} earlier messages were \
@@ -4228,7 +4209,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Added back as they were shown, where that is more than they were charged: the live
                     // figure counts pieces of an argument that a reply without a figure of its own is
                     // not charged for, and a count that falls between rounds reads as a bug.
-                    let written_before = shown_before.max(output_tokens);
+                    let written_before = shown_before.max(account.output_tokens);
                     let mut round_shown = 0u64;
                     let mut composing: Option<&'static str> = None;
                     // A request that failed in transit is sent again by the client, which the person waiting
@@ -4293,12 +4274,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     if let Err(error) = &completion
                         && let Some(usage) = error.completed_usage()
                     {
-                        tokens += usage.total();
-                        output_tokens += usage.completion_tokens;
-                        cached.add(usage.cached);
+                        account.add_usage(usage);
                         if let Some(measured) = error.context_tokens() {
-                            context_tokens = measured;
-                            conversation.measured(context_tokens);
+                            account.context_tokens = measured;
+                            conversation.measured(account.context_tokens);
                         }
                     }
                     // A failure the person's fallback model may answer for: the same request goes to it
@@ -4394,17 +4373,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     if completion.cut_off.is_some() {
                         completion.calls.clear();
                     }
-                    tokens += completion.usage.total();
-                    output_tokens += completion.usage.completion_tokens;
-                    cached.add(completion.usage.cached);
-                    context_tokens = completion.context_tokens;
-                    conversation.measured(context_tokens);
+                    account.add_usage(completion.usage);
+                    account.context_tokens = completion.context_tokens;
+                    conversation.measured(account.context_tokens);
                     reporter.spent(crate::outcome::Spent {
-                        tokens,
-                        output_tokens,
-                        context_tokens,
-                        cached,
                         timing: spent.finish(),
+                        ..account
                     });
 
                     // A reply the ceiling stopped part way through a call, after text. The text is
@@ -4469,9 +4443,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             &mut policy,
                             conversation,
                             &mut reporter,
-                            &mut tokens,
-                            &mut output_tokens,
-                            &mut cached,
+                            &mut account,
                             true,
                             &mut waits,
                             &mut spent,
@@ -4496,9 +4468,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut policy,
                                 conversation,
                                 &mut reporter,
-                                &mut tokens,
-                                &mut output_tokens,
-                                &mut cached,
+                                &mut account,
                                 true,
                                 &mut waits,
                                 &mut spent,
@@ -4869,15 +4839,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // A processor is a model call of its own, so what it spent belongs in the turn's
                         // total. Left out, a turn that did most of its work in processors would report
                         // having cost almost nothing.
-                        tokens += output.usage.total();
-                        output_tokens += output.usage.completion_tokens;
-                        cached.add(output.usage.cached);
+                        account.add_usage(output.usage);
                         reporter.spent(crate::outcome::Spent {
-                            tokens,
-                            output_tokens,
-                            context_tokens,
-                            cached,
                             timing: spent.finish(),
+                            ..account
                         });
                         // Kept as the turn goes rather than read off the last round, and overwritten by each
                         // call: a turn that says when to wake twice meant the second one, which is the answer
@@ -5641,9 +5606,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &mut policy,
                     conversation,
                     &mut reporter,
-                    &mut tokens,
-                    &mut output_tokens,
-                    &mut cached,
+                    &mut account,
                     true,
                     &mut waits,
                     &mut spent,
@@ -5663,11 +5626,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         *rounds_taken = steps;
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
-            tokens,
-            output_tokens,
-            context_tokens,
-            cached,
             timing: spent.finish(),
+            ..account
         });
 
         // Said to the person, not to the planner, which gets its own question while the turn is still
@@ -5785,10 +5745,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             programs,
             asked_about,
             exposed,
-            tokens,
-            output_tokens,
-            context_tokens,
-            cached,
+            tokens: account.tokens,
+            output_tokens: account.output_tokens,
+            context_tokens: account.context_tokens,
+            cached: account.cached,
             // Whether a credential was actually presented, which is what `route` decides from. A
             // subscription that was found is one that will be spent on every round of this turn.
             premium: subscription.is_some(),
@@ -5980,16 +5940,14 @@ mod tests {
                 stop: Default::default(),
                 handle: worker,
             }];
-            let mut tokens = 0;
+            let mut account = crate::outcome::Spent::default();
             assert_eq!(
                 collect_delegates(
                     &mut delegates,
                     &mut policy,
                     &mut Conversation::new(),
                     &mut Joining,
-                    &mut tokens,
-                    &mut 0,
-                    &mut Cached::default(),
+                    &mut account,
                     true,
                     &mut waits,
                     &mut spent,
@@ -6000,7 +5958,7 @@ mod tests {
             );
             assert!(delegates.is_empty());
             assert_eq!(
-                tokens, 17,
+                account.tokens, 17,
                 "completed usage survives the cancelled delegate"
             );
         });
@@ -6072,9 +6030,7 @@ mod tests {
                 &mut policy,
                 &mut Conversation::new(),
                 &mut reporter,
-                &mut 0,
-                &mut 0,
-                &mut Cached::default(),
+                &mut crate::outcome::Spent::default(),
                 true,
                 &mut crate::timing::DelegateWait::default(),
                 &mut Elapsed::default(),
@@ -6165,9 +6121,7 @@ mod tests {
                 &mut policy,
                 &mut conversation,
                 &mut reporter,
-                &mut 0,
-                &mut 0,
-                &mut Cached::default(),
+                &mut crate::outcome::Spent::default(),
                 true,
                 &mut crate::timing::DelegateWait::default(),
                 &mut Elapsed::default(),
@@ -6232,7 +6186,10 @@ mod tests {
             .unwrap();
         let report = policy.label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND".to_string());
         let mut recording = crate::report::RecordingReporter::default();
-        let mut tokens = 1_000;
+        let mut account = crate::outcome::Spent {
+            tokens: 1_000,
+            ..Default::default()
+        };
         {
             let lent = crate::shared::Lent::new(&mut recording);
             let mut turn = lent.turn();
@@ -6276,9 +6233,7 @@ mod tests {
                     &mut policy,
                     &mut conversation,
                     &mut turn,
-                    &mut tokens,
-                    &mut 0,
-                    &mut Cached::default(),
+                    &mut account,
                     true,
                     &mut crate::timing::DelegateWait::default(),
                     &mut Elapsed::default(),
@@ -6292,8 +6247,11 @@ mod tests {
                 refused.contains("could not quarantine a one-round delegate"),
                 "the turn failed for some other reason: {refused}"
             );
-            assert_eq!(tokens, 1_500, "the delegate's usage was not counted");
-            turn.spent(a_total(tokens));
+            assert_eq!(
+                account.tokens, 1_500,
+                "the delegate's usage was not counted"
+            );
+            turn.spent(a_total(account.tokens));
         }
 
         assert!(

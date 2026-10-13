@@ -73,9 +73,7 @@ impl Totals {
     fn reported(&self) -> crate::outcome::Spent {
         let mut total = self.turn;
         for delegate in self.delegates.values() {
-            total.tokens += delegate.spent.tokens;
-            total.output_tokens += delegate.spent.output_tokens;
-            total.cached.add(delegate.spent.cached);
+            total.add_spent(&delegate.spent);
         }
         total
     }
