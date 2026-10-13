@@ -499,6 +499,9 @@ mod tests {
         let ninety_nine = format!("go {}", "é".repeat(SUGGEST_CHARS - 4));
         assert!(ninety_nine.len() > SUGGEST_CHARS);
         assert_eq!(suggestion(&ninety_nine), Some(ninety_nine.clone()));
+        let hundred = format!("go {}", "é".repeat(SUGGEST_CHARS - 3));
+        assert_eq!(hundred.chars().count(), SUGGEST_CHARS);
+        assert_eq!(suggestion(&hundred), None);
     }
 
     /// INPUT-42: a suggestion is a question with a limit, asked over the exchange, in the driver's
