@@ -23,7 +23,7 @@ def _load(name, path):
     return module
 
 
-# The git and quietly helpers are shared with the other selftests of this pair.
+# The git, quietly and ssh helpers are shared with the other selftests of this pair.
 helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
 git = helpers.git
 quietly = helpers.quietly
@@ -126,6 +126,17 @@ def test_a_push_made_since_start_is_refused_rather_than_overwritten():
         code, out = quietly(pr_fix.push, pr())
         assert code == 1, out
         assert git("log", "-1", "--format=%s", "feature", cwd=fork) == "pushed meanwhile"
+
+
+def test_a_push_github_refuses_is_retried_with_each_other_key_the_agent_holds():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, remote = helpers.an_ssh_remote(Path(tmp).resolve())
+        keys = ["ssh-ed25519 AAAAbad bot@example.invalid", "ssh-ed25519 AAAAgood person@example.invalid"]
+        with helpers.an_agent_holding(keys):
+            code, out = quietly(pr_fix.push, pr)
+        assert code == 0 and "person@example.invalid" in out, out
+        assert "bot@example.invalid" not in out, out
+        assert git("rev-parse", "feature", cwd=remote) == git("rev-parse", "HEAD", cwd=pr.tree)
 
 
 def test_a_branch_already_rebased_here_is_rebased_again_rather_than_refused():

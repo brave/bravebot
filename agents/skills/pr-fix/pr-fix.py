@@ -327,14 +327,7 @@ def push(pr):
             "Report the signing error to the person. Do not rebase the pull request on GitHub with "
             "`update-branch`, which also leaves its commits unsigned."
         )
-    # The lease is the head `start` fetched, so a push made since is refused rather than lost.
-    git(
-        "push",
-        f"--force-with-lease=refs/heads/{pr.head}:{tip}",
-        pr.head_remote,
-        f"HEAD:refs/heads/{pr.head}",
-        cwd=tree,
-    )
+    pr_worktree.push_head(pr, tree, tip)
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0
 

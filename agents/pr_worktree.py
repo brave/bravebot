@@ -4,10 +4,12 @@ Each script loads this module by path and binds the names it uses, so a fix made
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +22,7 @@ THEIRS = re.compile(r"^>{7}(?: |$)")
 MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
 SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
 LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
+PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
 
 
 def die(message):
@@ -271,3 +274,44 @@ def run_commands(tree, commands, log_name):
             print(f"failed: {shown} (full log {log})")
             print("\n".join([one for one in lines if MAKE_FAILED.match(one)] + ["..."] + lines[-30:]))
     return 1 if failed else 0
+
+
+def agent_keys():
+    listed = run("ssh-add", "-L", check=False)
+    if listed.returncode:
+        return []
+    return [line for line in listed.stdout.splitlines() if line.startswith(("ssh-", "ecdsa-", "sk-"))]
+
+
+def push_as_another_key(args, tree, denied):
+    """GitHub refused the key ssh offered first; try each other key the agent holds, once."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for number, line in enumerate(agent_keys()):
+            file = Path(tmp) / f"key{number}.pub"
+            file.write_text(line + "\n")
+            env = {**os.environ, "GIT_SSH_COMMAND": f"ssh -i {file} -o IdentitiesOnly=yes"}
+            done = run("git", *args, cwd=tree, check=False, env=env)
+            if not done.returncode:
+                return done, line.split(maxsplit=2)[-1]
+            if not PUSH_DENIED.search(done.stderr):
+                return done, None
+    return denied, None
+
+
+def push_head(pr, tree, tip):
+    """Push HEAD to the pull request's head branch, over `tip` and nothing newer."""
+    # The lease is the head `start` fetched, so a push made since is refused rather than lost.
+    args = [
+        "push",
+        f"--force-with-lease=refs/heads/{pr.head}:{tip}",
+        pr.head_remote,
+        f"HEAD:refs/heads/{pr.head}",
+    ]
+    done = run("git", *args, cwd=tree, check=False)
+    key = None
+    if done.returncode and PUSH_DENIED.search(done.stderr):
+        done, key = push_as_another_key(args, tree, done)
+    if done.returncode:
+        die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
+    if key:
+        print(f"pushed as the ssh-agent key {key}")
