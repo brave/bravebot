@@ -226,10 +226,6 @@ fn split_at_width(text: &str, width: usize) -> (String, String) {
     (text.to_string(), String::new())
 }
 
-/// Draw one tool call: what it is, and what came of it.
-///
-/// The shape mirrors a turn's own: a marker, then the detail indented beneath it, so a call
-/// and its result read as one thing rather than two unrelated lines.
 /// One delegate, with the last of its own work under it.
 ///
 /// The block is a live view of something working rather than a second transcript. While it runs
@@ -363,6 +359,10 @@ fn call_rows(marker: Span<'static>, call: String, style: Style, why: &str) -> Ve
     ]
 }
 
+/// Draw one tool call: what it is, and what came of it.
+///
+/// The shape mirrors a turn's own: a marker, then the detail indented beneath it, so a call
+/// and its result read as one thing rather than two unrelated lines.
 fn activity_lines(
     activity: &Activity,
     landing: Option<Landing>,
@@ -1255,14 +1255,6 @@ fn window_start(rows: usize, cursor: usize, visible: usize) -> usize {
         .min(rows - visible)
 }
 
-/// One delegate on the list: how it is going, what it is, what it was asked, and how much it has
-/// done.
-///
-/// The task is on the row because two delegates of the same kind are otherwise identical, and
-/// which one somebody wants is the whole question the list is answering.
-///
-/// The row that would open is filled edge to edge rather than pointed at. A mark beside a short
-/// name reads as decoration on the text; a bar reads as the row being chosen, which is what it is.
 /// The first row of the list: the conversation the delegates were spawned from.
 ///
 /// Here because the way back was the one destination the list did not offer. Somebody comparing
@@ -1366,6 +1358,14 @@ fn aside_row(
     }
 }
 
+/// One delegate on the list: how it is going, what it is, what it was asked, and how much it has
+/// done.
+///
+/// The task is on the row because two delegates of the same kind are otherwise identical, and
+/// which one somebody wants is the whole question the list is answering.
+///
+/// The row that would open is filled edge to edge rather than pointed at. A mark beside a short
+/// name reads as decoration on the text; a bar reads as the row being chosen, which is what it is.
 fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'static> {
     // The glyph carries the standing on the bar as well as off it, so the row under the cursor
     // does not have to spend a colour the highlight has already taken.
@@ -1856,11 +1856,6 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Build the transcript as lines, so height is known before rendering.
-///
-/// `width` is the terminal's, and a table is laid out against what is left of it after the lead.
-/// `height` is the transcript area's, which only the opening mark uses: it floats down from the
-/// top edge by a share of whatever room there is.
 /// Draw what the model said, styled rather than shown with its markdown markers.
 ///
 /// Used for a finished turn in the transcript and for the reply still arriving beneath it, which
@@ -1903,6 +1898,11 @@ fn assistant_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// Build the transcript as lines, so height is known before rendering.
+///
+/// `width` is the terminal's, and a table is laid out against what is left of it after the lead.
+/// `height` is the transcript area's, which only the opening mark uses: it floats down from the
+/// top edge by a share of whatever room there is.
 #[cfg(test)]
 fn transcript_lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
     with_prompts(session, width, height).0
