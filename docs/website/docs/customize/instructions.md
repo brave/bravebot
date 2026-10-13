@@ -182,7 +182,8 @@ username on its own, no file contents, no directory listing.
 
 They are labelled as facts about the machine rather than as instructions. One of them asks something
 of the planner as well, and only because a probe found what the request names: the scratch directory
-is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
+is stated with what to put in it, and with what to do when a Python program is missing a module.
+Nothing is asked on the account of the rest. What an installed `gh`
 is for is said too, just outside this block, and [below](#the-github-cli) is what it says.
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
@@ -207,6 +208,16 @@ It is removed when the session ends, with everything written in it, and a sessio
 from another is given its own. A program started by [`run`](../reference/tools.md#run) reads the same
 path from `BRAVEBOT_SCRATCH_DIR`. A session that could not be given a directory says so and runs
 without one, and the line is then absent rather than naming somewhere that is not there.
+
+The block also says what to do when a Python program fails because a module is missing, such as
+`tomllib` on a Python older than 3.11. The planner checks whether an installed package provides the
+same module under another name, with a command like `python3 -c 'import tomli'` whose exit status
+answers it. Where one does, it writes a module of the missing name in the scratch directory that
+imports from that package, and runs the program again with `PYTHONPATH=<the scratch directory>` in
+front of it on that one command. The program, your machine and your settings are left as they were,
+and the module goes with the session. Where nothing installed provides it, the planner says which
+module is missing and what provides it. A session with no scratch directory is not told any of
+this.
 
 It is stated because no `run` could discover it: nothing names that directory but this program, and a
 planner never told of it puts an intermediate file in the project instead. Reaching it grants nothing.

@@ -296,6 +296,59 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     );
 }
 
+/// INSTR-9 tells the planner to stand in for a missing Python module with one written in the
+/// session's own directory and named on the line's `PYTHONPATH`. The regressions it rejects are a
+/// confinement that keeps that directory from the stage or drops the assignment, so the road the
+/// planner is told to take fails under the sandbox, and a stage given the directory on its
+/// `PYTHONPATH` whatever the line says, which puts the session's files ahead of every program's own
+/// modules. The line with no assignment is the control that the assignment alone finds the module,
+/// and the unconfined line is the control that Python finds it at all.
+#[cfg(unix)]
+#[test]
+fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("stand-in-module");
+    if bravebot_agent::programs::resolve("python3", &places.session).is_none() {
+        return;
+    }
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    std::fs::write(own.join("bravebot_stand_in.py"), "from json import *\n").expect("a module");
+    let program = "python3 -c 'import bravebot_stand_in; print(bravebot_stand_in.dumps([1]))'";
+    let named = format!("PYTHONPATH={} {program}", own.display());
+    let confinement =
+        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
+            .expect("a platform with a base");
+    let run = |line: &str, confinement: Option<&Confinement>| {
+        exec::run_plan_observed(
+            &places.plan(line),
+            &Cancel::new(),
+            exec::LIMIT,
+            Some(&own),
+            None,
+            confinement,
+            &mut |_| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
+    };
+
+    let control = run(&named, None);
+    let confined = run(&named, Some(&confinement));
+    let unnamed = run(program, Some(&confinement));
+
+    assert_eq!(control.stdout, "[1]\n", "unconfined: {control:?}");
+    assert!(
+        confined.ended_well && confined.stdout == "[1]\n",
+        "the module was not imported with the assignment: {confined:?}"
+    );
+    assert!(
+        !unnamed.ended_well && !unnamed.stdout.contains("[1]"),
+        "the module was imported with no assignment on the line: {unnamed:?}"
+    );
+}
+
 /// The regression it rejects: a profile built once and kept, so a file created after the first
 /// stage started cannot be read by the second, or a listing made at one moment that a path made
 /// later in a directory holding a credential location escapes.

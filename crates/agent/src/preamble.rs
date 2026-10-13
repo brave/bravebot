@@ -408,8 +408,10 @@ fn fence_for(text: &str) -> String {
 /// project. A session that has none has nothing said about one, since a path to a directory that
 /// is not there costs a turn the run that finds out.
 ///
-/// One fact carries an imperative, gated on what the probe found: what the session's own directory
-/// is for. A probe that only produces a fact is a line on every turn that changes nothing, and a
+/// One fact carries imperatives, gated on what the probe found: what the session's own directory
+/// is for, and the one use of it a Python program missing a module needs, since a planner not told
+/// of that road stops after looking for a newer interpreter and asks the person to change the
+/// machine. A probe that only produces a fact is a line on every turn that changes nothing, and a
 /// gate is what keeps an imperative from naming something this machine does not have. What the
 /// GitHub CLI is for is the same argument and is [`github_cli_guidance`], which goes to the person's
 /// own turn rather than into this block.
@@ -455,6 +457,20 @@ fn environment(workspace: &Workspace, github_cli: bool) -> String {
              inside, rather than in the project where somebody has to notice it and delete it. It \
              is removed when this session ends, and a program a `run` starts reads the same path \
              from BRAVEBOT_SCRATCH_DIR.\n",
+        );
+        out.push_str(
+            "\nWhen a Python program fails because a module is missing, such as `tomllib` on a \
+             Python older than 3.11, check whether an installed package provides the same module \
+             under another name, with a line that only reads and whose exit status is the answer, \
+             such as `python3 -c 'import tomli'` run with the interpreter the program uses. Where \
+             one does, write a module of the missing name in the scratch directory that imports \
+             everything from that package, such as `tomllib.py` holding `from tomli import *`, and \
+             run the program again with `PYTHONPATH=` and the scratch directory's path in front \
+             of it on that one line. Write the path out in full, since a line expands no \
+             variable. That leaves the program, the machine and the person's settings as they \
+             were, so try it before asking the person to install something or edit the program. \
+             Where nothing installed provides the module, say which module is missing and what \
+             provides it.\n",
         );
     }
     out

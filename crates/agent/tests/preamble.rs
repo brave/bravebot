@@ -848,6 +848,47 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     );
 }
 
+/// A program that fails for a module its Python lacks is otherwise handed back to the person as a
+/// request to install a newer Python or edit the program. An installed package often provides the
+/// module under another name, and a module of the missing name in the session's own directory,
+/// named on that one line's `PYTHONPATH`, runs the program with nothing on the machine changed.
+/// Where no package provides it, the planner says what is missing.
+#[test]
+fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
+    let tree = Scratch::new("stand-in-module");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    for said in [
+        "with a line that only reads",
+        "write a module of the missing name in the scratch directory",
+        "`PYTHONPATH=` and the scratch directory's path",
+        "say which module is missing",
+    ] {
+        assert!(
+            preamble.text.contains(said),
+            "`{said}` is not in the preamble: {}",
+            preamble.text
+        );
+    }
+}
+
 /// A session that could not be given one has nowhere of its own to write, and a planner told
 /// otherwise spends a run discovering that the directory is not there.
 #[test]
@@ -875,7 +916,7 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
         "the rest of the block is missing too: {}",
         preamble.text
     );
-    for absent in ["Scratch directory:", "BRAVEBOT_SCRATCH_DIR"] {
+    for absent in ["Scratch directory:", "BRAVEBOT_SCRATCH_DIR", "PYTHONPATH"] {
         assert!(
             !preamble.text.contains(absent),
             "`{absent}` is stated for a session that has no directory of its own: {}",
