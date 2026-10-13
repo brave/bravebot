@@ -263,10 +263,10 @@ A delegate finishing leaves the view on it. A delegate starting does not take th
 somebody reading an older one. Nor does anything else that happens without a press: a turn the
 queue starts as the one before it ends, a tick of a loop coming due, a watch firing, a goal sending
 the work back, a command line that waited being run, and what that command printed each leave an
-open view where its reader put it. Where no view is open the tail is where the session's own view
-belongs, so every one of those still takes the transcript there. A delegate starting is the running
-turn adding to the transcript, which [VIEW-1](terminal-transcript.md#VIEW-1) holds a scrolled-back
-view through.
+open view where its reader put it, and the scroller where its reader put it too. Where neither is
+open the tail is where the session's own view belongs, so every one of those still takes the
+transcript there. A delegate starting is the running turn adding to the transcript, which
+[VIEW-1](terminal-transcript.md#VIEW-1) holds a scrolled-back view through.
 
 **Why.** Several delegates report at once, so a view that followed the newest event would move
 under the reader several times a second, and the run somebody opened would be the one run they
@@ -287,6 +287,7 @@ the one that opened the view they are in.
 `verified-by: bravebot_tui::state::a_watch_firing_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::a_queued_command_line_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::a_goal_sending_the_work_back_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::what_starts_without_a_press_leaves_an_open_scroller_where_its_reader_put_it`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key

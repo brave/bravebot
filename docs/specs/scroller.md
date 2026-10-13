@@ -334,6 +334,7 @@ turn that is going wrong is reading precisely because it is going wrong, and a v
 bottom by the next line the model writes takes away the only thing they were trying to do.
 
 `verified-by: bravebot_tui::state::what_arrives_while_the_scroller_is_open_does_not_move_the_view`
+`verified-by: bravebot_tui::state::what_starts_without_a_press_leaves_an_open_scroller_where_its_reader_put_it`
 `verified-by: bravebot_tui::render::a_turn_writing_underneath_does_not_slide_the_view_between_frames`
 `verified-by: bravebot_tui::render::the_scroller_says_more_has_arrived_below`
 `verified-by: bravebot_tui::render::the_scroller_says_a_turn_is_still_running`
