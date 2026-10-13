@@ -1965,6 +1965,8 @@ there too, so `make > build.log` is.
 `verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_file_writes_before_accepting_edits`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_a_writing_manifest_before_approval`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
 `verified-by: bravebot_ui_bridge::sandbox_mode::another_session_opens_under_the_settings_and_not_the_choice`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_projects_strict_does_not_lift_the_persons_read_only`
