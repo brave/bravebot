@@ -1156,6 +1156,7 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_config::git_identities::a_key_beside_identities_is_reported_as_unread`
 `verified-by: bravebot_config::settings::only_the_persons_own_files_choose_a_key_for_an_owner`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read`
+`verified-by: bravebot_cli::running::a_configured_git_identity_reaches_only_the_matching_run_stage`
 `verified-by: bravebot_agent::confine::an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other`
 `verified-by: bravebot_agent::confine::no_entry_leaves_a_remote_stage_as_it_was`
 `verified-by: bravebot_agent::confine::a_key_the_plan_could_have_written_or_that_is_not_a_public_key_is_not_offered`
