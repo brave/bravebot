@@ -5656,11 +5656,13 @@ mod tests {
 
     /// A home holding the public halves of two keys and the private half of one, and a session
     /// directory beside it, for the `git.identities` tests.
+    #[cfg(unix)]
     struct IdentityPlaces {
         home: PathBuf,
         session: PathBuf,
     }
 
+    #[cfg(unix)]
     impl IdentityPlaces {
         fn new(name: &str) -> Self {
             let top = Path::new(env!("CARGO_MANIFEST_DIR"))
