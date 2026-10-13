@@ -1958,6 +1958,11 @@ fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
             format!(r#"{{"query":"log","repository":"{outside}"}}"#),
             format!("read_git.repository: '{outside}'"),
         ),
+        (
+            "watch_file",
+            format!(r#"{{"path":"{outside}/todo.txt"}}"#),
+            format!("watch_file.path: '{outside}/todo.txt'"),
+        ),
     ];
     let mut script: Vec<_> = calls
         .iter()
@@ -1969,11 +1974,12 @@ fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
+    // A turn that may arm a watch, since one that may not is never offered watch_file (ARM-5).
     turns::run(
         &config,
         &egress,
         &workspace,
-        &Task::new("tidy up my notes"),
+        &Task::new("tidy up my notes").arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
     )

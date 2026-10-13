@@ -6539,14 +6539,14 @@ fn watch_file<S: Sink>(
         );
     }
     // A path with nothing at it is armed, and the first look records that it is absent. Only a
-    // path the session cannot reach is refused, as a read of it would be.
-    if matches!(
-        workspace.look(&path, workspace.root()),
-        crate::watch::Looked::OutOfReach
-    ) {
-        return Produced::problem(
-            "refused: that path cannot be looked at from here, so it cannot be watched.",
-        );
+    // path the session cannot reach is refused, as a read of it would be, and recorded as one: the
+    // promotion above says nothing about where the path lands (TRACE-1). Named as the planner typed
+    // it, since this tool takes no reference.
+    if let Err(e) = workspace.resolve(&path) {
+        return Produced::problem(format!(
+            "refused: {}",
+            workspace_failure(policy, "watch_file", "path", &e, &found.shown)
+        ));
     }
 
     *armed += 1;
@@ -15383,6 +15383,19 @@ mod tests {
             armed: &mut usize,
             arguments: Value,
         ) -> (Produced, String) {
+            let (produced, told, _, _) = traced(context, workspace, arming, armed, arguments);
+            (produced, told)
+        }
+
+        /// The same, with the confinement refusals the trail holds and whether the turn would end
+        /// as clean.
+        fn traced(
+            context: bravebot_core::label::Integrity,
+            workspace: &Workspace,
+            arming: crate::watch::Arming,
+            armed: &mut usize,
+            arguments: Value,
+        ) -> (Produced, String, Vec<String>, bool) {
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
             routing.insert_trusted("task", "tell me when a file changes");
@@ -15404,7 +15417,19 @@ mod tests {
             );
             let proof = policy.authorise_display_release("test inspects the tool result");
             let told = produced.text.clone().declassify(&proof);
-            (produced, told)
+            let clean = policy.finish();
+            let refused = sink
+                .blocked()
+                .filter_map(|event| match event {
+                    bravebot_core::event::Event::GateBlocked {
+                        gate: "confine",
+                        reason,
+                        ..
+                    } => Some(reason.clone()),
+                    _ => None,
+                })
+                .collect();
+            (produced, told, refused, clean)
         }
 
         /// The baseline. Without it every refusal below would prove nothing.
@@ -15576,6 +15601,54 @@ mod tests {
             assert!(told.starts_with("refused:"), "{told}");
             assert_eq!(produced.watch, None);
             assert_eq!(count, 0, "a watch the gate refused was counted as armed");
+        }
+
+        /// A watch refused for leaving the workspace is a refusal in the trail, under the name the
+        /// planner typed and the remedy it was told, and the turn does not end as clean.
+        ///
+        /// The refusal comes after a promotion that passed and says nothing about where the path
+        /// lands, so a refusal with no record of its own leaves the trail ending at that pass. The
+        /// path starts with `~` so the name typed and the absolute path refused differ, and a
+        /// record of the second would not be the name the planner was told.
+        #[test]
+        fn a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed() {
+            let scratch = Scratch::new("escape-recorded");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("todo.txt"), "milk\n").unwrap();
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.canonicalize().unwrap()));
+
+            let mut count = 0;
+            let (produced, told, refused, clean) = traced(
+                bravebot_core::label::Integrity::Trusted,
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "~/todo.txt"}),
+            );
+
+            assert!(
+                told.starts_with("refused: '~/todo.txt' resolves outside the workspace"),
+                "{told}"
+            );
+            assert!(
+                told.contains("open the directory it is in"),
+                "the planner was not told the remedy the trail records: {told}"
+            );
+            assert_eq!(produced.watch, None);
+            assert_eq!(
+                refused,
+                [
+                    "watch_file.path: '~/todo.txt' resolves outside the workspace; remedy offered: \
+                     open its directory"
+                ],
+                "the refused watch was not recorded once, as the planner named it"
+            );
+            assert!(!clean, "a turn whose watch was refused would end as clean");
         }
 
         /// A read of a file is refused once the context has met untrusted content, because what
