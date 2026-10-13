@@ -582,7 +582,7 @@ doctor-settings-git-identities-ignored =
 doctor-settings-git-identities-misshapen =
     { $key } in { $path } is not read: git.identities maps a name <host>/<owner> to the path of a public key file
 doctor-settings-git-identities-key-refused =
-    { $key } in { $path } names { $value }, which is not a key a push can be given: it has to be a regular *.pub file in your home, outside ~/.aws, ~/.kube and the other credential locations, with no ', % or $ in its path, so ssh offers its default key for that owner
+    { $key } in { $path } names { $value }, which is not a key a push can be given: it has to be a regular *.pub file outside every credential location but ~/.ssh, such as ~/.aws, with no ', % or $ in its path, so ssh offers its default key for that owner
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =

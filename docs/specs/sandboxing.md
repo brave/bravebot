@@ -885,8 +885,9 @@ on the stage it applies to. Only the person's own settings file and a `--setting
 workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
 local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
 file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string, a
-`git` block or an `identities` value that is not an object, and an entry whose key is refused by
-the rules above. A key beside `identities` in the block is reported as unread.
+`git` block or an `identities` value that is not an object, and an entry whose key the rules above
+refuse, all but the one about the directories the plan may write, which it has no session to know.
+A key beside `identities` in the block is reported as unread.
 
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
