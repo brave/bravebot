@@ -2101,6 +2101,164 @@ def test_the_prompt_lane_starts_from_every_prompt():
         audit.mechanics.changed_files = was
 
 
+PINNED_ROW = (
+    "| one effect | a write | the body | the value | the one effect "
+    "| `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart` |"
+)
+ACCEPTED_ROW = (
+    "| the trust map | `y` | the directory | the path | the session "
+    "| accepted: [costs.md](costs.md#known-costs) |"
+)
+KEPT = [
+    "Confirmer::confirm_write: one effect",
+    "Confirmer::interjection: nothing",
+    "Answers::trust: the trust map",
+    "trust_prompt::ask: the trust map",
+]
+
+
+def register_findings(
+    kept=KEPT,
+    rows=(PINNED_ROW, ACCEPTED_ROW),
+    trait="Confirmer",
+    methods=("confirm_write", "interjection"),
+    fields=("trust",),
+    asks=("ask",),
+    spec_id="PROMPT",
+    elsewhere="",
+):
+    """Run the register check in a tree holding one of each declaration it reads."""
+    front = "".join(f"  - {one}\n" for one in kept)
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": f"---\nid: {spec_id}\ntitle: Asking\nstatus: normative\n"
+            f"governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n{front}---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + "".join(f"{row}\n" for row in rows) + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": f"---\nid: PLAIN\n{elsewhere}---\n\n### Known costs\n\nNone.\n",
+            "crates/agent/src/confirm.rs": f"pub trait {trait} {{\n"
+            + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Decision;\n" for one in methods)
+            + "}\n",
+            "crates/tui/src/app.rs": "struct Answers {\n"
+            + "".join(f"    /// Kept.\n    {one}: Kept,\n" for one in fields)
+            + "}\n",
+            "crates/tui/src/trust_prompt.rs": "".join(
+                f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
+                for one in (f"pub fn {ask}" if " " not in ask else ask for ask in asks)
+            ),
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_answers_registered(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_answers_registered():
+    """A question or a remembered set with no row is how a yes comes to cover something unshown.
+
+    The check reads the declarations rather than a list, so each fixture adds a member to one of
+    them and expects the finding that names it, and each row fault is one a reader would take for a
+    decision somebody made.
+    """
+    found = register_findings()
+    check("a register accounting for every question and set is silent", found == [], str(kinds(found)))
+
+    cases = [
+        ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
+        ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
+        ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
+        ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
+        (
+            "an entry landing in a row the table does not have",
+            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3]]},
+            ["register-row-unknown"],
+        ),
+        ("an entry that is not member and row", {"kept": KEPT + ["the trust map"]}, ["kept-in-malformed"]),
+        ("an entry for a declaration the check reads nothing of", {"kept": KEPT + ["Elsewhere::thing: nothing"]}, ["kept-in-malformed"]),
+        ("a row with a cell left empty", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", ""))}, ["register-cell-empty"]),
+        ("a row with a cell past the last column", {"rows": (PINNED_ROW, ACCEPTED_ROW + " more |")}, ["register-cell-empty"]),
+        (
+            "a row citing a test that does not exist",
+            {"rows": (PINNED_ROW.replace("a_key_tells_two_cases_apart", "a_key_tells_nothing_apart"), ACCEPTED_ROW)},
+            ["register-test-missing"],
+        ),
+        ("a row citing neither a test nor a cost", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "see"))}, ["register-unpinned"]),
+        (
+            "a row accepting a cost from a spec that admits none",
+            {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("costs.md", "plain.md"))},
+            ["register-cost-missing"],
+        ),
+        ("a clause with no rows under its header", {"rows": ()}, ["register-unreadable"]),
+        ("a confirmer that is no longer a trait the check can find", {"trait": "Asker"}, ["register-unreadable"]),
+        ("a trust prompt that asks nothing the check can read", {"asks": ()}, ["register-unreadable"]),
+        ("a prompting spec that is no longer the one with the register's id", {"spec_id": "ASKING"}, ["register-unreadable"]),
+        ("a trust question only the crate can see", {"asks": ("ask", "pub(crate) fn ask_again")}, ["answer-unregistered"]),
+        ("a public helper whose name only starts like a question", {"asks": ("ask", "asking_line")}, []),
+        ("a member listed twice", {"kept": KEPT + ["Answers::trust: one effect"]}, ["kept-in-duplicate"]),
+        ("an entry keeping nothing and naming a row", {"kept": KEPT[:1] + ["Confirmer::interjection: nothing; one effect"] + KEPT[2:]}, ["kept-in-malformed"]),
+        ("a list in a spec the check does not read it from", {"elsewhere": "kept_in:\n  - Answers::trust: the trust map\n"}, ["kept-in-misplaced"]),
+        ("a cell holding a dash", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "-"))}, ["register-cell-empty"]),
+        ("a cell holding n/a", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "n/a"))}, ["register-cell-empty"]),
+        ("a row of empty cells", {"rows": (PINNED_ROW, ACCEPTED_ROW, "| | | | | | |")}, ["register-cell-empty", "register-unpinned"]),
+        ("a cost the cell says is not accepted", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "not accepted:"))}, ["register-unpinned"]),
+    ]
+    for name, change, expected in cases:
+        found = register_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    stale = register_findings(kept=KEPT + ["Answers::gone: the trust map"])
+    check(
+        "an entry outliving its member is a warning, since nothing is let through by it yet",
+        [one["severity"] for one in stale] == [audit.WARNING],
+        str(stale),
+    )
+    unlisted = register_findings(fields=("trust", "granted"))
+    check(
+        "the finding names the member and where it is declared",
+        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/tui/src/app.rs" in unlisted[0]["summary"],
+        str(unlisted[0] if unlisted else "no finding"),
+    )
+
+    missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
+    check("every file the binding lane is selected by exists", missing == [], str(missing))
+
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    was = audit.mechanics.changed_files
+    try:
+        for touched, wanted in [
+            ("crates/agent/src/confirm.rs", True),
+            ("crates/core/src/credentials.rs", True),
+            ("crates/agent/src/tools.rs", True),
+            ("crates/tui/src/asks.rs", True),
+            ("crates/tui/src/app.rs", True),
+            ("docs/specs/asking.md", True),
+            ("crates/core/src/label.rs", False),
+        ]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()])
+            check(
+                f"a branch that touches {touched} "
+                + ("runs" if wanted else "does not run")
+                + " the lane that asks what a kept answer covers",
+                ("approval-binding" in lanes) == wanted,
+                str(lanes),
+            )
+    finally:
+        audit.mechanics.changed_files = was
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -2573,6 +2731,7 @@ def main():
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
+        test_answers_registered,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,

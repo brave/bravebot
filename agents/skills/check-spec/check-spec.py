@@ -48,7 +48,8 @@ WARNING = "warning"
 # `reads_a_step_without_keying` is read by the security-audit skill rather than here: it names the
 # functions that read a `Step` field by field for something that is not a key, which that skill
 # otherwise faults. It is listed so a deliberate key is told apart from a `sites:` indented out of
-# its `guards` entry, which is what the unknown-key error is for.
+# its `guards` entry, which is what the unknown-key error is for. `kept_in` is the security-audit
+# skill's too: it says which register row each question and remembered set lands in.
 FRONT_MATTER_KEYS = {
     "id",
     "title",
@@ -57,6 +58,7 @@ FRONT_MATTER_KEYS = {
     "guards",
     "documented-by",
     "reads_a_step_without_keying",
+    "kept_in",
 }
 
 UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")

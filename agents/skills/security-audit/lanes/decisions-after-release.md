@@ -41,11 +41,16 @@ reads a file, one that writes, one carrying an environment assignment, and one r
 root are each refused a remembered answer however the person answered. `crates/agent/src/remembered.rs`
 is the file and `bravebot_core::remembered` is what an entry means. Report none of that.
 
+An answer kept past the effect it was given for, at any prompt, is the `approval-binding` lane's.
+It starts from the register under `PROMPT-11` in `docs/specs/prompting.md`, which lists every
+question and the row its answer lands in. Report none of that here.
+
 The residue is parity and rewriting:
 
-- **The other prompts.** `run` has those clauses and those tests. Ask whether writing, editing and
-  fetching bind an approval as narrowly, and against what. A grant keyed to something coarser than
-  the bytes or the argument list a person read at the prompt covers an effect they did not see.
+- **The other single-use approvals.** The register's `one effect` row names the prompts whose yes
+  covers one effect. `run` has its clauses and tests; ask whether each of the others binds its
+  approval as narrowly, and against what. A grant keyed to something coarser than the bytes or the
+  argument list a person read at the prompt covers an effect they did not see.
 - **What compaction is allowed to move.** `compaction.md` rewrites a turn's history. Ask what an
   approval is recorded against and whether that survives the rewrite: one keyed to a position in a
   transcript, or to a tool call's index, is keyed to something compaction may move.
