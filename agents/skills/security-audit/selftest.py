@@ -2227,6 +2227,37 @@ def test_answers_registered():
         str(unlisted[0] if unlisted else "no finding"),
     )
 
+    missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
+    check("every file the binding lane is selected by exists", missing == [], str(missing))
+
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    was = audit.mechanics.changed_files
+    try:
+        for touched, wanted in [
+            ("crates/agent/src/confirm.rs", True),
+            ("crates/core/src/credentials.rs", True),
+            ("crates/agent/src/tools.rs", True),
+            ("crates/tui/src/asks.rs", True),
+            ("crates/tui/src/app.rs", True),
+            ("docs/specs/asking.md", True),
+            ("crates/core/src/label.rs", False),
+        ]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()])
+            check(
+                f"a branch that touches {touched} "
+                + ("runs" if wanted else "does not run")
+                + " the lane that asks what a kept answer covers",
+                ("approval-binding" in lanes) == wanted,
+                str(lanes),
+            )
+    finally:
+        audit.mechanics.changed_files = was
+
 
 def test_verifier_prompt_composes():
     candidate = {

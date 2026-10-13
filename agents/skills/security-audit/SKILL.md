@@ -3,7 +3,7 @@ name: security-audit
 description:
   'Audit this repository against the rule that untrusted content never enters the
   driver or the planner. Enumerates the label surface mechanically, then reads the
-  code in nine lanes, tries to disprove every candidate, and files one issue per
+  code in ten lanes, tries to disprove every candidate, and files one issue per
   finding that survives, skipping anything the tracker already holds.
   Triggers on: security audit, /security-audit, make check-security, find security
   issues, audit the trust boundary, is the rule still holding, prompt injection
@@ -19,7 +19,7 @@ untrusted content in their context.** The driver is `bravebot-core` and `bravebo
 The planner is the model. This skill answers one question about that: **does the guarantee
 hold?**
 
-- **Full run** (default): all nine lanes.
+- **Full run** (default): all ten lanes.
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
@@ -251,7 +251,7 @@ Nothing else. The report is the deliverable.
 
 ---
 
-## The nine lanes
+## The ten lanes
 
 Each is a prompt file with the sites it starts from already filled in, so no lane is a vague
 instruction to go and look at things. The first four are the four shapes a violation takes in a
@@ -268,6 +268,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | `unpinned-guarantee` | what holds today that nothing would fail on if it stopped? | `verified-by: none` clauses, the `by-construction` brackets that answered the rest, and label-touching code no spec governs |
 | `supply-chain` | what executes with this tree checked out or gets linked into the binary, and who decides what that is? | the workflows, the lock file, and the second network client |
 | `shown-before-answered` | for each prompt, what does the person need to see to decide, who controls its length, and is the approving key gated on it having been drawn? | every `ask` function in the files the prompting spec governs |
+| `approval-binding` | can a kept answer's key match an effect the person was never shown, now or after a transition or a change to the tree? | each row of the register of kept answers in `docs/specs/prompting.md`, and the questions and sets its `kept_in` list maps to them |
 
 ---
 
@@ -295,6 +296,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A clause at `verified-by: none` | mechanical | warning |
 | A confirmer method, a remembered set or a trust question with no row in the register, an entry naming a row the table lacks, one member listed twice or a list in another spec, a cell left empty, or a row naming no test or a test that does not exist | mechanical | error |
 | A register entry for a question or a set that is no longer declared | mechanical | warning |
+| A kept answer whose key matches an effect its prompt never showed | lane, then verifier | error |
 | A label built with more trust than its inputs had | lane, then verifier | error |
 | A decision taken from a released value | lane, then verifier | error |
 | A clause a conforming implementation can satisfy and still break the rule | lane, then verifier | error |

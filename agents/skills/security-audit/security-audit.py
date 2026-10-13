@@ -312,6 +312,7 @@ LANES = (
     "unpinned-guarantee",
     "supply-chain",
     "shown-before-answered",
+    "approval-binding",
 )
 
 # The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
@@ -346,6 +347,30 @@ REGISTERED = {
         ASKS,
     ),
 }
+# Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
+# declarations above.
+REMEMBERED_SETS = (
+    "crates/tui/src/state.rs",
+    "crates/tui/src/sandbox_command.rs",
+    "crates/cli/src/plain.rs",
+    "crates/ui-bridge/src/running.rs",
+    "crates/session/src/sessions.rs",
+    "crates/agent/src/tools.rs",
+    "crates/core/src/policy.rs",
+    "crates/core/src/trust.rs",
+    "crates/core/src/programs.rs",
+    "crates/core/src/remembered.rs",
+    "crates/core/src/credentials.rs",
+    "crates/core/src/ask.rs",
+    "crates/agent/src/remembered.rs",
+    "crates/agent/src/granted.rs",
+    "crates/agent/src/trusted.rs",
+    "crates/agent/src/reach.rs",
+    "crates/agent/src/workspace.rs",
+    "crates/agent/src/mcp.rs",
+    "crates/config/src/mcp.rs",
+    "crates/lsp/src/server.rs",
+)
 EVIDENCE = "Evidence"
 CITED_TEST = re.compile(r"verified-by:\s*([^`\s|]+)")
 # Only where the cell says it, at its start or after a `;`, so "not accepted: [...]" admits nothing.
@@ -2619,6 +2644,8 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         if not site["core"] and not site["test_file"]
     ]
     releases = [site for site in found["releases"] if not site["test_file"]]
+    _, header, rows, entries = register_of(specs)
+    drawn = header + [["---"] * len(header[0])] + rows if header else []
     filling = {
         "results_file": results_file,
         # Absolute, because a lane is read by a subagent whose working directory is its own business,
@@ -2653,6 +2680,9 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         "second_client": as_paths(found["second_client"]),
         "prompt_files": as_paths(found["prompt_files"]),
         "prompt_sites": as_list(found["prompts"]),
+        "register_rows": "\n".join("| " + " | ".join(cells) + " |" for cells in drawn)
+        or "- (none)",
+        "kept_in": "\n".join(f"- `{one}`" for one in entries) or "- (none)",
     }
     return read_prompt(name).format(**filling)
 
@@ -2683,6 +2713,9 @@ def changed_lanes(base, specs):
         lanes.add("supply-chain")
     if touched & set(prompt_files(specs) + prompt_spec_files(specs)):
         lanes.add("shown-before-answered")
+    binding = set(REMEMBERED_SETS) | {str(one[0]) for one in REGISTERED.values()}
+    if touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))):
+        lanes.add("approval-binding")
     return sorted(lanes) or list(LANES)
 
 
