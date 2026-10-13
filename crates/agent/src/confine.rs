@@ -746,7 +746,26 @@ impl Confinement {
                         })
                 })
                 .collect(),
+            writes_git_directories: self.writes_git_directories(steps, environment),
         }
+    }
+
+    /// Whether a stage of `steps` can write a `.git` on a platform that holds none back: its
+    /// program is not git by the decision its profile is built with, and the profile writes beyond
+    /// the temporary directory and the null device the base gives every stage (SANDBOX-18).
+    fn writes_git_directories(&self, steps: &[&Step], environment: &[(String, String)]) -> bool {
+        if self.prelude == Prelude::MacOs {
+            return false;
+        }
+        let base = self.base_policy();
+        steps.iter().any(|step| {
+            let (policy, _) = self.composed(step, environment);
+            !policy.git_directories_writable
+                && policy
+                    .writable
+                    .iter()
+                    .any(|row| !base.writable.iter().any(|kept| kept.path == row.path))
+        })
     }
 
     /// Where `environment` moves the scope the step's own argv names. The process's own
@@ -783,14 +802,20 @@ impl Confinement {
         directory: &Path,
         environment: &[(String, String)],
     ) -> SandboxPolicy {
-        let Step {
-            program: _,
-            resolved,
-            started_as,
-            args: _,
-            environment: _,
-            routes: _,
-        } = step;
+        let (policy, machine) = self.composed(step, environment);
+        // A program bravebot starts itself must not be found in a place this stage can write. A
+        // row that came with the whole machine is such a place only where the account can write.
+        for row in &policy.writable {
+            match machine.contains(&row.path) {
+                true => bravebot_sandbox::programs::keep_out_where_writable(&row.path),
+                false => bravebot_sandbox::programs::keep_out(&row.path),
+            }
+        }
+        policy.starting_in(directory)
+    }
+
+    /// The base every stage of this confinement starts from, before anything its step brings.
+    fn base_policy(&self) -> SandboxPolicy {
         let mut policy = if self.reads_the_machine() {
             run_base(self.prelude, &self.temporary, self.home.as_deref())
         } else {
@@ -802,6 +827,26 @@ impl Confinement {
         {
             policy = with_security_cache(policy, cache);
         }
+        policy
+    }
+
+    /// [`Confinement::policy`] before it is given a directory to start in, with the rows of it
+    /// that came with the whole machine and no other grant. It records nothing, so a prompt can
+    /// read it without the stage having run.
+    fn composed(
+        &self,
+        step: &Step,
+        environment: &[(String, String)],
+    ) -> (SandboxPolicy, Vec<PathBuf>) {
+        let Step {
+            program: _,
+            resolved,
+            started_as,
+            args: _,
+            environment: _,
+            routes: _,
+        } = step;
+        let mut policy = self.base_policy();
         if !self.egress(step) {
             policy = policy.without_network_egress();
         }
@@ -937,27 +982,23 @@ impl Confinement {
                 }
             }
         }
-        // A program bravebot starts itself must not be found in a place this stage can write. A
-        // row that came with the whole machine is such a place only where the account can write.
-        for row in &policy.writable {
-            match unasked.contains(&row.path) && !held.contains(&row.path) {
-                true => bravebot_sandbox::programs::keep_out_where_writable(&row.path),
-                false => bravebot_sandbox::programs::keep_out(&row.path),
-            }
-        }
+        let machine: Vec<PathBuf> = unasked
+            .into_iter()
+            .filter(|row| !held.contains(row))
+            .collect();
         // The rows bypass gives without a request are the whole machine, so counting them would
         // leave no git anywhere; a git under one of them alone keeps the lift (SANDBOX-18).
         let planted: Vec<&Path> = policy
             .writable
             .iter()
-            .filter(|row| !unasked.contains(&row.path) || held.contains(&row.path))
+            .filter(|row| !machine.contains(&row.path))
             .map(|row| row.path.as_path())
             .collect();
-        let policy = match is_git(resolved, &planted) {
+        let policy = match is_git(self.prelude, resolved, &planted) {
             true => policy.allow_git_directory_writes(),
             false => policy,
         };
-        policy.starting_in(directory)
+        (policy, machine)
     }
 
     /// The one sentence that says what the programs of `steps` ran under, for a result whose
@@ -1788,11 +1829,16 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 /// Whether the file a step resolved to is git, the one program whose stage writes a `.git`
-/// (SANDBOX-14, SANDBOX-18): a file named `git` beneath none of `planted`, the rows a stage may
-/// write, so a file a stage could have put there is not git by being named `git`.
-fn is_git(resolved: &Path, planted: &[&Path]) -> bool {
+/// (SANDBOX-14, SANDBOX-18): a file named `git`, or `git.exe` in any case on Windows, beneath none
+/// of `planted`, the rows a stage may write, so a file a stage could have put there is not git by
+/// being named `git`.
+fn is_git(prelude: Prelude, resolved: &Path, planted: &[&Path]) -> bool {
     let file = canonical(resolved);
-    resolved.file_name() == Some(OsStr::new("git"))
+    let named_git = match (prelude, resolved.file_name()) {
+        (Prelude::Windows, Some(name)) => name.eq_ignore_ascii_case("git.exe"),
+        (_, name) => name == Some(OsStr::new("git")),
+    };
+    named_git
         && !planted
             .iter()
             .any(|row| file.starts_with(row) || file.starts_with(canonical(row)))
@@ -1948,6 +1994,30 @@ mod tests {
         confined.policy(&step("/bin/cat", &["f"]), &granted, &[]);
 
         assert_eq!(search(), None);
+    }
+
+    /// The prompt reads the profile a step would run under before anybody has approved it, and a
+    /// line that is refused grants nothing, so describing one keeps no directory out of the search
+    /// for a program bravebot starts itself (SANDBOX-30). The regression it rejects: the profile
+    /// built for the prompt recording its rows as though the stage had run.
+    #[test]
+    fn describing_a_line_keeps_nothing_out_of_the_search_for_programs() {
+        // A path no other test names, since the record is one for the whole process.
+        let described = PathBuf::from("/work/confine-described-only");
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![described.clone()],
+            None,
+        );
+        let cat = step("/bin/cat", &["f"]);
+        let kept_out = || bravebot_sandbox::programs::registered().contains(&described);
+
+        assert!(confined.describe_in(&[&cat], &[]).writes_git_directories);
+        assert!(!kept_out(), "kept out by describing the line");
+        confined.policy(&cat, &described, &[]);
+        assert!(kept_out(), "the line's own run kept nothing out");
     }
 
     /// A confinement on a platform that reads the machine except the credential locations.
@@ -2362,6 +2432,71 @@ mod tests {
             reading_confinement(Prelude::MacOs, &["/work/project"]).with_mode(SandboxMode::Strict);
         assert!(lifted(&strict, step("/usr/bin/git", &["commit"])));
         assert!(!lifted(&strict, named_git));
+    }
+
+    /// SANDBOX-18: on Linux and Windows nothing holds a `.git` back, so the prompt is where a person
+    /// learns that a line can plant a hook or a configuration that git runs later with no sandbox.
+    /// It follows the lift the profile is built with, so the two cannot disagree. The regressions it
+    /// rejects: the flag never set, set on macOS where the refusal holds, set under `read-only`
+    /// where only the temporary directory is written, kept from a `read-only` stage that a person's
+    /// own write row lets write a directory, set for a line whose every stage is git, judged by the
+    /// first stage alone, keyed on the file's name so that a `git` a stage could have written counts
+    /// as git, and Windows's `git.exe` taken for some other program.
+    #[test]
+    fn a_prompt_says_a_program_other_than_git_can_write_a_git_directory_where_none_is_held_back() {
+        let make = step("/usr/bin/make", &["install"]);
+        let says_with = |prelude, mode, lists: &Lists, steps: &[&Step]| {
+            reading_confinement(prelude, &["/work/project"])
+                .with_mode(mode)
+                .with_filesystem(lists)
+                .describe_in(steps, &[])
+                .writes_git_directories
+        };
+        let says =
+            |prelude, mode, steps: &[&Step]| says_with(prelude, mode, &Lists::default(), steps);
+        let writing_a_repository = listed(&[], &["/data/repository"], &[]);
+
+        for (prelude, name) in [(Prelude::Linux, "git"), (Prelude::Windows, "git.exe")] {
+            let git = step(&format!("/usr/bin/{name}"), &["status"]);
+            let planted = step(&format!("/work/project/{name}"), &["commit"]);
+            for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Strict] {
+                let says = |steps: &[&Step]| says(prelude, mode, steps);
+                assert!(!says(&[&git]), "{prelude:?} {mode:?}: git alone");
+                assert!(!says(&[&git, &git]), "{prelude:?} {mode:?}: git twice");
+                assert!(says(&[&make]), "{prelude:?} {mode:?}: make");
+                assert!(says(&[&git, &make]), "{prelude:?} {mode:?}: git then make");
+                assert!(
+                    says(&[&planted]),
+                    "{prelude:?} {mode:?}: a git the session could write"
+                );
+            }
+            assert!(
+                !says(prelude, SandboxMode::ReadOnly, &[&make]),
+                "{prelude:?}: read-only"
+            );
+            assert!(
+                says_with(
+                    prelude,
+                    SandboxMode::ReadOnly,
+                    &writing_a_repository,
+                    &[&make]
+                ),
+                "{prelude:?}: read-only with a write row of the person's"
+            );
+        }
+        let shouted = step("/usr/bin/GIT.EXE", &["status"]);
+        assert!(!says(
+            Prelude::Windows,
+            SandboxMode::WorkspaceWrite,
+            &[&shouted]
+        ));
+        let windows_named = step("/usr/bin/git.exe", &["status"]);
+        assert!(says(
+            Prelude::Linux,
+            SandboxMode::WorkspaceWrite,
+            &[&windows_named]
+        ));
+        assert!(!says(Prelude::MacOs, SandboxMode::WorkspaceWrite, &[&make]));
     }
 
     /// No step that names no credential reaches any file in the account's home, whatever program

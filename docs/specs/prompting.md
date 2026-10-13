@@ -78,7 +78,12 @@ The run prompt says what the programs are held to: where the turn confines them
 ([SANDBOX-17](#SANDBOX-17)), the directories they are confined to and the toolchain lists and
 credential scopes each stage brings beyond them ([SANDBOX-18](#SANDBOX-18)), and where it does not,
 that they are not sandboxed. Which of the two it says is decided by the confinement the executor
-starts the stages under, so it cannot disagree with what runs. It asks for the side effects and the
+starts the stages under, so it cannot disagree with what runs. On Linux and Windows, where no
+`.git` is held back, the heading over those directories also says, for a line with a stage whose
+program is not git and whose profile writes more than the temporary directory, that a program in
+the line other than git can write a repository's hooks and configuration, which git runs later
+with no sandbox ([SANDBOX-18](sandboxing.md#SANDBOX-18)); whether a stage's program is git is the
+decision its profile is built with. It asks for the side effects and the
 output together, and names the exact command it would vouch for. The output prompt says
 what approving does. The vetting prompt says what approving does and, because nothing else on the
 screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers. The prompt
@@ -89,15 +94,20 @@ writes, which are each still put to the person as they come up; and that nothing
 declining leaves everything as it is.
 
 **Why.** The second half of a run grant, that what the command prints becomes trusted, is the one
-nothing else would tell the user. A directory nobody typed is the same problem in the other
+nothing else would tell the user. A hook or a configuration that a program other than git writes
+into a `.git` where the platform cannot refuse the write runs with the person's whole access after
+the line has ended, and nothing else tells them that either. A directory nobody typed is the same problem in the other
 direction: without the question saying where the name came from, the box is unexplained. A plan is
 the same problem at its largest, since a reader has no way to tell from a step list how much of the
 run one keypress settles.
 
 `verified-by: bravebot_tui::confirm::a_run_prompt_says_it_is_not_sandboxed_where_the_turn_does_not_confine`
 `verified-by: bravebot_tui::confirm::a_run_prompt_says_what_a_confined_run_is_held_to`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_a_program_other_than_git_can_write_a_repositorys_hooks`
 `verified-by: bravebot_cli::plain::a_run_is_asked_about_as_confined_only_where_the_turn_confines`
 `verified-by: bravebot_agent::confine::what_a_prompt_says_a_stage_carries_is_what_its_profile_grants`
+`verified-by: bravebot_agent::confine::a_prompt_says_a_program_other_than_git_can_write_a_git_directory_where_none_is_held_back`
+`verified-by: bravebot_agent::confirm::a_line_that_can_write_a_repositorys_hooks_says_so_in_its_heading`
 `verified-by: bravebot_agent::turn::a_run_prompt_describes_the_confinement_only_where_the_turn_confines`
 `verified-by: bravebot_tui::confirm::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_exact_command_it_would_vouch_for`

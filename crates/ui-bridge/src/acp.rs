@@ -1281,6 +1281,7 @@ mod tests {
                 remembered: Vec::new(),
             }],
             reads_the_machine: false,
+            writes_git_directories: false,
         });
         let confined = as_the_terminal_draws(&run);
         assert!(

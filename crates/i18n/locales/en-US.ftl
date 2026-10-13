@@ -1636,6 +1636,9 @@ run-not-sandboxed = this is not sandboxed: it runs with the access your own shel
 # directories it is held to and by one sentence for each toolchain and credential a stage brings.
 run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
 run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
+# The two above, where the platform cannot hold a `.git` back from a program that is not git.
+run-confined-git = its files are confined to these directories, the system temporary directory and the system files every program needs, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
+run-confined-machine-git = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine

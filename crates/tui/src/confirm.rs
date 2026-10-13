@@ -4554,6 +4554,7 @@ mod tests {
                     remembered: Vec::new(),
                 },
             ],
+            writes_git_directories: false,
         });
 
         let drawn = rendered_run(&request);
@@ -4582,6 +4583,31 @@ mod tests {
             drawn.contains("sed also reaches the install and the cache of the cargo toolchain"),
             "{drawn}"
         );
+        assert!(!drawn.contains("hooks"), "{drawn}");
+    }
+
+    /// SANDBOX-18: where nothing holds a `.git` back from a program that is not git, the heading a
+    /// person approves under says that such a program can write a repository's hooks and
+    /// configuration, at the size a terminal opens at, above the directories it names.
+    #[test]
+    fn a_run_prompt_says_a_program_other_than_git_can_write_a_repositorys_hooks() {
+        let mut request = a_run(false);
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: true,
+            directories: vec!["/home/someone/project".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: true,
+        });
+
+        let drawn = rendered_run(&request);
+
+        assert!(drawn.contains("can read this machine"), "{drawn}");
+        assert!(drawn.contains("can write a repository's hooks"), "{drawn}");
+        assert!(drawn.contains("/home/someone/project"), "{drawn}");
     }
 
     /// A prompt for a session whose network is closed says so, and names the stage that keeps it,
@@ -4606,6 +4632,7 @@ mod tests {
                 network: kept,
                 remembered: Vec::new(),
             }],
+            writes_git_directories: false,
         };
         request.confined = Some(held(bravebot_sandbox::network::Network::Closed, true));
 
@@ -5206,6 +5233,7 @@ mod tests {
             )],
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         });
         assert!(request.asks_for_scopes());
 
@@ -5500,6 +5528,7 @@ mod tests {
                 .collect(),
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         });
         request.reach_record = Some("/home/someone/.bravebot/reach.jsonl".into());
         request

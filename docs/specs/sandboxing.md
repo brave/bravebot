@@ -1368,8 +1368,8 @@ none of them has nothing to refuse. `/add-dir`,
 `--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
 person is not shown a session directory the stage would be refused for.
 
-A stage's program is git where the file it resolved to, with its links followed, is named `git` and
-lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
+A stage's program is git where the file it resolved to, with its links followed, is named `git`, or
+`git.exe` in any case on Windows, and lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
 would leave no git anywhere. A script, `make`, `npm`, `gh` or any other program is not git, and git
 started by one runs under that stage's profile. The lift changes a profile only on macOS, the one
@@ -1426,7 +1426,9 @@ shim that resolves to that manager. The planner is told to run git as a step of 
 stage, so `> .git/config` written on the line itself is not refused. A `core.hooksPath` that points into the work tree makes files every stage writes into hooks,
 and a bare repository in a toolchain cache, cargo's under `~/.cargo/git/db` and Go's under its module
 cache, has a configuration every stage writes and a later fetch reads. On Linux and Windows nothing holds a `.git` back, so every stage there may
-write a repository's hooks and configuration, and the confirmation does not say so. Landlock holds
+write a repository's hooks and configuration, and the confirmation of a line with a stage whose
+program is not git says so wherever that stage writes more than the temporary directory
+([PROMPT-2](prompting.md#PROMPT-2)). Landlock holds
 a path back from a write row only by listing the directory above it entry by entry, which leaves
 that directory without the right to make an entry directly in it: held back from a session
 directory, that is every new file at the top of the project, the lockfile `npm install` renames
@@ -1436,6 +1438,7 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
+`verified-by: bravebot_agent::confine::a_prompt_says_a_program_other_than_git_can_write_a_git_directory_where_none_is_held_back`
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
 `verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
@@ -2724,8 +2727,9 @@ lie outside every directory a confined stage may write.
   grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
   whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
   can write the directory or the program, so `/usr/bin` stays searched. A directory is added to the
-  set when it is opened or first granted, and is never removed from it, because closing a
-  directory does not remove a file already written there.
+  set when it is opened or first granted to a stage, and not when a prompt describes the stage, and
+  is never removed from it, because closing a directory does not remove a file already written
+  there.
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
@@ -2770,6 +2774,7 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
 `verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_installed_outside_every_writable_directory_is_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
