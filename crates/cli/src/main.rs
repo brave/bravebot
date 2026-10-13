@@ -1985,6 +1985,9 @@ fn run_task(
                 .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
                 .unwrap_or_default();
             let begins = conversation.recounted().len();
+            let mut rewind = continued.as_ref().map(|record| {
+                continued::rewind_points(record, &workspace, &conversation, &trust, &task.prompt)
+            });
             let completed = turn::resume(
                 &config,
                 &egress,
@@ -1999,6 +2002,9 @@ fn run_task(
                 None,
                 &Cancel::new(),
             );
+            if let Some(points) = rewind.as_mut() {
+                points.keep_backups(workspace.take_backups());
+            }
             let turn::Decisions {
                 trust,
                 programs: _,
@@ -2008,7 +2014,7 @@ fn run_task(
             if let Ok(finished) = &completed.outcome {
                 session = continued::keep(
                     workspace.root(),
-                    continued.take(),
+                    continued.take().zip(rewind),
                     continued::Finished {
                         prompt: &task.prompt,
                         conversation: &conversation,
