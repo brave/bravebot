@@ -157,7 +157,9 @@ struct Held {
 /// What the managed file holds the mode to, or `None` where it holds it to nothing.
 fn floor(managed: &crate::Managed) -> Option<Held> {
     let file = managed.path().map(Path::to_path_buf)?;
-    let closed = managed.network() == Some(bravebot_sandbox::network::Network::Closed);
+    // A word that is neither is read as `closed` (SANDBOX-20), so it holds the same floor.
+    let closed = managed.network() == Some(bravebot_sandbox::network::Network::Closed)
+        || managed.network_unreadable();
     let (mode, because) = match managed.sandbox() {
         Some(pinned) if pinned != SandboxMode::Off || !closed => (pinned, Floor::Mode),
         _ if closed => (SandboxMode::WorkspaceWrite, Floor::Network),
