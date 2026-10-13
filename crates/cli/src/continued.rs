@@ -2,6 +2,7 @@
 
 use bravebot_agent::Workspace;
 use bravebot_agent::conversation::Conversation;
+use bravebot_agent::rewind::CoverageGap;
 use bravebot_agent::turn::Outcome;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
@@ -44,11 +45,12 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
 }
 
 /// The points the continued turn can be rewound to: the record's own, and one opened for this turn
-/// from the state the record stood in before it (SESSION-19).
+/// from the record as it stood before it (SESSION-19).
 ///
 /// Opened before the turn and bound to `workspace`, so a program the turn runs is recorded as a
 /// coverage gap on every point a rewind could reach. `conversation` and `trust` are what the turn
-/// is about to be handed.
+/// is about to be handed, so a `--trust-workspace` grant is in the point as the trust answer given
+/// before a session's turn is in that turn's point.
 pub fn rewind_points(
     record: &Record,
     workspace: &Workspace,
@@ -56,6 +58,11 @@ pub fn rewind_points(
     trust: &TrustStore,
     prompt: &str,
 ) -> RewindStack {
+    // The workspace is new to this run, so a language server an earlier turn started is not on
+    // it. The record remembers one, and the warning goes on the workspace before the points bind.
+    if record.server_children_may_run() {
+        workspace.mark_rewind_gap(CoverageGap::LanguageServer);
+    }
     let mut points = RewindStack::of(record.rewind_points(workspace.root()));
     points.open(
         TurnSnapshot {

@@ -10244,17 +10244,22 @@ fn a_gateway_doing_what_each_task_names() -> Gateway {
     })
 }
 
-/// The record named `id` under `scratch`'s home, as it is on disk.
-fn the_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+/// Where the record named `id` is under `scratch`'s home.
+fn the_record_file(scratch: &Scratch, id: &str) -> PathBuf {
     let records = scratch.path.join(".bravebot").join("sessions");
-    let file = std::fs::read_dir(&records)
+    std::fs::read_dir(&records)
         .expect("a run created the sessions directory")
         .flatten()
         .flat_map(|project| std::fs::read_dir(project.path()).expect("a project directory"))
         .flatten()
         .find(|file| file.file_name().to_string_lossy() == format!("{id}.json"))
-        .unwrap_or_else(|| panic!("no record named {id} under {records:?}"));
-    serde_json::from_slice(&std::fs::read(file.path()).expect("read the record"))
+        .unwrap_or_else(|| panic!("no record named {id} under {records:?}"))
+        .path()
+}
+
+/// The record named `id` under `scratch`'s home, as it is on disk.
+fn the_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(the_record_file(scratch, id)).expect("read the record"))
         .expect("a record is JSON")
 }
 
@@ -10344,6 +10349,39 @@ fn a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held() {
         wrote_over(&points[1]),
         [("plan.txt".into(), "nothing".into(), serde_json::Value::Null)]
     );
+}
+
+/// SESSION-19: a language server's children may outlive it and still write, so a point a continued
+/// task opens after the session started one carries that warning, including where the record kept
+/// it only beside its points, as it does once an undo has consumed the point that carried it. The
+/// desktop's undo reads the warning off the points, so a point written without it would let that
+/// undo report a complete restore.
+#[test]
+fn a_continued_task_after_a_language_server_warns_on_the_point_it_opens() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-server-warning").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let mut record = the_record(&scratch, &id);
+    assert_eq!(record["rewind"], serde_json::json!([]));
+    record["server_children_may_run"] = serde_json::Value::Bool(true);
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&record).expect("a record serialises"),
+    )
+    .expect("write the record back");
+    a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]);
+    let after = the_record(&scratch, &id);
+
+    assert_eq!(
+        after["rewind"][0]["coverage"]["gaps"],
+        serde_json::json!(["language-server"]),
+        "{after:#?}"
+    );
+    assert_eq!(after["server_children_may_run"], true);
 }
 
 /// SESSION-19: a program a continued task runs is a gap in what a rewind can put back, on the point

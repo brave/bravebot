@@ -619,6 +619,7 @@ be identified as unknown rather than guessed from the available backups.
 `verified-by: bravebot_tui::undo_tests::undo_warnings_name_recorded_causes`
 `verified-by: bravebot_cli::running::a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach`
 `verified-by: bravebot_session::sessions::continuing_a_record_keeps_a_server_warning_only_its_replaced_points_carried`
+`verified-by: bravebot_cli::running::a_continued_task_after_a_language_server_warns_on_the_point_it_opens`
 
 Undo runs only after the turn's delegates and background jobs have finished cleanup. It stops and
 reaps the session's tracked language servers before restoring files; later questions may start
