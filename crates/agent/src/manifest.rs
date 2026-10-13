@@ -937,12 +937,16 @@ fn plan<S: Sink, R: Reporter>(
     // The sandbox mode `read-only` refuses on the same terms (SANDBOX-22). Bypassing approves the
     // plan and every write in it, so a refusal left to the step would never be reached there.
     if crate::tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
-        && let Some((index, _)) = plan
+        && let Some((index, step)) = plan
             .steps()
             .iter()
             .enumerate()
             .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
     {
+        policy.refuse_write_in_sandbox(
+            &format!("step {}: {}", index + 1, step.tool()),
+            task.sandbox.name(),
+        );
         return Err(TurnError::Precommit(format!(
             "the sandbox mode is read-only, and step {} of this plan writes a file, so nothing \
              ran. Choose another sandbox mode and ask again.",

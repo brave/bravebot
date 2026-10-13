@@ -4504,8 +4504,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Plan mode offers the write tools and refuses every call to them, so no write
                     // is possible while it is in force. Read as the round ends rather than once per
                     // turn, since the person can change the mode while the turn runs (MODE-8).
+                    // The sandbox mode `read-only` does the same for the whole turn (SANDBOX-22).
                     if may_write
                         && !task.permission_mode.get().refuses_writes()
+                        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
                         && !conversation.asked_to_write()
                         && !said_nothing_written
                         && steps >= ROUNDS_BEFORE_WRITING

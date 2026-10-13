@@ -13348,6 +13348,66 @@ fn a_turn_in_plan_mode_is_not_told_to_write() {
     );
 }
 
+/// TURN-3, SANDBOX-22: a turn under the sandbox mode `read-only` is not told to write, however long
+/// it reads.
+///
+/// The file tools refuse every write there, so a line saying to write now asks for a call the turn
+/// will refuse. The write tools are still offered, so the offer alone cannot tell this turn from
+/// one that may write. The control is the same turn under `workspace-write`, which is told, so the
+/// absence in the held turn is the mode's and not a turn too short to be told.
+#[test]
+fn a_turn_under_read_only_is_not_told_to_write() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let requests_under = |name: &str, sandbox| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+            .collect();
+        replies.push(reply_with("here is the plan"));
+        let (endpoint, received) = serve_sequence(replies);
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("add a toggle")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::IgnoreReports,
+            &mut RecordingSink::new(),
+            bravebot_agent::workspace::trust_store(workspace.root()),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes");
+        every_request(&received)
+    };
+
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let control = requests_under("no-writes-read-only-control", WorkspaceWrite);
+    assert_eq!(
+        control.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the control read too little"
+    );
+    assert!(
+        told(&control),
+        "the control was not told to write, so this says nothing"
+    );
+
+    let held = requests_under("no-writes-read-only-held", ReadOnly);
+    assert_eq!(
+        held.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the turn read too little"
+    );
+    assert!(!told(&held), "a turn under read-only was told to write");
+}
+
 /// TURN-3, MODE-8: a turn the person moves into plan mode during the round the line would come
 /// at is not told to write.
 ///
@@ -50993,6 +51053,7 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
         ]);
         let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
         let seen = asked.seen.clone();
+        let mut sink = RecordingSink::new();
         turn::resume(
             &config_for(&endpoint),
             &bravebot_net::Egress::new(),
@@ -51007,7 +51068,7 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
             &mut bravebot_agent::Conversation::new(),
             &mut bravebot_agent::Confining::new(&mut asked, mode, false),
             &mut bravebot_agent::report::RecordingReporter::default(),
-            &mut RecordingSink::new(),
+            &mut sink,
             trusting_the_workspace(),
             bravebot_core::programs::TrustedPrograms::new(),
             None,
@@ -51019,11 +51080,23 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
         let written = root.join("notes.txt").exists();
         let _ = std::fs::remove_dir_all(&root);
         let asked = seen.lock().unwrap().len();
+        let recorded: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
         (
             written,
             last.matches(REFUSED).count(),
             last.matches("It exited 0.").count(),
             asked,
+            recorded,
         )
     };
 
@@ -51034,7 +51107,7 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
     ] {
         for mode in [Ask, Bypass] {
             let asking = usize::from(mode == Ask);
-            let (written, refused, exited, asked) = turn_under(
+            let (written, refused, exited, asked, recorded) = turn_under(
                 &format!("redirect-control-{}", mode.name()),
                 command,
                 WorkspaceWrite,
@@ -51057,8 +51130,12 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
                 2 * asking,
                 "{form}, {mode:?}: the control asked about {asked} lines"
             );
+            assert!(
+                recorded.is_empty(),
+                "{form}, {mode:?}: the control recorded {recorded:?}"
+            );
 
-            let (written, refused, exited, asked) = turn_under(
+            let (written, refused, exited, asked, recorded) = turn_under(
                 &format!("redirect-held-{}", mode.name()),
                 command,
                 ReadOnly,
@@ -51079,6 +51156,11 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
             assert_eq!(
                 asked, asking,
                 "{form}, {mode:?}: the refused line was put to the person ({asked} asked)"
+            );
+            assert_eq!(
+                recorded,
+                ["run: the read-only sandbox mode refuses a write, so nothing was written"],
+                "{form}, {mode:?}: the refused line was not recorded once"
             );
         }
     }
@@ -51185,16 +51267,28 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
         };
         let mut recording = RecordingConfirmer::approving();
         let mut confirmer = bravebot_agent::Confining::new(&mut recording, mode, false);
-        turns::run_with_trust(
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
             &config_for(&endpoint),
             &bravebot_net::Egress::new(),
             &workspace,
             &task,
             &mut confirmer,
-            &mut RecordingSink::new(),
+            &mut sink,
             trust,
         )
         .expect("turn runs");
+        let recorded: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
         let told = every_request(&received)
             .last()
             .map(|body| body.matches(REFUSED).count())
@@ -51204,6 +51298,8 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
             std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
             told,
             recording.seen.len(),
+            recorded,
+            outcome.clean,
         )
     };
 
@@ -51214,7 +51310,7 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
                 mode.name(),
                 if trusted { "trusted" } else { "untrusted" }
             );
-            let (created, notes, told, asked) = turn_under(
+            let (created, notes, told, asked, recorded, _) = turn_under(
                 &format!("read-only-tools-control-{case}"),
                 WorkspaceWrite,
                 mode,
@@ -51235,8 +51331,12 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
                 mode == Ask && !trusted,
                 "{case}: the control asked about {asked} writes"
             );
+            assert!(
+                recorded.is_empty(),
+                "{case}: the control recorded {recorded:?}"
+            );
 
-            let (created, notes, told, asked) = turn_under(
+            let (created, notes, told, asked, recorded, clean) = turn_under(
                 &format!("read-only-tools-held-{case}"),
                 ReadOnly,
                 mode,
@@ -51254,6 +51354,20 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
             assert_eq!(
                 asked, 0,
                 "{case}: the person was asked about a write under read-only"
+            );
+            assert_eq!(
+                recorded,
+                [
+                    "write_file: the read-only sandbox mode refuses a write, so nothing was written",
+                    "edit_file: the read-only sandbox mode refuses a write, so nothing was written",
+                    "download_url: the read-only sandbox mode refuses a write, so nothing was written",
+                    "apply_checkout: the read-only sandbox mode refuses a write, so nothing was written",
+                ],
+                "{case}: the refused writes were not recorded once each, under the tool"
+            );
+            assert!(
+                !clean,
+                "{case}: a turn whose writes were refused read as clean"
             );
         }
     }

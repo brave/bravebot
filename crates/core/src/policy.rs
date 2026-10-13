@@ -6814,6 +6814,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that the sandbox mode refused a write before anything was written (SANDBOX-22).
+    ///
+    /// The mode is answered before any other gate sees the call, for the reason
+    /// [`Policy::refuse_write_in_mode`] gives. `call` is the tool, a plan's step and its tool, or
+    /// `run` for a line that redirects into a file, and `mode` is the sandbox mode's own name.
+    pub fn refuse_write_in_sandbox(&mut self, call: &str, mode: &'static str) {
+        let _ = self.deny(
+            "sandbox",
+            Principle::Confinement,
+            format!("{call}: the {mode} sandbox mode refuses a write, so nothing was written"),
+        );
+    }
+
     /// Accept a reference the planner named, as the source of content for an effect.
     ///
     /// A slot id is routing: it decides what an effect touches. A `path_ref` picks the file a

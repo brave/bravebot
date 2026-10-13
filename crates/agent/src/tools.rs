@@ -3461,6 +3461,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             if sandbox_refuses_writes(tools.confine_runs, tools.sandbox)
                 && writes_a_file(writing) =>
         {
+            policy.refuse_write_in_sandbox(strip_namespace(writing), tools.sandbox.name());
             Produced::problem(
                 "refused: the sandbox mode is read-only, so nothing is written to the session's \
                  files whatever the user would have answered; nothing was asked. Do not retry; say \
@@ -8088,6 +8089,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
     // tool's write is. The null device is not in the write set.
     if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
         return Produced::problem(
             "refused: the sandbox mode is read-only, and this line redirects output into a file, \
              which would write the session's files; nothing ran and nothing was asked. Leave the \

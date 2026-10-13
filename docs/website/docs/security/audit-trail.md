@@ -113,6 +113,14 @@ trail says why nothing was written:
 BLOCK   permission_mode: write_file: plan mode refuses a write, so nothing was written
 ```
 
+The [sandbox mode](security.md#confinement) `read-only` is recorded the same way, under `sandbox`:
+for a write call it refused, a planned run it refused for a step that writes, and a command line it
+refused for redirecting output into a file.
+
+```
+BLOCK   sandbox: write_file: the read-only sandbox mode refuses a write, so nothing was written
+```
+
 ## Delegates and checkouts are recorded
 
 A [delegate](../how-it-works.md#delegates) gets a line when it starts and another when it ends. The
