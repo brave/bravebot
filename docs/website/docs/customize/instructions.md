@@ -155,6 +155,29 @@ Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no
 user directory at all: each is the ordinary case and offers nothing.
 
+### Size
+
+Because every request carries them, a long instructions file costs its length on every turn of the
+session. Three fixed figures apply to sources that have passed the trust gate:
+
+| Over | What happens |
+|---|---|
+| 16384 bytes in one file | The file loads, and you are told which file it is and how big |
+| 32768 bytes across all sources | You are told the total, once, at the source that crosses it |
+| 131072 bytes in one file | The file is **not** loaded, and you are told so |
+
+```
+AGENTS.md is 41232 bytes, and every request this session sends carries it
+```
+
+A file past the ceiling is dropped whole rather than cut short. Half a conventions document is worse
+than none: the rules that happened to be in the second half are gone with no sign of it, and the
+first half reads as the whole.
+
+Both the figures and the notices concern files that are there. A source that is absent is still
+silent, and the check is a byte count: nothing a file says decides whether it loads or what is said
+about it. `--append-system-prompt` is not measured, since there is no file behind it.
+
 ## Where you are working
 
 The system prompt also states a handful of facts about your machine, so the planner does not have to

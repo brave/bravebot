@@ -3488,6 +3488,14 @@ reference-not-opened = reference { $alias } was not opened: { $problem }
 import-too-deep = { $import } was not imported: imports are nested too deeply or there are too many
 import-cycle = { $import } was not imported: a file above it already imports it
 import-not-loaded = { $import } was not imported: it is outside this project, cannot be read or is not trusted
+# Said about a standing instructions file long enough to be worth a word, which goes out with every
+# request of the session. The source is its workspace-relative path, or ~/.bravebot/AGENTS.md, and
+# stays as it is; the sizes are numbers of bytes. The file still loaded.
+source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
+# The same file past the length at which it is left out of the prompt altogether.
+source-past-ceiling = { $source } was not loaded: it is { $bytes } bytes, past the { $ceiling } bytes an instructions file may be
+# Said once for the turn, about every instructions file together rather than any one of them.
+sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

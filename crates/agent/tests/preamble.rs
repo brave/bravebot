@@ -1764,3 +1764,83 @@ fn a_path_outside_the_root_does_not_make_its_directory_a_source() {
 
     assert!(workspace.touched_directories().is_empty());
 }
+
+/// INSTR-15: a file past the warning length is still a source. Dropping it, or truncating it,
+/// would change what the planner is working under because of its size, and the person who wrote
+/// that much meant to. The notice is what the rule adds.
+#[test]
+fn a_long_instructions_file_loads_and_its_size_is_said() {
+    let long = format!("LONG-RULES {}", "padding ".repeat(2_500));
+    assert!(long.len() > 16_384 && long.len() < 32_768, "{}", long.len());
+
+    let preamble = composed_after_touching("size-warn", &[("AGENTS.md", &long)], &[], &[]);
+
+    assert!(
+        preamble.text.contains("LONG-RULES"),
+        "a file past the warning length was left out: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    let said = preamble.notices[0].message.as_str();
+    assert!(said.contains("AGENTS.md"), "{said}");
+    assert!(said.contains("bytes"), "{said}");
+    assert!(
+        !said.contains("not loaded"),
+        "a loaded file was reported as dropped: {said}"
+    );
+}
+
+/// INSTR-15: past the ceiling the file is not in the prompt and the person is told. A notice
+/// without the drop, or a drop without the notice, are both plausible and both wrong: the first
+/// pays for the file on every request anyway, the second leaves the planner working under rules
+/// nobody can see were discarded.
+#[test]
+fn an_instructions_file_past_the_ceiling_is_left_out_and_said() {
+    let huge = format!("HUGE-RULES {}", "padding ".repeat(20_000));
+    assert!(huge.len() > 131_072, "{}", huge.len());
+
+    let preamble = composed_after_touching("size-ceiling", &[("AGENTS.md", &huge)], &[], &[]);
+
+    assert!(
+        !preamble.text.contains("HUGE-RULES"),
+        "a file past the ceiling reached the prompt: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    let said = preamble.notices[0].message.as_str();
+    assert!(said.contains("AGENTS.md"), "{said}");
+    assert!(said.contains("not loaded"), "{said}");
+}
+
+/// INSTR-15: four sources each well under the per-file warning length still cost what they add up
+/// to, and the total is said at the source that crosses the combined figure and not at each one
+/// after it. A check written as "the total is over the figure" would say it three times here.
+#[test]
+fn sources_long_together_are_reported_once() {
+    let each = format!("PART-RULES {}", "padding ".repeat(1_500));
+    assert!(each.len() < 16_384, "{}", each.len());
+    assert!(each.len() * 3 > 32_768, "{}", each.len());
+
+    let preamble = composed_after_touching(
+        "size-combined",
+        &[
+            ("AGENTS.md", &each),
+            ("pkg/AGENTS.md", &each),
+            ("lib/AGENTS.md", &each),
+            ("app/AGENTS.md", &each),
+        ],
+        &["pkg/a.rs", "lib/a.rs", "app/a.rs"],
+        &[],
+    );
+
+    assert_eq!(
+        preamble.text.matches("PART-RULES").count(),
+        4,
+        "a source was left out: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    let said = preamble.notices[0].message.as_str();
+    assert!(said.contains("in all"), "{said}");
+    assert!(said.contains("bytes"), "{said}");
+}
