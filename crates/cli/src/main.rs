@@ -3723,6 +3723,31 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             ),
         );
     }
+    // Judged as a stage judges it, so a key a push would not be given is named before the push.
+    if let Some(home) = bravebot_agent::home::profile() {
+        for entry in &settings.git_identities().entries {
+            let lent = bravebot_sandbox::scope::identity_key(&entry.key, &home)
+                .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
+            if lent.is_none() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_git_identities_key_refused,
+                        key = format!(
+                            "git.identities.{}/{}",
+                            entry.address.host, entry.address.owner
+                        ),
+                        value = entry.key.clone(),
+                        path = entry
+                            .by
+                            .as_deref()
+                            .map(|by| by.display().to_string())
+                            .unwrap_or_default()
+                    ),
+                );
+            }
+        }
+    }
     for list in managed.filesystem_unreadable() {
         fact(
             t!(doctor_settings_ignored),

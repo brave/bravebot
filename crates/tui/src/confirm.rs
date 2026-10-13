@@ -4686,7 +4686,7 @@ mod tests {
         assert!(drawn.contains("never a private key"), "{drawn}");
         assert!(
             drawn.contains(
-                "git offers ssh only the key /home/someone/.ssh/work.pub, which your git.identities names"
+                "git has ssh offer the key /home/someone/.ssh/work.pub first, which your git.identities names"
             ),
             "{drawn}"
         );

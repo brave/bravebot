@@ -325,7 +325,7 @@ pub struct Carried {
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
     /// The public key the person's `git.identities` chose for the owner the argv's ssh address
-    /// names, which is the one key ssh offers the host.
+    /// names, which ssh offers the host first.
     pub identity: Option<std::path::PathBuf>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,

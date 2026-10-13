@@ -1,4 +1,4 @@
-//! `git.identities`: the ssh key a confined `git` stage offers a host, chosen by the owner its
+//! `git.identities`: the ssh key a confined `git` stage offers a host first, chosen by the owner its
 //! address names (SANDBOX-16).
 //!
 //! An ssh agent holding keys of two accounts offers them in order, and GitHub accepts the first one
@@ -8,6 +8,7 @@
 //! files are reported as not obeyed, as `sandbox.mode` is (SANDBOX-22).
 
 use crate::Settings;
+use bravebot_sandbox::scope::Address;
 use std::path::{Path, PathBuf};
 
 pub const BLOCK: &str = "git";
@@ -16,10 +17,8 @@ pub const IDENTITIES_KEY: &str = "identities";
 /// One entry: the key the person chose for the repositories of one owner on one host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
-    /// The host as an ssh address names it, `github.com`.
-    pub host: String,
-    /// The account or organisation whose name is the first part of a repository's path.
-    pub owner: String,
+    /// The host and owner the entry's name spells, `github.com/netzenbot`.
+    pub address: Address,
     /// The key as the person wrote it, a path judged when a stage is started.
     pub key: String,
     /// The file that wrote it.
@@ -37,20 +36,19 @@ impl Identities {
         self.entries.is_empty()
     }
 
-    /// The entry for `host` and `owner`, both compared without regard to ASCII case, as a host name
-    /// and a GitHub account are.
-    pub fn for_address(&self, host: &str, owner: &str) -> Option<&Identity> {
-        self.entries.iter().find(|entry| {
-            entry.host.eq_ignore_ascii_case(host) && entry.owner.eq_ignore_ascii_case(owner)
-        })
+    /// The entry for the host and owner of `address`.
+    pub fn for_address(&self, address: &Address) -> Option<&Identity> {
+        self.entries
+            .iter()
+            .find(|entry| entry.address.same_as(address))
     }
 
     /// Fold one root in. `granting` says whether this layer may choose a key.
     ///
     /// A layer that may not is named in `ignored`. An entry whose name is not `<host>/<owner>` or
-    /// whose value is not a string is named in `misshapen` and the others are read; a block that is
-    /// not an object is named whole. A later layer's entry for a host and owner replaces an
-    /// earlier one's.
+    /// whose value is not a string is named in `misshapen` and the others are read; a `git` block
+    /// or an `identities` value that is not an object is named whole. A later layer's entry for a
+    /// host and owner replaces an earlier one's.
     pub(crate) fn absorb(
         &mut self,
         root: &serde_json::Map<String, serde_json::Value>,
@@ -59,22 +57,21 @@ impl Identities {
         ignored: &mut Vec<PathBuf>,
         misshapen: &mut Vec<(PathBuf, String)>,
     ) {
-        let Some(value) = root
-            .get(BLOCK)
-            .and_then(serde_json::Value::as_object)
-            .and_then(|block| block.get(IDENTITIES_KEY))
-        else {
-            return;
-        };
         let by = path.map(Path::to_path_buf);
         let mut note = |name: String| {
             if let Some(path) = &by {
                 misshapen.push((path.clone(), name));
             }
         };
-        let serde_json::Value::Object(entries) = value else {
-            note(format!("{BLOCK}.{IDENTITIES_KEY}"));
-            return;
+        let block = match root.get(BLOCK) {
+            None => return,
+            Some(serde_json::Value::Object(block)) => block,
+            Some(_) => return note(BLOCK.to_string()),
+        };
+        let entries = match block.get(IDENTITIES_KEY) {
+            None => return,
+            Some(serde_json::Value::Object(entries)) => entries,
+            Some(_) => return note(format!("{BLOCK}.{IDENTITIES_KEY}")),
         };
         if !granting {
             if let Some(path) = &by {
@@ -83,36 +80,21 @@ impl Identities {
             return;
         }
         for (name, key) in entries {
-            let (Some((host, owner)), Some(key)) = (address(name), key.as_str()) else {
+            let address = name
+                .split_once('/')
+                .and_then(|(host, owner)| Address::spelled(host, owner));
+            let (Some(address), Some(key)) = (address, key.as_str()) else {
                 note(format!("{BLOCK}.{IDENTITIES_KEY}.{name}"));
                 continue;
             };
-            let entry = Identity {
-                host: host.to_string(),
-                owner: owner.to_string(),
+            self.entries.retain(|held| !held.address.same_as(&address));
+            self.entries.push(Identity {
+                address,
                 key: key.to_string(),
                 by: by.clone(),
-            };
-            self.entries.retain(|held| {
-                !(held.host.eq_ignore_ascii_case(host) && held.owner.eq_ignore_ascii_case(owner))
             });
-            self.entries.push(entry);
         }
     }
-}
-
-/// The host and owner an entry's name spells, `<host>/<owner>`, or `None`.
-fn address(name: &str) -> Option<(&str, &str)> {
-    let (host, owner) = name.split_once('/')?;
-    let host_spelled = !host.is_empty()
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
-    let owner_spelled = !owner.is_empty()
-        && owner
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
-    (host_spelled && owner_spelled).then_some((host, owner))
 }
 
 /// The keys of `git` other than `identities`, for the unread-key report.
@@ -157,12 +139,16 @@ mod tests {
             .iter()
             .map(|entry| {
                 (
-                    entry.host.as_str(),
-                    entry.owner.as_str(),
+                    entry.address.host.as_str(),
+                    entry.address.owner.as_str(),
                     entry.key.as_str(),
                 )
             })
             .collect()
+    }
+
+    fn address(host: &str, owner: &str) -> Address {
+        Address::spelled(host, owner).unwrap()
     }
 
     /// One root's entries are read by host and owner, and found without regard to case. The
@@ -183,17 +169,24 @@ mod tests {
         );
         assert_eq!(
             identities
-                .for_address("GitHub.com", "Brave")
+                .for_address(&address("GitHub.com", "Brave"))
                 .map(|entry| entry.key.as_str()),
             Some("~/.ssh/work")
         );
-        assert_eq!(identities.for_address("github.com", "other"), None);
-        assert_eq!(identities.for_address("gitlab.com", "brave"), None);
+        assert_eq!(
+            identities.for_address(&address("github.com", "other")),
+            None
+        );
+        assert_eq!(
+            identities.for_address(&address("gitlab.com", "brave")),
+            None
+        );
     }
 
     /// An entry whose name is not `<host>/<owner>`, or whose value is not a string, is reported and
-    /// the rest are read. The regression it rejects is one bad entry dropping the block, which would
-    /// leave every owner on the default key with nothing said.
+    /// the rest are read, and a block or a value of the wrong kind is reported whole. The regression
+    /// it rejects is one bad entry dropping the block, which would leave every owner on the default
+    /// key with nothing said.
     #[test]
     fn a_misshapen_entry_is_reported_and_the_rest_are_read() {
         let root = root_of(
@@ -225,19 +218,20 @@ mod tests {
         );
         assert!(ignored.is_empty());
 
-        let whole = root_of(r#"{"git": {"identities": ["x"]}}"#);
-        let mut misshapen = Vec::new();
-        Identities::default().absorb(
-            &whole,
-            Some(Path::new("/f")),
-            true,
-            &mut Vec::new(),
-            &mut misshapen,
-        );
-        assert_eq!(
-            misshapen,
-            [(PathBuf::from("/f"), "git.identities".to_string())]
-        );
+        for (text, whole) in [
+            (r#"{"git": {"identities": ["x"]}}"#, "git.identities"),
+            (r#"{"git": ["github.com/brave", "~/.ssh/a.pub"]}"#, "git"),
+        ] {
+            let mut misshapen = Vec::new();
+            Identities::default().absorb(
+                &root_of(text),
+                Some(Path::new("/f")),
+                true,
+                &mut Vec::new(),
+                &mut misshapen,
+            );
+            assert_eq!(misshapen, [(PathBuf::from("/f"), whole.to_string())]);
+        }
     }
 
     /// A key beside `identities` is reported as unread, so a block written for another tool does not

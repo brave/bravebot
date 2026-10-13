@@ -52,11 +52,13 @@ package manager keeps it, and so do the install scripts it runs.
 
 `{"git": {"identities": {"github.com/your-account": "~/.ssh/your-account.pub"}}}` has a `git`
 command whose arguments name an ssh address of that owner, such as
-`git push git@github.com:your-account/repo.git main`, offer GitHub that key and no other. ssh
-otherwise offers the agent's keys in order and GitHub takes the first one it knows, so with keys of
-two accounts in one agent every push goes out as one of them. A remote given by name, such as
-`origin`, is not matched, because its address is in the repository's own configuration. Only your
-own settings file and a `--settings` file outside the workspace can set it.
+`git push git@github.com:your-account/repo.git main`, offer GitHub that key first, and after it only
+keys your `~/.ssh/config` names for the host. ssh otherwise offers the agent's keys in order and
+GitHub takes the first one it knows, so with keys of two accounts in one agent every push goes out
+as one of them. A remote given by name, such as `origin`, is not matched, because its address is in
+the repository's own configuration. On those commands it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or
+`core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
+workspace can set it.
 
 On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,

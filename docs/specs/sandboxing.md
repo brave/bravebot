@@ -869,12 +869,14 @@ operation that does not start with `-` is an ssh address where it is written
 refspec such as `HEAD:refs/heads/main` is not one. Where the argv names one such address, or names
 the same host and owner more than once, the entry for that host and owner decides, both compared
 without regard to ASCII case. The stage then starts with `GIT_SSH_COMMAND` set to
-`ssh -i '<key>' -o IdentitiesOnly=yes`, in place of any value the environment held, and reads that
-one file. The value is judged as an `IdentityFile` name is: absolute or beginning `~/`, `.pub` added
-to a name that does not end in it, a regular file named `*.pub` once a link is followed, and outside
-every credential location other than `~/.ssh`. It must also lie outside every directory the plan may
-write (the session's directories, the scratch directory and the temporary directory), and a path
-holding `'` or one that is not valid UTF-8 is refused, since git hands the variable to a shell. A
+`ssh -i '<key>' -o IdentitiesOnly=yes` and reads that one file. ssh then offers that key first and
+after it only the keys an `IdentityFile` line of the person's ssh configuration names for the host,
+and no other key the agent holds. The value is judged as an `IdentityFile` name is: absolute or
+beginning `~/`, `.pub` added to a name that does not end in it, a regular file named `*.pub` once a
+link is followed, and outside every credential location other than `~/.ssh`. It must also lie
+outside every directory the plan may write (the session's directories, the scratch directory and the
+temporary directory). A path holding `'` is refused, since git hands the variable to a shell, and so
+is one holding `%` or `$`, which ssh expands in a key's name, and one that is not valid UTF-8. A
 refused key, an address with no entry, an argv naming two different addresses and an argv naming
 none leave the stage as it was. The address is read from the argv and nothing else: a remote given
 by name, such as `origin`, has its URL in the repository's configuration, which is workspace content
@@ -882,8 +884,9 @@ a clone or an earlier stage may have written, so it selects no entry. The run pr
 on the stage it applies to. Only the person's own settings file and a `--settings` file outside the
 workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
 local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
-file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string. A key
-beside `identities` in the block is reported as unread.
+file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string, a
+`git` block or an `identities` value that is not an object, and an entry whose key is refused by
+the rules above. A key beside `identities` in the block is reported as unread.
 
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
@@ -996,11 +999,13 @@ repository's is a file the plan may write. `~/.bravebot` is refused the same way
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 ssh offers an agent's keys in order and GitHub accepts the first one registered to any account, so a
 person whose agent holds two accounts' keys pushes every repository as one account unless a key is
-chosen. The planner cannot choose it, since an assignment in front of the line removes the scope
-and a repository's `core.sshCommand` is not followed. `git.identities` is the person's choice, for an
+chosen. Nothing else on a stage chooses it, since an assignment in front of the line removes the
+scope and a key a repository's `core.sshCommand` names is read only where the person's configuration
+names it too. `git.identities` is the person's choice, for an
 owner they named, selected by an address the planner wrote and the person approved, so no byte a
 program or a repository wrote picks the credential. `IdentitiesOnly=yes` stops ssh offering the
-agent's other keys after the named one, and the agent still signs, so the private key is not read.
+agent's keys the configuration does not name, and the agent still signs, so the private key is not
+read.
 
 A repository can set `user.signingkey` to a key the person's own configuration does not name, and
 the repository's configuration is not read, so a stage that signs with it cannot load that public key
@@ -1021,10 +1026,18 @@ nothing is lent. This adds no dependency and is not done on Windows. The prompt 
 sentence about the signing key, so that a signature that fails for a key the agent does not hold can
 be told from one the scope never reached.
 
-**What it costs.** A `git.identities` entry replaces a `GIT_SSH_COMMAND` the person's environment
-set on the stages it applies to, so the ssh options that variable carried are not passed there. A
-push to a remote given by name gets no entry; the planner has to write the ssh address in the argv
-for the person's choice to apply.
+**What it costs.** git takes `GIT_SSH_COMMAND` over `GIT_SSH` and every `core.sshCommand`, so on
+the stages an entry applies to it replaces those of the person's environment and their own git
+configuration, and the ssh options they carried are not passed there. The variable is the stage's,
+so every ssh connection the stage makes offers the key first, a submodule of another owner's
+included. git rewrites the argv's address by the repository's `url.<base>.insteadOf` and
+`pushInsteadOf`, so a repository can send the push, with the key chosen for the owner the argv
+named, to another address; a repository's configuration already acts within the remote scope, as
+its hooks do. A path a person lent with `request_path`, an `allowWrite` row and the rows a bypass
+stage holds without a request are not counted among the directories a key must lie outside, as
+they are not for a program's file below; a stage lent the agent can sign with any key it holds
+whatever file names one. A push to a remote given by name gets no entry, so the planner writes the
+ssh address in the argv for the person's choice to apply.
 
 The directories counted against a program's file are the plan's own. A path a
 person lent with `request_path` ([SANDBOX-28](#SANDBOX-28)), an `allowWrite` row
@@ -1406,16 +1419,18 @@ exit 2. The menu sentence ends the same way, and the `run` description's
 confinement statement names the tool.
 
 Where a step of the line is `git` carrying the remote scope by its argv, the sentence also says,
-before that fixed text, which key such a step offered over ssh ([SANDBOX-16](#SANDBOX-16)): the one
-the person's `git.identities` names for the owner of the ssh address its argv named; whichever key
-ssh tried first, since no entry names a readable public key for that owner; or whichever key ssh
-tried first, since the step named its remote by name or by an address that is not ssh. Each case
-present in the line is said once. It then says that GitHub refuses a push for permission when the
-key offered belongs to an account that cannot write to the repository and refuses the login when no
-key offered is registered, that a retry offers the same key, and that only the person chooses the
-key, with the entry shape and the file it goes in, so the planner asks them rather than retrying.
-The text names no host, owner, address or key path and reads nothing a program printed, so the same
-words follow a rejected push and a typo. A line with no such step says none of it.
+before that fixed text, which key such a step offered over ssh ([SANDBOX-16](#SANDBOX-16)): first
+the one the person's `git.identities` names for the owner of the ssh address its argv named, then
+only keys their ssh configuration names; whichever key ssh tried first, since no entry names a
+readable public key for that owner; or no key from `git.identities`, since the step named its
+remote by name or by an address that is not ssh, and over ssh whichever key ssh tried first. Each
+case present in the line is said once. It then says that where GitHub refused a push for permission
+the key offered may belong to an account that cannot write to the repository, and where it refused
+the login no key offered is registered, that a retry offers the same key, and that only the person
+chooses the key, with the entry shape and the file it goes in, so in either case the planner asks
+them rather than retrying. The text names no host, owner, address or key path and reads nothing a
+program printed, so the same words follow a rejected push and a typo, which is why each part of it
+says the case it is about. A line with no such step says none of it.
 
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from

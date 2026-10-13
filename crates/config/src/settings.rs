@@ -6553,7 +6553,12 @@ mod tests {
                 .git_identities()
                 .entries
                 .iter()
-                .map(|entry| (format!("{}/{}", entry.host, entry.owner), entry.key.clone()))
+                .map(|entry| {
+                    (
+                        format!("{}/{}", entry.address.host, entry.address.owner),
+                        entry.key.clone(),
+                    )
+                })
                 .collect()
         };
         let own = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/home.pub", "github.com/other": "~/.ssh/other.pub"}}}"#;
@@ -6589,7 +6594,9 @@ mod tests {
             assert_eq!(
                 settings
                     .git_identities()
-                    .for_address("github.com", "brave")
+                    .for_address(
+                        &bravebot_sandbox::scope::Address::spelled("github.com", "brave").unwrap()
+                    )
                     .map(|entry| entry.key.as_str()),
                 Some("~/.ssh/home.pub"),
                 "{name} chose a key"

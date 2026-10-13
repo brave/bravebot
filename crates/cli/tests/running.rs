@@ -772,16 +772,18 @@ fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
     );
 }
 
-/// SANDBOX-16: `doctor` says a checkout's `git.identities` is not obeyed and names an entry of the
-/// person's own that it cannot read, each with its file.
+/// SANDBOX-16: `doctor` says a checkout's `git.identities` is not obeyed, and names an entry of the
+/// person's own that it cannot read and one whose key a push would not be given, each with its
+/// file.
 ///
 /// The settings tests check the accessors. `doctor` is the only place that turns them into lines
 /// for a person, so a missing call would leave a checkout's attempt to choose a push key, and a
-/// person's mistyped entry, without a word.
+/// person's mistyped entry or key path, without a word.
 #[test]
 fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
-    let scratch = Scratch::new("cli-running-doctor-git-identities")
-        .with_settings(r#"{"git": {"identities": {"github.com": "~/.ssh/no-owner.pub"}}}"#);
+    let scratch = Scratch::new("cli-running-doctor-git-identities").with_settings(
+        r#"{"git": {"identities": {"github.com": "~/.ssh/no-owner.pub", "github.com/acme": "~/.ssh/missing.pub"}}}"#,
+    );
     let checkout = scratch.path.join("checkout");
     std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
     std::fs::write(
@@ -811,10 +813,17 @@ fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
             && ignored.contains(&checkout.join(".bravebot").display().to_string()),
         "a checkout's key choice went unreported: {stdout}"
     );
-    let misshapen = line("git.identities.github.com");
+    let misshapen = line("git.identities.github.com in");
     assert!(
         misshapen.contains("is not read") && misshapen.contains("settings.json"),
         "an entry the person's file holds went unreported: {stdout}"
+    );
+    let refused = line("git.identities.github.com/acme");
+    assert!(
+        refused.contains("~/.ssh/missing.pub")
+            && refused.contains("not a key a push can be given")
+            && refused.contains("settings.json"),
+        "a key a push would not be given went unreported: {stdout}"
     );
 }
 

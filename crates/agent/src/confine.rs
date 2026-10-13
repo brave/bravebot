@@ -530,12 +530,16 @@ impl Confinement {
         let Some(address) = ssh_address(&step.args) else {
             return Some(Identified::NoAddress);
         };
-        let key = self
+        let chosen = self
             .identities
-            .for_address(&address.host, &address.owner)
+            .for_address(&address)
             .and_then(|entry| identity_key(&entry.key, home))
-            .filter(|key| !self.writable_by_the_plan(key) && ssh_command(key).is_some());
-        Some(key.map_or(Identified::Unchosen, Identified::Key))
+            .filter(|key| !self.writable_by_the_plan(key))
+            .and_then(|key| Some((ssh_command(&key)?, key)));
+        Some(match chosen {
+            Some((command, key)) => Identified::Key { key, command },
+            None => Identified::Unchosen,
+        })
     }
 
     /// Whether a request can be applied: the rows of both kinds are under the account's home.
@@ -727,7 +731,7 @@ impl Confinement {
                         })
                         .collect();
                     let identity = match self.identified(step) {
-                        Some(Identified::Key(key)) => Some(key),
+                        Some(Identified::Key { key, .. }) => Some(key),
                         _ => None,
                     };
                     (toolchain.is_some() || scope.is_some() || network || !remembered.is_empty())
@@ -810,7 +814,7 @@ impl Confinement {
                         policy = policy.allow_read(reach.path);
                     }
                 }
-                if let Some(Identified::Key(key)) = self.identified(step) {
+                if let Some(Identified::Key { key, .. }) = self.identified(step) {
                     policy = policy.allow_read(key);
                 }
                 if matches!(scope, Scope::Remote | Scope::Signing)
@@ -967,7 +971,7 @@ impl Confinement {
             (
                 decided
                     .iter()
-                    .any(|held| matches!(held, Identified::Key(_))),
+                    .any(|held| matches!(held, Identified::Key { .. })),
                 IDENTITY_CHOSEN_SENTENCE,
             ),
             (
@@ -1208,7 +1212,7 @@ impl Confinement {
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
         let chosen = match self.identified(step) {
-            Some(Identified::Key(key)) => ssh_command(&key),
+            Some(Identified::Key { command, .. }) => Some(command),
             _ => None,
         };
         let environment = overlay(
@@ -1468,40 +1472,43 @@ const SIGNING_KEY_REFUSED_SENTENCE: &str = " A step that signs a commit reads on
      full or an existing `.pub` file inside the home directory, and a private key, a file \
      elsewhere and a relative path are not read, so signing fails until the person changes it.";
 
-/// The sentence that names the menu, for the planner, and the person is asked about every time.
 /// The variable git runs ssh by, which a `git.identities` entry sets for a stage.
 const GIT_SSH_COMMAND: &str = "GIT_SSH_COMMAND";
 
 /// What [`Confinement::identified`] decided for one `git` stage carrying the remote scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Identified {
-    /// The argv names an ssh address, and this is the key the person chose for its owner.
-    Key(PathBuf),
+    /// The argv names an ssh address, and this is the key the person chose for its owner, with the
+    /// `GIT_SSH_COMMAND` that offers it.
+    Key { key: PathBuf, command: String },
     /// The argv names an ssh address, and no entry names a key that can be read for its owner.
     Unchosen,
     /// The argv names no ssh address: a remote given by name, or another transport.
     NoAddress,
 }
 
-const IDENTITY_CHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address offered the \
-     host only the key the person's git.identities setting names for that address's owner.";
+const IDENTITY_CHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address had ssh \
+     offer first the key the person's git.identities setting names for that address's owner, and \
+     after it only the keys their ssh configuration names for the host.";
 
 const IDENTITY_UNCHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address offered \
      whichever key ssh tried first, since the person's git.identities setting names no readable \
      public key for that address's owner.";
 
 const IDENTITY_NO_ADDRESS_SENTENCE: &str = " A git step that named its remote by name, such as \
-     `origin`, or by an address that is not ssh, offered whichever key ssh tried first, since \
-     git.identities is applied only to an ssh address written in the argv.";
+     `origin`, or by an address that is not ssh, was given no key by git.identities, which applies \
+     only to an ssh address written in the argv; where it connected over ssh, ssh offered whichever \
+     key it tried first.";
 
-const IDENTITY_SENTENCE: &str = " GitHub refuses a push for permission when the key ssh offered \
-     belongs to an account that cannot write to the repository, and refuses the login when no key \
-     offered is registered. ssh offers an agent's keys in order and GitHub accepts the first one \
-     any account holds, so a retry offers the same key. Only the person chooses the key, with an \
-     entry `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
-     ~/.bravebot/settings.json, which applies to a git step whose argv names the ssh address. Ask \
-     the person for one rather than retrying.";
+const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, the key ssh offered \
+     may belong to an account that cannot write to the repository, and where it refused the login, \
+     no key offered is registered. ssh offers an agent's keys in order and GitHub accepts the first \
+     one any account holds, so a retry offers the same key. Only the person chooses the key, with \
+     an entry `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
+     ~/.bravebot/settings.json, which applies to a git step whose argv names the ssh address, so in \
+     either case ask them for one rather than retrying.";
 
+/// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
     format!(
         "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
@@ -5702,27 +5709,35 @@ mod tests {
         }
     }
 
-    /// The `GIT_SSH_COMMAND` a stage is started with, from a process environment that sets none.
+    /// The `GIT_SSH_COMMAND` a stage is started with, from a process environment that sets none,
+    /// or `None` where this machine cannot prepare a stage under its platform's sandbox (no
+    /// Landlock, or a run inside another profile). The assertions about the policy, the prompt and
+    /// the failure sentence need no sandbox and run either way.
     #[cfg(unix)]
     fn ssh_command_of(
         confinement: &Confinement,
         step: &Step,
         places: &IdentityPlaces,
-    ) -> Option<String> {
+    ) -> Option<Option<String>> {
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return None;
+        }
         let mut command = Command::new(&step.resolved);
         command.args(&step.args).env_remove(GIT_SSH_COMMAND);
         let prepared = confinement
             .prepared(&command, step, &places.session)
             .expect("a stage this platform can confine");
-        prepared
-            .variables
-            .iter()
-            .find(|(name, _)| name == GIT_SSH_COMMAND)
-            .map(|(_, value)| value.to_string_lossy().into_owned())
+        Some(
+            prepared
+                .variables
+                .iter()
+                .find(|(name, _)| name == GIT_SSH_COMMAND)
+                .map(|(_, value)| value.to_string_lossy().into_owned()),
+        )
     }
 
     /// SANDBOX-16: an entry for one owner has a `git` stage whose argv names that owner's ssh
-    /// address offer the host that key alone: the stage starts with `GIT_SSH_COMMAND` naming it,
+    /// address offer the host that key first: the stage starts with `GIT_SSH_COMMAND` naming it,
     /// reads that public key, and the prompt names it. A stage addressing another owner, or naming
     /// its remote by name, gets none of the three. The regressions it rejects are an entry applied to
     /// every address, which pushes another owner's repository with the wrong account, and the
@@ -5742,10 +5757,12 @@ mod tests {
             ],
         );
 
-        assert_eq!(
-            ssh_command_of(&confined, &mapped, &places),
-            Some(format!("ssh -i '{}' -o IdentitiesOnly=yes", key.display()))
-        );
+        if let Some(set) = ssh_command_of(&confined, &mapped, &places) {
+            assert_eq!(
+                set,
+                Some(format!("ssh -i '{}' -o IdentitiesOnly=yes", key.display()))
+            );
+        }
         assert!(reads(
             &confined.policy(&mapped, &places.session, &[]),
             key.to_str().unwrap()
@@ -5780,12 +5797,9 @@ mod tests {
                 &["repo", "view", "git@github.com:acme/widgets.git"],
             ),
         ] {
-            assert_eq!(
-                ssh_command_of(&confined, &unmapped, &places),
-                None,
-                "{:?}",
-                unmapped.args
-            );
+            if let Some(set) = ssh_command_of(&confined, &unmapped, &places) {
+                assert_eq!(set, None, "{:?}", unmapped.args);
+            }
             assert!(
                 !reads(
                     &confined.policy(&unmapped, &places.session, &[]),
@@ -5808,7 +5822,10 @@ mod tests {
             environment: vec![("A".to_string(), "b".to_string())],
             ..mapped.clone()
         };
-        assert_eq!(ssh_command_of(&confined, &assigned, &places), None);
+        if let Some(set) = ssh_command_of(&confined, &assigned, &places) {
+            assert_eq!(set, None);
+        }
+        assert_eq!(confined.identified(&assigned), None);
     }
 
     /// With no entry for the owner, a remote stage is started, and held, exactly as it was. The
@@ -5822,7 +5839,10 @@ mod tests {
         let elsewhere = places.confinement(&[("github.com/other", "~/.ssh/work")]);
 
         for confined in [&without, &elsewhere] {
-            assert_eq!(ssh_command_of(confined, &push, &places), None);
+            if let Some(set) = ssh_command_of(confined, &push, &places) {
+                assert_eq!(set, None);
+            }
+            assert_eq!(confined.identified(&push), Some(Identified::Unchosen));
             assert_eq!(confined.describe(&[&push]), without.describe(&[&push]));
         }
         let with_none = without.policy(&push, &places.session, &[]);
@@ -5848,7 +5868,9 @@ mod tests {
             ".ssh/work.pub",
         ] {
             let confined = places.confinement(&[("github.com/acme", named)]);
-            assert_eq!(ssh_command_of(&confined, &push, &places), None, "{named}");
+            if let Some(set) = ssh_command_of(&confined, &push, &places) {
+                assert_eq!(set, None, "{named}");
+            }
             assert!(!reads(
                 &confined.policy(&push, &places.session, &[]),
                 planted.to_str().unwrap()

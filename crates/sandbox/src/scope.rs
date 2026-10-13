@@ -778,6 +778,25 @@ pub fn ssh_address(args: &[String]) -> Option<Address> {
 }
 
 impl Address {
+    /// The address `host` and `owner` spell, or `None` where either holds anything but ASCII
+    /// letters, digits, `.` and `-`, and `_` in the owner, or is empty. A `git.identities` entry's
+    /// name and an address in the argv are read by this one rule, so that an entry the settings
+    /// accept is one an argv can match.
+    pub fn spelled(host: &str, owner: &str) -> Option<Address> {
+        let host_spelled = !host.is_empty()
+            && host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
+        let owner_spelled = !owner.is_empty()
+            && owner
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+        (host_spelled && owner_spelled).then(|| Address {
+            host: host.to_string(),
+            owner: owner.to_string(),
+        })
+    }
+
     /// Whether two addresses name the same host and owner. Both are compared without regard to
     /// ASCII case, as a host name and a GitHub account are.
     pub fn same_as(&self, other: &Address) -> bool {
@@ -818,19 +837,8 @@ fn address_in(argument: &str) -> Option<Address> {
             (host, path.strip_prefix('/').unwrap_or(path))
         }
     };
-    let host_spelled = !host.is_empty()
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
     let (owner, repository) = path.split_once('/')?;
-    let owner_spelled = !owner.is_empty()
-        && owner
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
-    (host_spelled && owner_spelled && !repository.is_empty()).then(|| Address {
-        host: host.to_string(),
-        owner: owner.to_string(),
-    })
+    Address::spelled(host, owner).filter(|_| !repository.is_empty())
 }
 
 /// The public key file a `git.identities` entry names, as the sandbox will be told it, or `None`
@@ -848,14 +856,18 @@ pub fn identity_key(written: &str, home: &Path) -> Option<PathBuf> {
     judged_public_key(&public_name(named)?, home)
 }
 
-/// The `GIT_SSH_COMMAND` that has ssh offer the host `key` and no other, or `None` where the key's
-/// path cannot be written inside single quotes.
+/// The `GIT_SSH_COMMAND` that has ssh offer the host `key` first, and after it only the keys an
+/// `IdentityFile` line of the person's ssh configuration names, or `None` where the key's path
+/// cannot be written so that ssh opens that file.
 ///
-/// git hands the value to a shell, so the path is quoted, and a path holding a `'` or one that is
-/// not valid UTF-8 is refused rather than escaped.
+/// git hands the value to a shell, so the path is quoted, and a path holding a `'` is refused
+/// rather than escaped. ssh expands `%` and `${` in a key's name, so a path holding `%` or `$` is
+/// refused too, as an `IdentityFile` line holding one is, and so is one that is not valid UTF-8.
 pub fn ssh_command(key: &Path) -> Option<String> {
     let key = crate::rules::without_verbatim_prefix(key.to_path_buf());
-    let key = key.to_str().filter(|text| !text.contains('\''))?;
+    let key = key
+        .to_str()
+        .filter(|text| !text.contains(['\'', '%', '$']))?;
     Some(format!("ssh -i '{key}' -o IdentitiesOnly=yes"))
 }
 
@@ -2394,18 +2406,22 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// The command offers ssh the one key, quoted for the shell git hands it to. The regression it
-    /// rejects is a path with a quote in it escaping the quoting and running a command of its own.
+    /// The command names the one key, quoted for the shell git hands it to. The regressions it
+    /// rejects are a path with a quote in it escaping the quoting and running a command of its own,
+    /// and a path holding `%` or `$`, which ssh expands into the name of another file.
     #[test]
     fn the_ssh_command_offers_one_key_and_refuses_a_path_it_cannot_quote() {
         assert_eq!(
             ssh_command(Path::new("/home/person/.ssh/my key.pub")).as_deref(),
             Some("ssh -i '/home/person/.ssh/my key.pub' -o IdentitiesOnly=yes")
         );
-        assert_eq!(
-            ssh_command(Path::new("/home/person/.ssh/x';touch pwned;'.pub")),
-            None
-        );
+        for refused in [
+            "/home/person/.ssh/x';touch pwned;'.pub",
+            "/home/person/.ssh/100%u.pub",
+            "/home/person/.ssh/${HOME}.pub",
+        ] {
+            assert_eq!(ssh_command(Path::new(refused)), None, "{refused}");
+        }
     }
 
     /// A key whose path is not text is refused rather than written as its lossy lookalike, which
