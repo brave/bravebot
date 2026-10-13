@@ -251,13 +251,15 @@ part of the project and writes one into the project instead, which is the file a
 a reviewer each have to deal with. Saying nothing where there is no such directory is the same
 argument the other way: a path to a directory that is not there costs a turn the run that finds out.
 
-The stand-in is stated because a planner shown a script failing on `import tomllib` under Python 3.9
-looked for a newer interpreter, found none, and asked the person to choose between installing one and
-editing the script. It had named `tomli` as a replacement and had not looked for it on the machine,
-and it did not consider supplying `tomllib` from the directory. The paragraph names no module. It
-asks for nothing the planner could not already do: the stand-in is a file written into the directory
-([TRUST-16](trust-map.md#TRUST-16)), and the assignment is part of the compiled plan a person
-approves and is asked about every time ([RUN-8](tools/run.md#RUN-8)).
+The stand-in is stated because without it a program that fails for want of a module is handed back
+to the person, who is asked to install a newer interpreter or to edit the script. An installed
+package often provides the same module under another name, such as `tomli` for `tomllib`, and a file
+in the directory can supply it under the name the script imports. Looking at what is installed costs
+one line that only reads, and standing in costs a file in the directory and an assignment on one
+line, so the person is asked only where nothing installed can stand in. The paragraph names no
+module. It asks for nothing the planner could not already do: the stand-in is a file written into
+the directory ([TRUST-16](trust-map.md#TRUST-16)), and the assignment is part of the compiled plan a
+person approves and is asked about every time ([RUN-8](tools/run.md#RUN-8)).
 
 The driver does not build the stand-in itself. The only evidence that a module is missing is the
 program's standard error, which the driver does not read ([RUN-4](tools/run.md#RUN-4),
