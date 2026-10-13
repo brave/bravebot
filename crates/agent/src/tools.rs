@@ -8093,7 +8093,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         return Produced::problem(
             "refused: the sandbox mode is read-only, and this line redirects output into a file, \
              which would write the session's files; nothing ran and nothing was asked. Leave the \
-             redirection out, or redirect to /dev/null to discard the output.",
+             redirection out, redirect to /dev/null to discard the output, or have a program open \
+             the file itself, where the sandbox profile decides whether it may.",
         );
     }
 
@@ -10071,8 +10072,9 @@ fn wants_checkout<'a>(
             ),
         ));
     }
-    // Making one writes `worktrees/<id>/` under the repository's `.git` (CHECKOUT-5), which is the
-    // project `read-only` keeps every writer out of (SANDBOX-22).
+    // Making one writes `worktrees/<id>/` under the repository's `.git` (CHECKOUT-5), which is part
+    // of the project that `read-only` holds programs and the file tools back from writing
+    // (SANDBOX-22).
     if sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
         return Err((
             CheckoutRefusal::ReadOnlySandbox,

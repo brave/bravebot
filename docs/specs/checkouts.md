@@ -298,7 +298,8 @@ keeps. A delegate's number will not do: it is a path from the turn
 
 Making a checkout asks nobody, and writes nothing into the working tree. Under the sandbox mode
 `read-only` no checkout is made and the spawn is refused, since the entry under `.git` is a write
-to the project that mode keeps every writer out of ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
+to the project that mode holds programs and the file tools back from writing
+([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 
 **Why not `git worktree add`.** git runs what the repository names as it checks a tree out: a
 `post-checkout` hook, a `core.fsmonitor` program, a filter driver. `read_git` starts no program for

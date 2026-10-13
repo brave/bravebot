@@ -1912,7 +1912,9 @@ fail there, and the `run` description says so. A workspace inside the temporary 
 writable, since that directory is writable in every mode. A person who wants them to run chooses
 `workspace-write`. The file tools refuse a write to that workspace as well, and a delegate defined
 with `isolation: checkout` does not start. A line that redirects output into a file is refused
-there too, so `make > build.log` is.
+there too, so `make > build.log` is. A program the stage runs opens its own redirections under the
+profile, so a person's `allowWrite` entry lets `sh -c 'make > build/log'` write where it lists the
+directory, and the profile refuses it elsewhere.
 
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`

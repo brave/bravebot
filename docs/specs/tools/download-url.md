@@ -97,12 +97,14 @@ body is read to the cap plus one byte to tell the two cases apart.
 `verified-by: bravebot_agent::turn::a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved`
 
 <a id="DOWNLOAD-5"></a>
-### DOWNLOAD-5: a delegate does not hold it, and plan mode refuses it
+### DOWNLOAD-5: a delegate does not hold it, and plan mode and the sandbox mode `read-only` refuse it
 
 Every delegate kind holds the capability for reaching the network so the driver can make its model
 call, and that is all it buys, so `download_url` is in the list of tools no delegate is offered, as
 `fetch_url` is. A call from one is answered as an unknown name. It is a write, so plan mode
-refuses it before anything is read or sent ([MODE-3](../permission-modes.md#MODE-3)).
+refuses it before anything is read or sent ([MODE-3](../permission-modes.md#MODE-3)), and so does
+the sandbox mode `read-only` ([SANDBOX-22](../sandboxing.md#SANDBOX-22)).
 
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_download_before_anything_is_sent`
+`verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`

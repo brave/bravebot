@@ -51026,9 +51026,9 @@ fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedA
 /// anybody is asked, in asking and in bypassing, because this process opens the redirection and the
 /// stage's profile does not reach it. A line that discards output into `/dev/null` still runs. The
 /// control is the same two lines under `workspace-write`, where the file is written and both lines
-/// are put to the person in asking. Standard output, appended output and standard error are each
-/// their own line, because a refusal that read only one form would leave the others as the way
-/// round it. The session is opened outside the temporary directory, which every mode leaves
+/// are put to the person in asking. Standard output, appended output, standard error, both streams
+/// and the last stage of a pipeline are each their own line, because a refusal that read only one
+/// form would leave the others as the way round it. The session is opened outside the temporary directory, which every mode leaves
 /// writable.
 #[test]
 fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs() {
@@ -51104,6 +51104,8 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
         ("standard output", "echo hi > notes.txt"),
         ("appended output", "echo hi >> notes.txt"),
         ("standard error", "echo hi 2> notes.txt"),
+        ("both streams", "echo hi &> notes.txt"),
+        ("the last stage of a pipeline", "echo hi | cat > notes.txt"),
     ] {
         for mode in [Ask, Bypass] {
             let asking = usize::from(mode == Ask);
