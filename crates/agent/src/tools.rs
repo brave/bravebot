@@ -8224,7 +8224,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // Read before the question is put, for the reason a write's is.
         let mode = tools.permission_mode.get();
         let answer = confirmer.confirm_run(&request);
-        policy.record_answer(mode.answers_a_run_unasked().then(|| mode.name()));
+        policy.record_answer(mode.answers_this_run_unasked(&request).then(|| mode.name()));
         if !answer.approved() {
             return Produced::problem(
                 "refused: the user did not approve running this. Do not retry the same \
