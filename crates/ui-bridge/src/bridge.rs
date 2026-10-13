@@ -78,6 +78,32 @@ struct Open {
     sandbox: Option<SandboxMode>,
 }
 
+impl Open {
+    /// A session as it opens, with no turn in flight. The trust answer and the record that would
+    /// keep one are required, since a default either way answers for somebody who was never asked.
+    fn opened(
+        project: PathBuf,
+        state: State,
+        answered_trust: bool,
+        keeping: Option<(trusted::Store, trusted::Identity)>,
+        auto_vetting: bool,
+    ) -> Self {
+        Self {
+            project,
+            state: Arc::new(Mutex::new(state)),
+            answered_trust,
+            keeping,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting,
+            definition: None,
+            permission_mode: LiveMode::default(),
+            sandbox: None,
+        }
+    }
+}
+
 /// Drives the agent for a front-end.
 pub struct Bridge {
     open: HashMap<String, Open>,
@@ -344,19 +370,13 @@ impl Bridge {
         let state = State::resumed(&directory, &record, opening.trust);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            state,
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
 
@@ -542,19 +562,13 @@ impl Bridge {
         // then, so it is never the map a turn uses.
         let opening = Opening::of(&directory, None);
         let reported = opening.json();
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(State::fresh(opening.trust))),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            State::fresh(opening.trust),
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -689,9 +703,9 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::forked(
+        let child = self.mint(Open::opened(
+            project.clone(),
+            State::forked(
                 begun,
                 cut.before,
                 opening.trust,
@@ -700,22 +714,15 @@ impl Bridge {
                 ordinal,
                 todos.clone(),
                 first_prompt,
-            ))),
+            ),
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+            opening.answered,
+            opening.keeping,
             // The parent's, not read again: the child's transcript is the parent's up to the cut,
             // and the notice at its top says what the parent opened under.
             auto_vetting,
-            definition: None,
-            // Not the parent's. A fork is a session opened again, and opens asking as one does.
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
@@ -2978,19 +2985,7 @@ mod coverage_tests {
         let workspace = Workspace::new(&directory).unwrap();
         open_rewind_point(&mut state, &workspace, "list the files");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
         let call = |bridge: &mut Bridge, method: &str, params: Value| {
             let line = json!({"id": 1, "method": method, "params": params}).to_string();
             bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
@@ -3071,23 +3066,13 @@ mod coverage_tests {
         }))
         .unwrap();
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let parent = bridge.mint(Open {
-            project: root.to_path_buf(),
-            state: Arc::new(Mutex::new(State::resumed(
-                root,
-                &record,
-                TrustStore::new(root),
-            ))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)),
+            true,
+            None,
+            false,
+        ));
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
                 "session": parent, "prompt": 0, "text": "work"
@@ -3159,19 +3144,7 @@ mod permissions_tests {
         let mut state = State::fresh(TrustStore::new("/work"));
         state.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
                 "session": handle, "kind": "command", "command": {
@@ -3201,19 +3174,13 @@ mod permissions_tests {
         trust.distrust("vendor");
         trust.undecide("vendor/ours");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(State::fresh(trust))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(trust),
+            true,
+            None,
+            false,
+        ));
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
                 .to_string(),
@@ -3256,19 +3223,13 @@ mod sandbox_tests {
         std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).unwrap();
         let managed = bravebot_config::Managed::at(&file);
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new("/work")))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(TrustStore::new("/work")),
+            true,
+            None,
+            false,
+        ));
         let choose = |mode: &str| {
             Request::parse(
                 &json!({"id": 1, "method": "session.sandbox", "params": {
@@ -3333,17 +3294,14 @@ mod watch_tests {
             .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let handle = bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         std::fs::write(
             root.join("watched"),
@@ -3397,17 +3355,14 @@ mod watch_tests {
             )
             .unwrap();
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::new(Mutex::new(watches)),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         change(&root);
         bridge.poll_watches_at(now + Duration::from_secs(6));
@@ -3485,17 +3440,15 @@ mod watch_tests {
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
-            answered_trust: true,
-            keeping: None,
             running: Some(running),
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                project.clone(),
+                State::fresh(TrustStore::new(&project)),
+                true,
+                None,
+                false,
+            )
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -3537,17 +3490,14 @@ mod watch_tests {
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

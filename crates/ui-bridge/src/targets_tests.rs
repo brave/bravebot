@@ -54,10 +54,6 @@ fn session_running(target: u64) -> Session {
     let (answers, _receiver) = mpsc::channel();
     let mut bridge = Bridge::new(Box::new(|_| {}));
     let handle = bridge.mint(Open {
-        project: project.clone(),
-        state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
-        answered_trust: true,
-        keeping: None,
         running: Some(Running {
             cancel: cancel.clone(),
             answers,
@@ -65,12 +61,14 @@ fn session_running(target: u64) -> Session {
             target,
             finished: Arc::clone(&finished),
         }),
-        model: None,
         watches: Arc::clone(&watches),
-        auto_vetting: false,
-        definition: None,
-        permission_mode: PermissionMode::Ask.into(),
-        sandbox: None,
+        ..Open::opened(
+            project.clone(),
+            State::fresh(TrustStore::new(&project)),
+            true,
+            None,
+            false,
+        )
     });
     Session {
         bridge,
