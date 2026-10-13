@@ -124,6 +124,7 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_diag::lib::a_state_directory_left_open_is_narrowed_and_nothing_above_it`
 `verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_log_directory`
 `verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_state_directory`
+`verified-by: bravebot_cli::running::the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads`
 
 <a id="STATE-2"></a>
 ### STATE-2: a machine whose platform names no profile directory has no state directory rather than a guessed one
