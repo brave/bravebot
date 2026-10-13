@@ -1810,8 +1810,8 @@ function Card({
         <div className={`tool replayed ${entry.why ? 'has-why' : ''}`}>
           <span className="tool-status" aria-hidden="true"><Icon name="check-normal" /></span>
           <span className="tool-body">
-            {entry.why && <span className="why" data-tooltip={entry.why.length > WHY_WIDTH ? entry.why : undefined}>{entry.why}</span>}
             <span className="call"><span className="verb">{entry.text}</span></span>
+            {entry.why && <span className="why" data-tooltip={entry.why.length > WHY_WIDTH ? entry.why : undefined}>{entry.why}</span>}
           </span>
         </div>
       )
@@ -1825,11 +1825,11 @@ function Card({
             {running ? <ProgressRing className="tool-ring" /> : <Icon name={activity.failed ? 'close' : 'check-normal'} />}
           </span>
           <span className="tool-body">
-            {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
             <span className="call">
               <span className="verb">{activity.verb}</span>
               {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
             </span>
+            {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
           </span>
           {!running && (
             <span className="note">
