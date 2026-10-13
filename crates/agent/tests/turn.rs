@@ -47751,6 +47751,55 @@ fn a_turn_may_ask_its_advisor_only_three_times() {
     );
 }
 
+/// ADVISOR-6: a call that failed still counts against the three a turn may make, so a planner
+/// whose advisor keeps failing cannot go on asking.
+#[test]
+fn a_failed_advisor_call_counts_against_the_three_a_turn_may_make() {
+    let scratch = Scratch::new("advisor-failures-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let ask = |question: &str| {
+        Served::Reply(tool_request(
+            "advisor",
+            &format!(r#"{{"question":"{question}","why":"unsure"}}"#),
+        ))
+    };
+    let (endpoint, received) = serve_script(vec![
+        ask("first question"),
+        Served::Status(401),
+        ask("second question"),
+        Served::Status(401),
+        ask("third question"),
+        Served::Status(401),
+        ask("fourth question"),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("failed consultations do not fail the turn");
+    let requests = every_request(&received);
+    let to_the_advisor = requests
+        .iter()
+        .filter(|body| body.contains(r#""model":"advisor-model""#))
+        .count();
+    assert_eq!(
+        to_the_advisor, 3,
+        "the fourth question was sent after three failures"
+    );
+    assert!(
+        requests.last().unwrap().contains("as often as a turn may"),
+        "the planner was not told why the fourth was refused"
+    );
+}
+
 /// ADVISOR-6: a call that fails is reported as a category, never in the backend's words.
 #[test]
 fn a_failed_advisor_call_tells_the_planner_only_the_category() {

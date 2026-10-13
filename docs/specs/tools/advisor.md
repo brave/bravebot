@@ -89,6 +89,7 @@ it has, and sends no request. A call that failed counts.
 bound is on a loop and not a budget.
 
 `verified-by: bravebot_agent::turn::a_turn_may_ask_its_advisor_only_three_times`
+`verified-by: bravebot_agent::turn::a_failed_advisor_call_counts_against_the_three_a_turn_may_make`
 `verified-by: bravebot_agent::tools::a_call_to_an_advisor_nobody_was_offered_is_answered_as_an_unknown_name`
 
 <a id="ADVISOR-7"></a>
