@@ -64,7 +64,21 @@ impl SandboxMode {
     /// and `strict` writes the session's directories. A managed pin of one therefore refuses the
     /// other.
     pub fn is_looser_than(self, other: Self) -> bool {
-        self.reads() > other.reads() || self.writes() > other.writes()
+        self.looser_than(other).is_some()
+    }
+
+    /// Which of reading and writing a program under this mode does more of than under `other`, or
+    /// `None` where it does no more of either.
+    ///
+    /// What a refusal under a managed pin gives as its reason. The modes are not a line, so
+    /// "looser" alone does not tell a person under a `strict` pin why `read-only` is refused.
+    pub fn looser_than(self, other: Self) -> Option<Looser> {
+        match (self.reads() > other.reads(), self.writes() > other.writes()) {
+            (true, true) => Some(Looser::Both),
+            (true, false) => Some(Looser::Reads),
+            (false, true) => Some(Looser::Writes),
+            (false, false) => None,
+        }
     }
 
     /// How much of the machine a program can read, as a rank.
@@ -85,6 +99,17 @@ impl SandboxMode {
             Self::Off => 3,
         }
     }
+}
+
+/// What one mode does more of than another ([`SandboxMode::looser_than`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Looser {
+    /// It reads more of the machine and writes no more.
+    Reads,
+    /// It writes more and reads no more of the machine.
+    Writes,
+    /// It reads more of the machine and writes more.
+    Both,
 }
 
 impl fmt::Display for SandboxMode {
@@ -157,6 +182,35 @@ mod tests {
             Strict.is_looser_than(ReadOnly),
             "strict writes the session's directories"
         );
+    }
+
+    /// A refusal under a pin says which of reading and writing the asked mode does more of, so the
+    /// answer for each pair has to be the one the ranks give and not merely "looser". The fault it
+    /// rejects is an answer that names one side for every pair, or swaps the two.
+    #[test]
+    fn a_looser_mode_reads_more_writes_more_or_both() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        for (asked, pinned, looser) in [
+            (ReadOnly, Strict, Looser::Reads),
+            (WorkspaceWrite, Strict, Looser::Both),
+            (Off, Strict, Looser::Both),
+            (Strict, ReadOnly, Looser::Writes),
+            (WorkspaceWrite, ReadOnly, Looser::Writes),
+            (Off, ReadOnly, Looser::Both),
+            (Off, WorkspaceWrite, Looser::Both),
+        ] {
+            assert_eq!(
+                asked.looser_than(pinned),
+                Some(looser),
+                "{asked} under {pinned}"
+            );
+        }
+        for (asked, pinned) in [(Strict, WorkspaceWrite), (ReadOnly, WorkspaceWrite)] {
+            assert_eq!(asked.looser_than(pinned), None, "{asked} under {pinned}");
+        }
+        for mode in SandboxMode::ALL {
+            assert_eq!(mode.looser_than(mode), None, "{mode}");
+        }
     }
 
     #[test]

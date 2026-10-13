@@ -1836,8 +1836,10 @@ report spells it `workspace-write`. Only `mode` is read from the `sandbox` block
 beside it is reported as unread, so a block written for another tool does not look configured.
 
 The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
-a mode looser than it refuses the session before it starts, naming both files; the same mode or a
-stricter one is kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
+a mode looser than it refuses the session before it starts, naming both files, saying which of
+reading and writing the mode does more of than the pin, and naming the pin as the mode to run with,
+since no mode is stricter than a pin of `strict` or of `read-only`; a mode no looser than the pin is
+kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
 to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `workspace-write` as well, because `off` starts a
 program with no profile and nothing would hold its network shut; the refusal says so. `doctor`,
 `--help`, `--version` and the commands that start no program (`auth`, `sessions`, `attach`,
@@ -1858,7 +1860,8 @@ all come from one mode, and the change applies from the next turn; a delegate sp
 under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
 a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
 pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
-file, before anything is asked. Otherwise the command ranks as `--sandbox` does, so
+file, before anything is asked, and under the pin the sentence says which of reading and writing
+the mode does more of. Otherwise the command ranks as `--sandbox` does, so
 `/sandbox workspace-write` replaces a checkout's `strict`. The mode is not in the session record, so a
 resumed session takes the mode its start-up chose, and the command's choice lasts until the process
 ends, across `/clear` and `/resume`. `/bg` is refused while the command's choice differs from the mode
@@ -1871,7 +1874,8 @@ the mode in force and offers `strict`, `read-only` and `workspace-write`. It off
 request for `off`, or for any word that is not one of the three, whatever the window sends. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
 started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
-file, and a choice is met with the floor again when a turn starts. A session that is opened, resumed
+file and saying which of reading and writing the mode does more of, and a choice is met with the
+floor again when a turn starts. A session that is opened, resumed
 or forked starts from the settings and the pin, not from the choice of the session it came from, and
 the settings' `off` is still read there as `workspace-write`.
 
@@ -1934,6 +1938,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`
 `verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
+`verified-by: bravebot_sandbox::mode::a_looser_mode_reads_more_writes_more_or_both`
 `verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
@@ -1969,6 +1974,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_cli::main::the_sandbox_flag_refuses_a_word_that_is_not_a_mode`
 `verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
 `verified-by: bravebot_cli::main::doctor_reports_a_mode_the_managed_file_refuses`
+`verified-by: bravebot_cli::main::a_refused_mode_says_what_it_does_more_of_and_suggests_a_mode_the_pin_keeps`
 `verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
 `verified-by: bravebot_cli::running::the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`
 `verified-by: bravebot_agent::turn::a_run_under_off_starts_with_no_profile_and_says_nothing_of_one`
@@ -1982,6 +1988,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_config::settings::a_windows_choice_outranks_the_settings_and_meets_the_pin`
 `verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
+`verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_says_whether_it_reads_or_writes_more_than_the_pin`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_file_writes_before_accepting_edits`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_a_writing_manifest_before_approval`
@@ -1995,6 +2002,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`
 `verified-by: bravebot_tui::sandbox_command::the_row_the_cursor_starts_on_keeps_the_mode`
 `verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing`
+`verified-by: bravebot_tui::sandbox_command::a_refusal_says_which_of_reading_and_writing_the_mode_does_more_of`
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`

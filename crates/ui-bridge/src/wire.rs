@@ -141,13 +141,22 @@ pub fn sandbox_mode(value: &Value) -> Result<SandboxMode, Failure> {
 /// The sentence for a mode the managed file does not allow, naming the file.
 pub fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     use bravebot_config::sandbox::Floor;
+    use bravebot_sandbox::mode::Looser;
     let file = refused.pinned_in.display();
     let asked = refused.asked.name();
     let pinned = refused.pinned.name();
     match refused.because {
-        Floor::Mode => format!(
-            "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may be stricter than that but not looser."
-        ),
+        Floor::Mode => {
+            let looser = match refused.asked.looser_than(refused.pinned) {
+                Some(Looser::Reads) => "reads more of the machine than",
+                Some(Looser::Writes) => "writes more than",
+                // A mode is refused only where it is looser than the pin, so `None` is not reached.
+                Some(Looser::Both) | None => "reads more of the machine and writes more than",
+            };
+            format!(
+                "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may read and write no more than that. {asked} {looser} {pinned}."
+            )
+        }
         Floor::Network => format!(
             "The sandbox mode {asked} is refused: {file} pins run.network to closed, so the mode must be {pinned} or stricter."
         ),

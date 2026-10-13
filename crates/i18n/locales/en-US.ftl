@@ -250,13 +250,21 @@ cli-bypass-unreachable =
     that mode unreachable here. Remove it there, or run without the flag.
 cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
 # The file that holds the floor is named, and the file that asked when there was one, because a
-# refusal that names neither sends somebody looking for a fault in the program.
+# refusal that names neither sends somebody looking for a fault in the program. $looser is one of the
+# sandbox-looser- sentences. The pin is the mode suggested, since no mode is stricter than a pin of
+# strict or of read-only.
 cli-sandbox-refused-flag =
     --sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a run may
-    be stricter than that but not looser. Run with --sandbox { $pinned } or stricter, or without the flag.
+    read and write no more than that. { $looser } Run with --sandbox { $pinned }, or without the flag.
 cli-sandbox-refused-file =
     sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } sets sandbox.mode to { $pinned },
-    and a run may be stricter than that but not looser. Change it there, or remove it.
+    and a run may read and write no more than that. { $looser } Change it to { $pinned } there, or
+    remove it.
+# Why a mode is looser than the managed file's sandbox.mode pin. The modes are not a line, so a
+# refusal says which of reading and writing the asked mode does more of.
+sandbox-looser-reads = { $asked } reads more of the machine than { $pinned }.
+sandbox-looser-writes = { $asked } writes more than { $pinned }.
+sandbox-looser-both = { $asked } reads more of the machine and writes more than { $pinned }.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
     with no sandbox is not held to that. Run with --sandbox workspace-write or stricter, or without the flag.
@@ -3496,8 +3504,8 @@ session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
 session-sandbox-refused-mode =
-    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may be
-    stricter than that but not looser.
+    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
+    read and write no more than that. { $looser }
 session-sandbox-refused-network =
     /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
     no sandbox is not held to that. Use /sandbox workspace-write, read-only or strict.

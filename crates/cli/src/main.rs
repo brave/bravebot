@@ -820,14 +820,16 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
             asked = refused.asked.name(),
             asked_in = file.display().to_string(),
             pinned = refused.pinned.name(),
-            pinned_in = pinned_in
+            pinned_in = pinned_in,
+            looser = bravebot_tui::sandbox_command::looser(refused)
         )
         .to_string(),
         (None, Floor::Mode) => t!(
             cli_sandbox_refused_flag,
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
-            pinned_in = pinned_in
+            pinned_in = pinned_in,
+            looser = bravebot_tui::sandbox_command::looser(refused)
         )
         .to_string(),
         (Some(file), Floor::Network) => t!(
@@ -6663,6 +6665,64 @@ mod tests {
         assert!(
             refused.contains("strict") && refused.contains("off"),
             "{refused}"
+        );
+    }
+
+    /// SANDBOX-22: a refusal under a pin says which of reading and writing the asked mode does more
+    /// of, and suggests the pin, which the pin always keeps. The fault it rejects is a sentence that
+    /// tells a person under a `read-only` pin to choose a stricter mode, of which there is none, or
+    /// tells one under a `strict` pin that `read-only` is looser without saying how.
+    #[test]
+    fn a_refused_mode_says_what_it_does_more_of_and_suggests_a_mode_the_pin_keeps() {
+        let settings = bravebot_config::Settings::default();
+        for (pin, asked, said) in [
+            (
+                "read-only",
+                SandboxMode::Strict,
+                "strict writes more than read-only.",
+            ),
+            (
+                "strict",
+                SandboxMode::ReadOnly,
+                "read-only reads more of the machine than strict.",
+            ),
+            (
+                "strict",
+                SandboxMode::WorkspaceWrite,
+                "workspace-write reads more of the machine and writes more than strict.",
+            ),
+        ] {
+            let managed = pin_file(
+                &format!("looser-{pin}-{asked}"),
+                &format!(r#"{{"sandbox": {{"mode": "{pin}"}}}}"#),
+            );
+            let refused = bravebot_config::sandbox::resolve(Some(asked), &settings, &managed)
+                .expect_err("looser than the pin");
+            let sentence = sandbox_refusal(&refused);
+            assert!(sentence.contains(said), "{sentence}");
+            assert!(
+                sentence.contains(&format!("Run with --sandbox {pin}, or without the flag.")),
+                "{sentence}"
+            );
+            assert!(!sentence.contains("stricter"), "{sentence}");
+            let suggested = SandboxMode::parse(pin).expect("a mode");
+            assert!(
+                bravebot_config::sandbox::resolve(Some(suggested), &settings, &managed).is_ok(),
+                "{pin} keeps {pin}"
+            );
+        }
+
+        let home = scratch("looser-file");
+        let file = home.join("settings.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let managed = pin_file("looser-file-pin", r#"{"sandbox": {"mode": "read-only"}}"#);
+        let refused = bravebot_config::sandbox::resolve(None, &settings, &managed)
+            .expect_err("looser than the pin");
+        let sentence = sandbox_refusal(&refused);
+        assert!(
+            sentence.contains("strict writes more than read-only. Change it to read-only there"),
+            "{sentence}"
         );
     }
 }

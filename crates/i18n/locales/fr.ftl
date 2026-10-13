@@ -242,11 +242,15 @@ cli-bypass-unreachable =
     ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
 cli-sandbox-needs-a-mode = --sandbox demande l'un de : { $names }
 cli-sandbox-refused-flag =
-    --sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une exécution peut
-    être plus stricte que cela mais pas plus souple. Lancez avec --sandbox { $pinned } ou plus strict, ou sans l'option.
+    --sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une exécution ne peut
+    lire ni écrire davantage. { $looser } Lancez avec --sandbox { $pinned }, ou sans l'option.
 cli-sandbox-refused-file =
     sandbox.mode { $asked } dans { $asked_in } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned },
-    et une exécution peut être plus stricte que cela mais pas plus souple. Modifiez-le là, ou retirez-le.
+    et une exécution ne peut lire ni écrire davantage. { $looser } Remplacez-le par { $pinned } là,
+    ou retirez-le.
+sandbox-looser-reads = { $asked } lit davantage de la machine que { $pinned }.
+sandbox-looser-writes = { $asked } écrit davantage que { $pinned }.
+sandbox-looser-both = { $asked } lit davantage de la machine et écrit davantage que { $pinned }.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé
     sans bac à sable n'est pas tenu à cela. Lancez avec --sandbox workspace-write ou plus strict, ou sans l'option.
@@ -3040,8 +3044,8 @@ session-sandbox-kept = Le mode du bac à sable reste { $mode }.
 session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
 session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
 session-sandbox-refused-mode =
-    /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session peut
-    être plus stricte que cela mais pas moins.
+    /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session ne peut
+    lire ni écrire davantage. { $looser }
 session-sandbox-refused-network =
     /sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé sans
     bac à sable n'y est pas tenu. Utilisez /sandbox workspace-write, read-only ou strict.
