@@ -6,6 +6,7 @@ governs:
   - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/ui-bridge/src/mentions.rs
   - crates/session/src/excerpt.rs
 documented-by: docs/website/docs/using/context.md

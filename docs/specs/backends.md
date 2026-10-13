@@ -9,6 +9,7 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs

@@ -16,6 +16,7 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs
 guards:

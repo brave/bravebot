@@ -14,6 +14,7 @@ governs:
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
   - crates/cli/src/background.rs
+  - crates/cli/src/doctor.rs
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs

@@ -261,7 +261,7 @@ pub fn report(
     let host = remote.map_or(DEFAULT_HOST, |address| address.host.as_str());
     let rows = probe(ssh, keys, host, chosen);
     for (name, value) in facts(host, remote.map(|address| address.owner.as_str()), &rows) {
-        crate::fact(name, value);
+        crate::doctor::fact(name, value);
     }
     Ending::Done
 }
