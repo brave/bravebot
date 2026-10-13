@@ -30,7 +30,7 @@ def _load_shared():
     return module
 
 
-# What this script and pr-fix.py define alike is agents/pr_worktree.py.
+# The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
 
 BASE_REPO = pr_worktree.BASE_REPO
