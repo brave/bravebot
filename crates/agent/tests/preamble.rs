@@ -900,8 +900,10 @@ fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
     );
 }
 
-/// The road holds for any language, so the paragraph names none: a case named in it reads as the
-/// case it is for, and a program in another language that fails the same way is left at the error.
+/// The road holds for anything a program can be missing, so the paragraph describes no case. A case
+/// written into it reads as the case it is for, and a program that fails another way is left at
+/// the error. A code span is how a program, module or variable would be written into this text,
+/// and an introduced example is how a case would be, so neither may appear.
 #[test]
 fn the_stand_in_road_names_no_language_or_variable() {
     let tree = Scratch::new("stand-in-names-nothing");
@@ -930,24 +932,24 @@ fn the_stand_in_road_names_no_language_or_variable() {
         .expect("the paragraph is there to read");
     let paragraph = &preamble.for_a_person[start..];
     let paragraph = &paragraph[..paragraph.find('\n').unwrap_or(paragraph.len())];
-    for named in [
+    for described in [
+        "`",
+        "such as",
+        "for example",
+        "for instance",
+        "e.g.",
         "Python",
-        "python",
-        "PYTHONPATH",
-        "tomllib",
-        "tomli",
         "Perl",
-        "PERL5LIB",
-        "Node",
-        "NODE_PATH",
         "Ruby",
-        "RUBYLIB",
+        "Node",
         "Java",
-        "CLASSPATH",
+        "Rust",
+        "Lua",
+        "PHP",
     ] {
         assert!(
-            !paragraph.contains(named),
-            "the paragraph names `{named}`: {paragraph}"
+            !paragraph.contains(described),
+            "the paragraph describes a case with `{described}`: {paragraph}"
         );
     }
 }

@@ -519,15 +519,14 @@ fn missing_dependency_guidance(scratch: bool) -> &'static str {
     "\nWhen a program fails because something it needs is missing from this machine, check whether \
      something installed can stand in for it, with a line that only reads and whose exit status is \
      the answer, run by the same interpreter or runtime the program uses. Where something can, \
-     write what connects the two, such as a module of the missing name that re-exports the \
-     installed one, in a new directory inside the scratch directory, and run the program again \
-     with that directory on a search path the program reads from its environment in addition to \
-     its own, assigned in front of it on that one line. Write the path out in full and in single \
-     quotes, since a line expands no variable and reads an unquoted backslash as an escape. Name \
-     only that directory, since whatever else the scratch directory holds would be found as well. \
-     That leaves the program, the machine and the person's settings as they were, so try it before \
-     asking the person to install anything or to edit the program. Where nothing installed can \
-     stand in, say what is missing and what provides it.\n"
+     write what connects the two in a new directory inside the scratch directory, and run the \
+     program again with that directory on a search path the program reads from its environment in \
+     addition to its own, assigned in front of it on that one line. Write the path out in full and \
+     in single quotes, since a line expands no variable and reads an unquoted backslash as an \
+     escape. Name only that directory, since whatever else the scratch directory holds would be \
+     found as well. That leaves the program, the machine and the person's settings as they were, \
+     so try it before asking the person to install anything or to edit the program. Where \
+     nothing installed can stand in, say what is missing and what provides it.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.

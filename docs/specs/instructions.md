@@ -273,19 +273,18 @@ sentence choosing between two tools, one of which a delegate never has: a delega
 to `fetch_url` spends a round on a name that resolves to nothing.
 
 The stand-in is stated because a planner not told of it asks the person to install what is missing
-or to edit the program. Both change the machine or the program to supply what something installed
-often already provides, as `tomli` does for the `tomllib` a Python older than 3.11 lacks. The case
-it names is a program failing for something missing, and it names no language, package or variable,
-because text naming one of them covers that one alone. What connects the two, written in the
-session's own directory, changes neither, and goes when the session does. The check runs on the
+or to edit the program, and both change the machine or the program to supply what something
+installed can often already provide. It describes no case: it says what to do when a program fails
+for something missing, and names no language, package or variable, because text naming one of them
+covers that one alone. What connects the two, written in the session's own directory, changes
+neither the machine nor the program, and goes when the session does. The check runs on the
 program's own interpreter because another one on the same machine can have what that one lacks. The
 search path is one read in addition to the program's own, because an assignment replaces whatever
 the variable held and a line cannot name the old value, so a path that stands in for a default would
 lose it. The stand-in goes in a directory of its own, and only that directory goes on the path,
-because the session's directory also holds whatever else the work put in it, such as an archive
-unpacked to look inside. The assignment is on the one line because nothing carries over between
-lines. The path is written out because a
-line expands no variable, and quoted because a line reads an unquoted backslash as an escape and a
+because the session's directory also holds whatever else the work put in it. The assignment is on
+the one line because nothing carries over between lines. The path is written out because a line
+expands no variable, and quoted because a line reads an unquoted backslash as an escape and a
 Windows path is made of them. It is gated on the directory because without one the only place to
 write the stand-in is the project. It is withheld from a delegate because the road is two `run`s and
 a reader is offered none. Nothing here is a decision the driver takes on a program's output: the
