@@ -924,7 +924,7 @@ fn a_session_with_a_directory_of_its_own_is_told_to_stand_in_for_what_a_program_
             "the stand-in is written in the session's own directory",
         ),
         (
-            "`PYTHONPATH=<the scratch directory> python3 script.py`",
+            "`PYTHONPATH=<the scratch directory>` in front of the command that starts the program",
             "the line is the assignment the compiler accepts in front of a program",
         ),
         (

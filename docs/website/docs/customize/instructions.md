@@ -218,10 +218,10 @@ The planner is also told what to do when a program fails because the machine lac
 needs, such as a module a script imports. It looks at what is installed with a command that only
 reads. Where an installed package can stand in under the missing name, it writes a small module of
 that name in the scratch directory and starts the program with the directory on its search path for
-that one run, as `PYTHONPATH=<scratch directory> python3 script.py`. A Python 3.9 script that imports
-`tomllib` runs this way where `tomli` is installed. The assignment is part of the command you are
-shown, and the script is not changed and nothing is installed. Where nothing installed can stand in,
-the planner says what is missing.
+that one run, by writing `PYTHONPATH=<scratch directory>` in front of its command. A Python 3.9
+script that imports `tomllib` runs this way where `tomli` is installed. The assignment is part of the
+command you are shown, and the script is not changed and nothing is installed. Where nothing
+installed can stand in, the planner says what is missing.
 
 ### The GitHub CLI
 

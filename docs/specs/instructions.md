@@ -217,10 +217,10 @@ directory is stated with what to put in it, and that includes a stand-in for som
 needs and the machine lacks: where a program fails for want of a module, the planner is told to look
 at what is installed with a line that only reads, and where an installed package can stand in under
 the missing name, to write a small module of that name in the directory that re-exports the package
-and to start the program with `PYTHONPATH=<the directory> python3 script.py`. It is told to do that
-before asking the person to install anything or to change the script, and to say what is missing
-where nothing installed can stand in. The rest are facts alone and nothing is asked of the planner
-on their account.
+and to start the program with `PYTHONPATH=<the directory>` in front of its command. It is told to do
+that before asking the person to install anything or to change the script, and to say what is
+missing where nothing installed can stand in. The rest are facts alone and nothing is asked of the
+planner on their account.
 
 What an installed GitHub CLI is for is said on the same terms, and to the turn a person is watching
 rather than in this block: the commands that read a pull request or an issue, with fetching the URL

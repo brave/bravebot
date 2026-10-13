@@ -463,10 +463,11 @@ fn environment(workspace: &Workspace, github_cli: bool) -> String {
              the script, find out what is installed with a line that only reads. Where an \
              installed package can stand in under the missing name, write a small module of that \
              name in the scratch directory that re-exports the package, and put that directory \
-             on the program's module search path for that one line: \
-             `PYTHONPATH=<the scratch directory> python3 script.py`. The assignment is part of \
-             the line the user approves, the script stays as it was, and nothing is installed. \
-             Where nothing installed can stand in, say what is missing.\n",
+             on the program's module search path for that one line, by writing \
+             `PYTHONPATH=<the scratch directory>` in front of the command that starts the \
+             program. The assignment is part of the line the user approves, the script stays as \
+             it was, and nothing is installed. Where nothing installed can stand in, say what is \
+             missing.\n",
         );
     }
     out
