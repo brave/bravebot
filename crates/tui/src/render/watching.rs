@@ -131,8 +131,7 @@ fn draw_aside(
     // line would otherwise be clipped at the edge of the screen.
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let total = paragraph.line_count(areas[1].width) as u16;
-    let max_offset = total.saturating_sub(areas[1].height);
-    let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
+    let offset = offset_from_end(total, areas[1].height, session.scroll);
     frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
@@ -233,13 +232,19 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
     // Counted back from the end, the way the transcript is, so a view opened on a long log starts
     // at the last thing the command said and the same keys walk back through it.
     let total = lines.len() as u16;
-    let max_offset = total.saturating_sub(areas[1].height);
-    let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
+    let offset = offset_from_end(total, areas[1].height, session.scroll);
     frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
     highlight_selection(frame, session);
     Laid::default()
+}
+
+/// The first row to draw so that the last of `total` rows lands on the bottom row of `height`,
+/// moved `scroll` rows back towards the start and never past it.
+fn offset_from_end(total: u16, height: u16, scroll: u16) -> u16 {
+    let max_offset = total.saturating_sub(height);
+    max_offset.saturating_sub(scroll.min(max_offset))
 }
 
 /// Which delegate this is, and what it was asked to do.
