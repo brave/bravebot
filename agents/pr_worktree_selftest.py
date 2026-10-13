@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("pr_worktree", HERE / "pr_worktree.py")
@@ -201,18 +202,17 @@ exit 128
 
 @contextlib.contextmanager
 def an_agent_holding(keys):
+    # An ssh command the caller exported would run in place of the fake for the first push.
     with tempfile.TemporaryDirectory() as tmp:
         bin = Path(tmp)
         (bin / "ssh").write_text(FAKE_SSH)
         (bin / "ssh-add").write_text("#!/bin/sh\ncat <<'EOF'\n" + "".join(k + "\n" for k in keys) + "EOF\n")
         for tool in ("ssh", "ssh-add"):
             (bin / tool).chmod(0o755)
-        path = os.environ["PATH"]
-        os.environ["PATH"] = f"{bin}{os.pathsep}{path}"
-        try:
+        env = {name: value for name, value in os.environ.items() if name not in ("GIT_SSH_COMMAND", "GIT_SSH")}
+        env["PATH"] = f"{bin}{os.pathsep}{os.environ['PATH']}"
+        with mock.patch.dict(os.environ, env, clear=True):
             yield
-        finally:
-            os.environ["PATH"] = path
 
 
 def an_ssh_remote(root):
