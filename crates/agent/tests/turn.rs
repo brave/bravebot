@@ -12528,6 +12528,157 @@ fn a_turn_that_has_written_is_not_told_to_write() {
     );
 }
 
+/// Moves the session to another mode when the planner's `at`th call finishes, standing in for the
+/// person pressing the mode key while that round runs.
+struct ChangesTheModeAfterACall {
+    live: bravebot_agent::LiveMode,
+    to: bravebot_agent::PermissionMode,
+    at: usize,
+    finished: usize,
+}
+
+impl bravebot_agent::report::Reporter for ChangesTheModeAfterACall {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn tool_finished(&mut self, _activity: bravebot_agent::report::Activity) {
+        self.finished += 1;
+        if self.finished == self.at {
+            self.live.set(self.to);
+        }
+    }
+}
+
+/// Reads past the round the line to write comes at, under `live`, with `reporter` watching, and
+/// returns every request the model was sent.
+fn read_past_the_write_threshold(
+    name: &str,
+    live: &bravebot_agent::LiveMode,
+    reporter: &mut (impl bravebot_agent::report::Reporter + Send),
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("here is the plan"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle").with_permission_mode(live.clone()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        reporter,
+        &mut sink,
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies = every_request(&received);
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the turn never read past the threshold, so it could not have been told"
+    );
+    bodies
+}
+
+/// TURN-3: a turn in plan mode is not told to write, however long it reads.
+///
+/// Plan mode refuses every write for the turn and its prompt tells the planner not to call one
+/// (MODE-3), so a line telling it to write now contradicts the prompt and asks for a call the
+/// turn will refuse. The write tools are still offered in plan mode, so the offer alone cannot
+/// tell this turn from one that may write.
+#[test]
+fn a_turn_in_plan_mode_is_not_told_to_write() {
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Plan);
+    let bodies = read_past_the_write_threshold(
+        "no-writes-plan-mode",
+        &live,
+        &mut bravebot_agent::report::IgnoreReports,
+    );
+
+    assert!(
+        bodies[0].contains("Plan mode. The user is deciding"),
+        "the turn did not start in plan mode, so this says nothing about it"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn in plan mode was told to write"
+    );
+}
+
+/// TURN-3, MODE-8: a turn the person moves into plan mode during the round the line would come
+/// at is not told to write.
+///
+/// The mode in force when the round ends decides it, not the one the turn or the round began in:
+/// the next request tells the planner that writing is refused, and a line beside it saying to
+/// write now would contradict it.
+#[test]
+fn a_turn_moved_into_plan_mode_is_not_told_to_write() {
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let mut reporter = ChangesTheModeAfterACall {
+        live: live.clone(),
+        to: bravebot_agent::PermissionMode::Plan,
+        at: ROUNDS_BEFORE_WRITING,
+        finished: 0,
+    };
+    let bodies = read_past_the_write_threshold("no-writes-into-plan-mode", &live, &mut reporter);
+
+    let told = |body: &String| body.contains("Plan mode. The user is deciding");
+    assert!(
+        !told(&bodies[ROUNDS_BEFORE_WRITING - 1]) && told(&bodies[ROUNDS_BEFORE_WRITING]),
+        "the mode did not change during the round the line comes at"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn moved into plan mode was told to write"
+    );
+}
+
+/// TURN-3, MODE-8: a turn the person moves out of plan mode is told to write at the round it
+/// would have been told at had it never been in plan mode.
+///
+/// Leaving plan mode makes a write possible again for the rest of the turn, so the rounds already
+/// spent reading still count. A turn that kept the mode it began with would never say it, and one
+/// that read the mode as the round began would say it a round late.
+#[test]
+fn a_turn_moved_out_of_plan_mode_is_told_to_write() {
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Plan);
+    let mut reporter = ChangesTheModeAfterACall {
+        live: live.clone(),
+        to: bravebot_agent::PermissionMode::Ask,
+        at: ROUNDS_BEFORE_WRITING,
+        finished: 0,
+    };
+    let bodies = read_past_the_write_threshold("no-writes-out-of-plan-mode", &live, &mut reporter);
+
+    let told = |body: &String| body.contains("Plan mode has ended");
+    assert!(
+        !told(&bodies[ROUNDS_BEFORE_WRITING - 1]) && told(&bodies[ROUNDS_BEFORE_WRITING]),
+        "the mode did not change during the round the line comes at"
+    );
+    let fired = bodies
+        .iter()
+        .position(|body| body.contains("nothing written yet"))
+        .expect("a turn moved out of plan mode was never told to write");
+    assert_eq!(
+        fired, ROUNDS_BEFORE_WRITING,
+        "the line came on the wrong round"
+    );
+}
+
 /// A turn continuing one that was stopped after a write is not told that nothing is written yet.
 ///
 /// A stop is usually not the end of the task. The next prompt is `continue`, and the change the

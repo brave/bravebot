@@ -2804,8 +2804,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let mut changed_at: Option<usize> = None;
         let mut ran_a_program = false;
         let mut said_nothing_run = false;
-        // Whether a write is possible at all here, which a run offered no write tool cannot be
-        // nudged into. Read once: the offer does not change while the turn runs.
+        // Whether a write tool is offered at all, which a run offered none cannot be nudged into.
+        // Read once: a tool loaded while the turn runs is a server's, never one of these. The mode
+        // can change while it runs, and is read where the nudge is decided.
         let may_write = tools::offer_writes(&offered);
         let may_run = tools::offer_runs(&offered);
         // The same question in the form the refusals read it in: a tool that will not answer may say
@@ -4444,7 +4445,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // that asks for a change from one that asks a question, and it must not try: what it
                     // knows is that rounds have gone by and nothing was written, and the planner is the
                     // one that knows whether that is wrong.
+                    //
+                    // Plan mode offers the write tools and refuses every call to them, so no write
+                    // is possible while it is in force. Read as the round ends rather than once per
+                    // turn, since the person can change the mode while the turn runs (MODE-8).
                     if may_write
+                        && !task.permission_mode.get().refuses_writes()
                         && !conversation.asked_to_write()
                         && !said_nothing_written
                         && steps >= ROUNDS_BEFORE_WRITING
