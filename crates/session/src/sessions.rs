@@ -1948,12 +1948,18 @@ impl Handle {
         for point in standing.rewind {
             self.retain_rewind_coverage(&point.coverage);
         }
-        if self.title.is_empty() {
+        // A prompt with nothing in it titles the record without settling the session's name, so the
+        // first prompt that says something still names it (SESSION-4).
+        if self.title.is_empty() && !first_prompt.trim().is_empty() {
             self.title = title_from(first_prompt);
         }
 
         let Some(directory) = self.directory() else {
             return;
+        };
+        let title = match self.title.is_empty() {
+            true => title_from(first_prompt),
+            false => self.title.clone(),
         };
 
         let record = Record {
@@ -1964,7 +1970,7 @@ impl Handle {
             issue: self.issue.clone(),
             pull_request: self.pull_request.clone(),
             handed_off_from: self.handed_off_from.clone(),
-            title: self.title.clone(),
+            title,
             started: self.started,
             updated: now(),
             turns: standing.turns,
@@ -2949,6 +2955,23 @@ mod tests {
     #[test]
     fn a_prompt_with_nothing_in_it_still_has_a_title() {
         assert_eq!(title_from("   \n\n"), "untitled");
+    }
+
+    /// The cut counts characters, so a title of wider characters is as long as one in ASCII and is
+    /// never split inside a character, and a title of exactly the longest length is not cut.
+    #[test]
+    fn a_title_is_cut_after_sixty_characters_rather_than_bytes() {
+        let sixty = "x".repeat(60);
+        assert_eq!(
+            title_from(&sixty),
+            sixty,
+            "a title of the longest length was cut"
+        );
+        assert_eq!(title_from(&"x".repeat(61)), format!("{sixty}…"));
+
+        // One byte, then two-byte characters, so a cut at sixty bytes lands inside a character.
+        let accented = format!("a{}", "é".repeat(99));
+        assert_eq!(title_from(&accented), format!("a{}…", "é".repeat(59)));
     }
 
     /// The phrasing itself is tested where it lives; what matters here is that a stored time
@@ -5038,6 +5061,54 @@ mod tests {
         assert!(
             handle.title().is_empty(),
             "the undone turn still names the session"
+        );
+    }
+
+    /// A save with nothing asked yet, as a desktop turn the person did not type makes, still writes
+    /// a titled record. The name is the first prompt that says something, and a later prompt does
+    /// not replace it (SESSION-4).
+    #[test]
+    fn a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-blank-first-prompt");
+        let empty = bravebot_agent::Conversation::new().snapshot();
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let trust = TrustStore::new("/work");
+        let programs = TrustedPrograms::default();
+        let standing = |turns| Standing {
+            history: None,
+            conversation: &empty,
+            turns,
+            tokens: 0,
+            spend: &spend,
+            timing: &timing,
+            model: None,
+            todos: &todos,
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+        };
+        let recorded = |handle: &Handle| load(&root, handle.id()).expect("the record").title;
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.save(" \n", standing(0));
+        assert_eq!(recorded(&handle), "untitled");
+
+        handle.save("fix the parser\nit drops commas", standing(1));
+        assert_eq!(recorded(&handle), "fix the parser");
+        assert_eq!(handle.title(), "fix the parser");
+
+        handle.save("and the lexer", standing(2));
+        assert_eq!(
+            recorded(&handle),
+            "fix the parser",
+            "a later prompt renamed the session"
         );
     }
 

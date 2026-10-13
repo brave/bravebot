@@ -1140,10 +1140,9 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
 
 /// A session that has written a record without having had a turn is written where it moves to.
 ///
-/// A shell command and a compaction both write a record before the first turn, and what makes the
-/// session resumable in its new home is a record being there. Moving without writing one would
-/// leave the session offering no id to resume by, and its only record under a directory it is no
-/// longer working in.
+/// A shell command writes a record before the first turn, and what makes the session resumable in
+/// its new home is a record being there. Moving without writing one would leave the session
+/// offering no id to resume by, and its only record under a directory it is no longer working in.
 #[test]
 fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
     let scratch = Scratch::new("moved-after-a-command");

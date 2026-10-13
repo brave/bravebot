@@ -149,7 +149,10 @@ it still has a title.
 
 `verified-by: bravebot_session::sessions::a_title_is_the_first_line_of_the_prompt`
 `verified-by: bravebot_session::sessions::a_long_title_is_cut_and_says_it_was`
+`verified-by: bravebot_session::sessions::a_title_is_cut_after_sixty_characters_rather_than_bytes`
 `verified-by: bravebot_session::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
+`verified-by: bravebot_session::sessions::a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt`
+`verified-by: bravebot_tui::app::compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session`
 
 <a id="SESSION-5"></a>
 ### SESSION-5: everything here degrades to doing nothing
