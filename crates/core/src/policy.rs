@@ -3208,7 +3208,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// it before the run is what keeps the processor out of the decision: nothing it writes has
     /// any bearing on how what it writes is labelled.
     ///
-    /// The instruction is the planner's own words and must be public. It is not routing, since
+    /// The instruction is the planner's own words and must be public. `spawn_processor` labels it
+    /// from the context with [`Policy::adopt_model_output`], so once the planner has been shown
+    /// private content no instruction it writes passes. It is not routing, since
     /// a processor has nowhere to route anything to: no tool, no path, no address, and one
     /// output slot chosen by the driver. It is nonetheless read here rather than carried,
     /// which is the same relaxation [`Policy::promote_confined_read`] makes and rests on the
@@ -3234,12 +3236,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let label = instruction.label();
         if !label.is_public() {
+            // An instruction labelled from a context holding private content is private however
+            // it is worded, so advice to reword would only send the planner round again.
+            let instead = if self.holds == Confidentiality::Private {
+                "what you write has been private since you were shown private content, so no \
+                 rewording changes that and no processor can be started in this conversation; \
+                 tell the user what this one was for"
+            } else {
+                "say what to do rather than pasting what was read"
+            };
             return Err(self.deny(
                 "processor",
                 Principle::Confinement,
                 format!(
                     "{id}: the instruction is {label} and private content must not become one; \
-                     say what to do rather than pasting what was read"
+                     {instead}"
                 ),
             ));
         }

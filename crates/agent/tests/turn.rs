@@ -11284,6 +11284,7 @@ fn a_planner_shown_private_content_cannot_instruct_a_processor() {
         let sent = every_request(&received);
         let (processors, planners): (Vec<&String>, Vec<&String>) = sent
             .iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
             .partition(|body| body.contains("You are an isolated processor"));
         let told = planners.last().expect("the planner's last round");
         if shown {
@@ -11300,6 +11301,14 @@ fn a_planner_shown_private_content_cannot_instruct_a_processor() {
             assert!(
                 told.contains("private content must not become one"),
                 "the planner was not told why its instruction was refused: {told}"
+            );
+            // Rewording cannot make the instruction public, so the planner is told no processor
+            // can be started rather than sent round again to reword it.
+            assert!(
+                told.contains("no processor can be started in this conversation")
+                    && !told.contains("rather than pasting what was read"),
+                "the planner was told to reword an instruction no wording could make public: \
+                 {told}"
             );
         } else {
             assert_eq!(
