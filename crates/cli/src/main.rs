@@ -752,8 +752,8 @@ fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>
 /// Removed before dispatch for the reason `--settings` is: how far a program may reach is a
 /// property of the run, and a flag read per subcommand would be one silently ignored by whichever
 /// forgot it. Given twice the last one wins, as `--settings` does. A blank or unknown word is
-/// refused rather than read as the default, because the three modes differ in what a program may
-/// reach and a script whose variable expanded to nothing asked for one of them.
+/// refused rather than read as the default, because the modes differ in what a program may reach
+/// and a script whose variable expanded to nothing asked for one of them.
 fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
     let mut named = None;
     let mut kept = Vec::with_capacity(args.len());

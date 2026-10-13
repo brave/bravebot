@@ -1481,15 +1481,15 @@ impl Settings {
             .find(|(mode, _)| SandboxMode::Strict.is_looser_than(*mode))
     }
 
-    /// The layers that named `workspace-write` or `off` without being entitled to, with the mode, weakest
-    /// first. Reported rather than obeyed, for the reason `vetting_ignored` is.
+    /// The layers that named `read-only`, `workspace-write` or `off` without being entitled to, with
+    /// the mode, weakest first. Reported rather than obeyed, for the reason `vetting_ignored` is.
     pub fn sandbox_ignored(&self) -> impl Iterator<Item = (&Path, SandboxMode)> {
         self.sandbox_ignored
             .iter()
             .map(|(path, mode)| (path.as_path(), *mode))
     }
 
-    /// The layers that named `sandbox.mode` as something other than one of the three words. Read as
+    /// The layers that named `sandbox.mode` as something that names none of the four modes. Read as
     /// absence and reported, since a mistyped `strict` is the failure worth interrupting somebody
     /// over.
     pub fn sandbox_unreadable(&self) -> impl Iterator<Item = &Path> {
@@ -7011,7 +7011,7 @@ mod tests {
         }
     }
 
-    /// SANDBOX-22: a value that is not one of the three words is absence and is reported with its
+    /// SANDBOX-22: a value that names none of the four modes is absence and is reported with its
     /// file, in every layer. The regression it rejects is a near miss read as a mode.
     #[test]
     fn a_word_that_is_not_a_mode_chooses_nothing_and_is_reported() {
