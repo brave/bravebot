@@ -2495,7 +2495,24 @@ fn what_becomes_of_a_job(kept: bool) -> &'static str {
 /// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
 /// is the only account of it the planner ever gets.
 fn how_it_ended(codes: &[Option<i32>], confinement: Option<&str>) -> crate::report::Outcome {
-    let failed: Vec<String> = codes
+    let failed = failed_steps(codes);
+    if failed.is_empty() {
+        crate::report::Outcome::Succeeded
+    } else {
+        crate::report::Outcome::Failed {
+            detail: failed,
+            confinement: confinement.map(str::to_string),
+        }
+    }
+}
+
+/// The steps that did not exit zero, each numbered from 1 by its place among the steps that ran,
+/// joined by commas.
+///
+/// Read off the exit codes alone, so no byte of what the steps printed reaches it. Empty where
+/// every step exited zero.
+fn failed_steps(codes: &[Option<i32>]) -> String {
+    codes
         .iter()
         .enumerate()
         .filter(|(_, code)| **code != Some(0))
@@ -2503,15 +2520,8 @@ fn how_it_ended(codes: &[Option<i32>], confinement: Option<&str>) -> crate::repo
             Some(code) => format!("step {} exited {code}", at + 1),
             None => format!("step {} was killed", at + 1),
         })
-        .collect();
-    if failed.is_empty() {
-        crate::report::Outcome::Succeeded
-    } else {
-        crate::report::Outcome::Failed {
-            detail: failed.join(", "),
-            confinement: confinement.map(str::to_string),
-        }
-    }
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What one tool produced, before dispatch wraps it up.
@@ -8651,16 +8661,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             } else if ran.ended_well {
                 crate::report::Outcome::Succeeded
             } else {
-                let failed: Vec<String> = ran
-                    .failures()
-                    .iter()
-                    .map(|(at, code)| match code {
-                        Some(code) => format!("step {at} exited {code}"),
-                        None => format!("step {at} was killed"),
-                    })
-                    .collect();
                 crate::report::Outcome::Failed {
-                    detail: failed.join(", "),
+                    detail: failed_steps(&ran.codes),
                     confinement: confinement
                         .as_ref()
                         .map(|confinement| confinement.profile(&plan.steps())),
@@ -11595,6 +11597,18 @@ mod tests {
         // Not an invitation to guess at anything else.
         assert_eq!(strip_namespace("tools.todo_write"), "tools.todo_write");
         assert_eq!(strip_namespace("functions."), "functions.");
+    }
+
+    /// The planner is told which step failed and how, and acts on that number: a step counted
+    /// among the failures rather than among the steps, or a killed step left out, sends it to fix
+    /// the wrong program.
+    #[test]
+    fn each_failed_step_is_named_by_its_place_and_how_it_ended() {
+        assert_eq!(
+            failed_steps(&[Some(2), Some(0), None]),
+            "step 1 exited 2, step 3 was killed"
+        );
+        assert_eq!(failed_steps(&[Some(0), Some(0)]), "");
     }
 
     /// A task list is written by the planner, which has only reference names, and read by the
