@@ -1000,11 +1000,6 @@ impl StreamAccumulator {
             .filter(|name| !name.is_empty())
     }
 
-    /// Whether the server has reported usage, so the count is now authoritative.
-    pub fn usage_is_reported(&self) -> bool {
-        self.usage.is_some()
-    }
-
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
     }
@@ -1051,8 +1046,7 @@ impl StreamAccumulator {
     /// measurement, and the figure exists to tell somebody what a session cost them.
     ///
     /// The estimate is chunks of text rather than tokens, the part of what
-    /// [`StreamAccumulator::output_tokens`] shows live that it has always shown, and
-    /// [`StreamAccumulator::usage_is_reported`] is how a caller tells the two apart. Pieces of a
+    /// [`StreamAccumulator::output_tokens`] shows live that it has always shown. Pieces of a
     /// tool argument are left out: they keep the live count moving while a long file is written,
     /// and counting them here would raise what every reply without a figure is charged.
     pub fn finish(self) -> (String, Option<String>, Vec<ToolCall>, Usage) {
@@ -1271,7 +1265,7 @@ mod tests {
 
             assert_eq!(accumulated.output_tokens(), 3, "the live estimate was lost");
             assert!(
-                !accumulated.usage_is_reported(),
+                accumulated.usage.is_none(),
                 "a receipt reports no output, so the count it shows is still an estimate"
             );
             let (_, _, _, usage) = accumulated.finish();
@@ -1384,7 +1378,7 @@ mod tests {
                 );
             }
 
-            assert!(!acc.usage_is_reported(), "the server reported nothing");
+            assert!(acc.usage.is_none(), "the server reported nothing");
             let live = acc.output_tokens();
             let (_, _, _, usage) = acc.finish();
             assert_eq!(
@@ -1422,7 +1416,7 @@ mod tests {
                 acc.push(chunk(r#"{"choices":[{"delta":{"content":"x"}}]}"#));
                 assert_eq!(acc.output_tokens(), n);
             }
-            assert!(!acc.usage_is_reported());
+            assert!(acc.usage.is_none());
         }
 
         /// A long file is written as a tool argument, so a count of text alone stands still for
@@ -1470,7 +1464,7 @@ mod tests {
                 r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":51}}"#,
             ));
             assert_eq!(acc.output_tokens(), 51);
-            assert!(acc.usage_is_reported());
+            assert!(acc.usage.is_some());
             assert_eq!(acc.usage().prompt_tokens, 100);
         }
 

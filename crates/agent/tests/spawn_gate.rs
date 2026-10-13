@@ -14,12 +14,16 @@
 #![cfg(unix)]
 
 use bravebot_agent::usability::{self, Stage as Probe, Workflow};
-use bravebot_agent::{exec, hooks, shell};
+use bravebot_agent::{hooks, shell};
 use bravebot_config::hooks::{Hooks, Moment};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::{Pipeline, Stage};
 use std::path::Path;
 use std::time::Duration;
+
+#[allow(dead_code)]
+#[path = "../test-support/pipelines.rs"]
+mod pipelines;
 
 /// Runs `start` on another thread while this one holds the gate, and checks that the start reaches
 /// the gate, is held there, and finishes once the gate is released.
@@ -52,7 +56,7 @@ fn a_run_stage_waits_for_a_channel_being_created() {
             .expect("/bin/sh resolves"),
     ];
     start_waits_for_the_gate(move || {
-        let ran = exec::run(&pipeline, &resolved, Path::new("/"), &Cancel::new(), None)
+        let ran = pipelines::run(&pipeline, &resolved, Path::new("/"), &Cancel::new(), None)
             .expect("the program runs");
         assert!(ran.succeeded());
     });

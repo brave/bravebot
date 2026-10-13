@@ -16,6 +16,10 @@
 #[allow(dead_code)]
 mod repository;
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::remembered::Store;
 use bravebot_core::command::{Plan, Step, Steps};
 use bravebot_core::remembered::RememberedLine;
@@ -542,7 +546,7 @@ fn a_checkout_is_not_made_under_the_state_directory() {
     let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
     trust.trust(".");
 
-    let outcome = bravebot_agent::turn::run_cancellable(
+    let outcome = turns::run_cancellable(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,

@@ -32,7 +32,7 @@ use std::time::Instant;
 
 use crate::confirm::Confirmer;
 use crate::conversation::{Composed, Conversation, TOOL_RESULT_PREFIX};
-use crate::report::{DelegateId, IgnoreReports, Phase, Reporter};
+use crate::report::{DelegateId, Phase, Reporter};
 use crate::request_view::{Prompt, Provenance, RequestView};
 use crate::timing::{Elapsed, Timing};
 use crate::tools;
@@ -1687,7 +1687,7 @@ pub struct Outcome {
 impl Outcome {
     /// The reply as text, for showing to the user.
     ///
-    /// Authorised inside [`run`], while the policy is still alive, so the release is
+    /// Authorised inside [`resume`], while the policy is still alive, so the release is
     /// recorded in the audit trail rather than happening implicitly after the fact.
     pub fn reply_for_display(&self) -> &str {
         &self.display
@@ -1705,29 +1705,6 @@ impl Outcome {
     pub fn ran_on_the_sessions_model(&self) -> bool {
         !self.compared_the_model_itself
     }
-}
-
-/// Run one turn.
-///
-/// Routing is precommitted from the task before any file is read, so the set of files
-/// and the shape of the request are fixed before untrusted content is in play.
-pub fn run<S: Sink + Send, C: Confirmer + Send>(
-    config: &Config,
-    egress: &Egress,
-    workspace: &Workspace,
-    task: &Task,
-    confirmer: &mut C,
-    sink: &mut S,
-) -> Result<Outcome, TurnError> {
-    run_with_trust(
-        config,
-        egress,
-        workspace,
-        task,
-        confirmer,
-        sink,
-        crate::workspace::trust_store(workspace.root()),
-    )
 }
 
 /// Session decisions after an ordinary turn ending. Advice and exposure answers are live-only.
@@ -1813,52 +1790,6 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     CompletedTurn { outcome, decisions }
 }
 
-/// As [`run_with_trust`], with a token the caller can use to stop the turn and a reporter to tell
-/// about progress. This starts and ends a standalone session. Continuing callers use [`resume`]
-/// and adopt its decisions on every ending.
-///
-/// The reporter is separate from the confirmer because it cannot affect the turn: it is told
-/// things and has no reply, so a caller with nowhere to draw passes [`IgnoreReports`] and loses
-/// nothing but the display.
-#[allow(clippy::too_many_arguments)]
-pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
-    config: &Config,
-    egress: &Egress,
-    workspace: &Workspace,
-    task: &Task,
-    confirmer: &mut C,
-    reporter: &mut R,
-    sink: &mut S,
-    trust: TrustStore,
-    cancel: &Cancel,
-) -> Result<Outcome, TurnError> {
-    run_inner(
-        config,
-        egress,
-        workspace,
-        task,
-        &mut Conversation::new(),
-        confirmer,
-        reporter,
-        sink,
-        trust,
-        // A fresh conversation vouches for no program: the list belongs to a session, and this
-        // begins one.
-        TrustedPrograms::new(),
-        // And it begins and ends one, so a set kept past the turn would be kept past the session
-        // it belonged to. The turn owns the servers it starts and stops them on the way out.
-        None,
-        cancel,
-        None,
-        // A turn a person asked for reads what its hooks said off the [`Outcome`].
-        None,
-        // And how many rounds it made, off the same [`Outcome`].
-        None,
-        // And it opens the run's wallet rather than being lent one: it is the run.
-        None,
-    )
-}
-
 /// Run one delegate's turn.
 ///
 /// Everything a delegate is comes off the spec on the task, so this adds nothing to the ordinary
@@ -1923,44 +1854,6 @@ pub(crate) fn delegated(
         programs: decisions.programs,
     };
     outcome
-}
-
-/// As [`run`], with the user's trust decisions.
-///
-/// The map comes back in the [`Outcome`] because a turn can change it: writing untrusted data
-/// into a trusted path marks that path untrusted, and a session must carry that forward or the
-/// next turn would read the same data back as trusted.
-pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
-    config: &Config,
-    egress: &Egress,
-    workspace: &Workspace,
-    task: &Task,
-    confirmer: &mut C,
-    sink: &mut S,
-    trust: TrustStore,
-) -> Result<Outcome, TurnError> {
-    run_inner(
-        config,
-        egress,
-        workspace,
-        task,
-        &mut Conversation::new(),
-        confirmer,
-        &mut IgnoreReports,
-        sink,
-        trust,
-        TrustedPrograms::new(),
-        // One turn is the whole session here, so the set the turn owns is the session's.
-        None,
-        &Cancel::new(),
-        None,
-        // A turn a person asked for reads what its hooks said off the [`Outcome`].
-        None,
-        // And how many rounds it made, off the same [`Outcome`].
-        None,
-        // And it opens the run's wallet rather than being lent one: it is the run.
-        None,
-    )
 }
 
 /// Compact a conversation on its own, outside any turn.

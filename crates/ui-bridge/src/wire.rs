@@ -426,7 +426,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // What the write does to the file's line terminators, which the changes below cannot
         // show: they are compared without them. Null where both sides end in `\n`.
         "lineEndings": request.line_endings_note(),
-        "existing": request.existing.is_some(),
+        "existing": request.is_overwrite(),
         "added": diff.added(),
         "removed": diff.removed(),
         // False when the diff had to give up on an exact answer, which happens on two

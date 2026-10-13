@@ -34,6 +34,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+#[allow(dead_code)]
+#[path = "../../agent/test-support/pipelines.rs"]
+mod pipelines;
+
 const PATIENCE: Duration = Duration::from_secs(60);
 const RACE_STARTS: usize = 400;
 const FORGED: &str = "FORGED-BY-A-TOOL";
@@ -1044,7 +1048,7 @@ fn the_descriptor_is_named_before_the_arrow_on_linux_and_last_on_macos() {
 /// itself holds the near end of every channel, and the programs it starts hold none of it.
 #[test]
 fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
-    use bravebot_agent::{exec, hooks};
+    use bravebot_agent::hooks;
     use bravebot_config::hooks::{Hooks, Moment};
     use bravebot_core::cancel::Cancel;
     use bravebot_core::{Pipeline, Stage};
@@ -1075,7 +1079,7 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
     let sh = Path::new("/bin/sh")
         .canonicalize()
         .expect("/bin/sh resolves");
-    let ran = exec::run(
+    let ran = pipelines::run(
         &Pipeline::new(vec![Stage::new(
             "sh",
             vec!["-c".into(), list_sockets_command()],

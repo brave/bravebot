@@ -5,6 +5,10 @@
 //! are the ones that matter, and each asserts the negative directly, that no extra request went
 //! out and no file appeared, rather than asserting that a reply looked sensible.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::manifest;
 use bravebot_agent::turn::Task;
 use bravebot_agent::{Mode, Workspace};
@@ -1931,7 +1935,7 @@ fn a_turn_reports_no_planning_record() {
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
 
-    let outcome = bravebot_agent::turn::run(
+    let outcome = turns::run(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,

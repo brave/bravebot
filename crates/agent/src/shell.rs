@@ -128,7 +128,7 @@ pub fn shell_named(variable: Option<String>) -> String {
 /// Run `line` through the user's shell in `directory`, and collect what it printed.
 ///
 /// `cancel` is checked while waiting, so a slow command can be stopped. Like
-/// [`crate::exec::run`] this kills rather than detaching: a command still running is an effect in
+/// [`crate::exec::run_plan_observed`] this kills rather than detaching: a command still running is an effect in
 /// progress, and asking it to stop is asking for it to end.
 ///
 /// The line is passed as a single argument after `-c`, so the shell parses it and nothing here
