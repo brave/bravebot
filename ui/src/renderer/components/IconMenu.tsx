@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { ButtonMenu, type IconName } from '../nala'
+import { useFocusReturn, useMenuItemRoles } from '../hooks'
 import { IconButton } from './IconButton'
 
 /**
@@ -27,32 +28,19 @@ export function IconMenu({ icon, label, tooltip, shortcut, disabled, className, 
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLElement>(null)
-  const reason = useRef('explicit')
-  useEffect(() => {
-    const menu = trigger.current?.parentElement
-    if (!menu) return
-    const restore = (): void => {
-      for (const item of menu.querySelectorAll<HTMLElement>('leo-menu-item[data-role]')) {
-        if (item.getAttribute('role') !== item.dataset.role) item.setAttribute('role', item.dataset.role!)
-      }
-    }
-    restore()
-    const watch = new MutationObserver(restore)
-    watch.observe(menu, { subtree: true, childList: true, attributes: true, attributeFilter: ['role'] })
-    return () => watch.disconnect()
-  }, [])
+  const { onClose, restoreFocus } = useFocusReturn(trigger)
+  useMenuItemRoles(trigger)
   return (
     <ButtonMenu
       className={`icon-menu${className ? ` ${className}` : ''}`}
       isOpen={open}
       placement={placement}
       positionStrategy="fixed"
-      onClose={(detail) => { reason.current = detail.reason }}
+      onClose={onClose}
       onChange={({ isOpen }) => {
         setOpen(isOpen)
         onOpen?.(isOpen)
-        if (!isOpen && reason.current !== 'blur') trigger.current?.focus()
-        if (!isOpen) reason.current = 'explicit'
+        if (!isOpen) restoreFocus()
       }}
     >
       <IconButton
