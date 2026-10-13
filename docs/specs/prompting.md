@@ -470,10 +470,10 @@ prompt showed the row says what it leaves out.
 | the sandbox mode | `y` at the question `/sandbox off` asks; `/sandbox` naming any other mode asks nothing | that programs `run` starts will have no profile, so nothing confines what they read, write or reach, and the mode a no keeps | nothing about any one run. Every program a later turn starts runs with no profile | the process; `/resume` hands it to the session it starts | `verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode` `verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode` |
 
 **Why.** A yes about one thing comes to cover another when the key it is kept under holds less than
-the prompt showed, or is relative to something that later moves. Each of those has been fixed where
-it was found, and none of the fixes made the next prompt say what its answer is kept under. A row has
-to be written before a question lands, so what the key holds is decided where a reviewer reads it,
-and the audit can hold the code to it.
+the prompt showed, or is relative to something that later moves. With no row written before a
+question lands, nothing makes a prompt state what its answer is kept under, and a key that holds
+less than the prompt showed lets one yes cover another effect. Writing the row first decides what
+the key holds where a reviewer reads it, and the audit can hold the code to it.
 
 <a id="PROMPT-9"></a>
 ### PROMPT-9: where nobody can be asked, the answer is no
