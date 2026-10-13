@@ -3091,11 +3091,10 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 
 /// Interpret a paste.
 ///
-/// A paste is one act rather than a run of keys, which is the whole point of asking the
-/// terminal for it separately: the text lands in the box and the user decides when to send it.
-/// It never submits, whatever it ends with.
 /// Answer a paste the terminal delivered, which is what Command-V and the middle mouse button
-/// become by the time they reach this process.
+/// become by the time they reach this process. A paste is one act rather than a run of keys, which
+/// is the whole point of asking the terminal for it separately: the text lands in the box and the
+/// user decides when to send it. It never submits, whatever it ends with.
 ///
 /// A paste that arrives carrying nothing is the interesting one. It means the terminal wrote the
 /// bracketed-paste markers with nothing between them, which is what happens when the clipboard
@@ -3210,16 +3209,6 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     }
 }
 
-/// Take what the selection covers and put it on the clipboard.
-///
-/// What the user swept over is what they saw: wrapped, scrolled and trimmed exactly as it was
-/// drawn. So it is read back off a frame rather than out of the transcript, which would have to
-/// be laid out a second time to say what any of it looked like.
-///
-/// Drawn again to get one. A finished draw resets the buffer the next one will be built in, so
-/// the frame that drew the screen is the only place the screen can be read from.
-///
-/// A click that swept over nothing just puts the selection away.
 /// Draw a frame, and take back what it laid the transcript out to.
 ///
 /// Every draw a person looks at goes through here, so nothing can redraw without the session
@@ -3264,6 +3253,16 @@ fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crat
     let _ = crate::title::mark(terminal.backend_mut(), state);
 }
 
+/// Take what the selection covers and put it on the clipboard.
+///
+/// What the user swept over is what they saw: wrapped, scrolled and trimmed exactly as it was
+/// drawn. So it is read back off a frame rather than out of the transcript, which would have to
+/// be laid out a second time to say what any of it looked like.
+///
+/// Drawn again to get one. A finished draw resets the buffer the next one will be built in, so
+/// the frame that drew the screen is the only place the screen can be read from.
+///
+/// A click that swept over nothing just puts the selection away.
 fn copy_selection(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -3705,8 +3704,6 @@ fn show_transcript(
     Ok(())
 }
 
-/// Concrete in the backend rather than generic: the loop is only ever driven by a real
-/// terminal, and a generic backend's error type carries no bounds to convert from.
 /// The session left behind, for telling somebody how to pick it up again.
 ///
 /// Nothing for a session that was opened and left without sending anything: there is no record to
@@ -4040,6 +4037,9 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
     }
 }
 
+/// Concrete in the backend rather than generic: the loop is only ever driven by a real
+/// terminal, and a generic backend's error type carries no bounds to convert from.
+///
 /// Returns the session left behind, where there is one to pick up again.
 #[allow(clippy::too_many_arguments)]
 fn event_loop(
@@ -5707,15 +5707,6 @@ fn expand_home(directory: &str) -> String {
     }
 }
 
-/// Ask the endpoint what it offers, let the user pick, and remember what they picked.
-///
-/// A refusal or an unreachable endpoint leaves the model as it was and says so. That is the right
-/// outcome for a list nobody could fetch: guessing a set of names would offer choices the backend
-/// may not have, and a picker showing only "automatic" would look like a server with one model.
-///
-/// The list is content and the choice is routing. Nothing here is quarantined, because there is no
-/// planner context to keep it out of: the names are drawn for a person, and their pick is the
-/// endorsement for the request field it lands in.
 /// Ask the endpoint what it offers.
 ///
 /// Shared by the picker and by the budget lookup a session does when it starts, because both want
@@ -6172,6 +6163,15 @@ fn advertised_inputs<'a>(
         .map_or(&[], |model| model.advertised.input_modalities.as_slice())
 }
 
+/// Ask the endpoint what it offers, let the user pick, and remember what they picked.
+///
+/// A refusal or an unreachable endpoint leaves the model as it was and says so. That is the right
+/// outcome for a list nobody could fetch: guessing a set of names would offer choices the backend
+/// may not have, and a picker showing only "automatic" would look like a server with one model.
+///
+/// The list is content and the choice is routing. Nothing here is quarantined, because there is no
+/// planner context to keep it out of: the names are drawn for a person, and their pick is the
+/// endorsement for the request field it lands in.
 fn choose_model(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
