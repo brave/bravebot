@@ -9,6 +9,7 @@ use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// How long a stop waits for a session to end before it is killed.
@@ -27,6 +28,32 @@ pub(crate) fn sessions(args: &[String]) -> ExitCode {
         [word, rest @ ..] if word == "search" => crate::session_search::command(rest),
         _ => fail(Ending::Argument, t!(sessions_usage)),
     }
+}
+
+/// The directory `sessions import` and `sessions search` look in: the one the person typed, or the
+/// current one. It has to exist and be a directory; a path that is not one is an argument error.
+pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
+    let directory = match named {
+        Some(path) => path,
+        None => match std::env::current_dir() {
+            Ok(here) => here,
+            Err(_) => return Err(fail(Ending::Failed, t!(cli_directory_unknown))),
+        },
+    };
+    directory
+        .canonicalize()
+        .and_then(|resolved| {
+            resolved
+                .is_dir()
+                .then_some(resolved)
+                .ok_or(std::io::ErrorKind::NotADirectory.into())
+        })
+        .map_err(|_| {
+            fail(
+                Ending::Argument,
+                t!(sessions_import_no_project, path = directory.display()),
+            )
+        })
 }
 
 fn list(as_json: bool) -> ExitCode {
