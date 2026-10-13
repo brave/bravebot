@@ -13,7 +13,6 @@ governs:
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
   - crates/cli/src/auth.rs
-  - crates/cli/src/doctor.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 

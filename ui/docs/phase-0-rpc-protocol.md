@@ -825,7 +825,7 @@ was asked to be kept.
 The app will otherwise fail opaquely on a machine with no credentials, which is the first
 machine anyone will try it on.
 
-**v1 shells out.** The checks live in `crates/cli/src/main.rs`, a binary, so they cannot
+**v1 shells out.** The checks live in `crates/cli/src/doctor.rs`, in a binary, so they cannot
 be called as a library without an upstream change (§2.3). The bridge runs `bravebot doctor`,
 captures stdout and stderr, and returns their combined text:
 
