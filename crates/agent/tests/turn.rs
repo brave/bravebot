@@ -12706,6 +12706,152 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
     );
 }
 
+/// A line refused for a credential it left behind had run to its end before the scan read what it
+/// left, so the turn that ran it is not told that nothing was run.
+#[test]
+fn a_line_refused_for_a_credential_it_left_counts_as_run() {
+    let scratch = Scratch::new("credential-refused-still-ran");
+    std::fs::write(scratch.path.join("key.txt"), format!("{DECLARED_KEY}\n")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        tool_request("run", r#"{"command":"cat key.txt > build.log"}"#),
+    ];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    // Vouched for, since what the scan of a destination reads is decided by whether the line's
+    // program was, and a line nobody vouched for would never reach the refusal under test.
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        vouching_for("cat", &["key.txt"], &scratch.path),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("put a credential in build.log")),
+        "the line was not refused for what it left, so this is not the case under test"
+    );
+    assert!(
+        bodies.len() > ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 2,
+        "the turn ended before the question would have fallen due, so its absence proves nothing"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a turn whose line ran was asked why nothing had been run"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told no command was run after one ran: {:?}",
+        reporter.narration
+    );
+}
+
+/// A line that stopped on an error before any program in it started has built nothing, so the
+/// change before it is still reported as never built.
+///
+/// The error does not say whether a program had started, so a turn that counted every line that
+/// failed would tell the person their change had been built after a line whose one program never
+/// ran.
+#[test]
+fn a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_never_built() {
+    let scratch = Scratch::new("line-failed-before-starting");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        tool_request(
+            "run",
+            r#"{"command":"cat notes.txt > missing-directory/out.txt"}"#,
+        ),
+    ];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("did not run") && body.contains("could not be opened")),
+        "the line did not fail on its redirection, so this is not the case under test"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a line whose program never started was counted as a build"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// A turn that has read for a long time and written nothing is told so, once.
 ///
 /// The failure this is for produced nothing at all: fourteen minutes of reading, a plan the

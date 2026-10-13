@@ -1785,10 +1785,10 @@ pub struct Output {
     pub ran_a_program: bool,
     /// Whether a program was started, whatever came of the call.
     ///
-    /// Wider than `ran_a_program`, which says a change was built: a line refused for a credential
-    /// it left behind, or one that failed after an earlier stage had spawned, built nothing the
-    /// planner may rely on and still started a program. Read for the checkout, which is kept
-    /// wherever one was started (CHECKOUT-15).
+    /// Wider than `ran_a_program`, which says a program ran: a line that failed after an earlier
+    /// stage may have spawned is marked here and not there, since the failure does not say whether
+    /// anything started. Read for the checkout, which is kept wherever one was started
+    /// (CHECKOUT-15).
     pub started_a_program: bool,
     /// Whether a stage of the command was git, so a result sealed from the planner can name the
     /// tool that reads history without a prompt.
@@ -8641,8 +8641,13 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.record_ambient(&spends);
     }
     if !left.scanned.refused().is_empty() {
-        return credential_refusal_after_a_line(&displayed, &left, &stuck)
-            .having_started_a_program();
+        let refused = credential_refusal_after_a_line(&displayed, &left, &stuck);
+        // A line that ran to its end has run, whatever the scan made of what it left (TURN-4). One
+        // that stopped on an error may not have started anything, and the error does not say.
+        return match ran.is_ok() {
+            true => refused.having_run_a_program(),
+            false => refused.having_started_a_program(),
+        };
     }
 
     match ran {
