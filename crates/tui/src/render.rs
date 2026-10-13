@@ -53,6 +53,8 @@ use self::scroller::needle_that_fits;
 #[cfg(test)]
 use self::transcript::{lay_out, transcript_lines};
 #[cfg(test)]
+use self::watching::padded;
+#[cfg(test)]
 use crate::keybindings::Keybindings;
 #[cfg(test)]
 use crate::state::Status;
@@ -767,11 +769,16 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
+    highlight_selection(frame, session);
+
+    laid
+}
+
+/// Paint the selection, where there is one, over what the frame already holds.
+fn highlight_selection(frame: &mut Frame, session: &Session) {
     if let Some(selection) = &session.selection {
         crate::select::highlight(frame.buffer_mut(), selection);
     }
-
-    laid
 }
 
 /// Draw the thumbnails side by side, leftmost first, each only where it fits whole.
@@ -1777,6 +1784,25 @@ mod tests {
                 !rows.contains("who calls it"),
                 "the task was drawn past the edge of the row: {rows}"
             );
+        }
+
+        /// The counts down the right edge of the list line up only if the column before them is
+        /// exactly as wide on every row, so a short task is padded out to its room and a long one
+        /// is cut to it. A cut one ends in an ellipsis, so it does not read as the whole task. The
+        /// room is counted in characters, as the rest of the row's columns are.
+        #[test]
+        fn a_list_column_is_cut_with_an_ellipsis_or_padded_to_its_room() {
+            assert_eq!(padded("", 0), "");
+            assert_eq!(
+                padded("run the build", 0),
+                "…",
+                "a row with no room still says something was cut"
+            );
+            assert_eq!(padded("run", 6), "run   ");
+            assert_eq!(padded("run the", 7), "run the");
+            assert_eq!(padded("run the build", 7), "run th…");
+            assert_eq!(padded("héllo", 6), "héllo ");
+            assert_eq!(padded("ééééé", 3), "éé…");
         }
 
         /// The mark invites a prompt, and a delegate takes none. A delegate that has not made a
