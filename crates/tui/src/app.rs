@@ -2964,10 +2964,6 @@ fn event_loop(
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
                 scratch = opened_scratch(&mut session, &mut workspace);
-                // The servers go with it, LSP-8: what was approved was a process for the session,
-                // so dropping the set shuts them down and the session beginning here is asked
-                // again before one starts.
-                answers.servers = None;
                 // Last, once everything the new session is asked has been answered: the next pass
                 // of the loop sends it as the person's own line.
                 if let Some(brief) = brief {
@@ -3073,7 +3069,8 @@ fn event_loop(
                         &mut stored,
                     )?;
                     // Taken apart with no `..`, so an answer a turn learns to remember does not
-                    // build until it has a place in `answers`, where `/cd` and `/clear` decide it.
+                    // build until it has a place in `answers`, where `/cd`, `/clear` and `/branch`
+                    // decide it.
                     let Continued {
                         conversation: next,
                         trust,
@@ -4801,10 +4798,10 @@ impl Rules {
 
 /// The answers the event loop itself keeps past the prompt that gave them.
 ///
-/// One value so that `/cd` and `/clear` each take it apart with no `..`: a set added here does not
-/// build until both say whether it is kept, reset, rebased or read again. The mode, vetting and the
-/// MCP servers are the `Session`'s, and the directories `/add-dir` opened are the `Workspace`'s, so
-/// neither pattern reaches them.
+/// One value so that `/cd`, `/clear` and `/branch` each take it apart with no `..`: a set added here
+/// does not build until each says whether it is kept, reset, rebased or read again. The mode, vetting
+/// and the MCP servers are the `Session`'s, and the directories `/add-dir` opened are the
+/// `Workspace`'s, so no pattern reaches them.
 struct Answers {
     trust: TrustStore,
     programs: TrustedPrograms,
@@ -4845,21 +4842,43 @@ impl Answers {
     /// secret were answers given to the session the copy was made from, and `--resume` of the copy
     /// would start without them.
     fn forget_what_no_record_keeps(&mut self) {
-        self.servers = None;
-        self.asked_about = AskedAbout::new();
-        self.exposed = bravebot_core::credentials::Exposed::new();
+        let Answers {
+            trust: _,
+            programs: _,
+            rules: _,
+            servers,
+            asked_about,
+            exposed,
+        } = self;
+        *servers = None;
+        *asked_about = AskedAbout::new();
+        *exposed = bravebot_core::credentials::Exposed::new();
     }
 
     /// Forget what the session agreed to, for one beginning again in this process (`/clear`).
     fn forget_what_was_agreed(&mut self) {
+        let Answers {
+            // Replaced by the `/clear` arm before it calls this: the map the new session was asked
+            // for, TRUST-6, and the rules read again for the root it opens in, PERM-15.
+            trust: _,
+            rules: _,
+            programs,
+            servers,
+            asked_about,
+            exposed,
+        } = self;
         // A new session vouches for no program, on the same reasoning as the map: the list is a
         // standing permission, and this begins a session that was never asked.
-        self.programs = TrustedPrograms::new();
+        *programs = TrustedPrograms::new();
+        // The servers go with it, LSP-8: what was approved was a process for the session, so
+        // dropping the set shuts them down and the session beginning here is asked again before
+        // one starts.
+        *servers = None;
         // And nothing has been asked about, since the questions this list holds were put in a
         // session that is over.
-        self.asked_about = AskedAbout::new();
+        *asked_about = AskedAbout::new();
         // And nothing agreed to be shown, and no file agreed to hold a secret, for the same reason.
-        self.exposed = bravebot_core::credentials::Exposed::new();
+        *exposed = bravebot_core::credentials::Exposed::new();
     }
 }
 
@@ -24699,6 +24718,42 @@ mod tests {
             !answers.exposed.holds(".env"),
             "the copy kept a file agreed to be shown"
         );
+    }
+
+    /// `/clear` begins a session nobody has asked anything. A program vouched for, a server
+    /// approved, a run prompt drawn and a file agreed to be shown were answers about the session it
+    /// ends, and kept they would answer the next one's questions for it.
+    #[test]
+    fn clearing_forgets_every_answer_the_session_it_ends_gave() {
+        let root = crate::testutil::scratch_dir("bravebot-app-clear-answers");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), &root);
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        give_answers(&mut answers, &root);
+
+        answers.forget_what_was_agreed();
+
+        assert_eq!(
+            answers.programs,
+            TrustedPrograms::new(),
+            "the new session kept a program vouched for"
+        );
+        assert!(
+            answers.servers.is_none(),
+            "the new session kept the servers approved"
+        );
+        assert_eq!(
+            answers.asked_about,
+            AskedAbout::new(),
+            "the new session kept the run prompts drawn"
+        );
+        assert!(
+            !answers.exposed.holds(".env"),
+            "the new session kept a file agreed to be shown"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// SESSION-31, CHECKOUT-16: a fork carries no checkout, so a branch while the session keeps one
