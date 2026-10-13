@@ -23,10 +23,13 @@ pub const QUARANTINE_BAR: &str = "\u{2503}";
 
 /// How many lines of what a question is about are shown before the rest is counted instead.
 ///
-/// A write is approved from the change it would make and a read from the bytes it would release,
-/// so the content is what the question is; and the whole of a generated file is not readable as
-/// one. A person scrolled past a thousand lines is answering whatever was in front of them at the
-/// end of it, which is not the question that was asked.
+/// A write is approved from the change it would make, so the change is what the question is; and
+/// the whole of a generated file is not readable as one. A person scrolled past a thousand lines is
+/// answering whatever was in front of them at the end of it, which is not the question that was
+/// asked.
+///
+/// A command's output is not capped ([`output_lines`]), since a yes releases every byte of it to
+/// the planner and a line counted rather than shown would be approved unread.
 pub const MOST_CONTENT_LINES: usize = 40;
 
 /// Replace control characters, so shown text cannot move the cursor or recolour the screen.
@@ -58,13 +61,22 @@ pub fn quarantined(content: &str) -> Vec<String> {
     let mut rows = Vec::new();
     let mut counted = content.lines();
     for line in counted.by_ref().take(MOST_CONTENT_LINES) {
-        rows.push(format!("{QUARANTINE_BAR} {}", printable(line)));
+        rows.push(behind_the_margin(line));
     }
     let left_out = counted.count();
     if left_out > 0 {
         rows.push(t!(transcript_more_lines, count = left_out).to_string());
     }
     rows
+}
+
+/// Quarantined content as rows, each behind a margin, and none of it left out.
+fn quarantined_in_full(content: &str) -> Vec<String> {
+    content.lines().map(behind_the_margin).collect()
+}
+
+fn behind_the_margin(line: &str) -> String {
+    format!("{QUARANTINE_BAR} {}", printable(line))
 }
 
 /// What a write's approval holds besides the sentence naming it.
@@ -281,14 +293,17 @@ pub fn fetch_lines(host: &str, url: &str, metadata_service: bool) -> Vec<String>
 }
 
 /// The lines a command's output is read before the planner may: what it is, what was made of it,
-/// then the output behind the margin.
+/// then every line of the output behind the margin.
+///
+/// None of the output is left out, because a yes releases all of it to the planner (OUTPUT-1).
+/// The terminal's panel and the desktop card show all of it too.
 pub fn output_lines(summary: &str, check: Check, output: &str) -> Vec<String> {
     let mut lines = vec![
         printable(summary),
         t!(output_unseen).to_string(),
         checked(check),
     ];
-    lines.extend(quarantined(output));
+    lines.extend(quarantined_in_full(output));
     lines
 }
 
