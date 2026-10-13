@@ -4,6 +4,8 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/command_table.rs
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
   - crates/tui/src/away.rs

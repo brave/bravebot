@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
   - crates/ui-bridge/src/attached.rs
 guards:

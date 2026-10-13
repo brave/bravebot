@@ -19,6 +19,7 @@ governs:
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: Policy::address
   - symbol: Session::address
