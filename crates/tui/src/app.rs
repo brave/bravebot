@@ -5264,17 +5264,21 @@ fn opening_trust(
 
 /// A key press while a command runs from shell mode.
 ///
-/// A scroller left open when the command began (a queued command line begins one as the turn ends,
-/// and nothing closes a view then) answers the press first, so `q`, Escape, Ctrl-O and Ctrl-C close
-/// it and the press that reaches the command is the next one (SCROLL-1). Otherwise a running
-/// command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a turn: the
-/// way out is the press after that, at the box. Every other key waits. A command is brief, and
-/// taking a prompt here would leave it half-typed when the output lands on top of it.
+/// A view left open when the command began answers the press first, since a queued command line
+/// begins one as the turn ends and nothing closes a view then. The delegate view takes every key
+/// (WATCH-9) and the scroller its own (SCROLL-1), so Ctrl-C and Escape are theirs while either is
+/// open, and the first press after it closes is the one that reaches the command. Otherwise a
+/// running command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a
+/// turn: the way out is the press after that, at the box. Every other key waits. A command is
+/// brief, and taking a prompt here would leave it half-typed when the output lands on top of it.
 fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     if key.kind == KeyEventKind::Release {
         return;
     }
-    if session.scrolling() {
+    if session.watching().is_some() {
+        let action = watching_key(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
+    } else if session.scrolling() {
         let action = scroller_key(session, key);
         act_while_working(session, action, crate::clipboard::paste);
     } else if stops_a_command(session, key) {
@@ -9292,6 +9296,120 @@ mod tests {
             goal_check_key(&mut session, released(ctrl('c')));
             assert!(session.goal().is_some(), "the release took the goal off");
             assert!(!session.is_quitting(), "the release ended the session");
+        }
+
+        /// A command line queued behind a turn begins as the turn ends, and nothing closes the view
+        /// then, so a person reading a delegate when the turn finished is still reading it while
+        /// the command runs. The view is on the second of two delegates, so there is a list behind
+        /// it.
+        fn watched_under_a_running_command() -> (Session, Cancel) {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            let reader = spawn(&mut session, "reader", "find the parser");
+            let checker = spawn(&mut session, "checker", "run the build");
+            handle_key_while_working(&mut session, ctrl('l'));
+            session.open_watched();
+            session.delegate_finished(reader, "answered".to_string(), false, None);
+            session.delegate_finished(checker, "built".to_string(), false, None);
+            session.complete("an answer", Vec::new(), 0);
+            session.begin_command();
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("checker"),
+                "the view was not on a delegate when the command began"
+            );
+            (session, Cancel::new())
+        }
+
+        /// The two keys that close the view from either level close it from a delegate with a
+        /// list behind it, and the command they did not reach goes on.
+        #[test]
+        fn ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command() {
+            for closing in [ctrl('c'), ctrl('l')] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, closing, &cancel);
+
+                assert!(
+                    session.watching().is_none(),
+                    "{closing:?} left the view open"
+                );
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{closing:?} stopped the command as well as closing the view"
+                );
+            }
+        }
+
+        /// Escape and `q` are read against the nearest level while a command runs as they are
+        /// mid-turn: back to the list from a delegate, and out from the list.
+        #[test]
+        fn escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close() {
+            for leaving in [key(KeyCode::Esc), key(KeyCode::Char('q'))] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, leaving, &cancel);
+                assert!(
+                    session.listing_delegates(),
+                    "{leaving:?} did not go back to the list from a delegate"
+                );
+
+                command_key(&mut session, leaving, &cancel);
+                assert!(
+                    session.watching().is_none(),
+                    "{leaving:?} did not close the list"
+                );
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{leaving:?} stopped the command from inside the view"
+                );
+            }
+        }
+
+        /// The press that closes the view is spent doing so, and its release is not a press, so
+        /// the next press is the one that stops the command.
+        #[test]
+        fn the_press_after_the_view_closes_stops_the_command() {
+            for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, ctrl('c'), &cancel);
+                assert!(session.watching().is_none(), "the view did not close");
+                assert!(
+                    !cancel.is_cancelled(),
+                    "the press that closed the view stopped the command"
+                );
+                command_key(&mut session, released(ctrl('c')), &cancel);
+                assert!(
+                    !cancel.is_cancelled(),
+                    "the release of the press that closed the view stopped the command"
+                );
+
+                command_key(&mut session, stopping, &cancel);
+                assert!(cancel.is_cancelled(), "{stopping:?} did not reach it");
+            }
+        }
+
+        /// The view is moved through with the keys it answers mid-turn, since somebody reading a
+        /// delegate when the command began is still reading.
+        #[test]
+        fn the_view_left_open_under_a_running_command_still_moves_between_delegates() {
+            let (mut session, cancel) = watched_under_a_running_command();
+
+            command_key(&mut session, key(KeyCode::Char('p')), &cancel);
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("reader"),
+                "p did not move to the previous delegate"
+            );
+
+            command_key(&mut session, key(KeyCode::Char('n')), &cancel);
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("checker"),
+                "n did not move to the next delegate"
+            );
+            assert!(!cancel.is_cancelled());
         }
 
         /// Both keys close, and a person who reached for the one they close every other panel

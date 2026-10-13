@@ -221,8 +221,9 @@ list from a delegate, and close the mode from the list or where there is no list
 Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
 before they reach the turn: the turn in flight goes on, and the press that reaches it is the next
 one. A summary, an aside and a goal check are read the same way, each being a request the view can
-be open over. A goal armed behind a check is not touched either, since the press that closes the
-view is not a press about it.
+be open over. So is a command line that waited in the queue, which begins as the turn ends with the
+view still open, and the press that closes the view does not stop it. A goal armed behind a check
+is not touched either, since the press that closes the view is not a press about it.
 
 There is no key for talking to a delegate and no box for it. A delegate is given one task, has
 nobody to ask, and takes no line typed mid-turn.
@@ -246,6 +247,10 @@ watching is also the mode most likely to be open while something is going wrong.
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
+`verified-by: bravebot_tui::app::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
+`verified-by: bravebot_tui::app::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
+`verified-by: bravebot_tui::app::the_press_after_the_view_closes_stops_the_command`
+`verified-by: bravebot_tui::app::the_view_left_open_under_a_running_command_still_moves_between_delegates`
 `verified-by: bravebot_tui::app::x_stops_the_delegate_the_view_is_on_and_no_other`
 `verified-by: bravebot_tui::app::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
 `verified-by: bravebot_tui::app::a_chord_on_x_does_not_stop_a_delegate`
