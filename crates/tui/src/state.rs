@@ -1379,8 +1379,9 @@ pub struct Session {
     outputs: Vec<Output>,
     /// Where the rows of the turn in flight, or of the last one, begin in `outputs`.
     ///
-    /// The jobs the hint line counts and `/status` lists are the rows from here on: a job cannot
-    /// outlive its turn, so the last turn's are the only ones there is anything to say about.
+    /// The jobs the hint line counts and `/status` lists are the rows from here on. A job's row can
+    /// come before it and still be reported on: a kept job stopped between turns has its finish
+    /// told in the next turn (RUN-27).
     jobs_from: usize,
     /// Every question asked beside the work this session, oldest first.
     ///
@@ -2961,6 +2962,10 @@ impl Session {
             row.outcome = printed.outcome;
             return;
         }
+        // What a job printed is drawn in its row and nowhere else (WATCH-22).
+        if printed.job.is_some() {
+            return;
+        }
         self.outputs.push(Output {
             command: printed.command,
             lines: printed.lines,
@@ -3018,11 +3023,15 @@ impl Session {
         }
     }
 
-    /// The row of the job by this name, among the jobs of the turn in flight that belong to whoever
-    /// the driver last said the reports are from.
+    /// The newest row of the job by this name that belongs to whoever the driver last said the
+    /// reports are from.
+    ///
+    /// The newest, because a job's start makes its row before anything else is said about it.
+    /// Searched from the first row and not from where the list of jobs starts: a kept job the person
+    /// stopped between turns is out of the next turn's list when that turn reports its finish.
     fn job_row(&mut self, name: &str) -> Option<&mut Output> {
         let whose = self.attributed_to;
-        self.outputs[self.jobs_from..].iter_mut().rev().find(|row| {
+        self.outputs.iter_mut().rev().find(|row| {
             row.job
                 .as_ref()
                 .is_some_and(|job| job.name == name && job.delegate == whose)
@@ -9500,6 +9509,24 @@ mod tests {
                     ("cargo build", None, JobState::Ended),
                     ("cargo test", Some(id), JobState::Running),
                 ]
+            );
+        }
+
+        /// WATCH-22. What a job printed is drawn in its row and nowhere else, so a look at a job
+        /// with no row of its own adds none. A row made from it would be a second row for the job,
+        /// listed as a plain command, and a delegate's row by the same name is not its row either.
+        #[test]
+        fn a_look_at_a_job_with_no_row_of_its_own_adds_no_row() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "cargo test");
+            session.reporting_for(None);
+            job_looked(&mut session, "job:1", &["Compiling a"]);
+
+            assert_eq!(session.outputs().len(), 1, "the look made a row");
+            assert!(
+                session.outputs()[0].lines.is_empty(),
+                "the turn's look landed on the delegate's row"
             );
         }
 

@@ -579,6 +579,8 @@ earlier rows saying the job was running after it had ended.
 `verified-by: bravebot_tui::state::a_jobs_row_stops_adding_lines_at_a_gap_and_at_what_one_look_keeps`
 `verified-by: bravebot_tui::render::a_delegates_job_says_whose_it_is_and_the_turns_does_not`
 `verified-by: bravebot_tui::state::a_job_printing_status_shaped_lines_changes_no_row_mark_or_count`
+`verified-by: bravebot_tui::state::a_look_at_a_job_with_no_row_of_its_own_adds_no_row`
+`verified-by: bravebot_tui::kept_jobs_tests::a_job_stopped_between_turns_keeps_its_one_row_through_the_next_turns_report`
 `verified-by: bravebot_agent::turn::a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name`
 `verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
 

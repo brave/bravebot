@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use super::undo_tests::endpoint;
 
-/// A checkout holding `serve`, a program that records its pid and then sleeps.
+/// A checkout holding `serve`, a program that prints a line, records its pid and then sleeps.
 fn a_checkout(name: &str) -> PathBuf {
     let root = crate::testutil::scratch_dir(name);
     let _ = std::fs::remove_dir_all(&root);
@@ -16,7 +16,7 @@ fn a_checkout(name: &str) -> PathBuf {
     let script = root.join("serve");
     std::fs::write(
         &script,
-        "#!/bin/sh\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
+        "#!/bin/sh\necho listening\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
     )
     .expect("script");
     use std::os::unix::fs::PermissionsExt;
@@ -108,6 +108,80 @@ fn a_stop_between_turns_ends_the_program_and_the_row() {
     assert!(
         !is_alive(&pid),
         "the stop left the program running between turns"
+    );
+}
+
+/// WATCH-22. The next turn's first round reports the finish of a job stopped between turns, and
+/// what the job printed lands on its row; neither that report nor a later look adds a row. The
+/// next turn's list starts past a job that is no longer running, so a search for the row within
+/// that list misses it, and what the job printed becomes a second row listed as a plain command.
+#[test]
+fn a_job_stopped_between_turns_keeps_its_one_row_through_the_next_turns_report() {
+    let root = a_checkout("kept-job-stopped-then-reported");
+    let mut session = Session::new("none");
+    a_turn_that_started_a_job(&mut session, &root);
+    session.complete("started", Vec::new(), 0);
+    assert!(session.stop_job("job:1", None));
+
+    session.type_char('b');
+    session.submit().expect("the next turn begins");
+    let workspace = Workspace::new(&root).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::tool("job_output", json!({"job": "job:1"})),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let mut reporter = RecordingReporter::default();
+    turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &Task::new("anything").keeping_jobs(session.kept_jobs().expect("kept").clone()),
+        &mut Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveRuns,
+        &mut reporter,
+        &mut Trail::new(),
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    server.join().expect("the model finished");
+    let about_the_job = reporter
+        .printed
+        .iter()
+        .filter(|printed| printed.job.as_deref() == Some("job:1"))
+        .count();
+    assert_eq!(
+        about_the_job, 2,
+        "the turn did not report the finish and the look: {:?}",
+        reporter.printed
+    );
+    for event in reporter.jobs {
+        session.job(event);
+    }
+    for printed in reporter.printed {
+        session.command_printed(printed);
+    }
+
+    let rows: Vec<_> = session
+        .outputs()
+        .iter()
+        .map(|row| row.job.as_ref().map(|job| (job.name.as_str(), job.state)))
+        .collect();
+    assert_eq!(rows, [Some(("job:1", JobState::Ended))]);
+    let row = &session.outputs()[0];
+    assert_eq!(row.lines, ["listening"], "what it printed missed its row");
+    assert!(
+        matches!(row.outcome, Outcome::StoppedByTheUser(_)),
+        "{:?}",
+        row.outcome
     );
 }
 
