@@ -1279,7 +1279,7 @@ impl Settings {
         self.terminal_title
     }
 
-    /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-42).
+    /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
     ///
     /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
     /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
@@ -5765,7 +5765,7 @@ mod tests {
         assert_eq!(settings.unread_keys().count(), 0);
     }
 
-    /// INPUT-42: the key turns a request that spends on, so only a real `true` does it. A quoted
+    /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
     /// `"true"` read as true would spend for somebody who wrote something else.
     #[test]
     fn only_a_boolean_turns_suggestions_on() {

@@ -87,7 +87,7 @@ we are trying to do, where the work stands, and what is next.";
 /// The most a recap shows or keeps, in characters.
 pub const RECAP_LIMIT: usize = 400;
 
-/// What a follow-up suggestion asks, in the driver's own words (INPUT-42).
+/// What a follow-up suggestion asks, in the driver's own words (INPUT-43).
 ///
 /// The exchange it is asked over is the planner's own context, so the suggestion is written from
 /// what the person and the planner have said and from nothing else.
@@ -157,7 +157,7 @@ fn capped(text: &str, limit: usize) -> String {
 }
 
 /// The answer to [`SUGGEST_QUESTION`] as something the box may offer, or `None` where it breaks
-/// a count the instruction set (INPUT-42).
+/// a count the instruction set (INPUT-43).
 ///
 /// Counts only: characters, words and lines. What the words say is not read, so a suggestion that
 /// is a poor one or an odd one is offered as it came, and one that is too long is not offered at
@@ -228,7 +228,7 @@ impl Question {
         }
     }
 
-    /// The next prompt, asked over the exchange as it stands (INPUT-42).
+    /// The next prompt, asked over the exchange as it stands (INPUT-43).
     ///
     /// A question the driver writes, over the planner's own context. The answer is read through
     /// [`suggestion`], which holds it to the counts the instruction asked for.
@@ -468,7 +468,7 @@ mod tests {
         );
     }
 
-    /// INPUT-42: only an answer inside the counts is offered, and the counts are the whole of the
+    /// INPUT-43: only an answer inside the counts is offered, and the counts are the whole of the
     /// rule. A word count of one, thirteen words, a hundred characters and a second line each fail
     /// it, and a good one passes with its surrounding whitespace gone.
     #[test]
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(suggestion(&hundred), None);
     }
 
-    /// INPUT-42: a suggestion is a question with a limit, asked over the exchange, in the driver's
+    /// INPUT-43: a suggestion is a question with a limit, asked over the exchange, in the driver's
     /// words, and it leaves the exchange as it was.
     #[test]
     fn a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone() {

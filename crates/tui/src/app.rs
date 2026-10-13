@@ -1712,7 +1712,7 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 }
 
-/// What a key does to the suggestion in the empty box, if one is on offer (INPUT-42).
+/// What a key does to the suggestion in the empty box, if one is on offer (INPUT-43).
 ///
 /// Tab or Right, pressed bare, moves it into the box as text; the key is spent doing so and the
 /// line is not otherwise edited. Any other key takes the suggestion away and is then read as it
@@ -1755,7 +1755,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 
     // After the modes above, which claim every key of their own, and before anything that edits the
-    // line: a suggestion is taken by Tab or Right, and any other key removes it (INPUT-42).
+    // line: a suggestion is taken by Tab or Right, and any other key removes it (INPUT-43).
     if let Some(action) = suggestion_key(session, key) {
         return action;
     }
@@ -4338,7 +4338,7 @@ fn event_loop(
     let mut needs_draw = true;
     let mut drawn_at = Instant::now();
     let mut face_held = crate::avatar::look_now();
-    // The request for a suggestion that has gone out and not yet answered, if one has (INPUT-42).
+    // The request for a suggestion that has gone out and not yet answered, if one has (INPUT-43).
     let mut suggesting: Option<Suggesting> = None;
 
     loop {
@@ -4359,7 +4359,7 @@ fn event_loop(
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
         // A suggestion the box has stopped being empty for is dropped, and one whose request has
-        // answered is taken, before the frame so it is drawn on this pass (INPUT-42).
+        // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
         session.settle_suggestion();
         needs_draw |= take_suggestion(&mut session, &mut stored, &mut suggesting);
         // Before the frame rather than after it, so the first frame of an open panel names the
@@ -5280,7 +5280,7 @@ fn event_loop(
     }
 }
 
-/// A request for a follow-up suggestion that has gone out on a thread of its own (INPUT-42).
+/// A request for a follow-up suggestion that has gone out on a thread of its own (INPUT-43).
 struct Suggesting {
     answer: mpsc::Receiver<Suggested>,
 }
@@ -5293,7 +5293,7 @@ struct Suggested {
     events: Vec<Stamped>,
 }
 
-/// Whether a turn that just ended is followed by a request for a suggestion (INPUT-42).
+/// Whether a turn that just ended is followed by a request for a suggestion (INPUT-43).
 ///
 /// Every input is something the driver already knows: the setting, the mode, how the turn ended and
 /// what else is waiting. Nothing the model wrote is read to decide it.
@@ -5373,7 +5373,7 @@ fn suggest_next(
 }
 
 /// Take the answer to a request for a suggestion, if it has come, and say whether the screen
-/// changed (INPUT-42).
+/// changed (INPUT-43).
 ///
 /// What the request cost is charged and its trail kept whether or not the suggestion is offered:
 /// the request went out either way.
@@ -29519,7 +29519,7 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    /// INPUT-42: Tab and Right move the suggestion into the box as text, and nothing sends it.
+    /// INPUT-43: Tab and Right move the suggestion into the box as text, and nothing sends it.
     #[test]
     fn tab_and_right_move_the_suggestion_into_the_box_and_send_nothing() {
         for code in [KeyCode::Tab, KeyCode::Right] {
@@ -29671,7 +29671,7 @@ mod tests {
         session
     }
 
-    /// INPUT-42: an answer that comes back is charged to the session, its trail is kept, and the
+    /// INPUT-43: an answer that comes back is charged to the session, its trail is kept, and the
     /// suggestion is in the box. The screen is then redrawn and the request is not waited on again.
     #[test]
     fn an_answered_request_is_charged_recorded_and_offered() {

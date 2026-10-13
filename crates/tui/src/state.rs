@@ -1519,7 +1519,7 @@ pub struct Session {
     /// session never does: there a job still ends with the turn that started it. Dropping the
     /// value kills whatever is running, so the session ending or being cleared ends them.
     kept_jobs: Option<bravebot_agent::tools::SessionJobs>,
-    /// Whether the `suggestions` setting is on for this session (INPUT-42).
+    /// Whether the `suggestions` setting is on for this session (INPUT-43).
     suggesting: bool,
     /// The next prompt the model proposed, drawn in the empty box until a key takes or drops it.
     suggestion: Option<String>,
@@ -9910,7 +9910,7 @@ impl Session {
     }
 
     /// Turn follow-up suggestions on or off for the session, from the `suggestions` setting
-    /// (INPUT-42). Read once at startup, so what is paid for does not change under a turn.
+    /// (INPUT-43). Read once at startup, so what is paid for does not change under a turn.
     pub fn adopt_suggestions(&mut self, on: bool) {
         self.suggesting = on;
         if !on {

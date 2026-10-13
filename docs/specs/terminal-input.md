@@ -2488,8 +2488,8 @@ pass, so only the idle loop needs this event.
 `verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
 `verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`
 
-<a id="INPUT-42"></a>
-### INPUT-42: an empty box may hold one suggested next prompt, which only Tab or Right takes
+<a id="INPUT-43"></a>
+### INPUT-43: an empty box may hold one suggested next prompt, which only Tab or Right takes
 
 With the `suggestions` setting `true`, a turn that ended with a reply is followed by one request, to
 the model `summaryModel` names where it names one, as [compaction.md](compaction.md) has it, and the session's own model

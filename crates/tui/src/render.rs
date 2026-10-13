@@ -11171,7 +11171,7 @@ mod tests {
             .collect()
     }
 
-    /// INPUT-42: a suggestion takes the invitation's place in the empty box, and the invitation
+    /// INPUT-43: a suggestion takes the invitation's place in the empty box, and the invitation
     /// comes back when it goes.
     #[test]
     fn a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation() {
