@@ -29633,6 +29633,178 @@ mod tests {
         assert_eq!(session.tokens, 120);
         assert_eq!(session.spend_by_turn().get(&0).copied(), Some(120));
     }
+
+    fn a_store_for(name: &str) -> (std::path::PathBuf, bravebot_session::sessions::Handle) {
+        let root = crate::test_profile::project(name);
+        std::fs::create_dir_all(&root).unwrap();
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        (root, stored)
+    }
+
+    fn a_request_in_flight() -> (Option<Suggesting>, mpsc::Sender<Suggested>) {
+        let (worker, answer) = mpsc::channel();
+        (Some(Suggesting { answer }), worker)
+    }
+
+    fn what_the_request_did(text: Option<&str>, tokens: u64) -> Suggested {
+        Suggested {
+            text: text.map(str::to_string),
+            tokens,
+            events: vec![bravebot_session::audit::Stamped {
+                at: 1,
+                from: None,
+                event: bravebot_core::event::Event::GatePassed {
+                    gate: "file_read",
+                    detail: "suggestion".into(),
+                },
+            }],
+        }
+    }
+
+    fn a_session_that_suggests() -> Session {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        session
+    }
+
+    /// INPUT-42: an answer that comes back is charged to the session, its trail is kept, and the
+    /// suggestion is in the box. The screen is then redrawn and the request is not waited on again.
+    #[test]
+    fn an_answered_request_is_charged_recorded_and_offered() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-answered");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+
+        assert!(take_suggestion(&mut session, &mut stored, &mut suggesting));
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 120);
+        assert_eq!(session.suggestion(), Some("run the tests again"));
+        let trail = bravebot_session::sessions::audit_of(&root, stored.id());
+        assert_eq!(trail[&session.turns].len(), 1);
+    }
+
+    /// The request went out whatever it returned, so an answer outside the counts costs the same
+    /// and leaves the same trail, and puts nothing in the box.
+    #[test]
+    fn an_answer_that_is_not_usable_is_still_charged_and_recorded() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-unusable");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        worker.send(what_the_request_did(None, 30)).unwrap();
+
+        take_suggestion(&mut session, &mut stored, &mut suggesting);
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 30);
+        assert_eq!(session.suggestion(), None);
+        let trail = bravebot_session::sessions::audit_of(&root, stored.id());
+        assert_eq!(trail[&session.turns].len(), 1);
+    }
+
+    /// A request that has not been answered yet changes nothing and is still waited on, so the
+    /// answer is taken when it comes.
+    #[test]
+    fn a_request_not_yet_answered_is_waited_on() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (_root, mut stored) = a_store_for("suggestion-pending");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+
+        assert!(!take_suggestion(&mut session, &mut stored, &mut suggesting));
+        assert!(suggesting.is_some());
+        assert_eq!(session.tokens, 0);
+        assert_eq!(session.suggestion(), None);
+
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+        assert!(take_suggestion(&mut session, &mut stored, &mut suggesting));
+        assert_eq!(session.suggestion(), Some("run the tests again"));
+    }
+
+    /// A worker that ends without answering leaves nothing to wait for, and nothing to charge or
+    /// record.
+    #[test]
+    fn a_worker_that_ends_without_answering_is_forgotten() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = a_store_for("suggestion-disconnected");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        drop(worker);
+
+        assert!(!take_suggestion(&mut session, &mut stored, &mut suggesting));
+
+        assert!(suggesting.is_none());
+        assert_eq!(session.tokens, 0);
+        assert_eq!(session.suggestion(), None);
+        assert!(bravebot_session::sessions::audit_of(&root, stored.id()).is_empty());
+    }
+
+    /// An answer that comes after the person began typing is a guess about a state that has
+    /// passed. It is not put in the box, what was typed is kept, and the request is still charged.
+    #[test]
+    fn an_answer_that_arrives_after_typing_is_charged_and_not_offered() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (_root, mut stored) = a_store_for("suggestion-after-typing");
+        let mut session = a_session_that_suggests();
+        let (mut suggesting, worker) = a_request_in_flight();
+        handle_key(&mut session, pressed(KeyCode::Char('a')));
+        worker
+            .send(what_the_request_did(Some("run the tests again"), 120))
+            .unwrap();
+
+        take_suggestion(&mut session, &mut stored, &mut suggesting);
+
+        assert_eq!(session.tokens, 120);
+        assert_eq!(session.suggestion(), None);
+        assert_eq!(session.input(), "a");
+    }
+
+    /// No request goes out where the setting is off, before any turn has ended, or after one that
+    /// did not answer. The worker of a request that did go out cannot be driven without a model,
+    /// so these are the cases that return before it starts.
+    #[test]
+    fn no_request_is_made_where_the_setting_is_off_or_no_turn_answered() {
+        let config = a_config_needing_no_sign_in();
+        let conversation = Conversation::new();
+        let trust = TrustStore::new(workspace_for_test().root());
+
+        let mut off = Session::new("none");
+        off.complete("done", vec![], 10);
+        assert!(suggest_next(&off, &config, &conversation, &trust).is_none());
+
+        let before_any_turn = a_session_that_suggests();
+        assert!(suggest_next(&before_any_turn, &config, &conversation, &trust).is_none());
+
+        let mut failed = a_session_that_suggests();
+        failed.fail(
+            "safe failure",
+            Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        );
+        assert!(suggest_next(&failed, &config, &conversation, &trust).is_none());
+    }
 }
 
 #[cfg(test)]
