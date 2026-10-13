@@ -120,7 +120,31 @@ impl SeatbeltSandbox {
         // the network is allowed. Those grant no filesystem or network reach of their own, and no
         // other service is reachable.
         out.push_str("(allow process-exec)\n");
-        out.push_str("(allow sysctl-read)\n");
+        // KERN_PROCARGS2 can be authorised through either sysctl-read or process-info*.
+        // Refuse both routes: emptying a child's environment does not erase the parent's
+        // exec-time environment. Only named machine-information queries are allowed.
+        out.push_str("(deny process-info*)\n");
+        // System tools query their own pidinfo during startup. This exception cannot name
+        // the parent or any other process, including another process in the same sandbox.
+        out.push_str("(allow process-info-pidinfo (target self))\n");
+        // CPU count and page size serve language runtimes (the numeric page-size query
+        // resolves to pagesize_compat). The remaining names are uname's fields, used by
+        // Python's package platform detection. No process arguments or environment query
+        // is in this list.
+        out.push_str("(allow sysctl-read");
+        for name in [
+            "hw.machine",
+            "hw.ncpu",
+            "hw.pagesize",
+            "hw.pagesize_compat",
+            "kern.hostname",
+            "kern.osrelease",
+            "kern.ostype",
+            "kern.version",
+        ] {
+            out.push_str(&format!(" (sysctl-name {})", quote(name)));
+        }
+        out.push_str(")\n");
         out.push_str("(allow mach-lookup");
         for service in mach_services(policy) {
             out.push_str(&format!(" (global-name {})", quote(service)));
@@ -679,6 +703,40 @@ mod argument_tests {
             )
             .expect("no wrapper reads this path, so nothing misreads it"),
             vec![OsString::from(path)]
+        );
+    }
+
+    /// Neither a broad sysctl grant nor default process-info access may expose a parent's
+    /// exec-time environment. The only process-info exception names the caller itself.
+    #[test]
+    fn process_inspection_is_refused_and_sysctls_are_named_machine_queries() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write("/tmp")
+            .allow_network_egress()
+            .allow_subprocesses();
+        let profile = SeatbeltSandbox::profile(&policy);
+        let inspection: Vec<_> = profile
+            .lines()
+            .filter(|line| line.contains("process-info") || line.contains("sysctl"))
+            .collect();
+        assert_eq!(
+            inspection,
+            [
+                "(deny process-info*)",
+                "(allow process-info-pidinfo (target self))",
+                concat!(
+                    "(allow sysctl-read",
+                    " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.ncpu\")",
+                    " (sysctl-name \"hw.pagesize\")",
+                    " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.hostname\")",
+                    " (sysctl-name \"kern.osrelease\")",
+                    " (sysctl-name \"kern.ostype\")",
+                    " (sysctl-name \"kern.version\"))",
+                ),
+            ]
         );
     }
 
