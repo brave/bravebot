@@ -1035,23 +1035,24 @@ mod tests {
         }
     }
 
-    /// The regression it rejects: a Windows table holding only `gcloud` and `gpg`, which lets a
-    /// person's yes grant `AppData\Local` or a browser profile, or the files of Credential Manager,
-    /// the data protection keys, the account's private keys and the vault, to a container that
-    /// cannot be refused a path inside a grant. Spelled out here and not read from the table, so a row dropped from it fails this.
+    /// The regression it rejects: a Windows table holding only `gcloud` and `gpg` beyond the rows
+    /// every platform shares, which lets a person's yes grant `AppData\Local` or a browser
+    /// profile, or the files of Credential Manager, the data protection keys, the account's private
+    /// keys and the vault, to a container that cannot be refused a path inside a grant. The rows
+    /// are spelled out here and not read from the table, so a row dropped from it fails this.
     #[test]
     fn the_windows_credential_locations_name_the_browser_profiles_and_the_platforms_stores() {
         let home = Path::new(A_HOME);
+        let shared: Vec<PathBuf> = CREDENTIAL_DIRECTORIES
+            .iter()
+            .map(|row| under(home, row))
+            .collect();
+        let mut only_windows: Vec<PathBuf> = credential_locations(Prelude::Windows, home)
+            .into_iter()
+            .filter(|location| !shared.contains(location))
+            .collect();
+        only_windows.sort();
         let mut expected: Vec<PathBuf> = [
-            ".bravebot",
-            ".bravebot-browser",
-            ".ssh",
-            ".aws",
-            ".kube",
-            ".docker",
-            ".azure",
-            ".config/gcloud",
-            ".gnupg",
             "AppData/Roaming/gcloud",
             "AppData/Roaming/gnupg",
             "AppData/Local/BraveSoftware",
@@ -1070,10 +1071,8 @@ mod tests {
         .map(|row| under(home, row))
         .collect();
         expected.sort();
-        let mut windows = credential_locations(Prelude::Windows, home);
-        windows.sort();
 
-        assert_eq!(windows, expected);
+        assert_eq!(only_windows, expected);
     }
 
     /// Without a home directory only the absolute refusal can apply, and the policy still means
