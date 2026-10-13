@@ -25,6 +25,12 @@ const FOLD_AT_NEWLINES: usize = 3;
 /// copies of a prompt, where a prompt is sentences rather than a file.
 const UNDO_DEPTH: usize = 1000;
 
+/// How long the turn's command runs before a prompt waiting for the turn moves it to the background.
+///
+/// Long enough that a command about to finish returns its output to the turn instead of a job to
+/// ask about.
+const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
+
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
 /// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
@@ -1713,7 +1719,9 @@ pub struct Session {
     /// Held only between the driver offering it and that call finishing, and only for the turn's
     /// own call. Delegates run alongside the turn, so a delegate's call finishing while the turn's
     /// command is running must not take the turn's token with it.
-    movable: Option<bravebot_core::cancel::Handoff>,
+    ///
+    /// With the moment it was offered, which is the moment the command started.
+    movable: Option<(bravebot_core::cancel::Handoff, Instant)>,
     /// Prompts typed and sent while a turn was running, in the order they were typed.
     ///
     /// Not in the transcript: they have not happened. They are drawn under the box as waiting,
@@ -3512,7 +3520,7 @@ impl Session {
     /// offers it none, so a token attributed to one is not a token anybody here could mean.
     pub fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
         if self.attributed_to.is_none() {
-            self.movable = Some(handoff);
+            self.movable = Some((handoff, Instant::now()));
         }
     }
 
@@ -3529,11 +3537,34 @@ impl Session {
     ///
     /// Whether a command was moved.
     pub fn move_to_background(&mut self) -> bool {
-        let Some(handoff) = self.movable.take() else {
+        let Some((handoff, _)) = self.movable.take() else {
             return false;
         };
         handoff.request();
         true
+    }
+
+    /// Move the turn's command in flight to the background for a prompt waiting to go into the
+    /// turn, once the command has run for [`GIVE_WAY_AFTER`].
+    ///
+    /// The turn takes a waiting prompt only between rounds, and a round lasts as long as its
+    /// slowest command, which can be minutes. Nothing happens for a command or a command line
+    /// waiting, since those wait for the turn to end, nor for a turn being stopped, which takes
+    /// nothing more.
+    ///
+    /// Whether a command was moved.
+    pub fn give_way_to_the_queue(&mut self, now: Instant) -> bool {
+        let waiting = self.a_turn_is_running()
+            && !self.stopping
+            && self.queued.iter().any(|line| line.waiting.is_sent());
+        match self.movable {
+            Some((_, since))
+                if waiting && now.saturating_duration_since(since) >= GIVE_WAY_AFTER =>
+            {
+                self.move_to_background()
+            }
+            _ => false,
+        }
     }
 
     /// Accept a typed character.
@@ -12494,6 +12525,89 @@ mod tests {
         assert!(
             !session.can_move_to_background(),
             "a stopped turn left its command movable"
+        );
+    }
+
+    /// A turn running a movable command, with its token handed over.
+    fn running_a_movable_command() -> (Session, bravebot_core::cancel::Handoff) {
+        let mut session = session();
+        session.type_char('a');
+        session.submit().expect("submitted");
+        let handoff = bravebot_core::cancel::Handoff::new();
+        session.movable(handoff.clone());
+        (session, handoff)
+    }
+
+    /// A prompt waiting behind a long command reaches the turn without the person stopping the
+    /// turn or knowing the key that moves the command.
+    #[test]
+    fn a_waiting_prompt_moves_a_command_that_has_run_long_enough() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+
+        assert!(session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER));
+        assert!(
+            handoff.is_requested(),
+            "the waiting prompt did not move the command"
+        );
+        assert!(
+            !session.can_move_to_background(),
+            "the hint still offers a move already asked for"
+        );
+        assert!(
+            !session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER),
+            "the command was moved twice"
+        );
+    }
+
+    /// A command a few seconds in is likely about to finish, and moving it would hand the turn a
+    /// job to ask about in place of output that was on its way.
+    #[test]
+    fn a_waiting_prompt_leaves_a_command_that_only_just_started() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+
+        let soon = Instant::now() + GIVE_WAY_AFTER - Duration::from_secs(1);
+        assert!(!session.give_way_to_the_queue(soon));
+        assert!(!handoff.is_requested(), "a command that just started moved");
+        assert!(session.can_move_to_background());
+    }
+
+    /// A command or a command line waits for the turn to end whatever the command does, so moving
+    /// the command for one gets it there no sooner and costs the turn the command's output.
+    #[test]
+    fn only_a_waiting_prompt_moves_the_command() {
+        let (mut session, handoff) = running_a_movable_command();
+        let later = Instant::now() + GIVE_WAY_AFTER;
+        assert!(
+            !session.give_way_to_the_queue(later),
+            "moved with nothing waiting"
+        );
+
+        queue_lines(&mut session, &["/clear"]);
+        session.shell = true;
+        session.input = "ls".to_string();
+        assert!(session.queue_shell());
+
+        assert!(!session.give_way_to_the_queue(later));
+        assert!(
+            !handoff.is_requested(),
+            "a command or a command line waiting moved the command"
+        );
+    }
+
+    /// A turn being stopped takes nothing more. What is waiting becomes a turn of its own once the
+    /// stop lands, and moving the command would get it there no sooner.
+    #[test]
+    fn a_turn_being_stopped_moves_nothing() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+        session.stop_asked();
+
+        assert!(!session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER));
+        assert!(
+            !handoff.is_requested(),
+            "a turn being stopped moved its command"
         );
     }
 

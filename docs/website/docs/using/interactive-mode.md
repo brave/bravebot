@@ -448,6 +448,12 @@ The hint is there only while a press would move something. A command joined to a
 or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
 the hint does not appear for them.
 
+**Sending a message moves it too.** A message you send while the turn waits on a command that could
+be moved goes into the turn at its next round, and the turn reaches that round only when the command
+returns. So once the command has run for 10 seconds, the message moves it to the background as the
+key would, and the turn reads your message next. A command, such as `/clear`, or a shell line waiting
+does not move it, since those wait for the turn to end anyway.
+
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
