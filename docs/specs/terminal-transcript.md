@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/state.rs
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
+  - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/scripts/ux-state.test.mjs

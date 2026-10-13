@@ -15,14 +15,8 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use crate::input;
-use crate::theme;
+use crate::list_picker::{self, ListPicker, Panel, PickerRow};
 
 /// One row of the list.
 ///
@@ -68,15 +62,22 @@ impl Row {
     }
 }
 
-/// What the picker is showing and where the cursor is.
-#[derive(Debug)]
-pub struct Picker {
-    rows: Vec<Row>,
-    /// Which row is under the cursor.
-    selected: usize,
-    /// The level in force when the picker opened, marked in the list.
-    previous: Row,
+impl PickerRow for Row {
+    fn name(&self) -> String {
+        Row::name(*self)
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        Some(Row::hint(*self))
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self == other
+    }
 }
+
+/// What the picker is showing and where the cursor is.
+pub type Picker = ListPicker<Row>;
 
 impl Picker {
     /// Open on the level in use, since that is the row a person is looking for.
@@ -84,64 +85,7 @@ impl Picker {
         let rows = Row::all();
         let previous = Row(current);
         let selected = rows.iter().position(|row| *row == previous).unwrap_or(0);
-        Self {
-            rows,
-            selected,
-            previous,
-        }
-    }
-
-    /// The row under the cursor.
-    pub fn chosen(&self) -> Option<Row> {
-        self.rows.get(self.selected).copied()
-    }
-
-    fn down(&mut self) {
-        let last = self.rows.len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
-    }
-
-    fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-
-    fn is_current(&self, row: Row) -> bool {
-        row == self.previous
-    }
-}
-
-/// What a key press did to the picker.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// Still choosing.
-    Continue,
-    /// Take the row under the cursor.
-    Select,
-    /// Leave the level that was in force alone.
-    Cancel,
-}
-
-/// Interpret one key press.
-pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        return match code {
-            KeyCode::Char('c') => Outcome::Cancel,
-            _ => Outcome::Continue,
-        };
-    }
-
-    match code {
-        KeyCode::Esc => Outcome::Cancel,
-        KeyCode::Enter => Outcome::Select,
-        KeyCode::Up | KeyCode::Char('k') => {
-            picker.up();
-            Outcome::Continue
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            picker.down();
-            Outcome::Continue
-        }
-        _ => Outcome::Continue,
+        Self::open(rows, selected, previous)
     }
 }
 
@@ -153,137 +97,17 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
 pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     current: Option<Effort>,
-    mut behind: impl FnMut(&mut Frame),
+    behind: impl FnMut(&mut Frame),
 ) -> Option<Row> {
-    let mut picker = Picker::new(current);
-
-    loop {
-        if terminal
-            .draw(|frame| {
-                behind(frame);
-                draw(frame, &picker);
-            })
-            .is_err()
-        {
-            return None;
-        }
-
-        let Ok(event) = input::read() else {
-            return None;
-        };
-        let Some(key) = input::key_of(&event) else {
-            continue;
-        };
-        if key.kind != event::KeyEventKind::Press {
-            continue;
-        }
-
-        match handle_key(&mut picker, key.code, key.modifiers) {
-            Outcome::Continue => continue,
-            Outcome::Cancel => return None,
-            Outcome::Select => return picker.chosen(),
-        }
-    }
+    list_picker::choose(terminal, Picker::new(current), &panel(), behind)
 }
 
-fn draw(frame: &mut Frame, picker: &Picker) {
-    let area = centred(frame.area(), picker.rows.len());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::brand_primary()))
-        .title(format!(" {} ", t!(effort_picker_title)))
-        .style(Style::default().bg(theme::background()).fg(theme::text()));
-    let inside = block.inner(area);
-    frame.render_widget(block, area);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // what the row under the cursor is for
-            Constraint::Length(1), // keys
-        ])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(list_lines(picker, layout[0])), layout[0]);
-
-    // Every row has a hint, so this line never empties and the list below it does not shift as the
-    // cursor moves. Indented like the key line rather than like a name, so a sentence under the
-    // list does not read as another row to pick.
-    let hint = picker.chosen().map(Row::hint).unwrap_or_default();
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {hint}"),
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        layout[1],
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", t!(effort_picker_keys)),
-            Style::default().fg(theme::muted()),
-        ))),
-        layout[2],
-    );
-}
-
-/// A centred panel sized to the list, never larger than the terminal.
-fn centred(area: Rect, rows: usize) -> Rect {
-    let available = area.width.saturating_sub(2);
-    let width = available.min(52).max(24.min(available));
-    // Borders, hint line, key line, and one row per level that fits.
-    let list = (rows as u16)
-        .saturating_add(4)
-        .min(area.height.saturating_sub(2));
-    let height = list.max(6).min(area.height.saturating_sub(2));
-
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
+fn panel() -> Panel {
+    Panel {
+        title: t!(effort_picker_title),
+        keys: t!(effort_picker_keys),
+        width: 52,
     }
-}
-
-fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
-    let visible = (area.height as usize).max(1);
-    let first = picker.selected.saturating_sub(visible.saturating_sub(1));
-
-    let mut lines = Vec::new();
-    for (index, row) in picker.rows.iter().enumerate().skip(first).take(visible) {
-        let chosen = index == picker.selected;
-        let marker = if chosen { "❯ " } else { "  " };
-        let name = if chosen {
-            Style::default()
-                .fg(theme::brand_primary())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::text())
-        };
-
-        let mut spans = vec![
-            Span::styled(marker, Style::default().fg(theme::brand_primary())),
-            Span::styled(row.name(), name),
-        ];
-
-        if picker.is_current(*row) {
-            spans.push(Span::styled(
-                format!("  {}", t!(picker_current)),
-                Style::default().fg(theme::ok()),
-            ));
-        }
-
-        lines.push(Line::from(spans));
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -291,11 +115,12 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
 
     #[test]
     fn the_picker_opens_on_the_level_in_use() {
         let picker = Picker::new(Some(Effort::Xhigh));
-        assert_eq!(picker.chosen(), Some(Row(Some(Effort::Xhigh))));
+        assert_eq!(picker.chosen(), Some(&Row(Some(Effort::Xhigh))));
     }
 
     /// Somebody who has never chosen opens on the row that asks for no level, which is what their
@@ -303,7 +128,7 @@ mod tests {
     #[test]
     fn having_chosen_nothing_opens_on_the_row_that_asks_for_none() {
         let picker = Picker::new(None);
-        assert_eq!(picker.chosen(), Some(Row(None)));
+        assert_eq!(picker.chosen(), Some(&Row(None)));
     }
 
     /// A first pick must not be permanent: the row that asks for no level is how somebody gets
@@ -311,47 +136,13 @@ mod tests {
     #[test]
     fn asking_for_no_level_is_one_of_the_rows() {
         let picker = Picker::new(Some(Effort::Max));
-        assert!(picker.rows.contains(&Row(None)));
-    }
-
-    #[test]
-    fn the_arrows_walk_the_list_and_stop_at_its_ends() {
-        let mut picker = Picker::new(None);
-        handle_key(&mut picker, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(picker.chosen(), Some(Row(None)));
-
-        for _ in 0..100 {
-            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
-        }
-        assert_eq!(picker.chosen(), Some(Row(Some(Effort::Max))));
-    }
-
-    #[test]
-    fn enter_selects_and_escape_keeps_the_current_level() {
-        let mut picker = Picker::new(None);
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
-            Outcome::Select
-        );
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
-            Outcome::Cancel
-        );
-    }
-
-    #[test]
-    fn ctrl_c_leaves_the_level_alone() {
-        let mut picker = Picker::new(None);
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Outcome::Cancel
-        );
+        assert!(picker.rows().contains(&Row(None)));
     }
 
     fn rendered(picker: &Picker) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, picker))
+            .draw(|frame| list_picker::draw(frame, picker, &panel()))
             .expect("draw succeeds");
         terminal
             .backend()
@@ -401,9 +192,9 @@ mod tests {
         let picker = Picker::new(None);
         let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, &picker))
+            .draw(|frame| list_picker::draw(frame, &picker, &panel()))
             .expect("draw succeeds");
-        let area = centred(Rect::new(0, 0, 30, 8), picker.rows.len());
+        let area = list_picker::centred(Rect::new(0, 0, 30, 8), picker.rows().len(), panel().width);
         assert!(area.width <= 30);
         assert!(area.height <= 8);
         assert!(area.x + area.width <= 30);
