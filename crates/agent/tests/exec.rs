@@ -279,7 +279,7 @@ fn a_failing_stage_reports_its_code_and_its_message() {
     )
     .expect("ls runs even when it fails");
     assert!(!ran.succeeded());
-    assert_eq!(ran.failures().len(), 1);
+    assert_eq!(ran.codes.iter().filter(|code| **code != Some(0)).count(), 1);
     assert!(
         !ran.stderr.is_empty(),
         "a stage explained itself and the explanation was dropped"
@@ -379,7 +379,7 @@ fn an_early_stage_failing_makes_the_whole_pipeline_fail() {
         !ran.succeeded(),
         "an early failure was hidden by a later success"
     );
-    assert_eq!(ran.failures().first().map(|(at, _)| *at), Some(1));
+    assert_eq!(ran.codes.iter().position(|code| *code != Some(0)), Some(0));
 }
 
 /// A program that is not installed is a refusal to report, not a panic. The name is safe to say
