@@ -10,7 +10,7 @@ const MODES: Record<SandboxMode, ModeChoice> = {
   'read-only': {
     label: 'Read only',
     icon: 'eye-on',
-    says: 'Programs can read the machine except credential locations, and write nothing in the session',
+    says: 'Programs can read the machine except credential locations. Neither they nor the file tools write in the session',
   },
   strict: {
     label: 'Strict',

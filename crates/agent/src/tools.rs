@@ -2920,6 +2920,16 @@ pub(crate) fn writes_a_file(name: &str) -> bool {
     )
 }
 
+/// Whether the sandbox mode keeps the file tools from writing, as it keeps programs (SANDBOX-22).
+///
+/// A turn that confines nothing has no mode in force, which is why `confine_runs` is read too.
+pub(crate) fn sandbox_refuses_writes(
+    confine_runs: bool,
+    sandbox: bravebot_sandbox::SandboxMode,
+) -> bool {
+    confine_runs && sandbox == bravebot_sandbox::SandboxMode::ReadOnly
+}
+
 /// Whether a call by this name runs a program.
 pub(crate) fn runs_a_program(name: &str) -> bool {
     strip_namespace(name) == "run"
@@ -3443,6 +3453,19 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             Produced::problem(
                 "refused: the session is in plan mode, so writing is refused however the user would \
                  have answered. Do not retry; say what you would change and why.",
+            )
+        }
+        // Before the permission mode is reached, so accepting edits and bypassing, which answer the
+        // write prompt, cannot hand back what `read-only` withholds from programs (SANDBOX-22).
+        writing
+            if sandbox_refuses_writes(tools.confine_runs, tools.sandbox)
+                && writes_a_file(writing) =>
+        {
+            policy.refuse_write_in_sandbox(strip_namespace(writing), tools.sandbox.name());
+            Produced::problem(
+                "refused: the sandbox mode is read-only, so nothing is written to the session's \
+                 files whatever the user would have answered; nothing was asked. Do not retry; say \
+                 what you would change and why. Only the user can choose another sandbox mode.",
             )
         }
         // A tool the offer holds and has not loaded is not offered, so naming it is a mistake
@@ -8061,6 +8084,19 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             ));
         }
     }
+    // Every path the loop above lets through is in a directory the session was opened on, and this
+    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
+    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
+    // tool's write is. The null device is not in the write set.
+    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
+        return Produced::problem(
+            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
+             which would write the session's files; nothing ran and nothing was asked. Leave the \
+             redirection out, redirect to /dev/null to discard the output, or have a program open \
+             the file itself, where the sandbox profile decides whether it may.",
+        );
+    }
 
     // Before the person is asked. A rule refusing something is a statement that it does not run,
     // and there is nothing to show or approve once it has been made.
@@ -10033,6 +10069,19 @@ fn wants_checkout<'a>(
             format!(
                 "refused: {whose}you already work in a checkout, which the delegates you start \
                  share"
+            ),
+        ));
+    }
+    // Making one writes `worktrees/<id>/` under the repository's `.git` (CHECKOUT-5), which is part
+    // of the project that `read-only` holds programs and the file tools back from writing
+    // (SANDBOX-22).
+    if sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        return Err((
+            CheckoutRefusal::ReadOnlySandbox,
+            format!(
+                "refused: {whose}the sandbox mode is read-only, and making a checkout writes into \
+                 the repository's .git, so no checkout was made; only the user can choose another \
+                 sandbox mode"
             ),
         ));
     }

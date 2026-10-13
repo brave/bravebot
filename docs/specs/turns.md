@@ -96,7 +96,9 @@ tried to deliver, and telling it to start delivering would answer something nobo
 call to them ([MODE-3](permission-modes.md#MODE-3)), so the line is not said while it is in force.
 The mode is read when the round ends, because the person can change it while the turn runs
 ([MODE-8](permission-modes.md#MODE-8)), and rounds read in plan mode count toward the number once
-it has ended.
+it has ended. The sandbox mode `read-only` is the same kind of turn: the file tools refuse every
+write in it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so the line is not said. The sandbox mode
+does not change during a turn.
 
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
@@ -109,6 +111,7 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_under_read_only_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write`

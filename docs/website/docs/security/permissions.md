@@ -310,7 +310,9 @@ transcript when you press the key.
 and what it prints is what the next round reads. A mode named for edits that also stopped asking
 about programs would be granting the larger thing quietly. It does accept a write to any path the
 workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
-the settings file is what narrows that.
+the settings file is what narrows that. Under the sandbox mode `read-only`
+([confinement](security.md#confinement)) the agent's file tools write nothing, in this mode or in
+bypassing.
 
 **A write that would create a credential is still put to you.** A file that is one rare value and
 nothing else is how a generated key reaches a tree, so a write the credential scan finds such a value

@@ -402,6 +402,101 @@ fn a_manifest_run_runs_under_the_mode_the_window_chose() {
     );
 }
 
+/// SANDBOX-22: the selected mode reaches tool dispatch, even when the window accepts edits.
+/// Reporting read-only without passing it to the task would write the file in the first turn.
+#[test]
+fn a_read_only_window_refuses_file_writes_before_accepting_edits() {
+    let scratch = Scratch::new("bridge-sandbox-file-write");
+    let (endpoint, rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| {
+            (
+                "write_file",
+                json!({"path": "notes.txt", "contents": "hi", "why": "write notes"}),
+            )
+        })
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    front.call(
+        "session.mode",
+        json!({"session": session, "mode": "acceptEdits"}),
+    );
+    assert!(front.sandbox(&session, json!("read-only"))["ok"].is_object());
+    assert_eq!(front.ask(&session), "read-only");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert!(!scratch.project().join("notes.txt").exists());
+    let requests: Vec<_> = rounds.try_iter().collect();
+    let result = tool_results(requests.last().expect("the refusal reaches the planner"));
+    assert!(result.contains("the sandbox mode is read-only"), "{result}");
+
+    assert!(front.sandbox(&session, json!("workspace-write"))["ok"].is_object());
+    assert_eq!(front.ask(&session), "workspace-write");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("notes.txt")).unwrap(),
+        "hi"
+    );
+}
+
+/// SANDBOX-22: a manifest worker receives the window's mode before presenting a writing plan.
+/// The workspace-write control establishes that the same plan can be approved and executed.
+#[test]
+fn a_read_only_window_refuses_a_writing_manifest_before_approval() {
+    let scratch = Scratch::new("bridge-sandbox-manifest-write");
+    let replies = Mutex::new(std::collections::VecDeque::from([
+        json!({"role": "assistant", "content": "Write notes.txt containing hi."}),
+        json!({"role": "assistant", "content": json!({"steps": [
+            {"capability": "FILE_WRITE", "args": {"path": "notes.txt", "contents": "hi"}}
+        ]}).to_string()}),
+        json!({"role": "assistant", "content": "Write notes.txt containing hi."}),
+        json!({"role": "assistant", "content": json!({"steps": [
+            {"capability": "FILE_WRITE", "args": {"path": "notes.txt", "contents": "hi"}}
+        ]}).to_string()}),
+    ]));
+    let (endpoint, _rounds) = a_model_service(move |_| {
+        replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("four planning requests")
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    front.call(
+        "session.mode",
+        json!({"session": session, "mode": "acceptEdits"}),
+    );
+    assert!(front.sandbox(&session, json!("read-only"))["ok"].is_object());
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "write notes"}),
+    );
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert!(
+        ended.to_string().contains("the sandbox mode is read-only"),
+        "{ended}"
+    );
+    assert!(!scratch.project().join("notes.txt").exists());
+
+    assert!(front.sandbox(&session, json!("workspace-write"))["ok"].is_object());
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "write notes"}),
+    );
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "manifest.request", "{question}");
+    front.reply("manifest.reply", &session, &question, "approve");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("notes.txt")).unwrap(),
+        "hi"
+    );
+}
+
 /// SANDBOX-22: a window cannot turn the sandbox off, and a word that is no mode is refused rather
 /// than read as one. The session keeps the mode it had. The failure this rejects is `off`
 /// accepted from a window that has no way to show a program running unconfined.

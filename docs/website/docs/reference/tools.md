@@ -812,8 +812,8 @@ only once the whole body has arrived, so a dropped connection, a stop or a body 
 leaves what was there and no partial file.
 
 The cap is 100 MiB per call and is the [`download.maxBytes`](../customize/configuration.md#downloadmaxbytes)
-setting. A delegate is never offered the tool, and plan mode
-refuses it, since it writes a file.
+setting. A delegate is never offered the tool, and plan mode and the
+[sandbox mode](../security/security.md#confinement) `read-only` refuse it, since it writes a file.
 
 ## `spawn_processor`
 

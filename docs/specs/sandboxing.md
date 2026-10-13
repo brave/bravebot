@@ -1462,7 +1462,8 @@ makes a fixture repository fail there. So does git reached through another progr
 shim that resolves to that manager. The planner is told to run git as a step of its own
 ([SANDBOX-19](#SANDBOX-19)), and a person can let one line start with no sandbox
 ([SANDBOX-29](#SANDBOX-29)). A redirection on the line is opened by this process rather than by the
-stage, so `> .git/config` written on the line itself is not refused. A `core.hooksPath` that points into the work tree makes files every stage writes into hooks,
+stage, so `> .git/config` written on the line itself is not refused, except under `read-only`, where
+any redirection into a file is ([SANDBOX-22](#SANDBOX-22)). A `core.hooksPath` that points into the work tree makes files every stage writes into hooks,
 and a bare repository in a toolchain cache, cargo's under `~/.cargo/git/db` and Go's under its module
 cache, has a configuration every stage writes and a later fetch reads. On Linux and Windows nothing holds a `.git` back, so every stage there may
 write a repository's hooks and configuration, and the confirmation of a line with a stage whose
@@ -1534,7 +1535,8 @@ git to commit, check out or clone is refused that write and git is run as a step
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. Under the mode `read-only` it says that programs cannot write the
 project, names the temporary directory as the one place they write, and says that only the person
-widens it, by choosing another sandbox mode. On a turn
+widens it, by choosing another sandbox mode. It also says that the file tools write nothing in that
+mode and that a line redirecting output into a file is refused. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
 programs do not have stops reaching for paths they can reach.
 
@@ -1784,7 +1786,16 @@ directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)
 grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` holds back writes on
 this machine and nothing else: the network follows [SANDBOX-20](#SANDBOX-20) as in every mode, and a
 stage whose argv carries the remote scope ([SANDBOX-16](#SANDBOX-16)), such as `git push` or
-`gh pr create`, still reaches the remote with the person's credentials. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
+`gh pr create`, still reaches the remote with the person's credentials. Under `read-only` the file
+tools write nothing either, in every permission mode, accepting edits and bypassing included:
+`write_file`, `edit_file`, `download_url` and `apply_checkout` are refused before the tool runs and
+nobody is asked, a manifest plan with a step that writes a file is refused before it is put to
+anyone, a `run` line that redirects output into a file is refused because this process opens that
+file and not the stage ([SANDBOX-18](#SANDBOX-18)), and a spawn asking for a checkout is refused,
+since making one writes an entry under the repository's `.git`
+([CHECKOUT-5](checkouts.md#CHECKOUT-5)). Redirecting to the null device writes no file and runs.
+`/checkouts apply`, which the person types ([CHECKOUT-14](checkouts.md#CHECKOUT-14)), writes the
+project and is not held to the mode. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
 stage with no profile. The network is not part
 of a mode: whether a stage keeps egress is the setting [SANDBOX-20](#SANDBOX-20) describes, and
@@ -1882,7 +1893,13 @@ stricter than the machine requires. Bypass may widen `workspace-write`'s writes 
 `request_path` is already granted without asking, so a stage starts with what the planner could
 get with one request instead of failing first. `strict` is not widened, since a person who chose it
 asked for less than the default. `read-only` is not widened either: bypass answers a question and
-does not change which mode is in force.
+does not change which mode is in force. The file tools are held to `read-only` because they write
+the same directories its programs cannot, and accepting edits and bypassing answer the write prompt
+unasked, so a mode that held back programs alone would hand the project back through `write_file`
+in the two permission modes a person picks to stop being asked, and a redirection written on a `run`
+line would hand it back to a planner the file tools had refused. The refusal comes before the
+permission mode is reached, as a deny rule's does ([MODE-6](permission-modes.md#MODE-6)), so no
+mode answers it.
 
 **What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
@@ -1893,13 +1910,22 @@ shell start-up files and other repositories on the machine. Under `read-only`, a
 a session directory is refused with `Operation not permitted`. Builds, formatters and `git commit`
 fail there, and the `run` description says so. A workspace inside the temporary directory stays
 writable, since that directory is writable in every mode. A person who wants them to run chooses
-`workspace-write`.
+`workspace-write`. The file tools refuse a write to that workspace as well, and a delegate defined
+with `isolation: checkout` does not start. A line that redirects output into a file is refused
+there too, so `make > build.log` is. A program the stage runs opens its own redirections under the
+profile, so a person's `allowWrite` entry lets `sh -c 'make > build/log'` write where it lists the
+directory, and the profile refuses it elsewhere.
 
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`
 `verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
 `verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
+`verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
+`verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
+`verified-by: bravebot_agent::turn::under_read_only_a_spawn_asking_for_a_checkout_makes_none`
+`verified-by: bravebot_agent::turn::under_read_only_a_delegate_cannot_write_the_session`
+`verified-by: bravebot_agent::turn::under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs`
 `verified-by: bravebot_sandbox::mode::the_default_mode_is_workspace_write`
 `verified-by: bravebot_config::sandbox::a_mode_is_read_from_the_block_and_nothing_near_it_is`
 `verified-by: bravebot_sandbox::mode::the_word_workspace_write_replaced_still_names_it`
@@ -1942,6 +1968,8 @@ writable, since that directory is writable in every mode. A person who wants the
 `verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_file_writes_before_accepting_edits`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_read_only_window_refuses_a_writing_manifest_before_approval`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
 `verified-by: bravebot_ui_bridge::sandbox_mode::another_session_opens_under_the_settings_and_not_the_choice`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_projects_strict_does_not_lift_the_persons_read_only`

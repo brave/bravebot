@@ -13348,6 +13348,66 @@ fn a_turn_in_plan_mode_is_not_told_to_write() {
     );
 }
 
+/// TURN-3, SANDBOX-22: a turn under the sandbox mode `read-only` is not told to write, however long
+/// it reads.
+///
+/// The file tools refuse every write there, so a line saying to write now asks for a call the turn
+/// will refuse. The write tools are still offered, so the offer alone cannot tell this turn from
+/// one that may write. The control is the same turn under `workspace-write`, which is told, so the
+/// absence in the held turn is the mode's and not a turn too short to be told.
+#[test]
+fn a_turn_under_read_only_is_not_told_to_write() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let requests_under = |name: &str, sandbox| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+            .collect();
+        replies.push(reply_with("here is the plan"));
+        let (endpoint, received) = serve_sequence(replies);
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("add a toggle")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::IgnoreReports,
+            &mut RecordingSink::new(),
+            bravebot_agent::workspace::trust_store(workspace.root()),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes");
+        every_request(&received)
+    };
+
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let control = requests_under("no-writes-read-only-control", WorkspaceWrite);
+    assert_eq!(
+        control.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the control read too little"
+    );
+    assert!(
+        told(&control),
+        "the control was not told to write, so this says nothing"
+    );
+
+    let held = requests_under("no-writes-read-only-held", ReadOnly);
+    assert_eq!(
+        held.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the turn read too little"
+    );
+    assert!(!told(&held), "a turn under read-only was told to write");
+}
+
 /// TURN-3, MODE-8: a turn the person moves into plan mode during the round the line would come
 /// at is not told to write.
 ///
@@ -33644,6 +33704,109 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
     }
 }
 
+/// SANDBOX-22, CHECKOUT-5: under `read-only` a spawn asking for a checkout is refused, because
+/// making one writes `worktrees/<id>/` under the repository's `.git`, and bypassing, which approves
+/// the spawn, does not make it. The control is the same spawn under `workspace-write`, where the
+/// trail records the checkout made, so the fixture is one a checkout can be made of. The control's
+/// checkout is gone by the end of its turn, since its delegate wrote nothing in it (CHECKOUT-15),
+/// so the trail is what each arm is read from.
+#[test]
+fn under_read_only_a_spawn_asking_for_a_checkout_makes_none() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let spawn_under = |name: &str, sandbox| {
+        let scratch = Scratch::new(&format!("checkout-{name}"));
+        let home = Scratch::new(&format!("checkout-{name}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "ASK-FOR-A-CHECKOUT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"WORK-IN-IT","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("WORK-IN-IT", vec![reply_with("worked")]),
+        ]);
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut approving = RecordingConfirmer::approving();
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("ASK-FOR-A-CHECKOUT")
+                .with_home(Some(home.path.clone()))
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            &mut bravebot_agent::Confining::new(
+                &mut approving,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            ),
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+        let entries = scratch.path.join(".git").join("worktrees").exists();
+        (
+            every_request(&received),
+            checkouts_under(&home.path),
+            entries,
+            sink,
+        )
+    };
+
+    let made = |trail: &RecordingSink| {
+        checkout_events(trail)
+            .iter()
+            .any(|(_, detail)| detail.starts_with("made "))
+    };
+
+    let (asked, _, entries, trail) = spawn_under("read-only-control", WorkspaceWrite);
+    assert!(made(&trail), "the control made no checkout");
+    assert!(
+        entries,
+        "the control wrote no entry under the repository's .git"
+    );
+    assert!(
+        asked.iter().any(|body| body.contains("has started")),
+        "the control did not start its delegate, so the held arm's absence of one says nothing"
+    );
+
+    let (asked, left, entries, trail) = spawn_under("read-only-held", ReadOnly);
+    assert!(!made(&trail), "a checkout was made under read-only");
+    assert!(
+        left.is_empty(),
+        "a checkout was left under read-only: {left:?}"
+    );
+    assert!(!entries, "an entry was written under the repository's .git");
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("the sandbox mode is read-only, and making a checkout")),
+        "the planner was not told why"
+    );
+    assert!(
+        asked.iter().all(|body| !body.contains("has started")),
+        "a delegate started"
+    );
+    assert!(
+        trail.recorded().any(|(_, event)| matches!(
+            event,
+            Event::GateBlocked { gate: "delegate", reason, .. }
+                if reason.contains("refused for its checkout: read-only-sandbox;")
+        )),
+        "the trail does not record the refusal's cause"
+    );
+}
+
 /// CHECKOUT-3. A delegate in a checkout cannot ask for another.
 #[test]
 fn a_delegate_in_a_checkout_is_refused_another() {
@@ -50859,6 +51022,152 @@ fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedA
     bravebot_agent::Confining::new(asked, bravebot_agent::PermissionMode::Bypass, false)
 }
 
+/// SANDBOX-22, MODE-4: under `read-only` a line that redirects output into a file is refused before
+/// anybody is asked, in asking and in bypassing, because this process opens the redirection and the
+/// stage's profile does not reach it. A line that discards output into `/dev/null` still runs. The
+/// control is the same two lines under `workspace-write`, where the file is written and both lines
+/// are put to the person in asking. Standard output, appended output, standard error, both streams
+/// and the last stage of a pipeline are each their own line, because a refusal that read only one
+/// form would leave the others as the way round it. The session is opened outside the temporary directory, which every mode leaves
+/// writable.
+#[test]
+fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+    const REFUSED: &str = "the sandbox mode is read-only, and this line redirects output";
+    let turn_under = |name: &str, command: &str, sandbox, mode| {
+        let root = outside_the_session(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a session directory");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            ),
+            tool_request_2("run", r#"{"command":"echo hi > /dev/null"}"#),
+            reply_with("done"),
+        ]);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let seen = asked.seen.clone();
+        let mut sink = RecordingSink::new();
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("run it")
+                .with_profile(Some(
+                    bravebot_agent::home::profile().unwrap_or_else(|| root.join("profile")),
+                ))
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(mode),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::Confining::new(&mut asked, mode, false),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+        let last = every_request(&received).pop().unwrap_or_default();
+        let written = root.join("notes.txt").exists();
+        let _ = std::fs::remove_dir_all(&root);
+        let asked = seen.lock().unwrap().len();
+        let recorded: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        (
+            written,
+            last.matches(REFUSED).count(),
+            last.matches("It exited 0.").count(),
+            asked,
+            recorded,
+        )
+    };
+
+    for (form, command) in [
+        ("standard output", "echo hi > notes.txt"),
+        ("appended output", "echo hi >> notes.txt"),
+        ("standard error", "echo hi 2> notes.txt"),
+        ("both streams", "echo hi &> notes.txt"),
+        ("the last stage of a pipeline", "echo hi | cat > notes.txt"),
+    ] {
+        for mode in [Ask, Bypass] {
+            let asking = usize::from(mode == Ask);
+            let (written, refused, exited, asked, recorded) = turn_under(
+                &format!("redirect-control-{}", mode.name()),
+                command,
+                WorkspaceWrite,
+                mode,
+            );
+            assert!(
+                written,
+                "{form}, {mode:?}: the control did not write the file"
+            );
+            assert_eq!(
+                refused, 0,
+                "{form}, {mode:?}: the control was refused for read-only"
+            );
+            assert_eq!(
+                exited, 2,
+                "{form}, {mode:?}: the control's two lines did not both run"
+            );
+            assert_eq!(
+                asked,
+                2 * asking,
+                "{form}, {mode:?}: the control asked about {asked} lines"
+            );
+            assert!(
+                recorded.is_empty(),
+                "{form}, {mode:?}: the control recorded {recorded:?}"
+            );
+
+            let (written, refused, exited, asked, recorded) = turn_under(
+                &format!("redirect-held-{}", mode.name()),
+                command,
+                ReadOnly,
+                mode,
+            );
+            assert!(
+                !written,
+                "{form}, {mode:?}: a redirection wrote the session under read-only"
+            );
+            assert_eq!(
+                refused, 1,
+                "{form}, {mode:?}: exactly the redirection into a file is refused"
+            );
+            assert_eq!(
+                exited, 1,
+                "{form}, {mode:?}: the line discarding into /dev/null did not run"
+            );
+            assert_eq!(
+                asked, asking,
+                "{form}, {mode:?}: the refused line was put to the person ({asked} asked)"
+            );
+            assert_eq!(
+                recorded,
+                ["run: the read-only sandbox mode refuses a write, so nothing was written"],
+                "{form}, {mode:?}: the refused line was not recorded once"
+            );
+        }
+    }
+}
+
 /// SANDBOX-22, SANDBOX-28, MODE-4: under `read-only` a request to write a path is refused before
 /// anyone is asked, even in the mode that answers every question, so a program still cannot write
 /// it; a request to read is granted. The control is the same turn under `workspace-write`, where
@@ -50915,6 +51224,215 @@ fn under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not() {
     assert!(
         read.contains("approved") && !read.contains("refused"),
         "a request to read was refused: {read}"
+    );
+}
+
+/// SANDBOX-22, MODE-2, MODE-4: under `read-only` the file tools write nothing in any mode that
+/// would have let the write through, accepting edits and bypassing among them, and nobody is asked.
+/// Each mode runs twice. In a trusted workspace no write raises a prompt, so a refusal that lived in
+/// the confirmer would never be reached; in an untrusted one asking puts the write to the person in
+/// the control, so a refusal made after the prompt shows as a question asked. The control is the
+/// same turn under `workspace-write`, where `write_file` and `edit_file` land and `apply_checkout`
+/// fails for want of a checkout, so a refusal that came from anything but the sandbox mode fails
+/// the control. Each tool is its own call, because a mode held in one of them would leave the
+/// others as the way round it. `download_url` points at a port nothing listens on, so the count of
+/// refusals is what tells its refusal from its failure.
+#[test]
+fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
+    use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    const REFUSED: &str = "the sandbox mode is read-only, so nothing is written";
+    let turn_under = |name: &str, sandbox, mode, trusted: bool| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("notes.md"), "keep\nold\ntail\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("write_file", r#"{"path":"created.md","contents":"hi"}"#),
+            tool_request_2(
+                "edit_file",
+                r#"{"path":"notes.md","old_text":"old","new_text":"new"}"#,
+            ),
+            tool_request_2(
+                "download_url",
+                r#"{"url":"http://127.0.0.1:9/notes","path":"fetched.md"}"#,
+            ),
+            tool_request_2("apply_checkout", r#"{"checkout":"c1"}"#),
+            reply_with("done"),
+        ]);
+        let task = Task::new("write the notes")
+            .with_confined_runs(true)
+            .with_sandbox_mode(sandbox)
+            .with_permission_mode(mode);
+        let trust = match trusted {
+            true => trusting_the_workspace(),
+            false => bravebot_core::trust::TrustStore::new(workspace.root()),
+        };
+        let mut recording = RecordingConfirmer::approving();
+        let mut confirmer = bravebot_agent::Confining::new(&mut recording, mode, false);
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+        let recorded: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        let told = every_request(&received)
+            .last()
+            .map(|body| body.matches(REFUSED).count())
+            .unwrap_or_default();
+        (
+            scratch.path.join("created.md").exists(),
+            std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+            told,
+            recording.seen.len(),
+            recorded,
+            outcome.clean,
+        )
+    };
+
+    for mode in [Ask, AcceptEdits, Bypass] {
+        for trusted in [true, false] {
+            let case = format!(
+                "{}-{}",
+                mode.name(),
+                if trusted { "trusted" } else { "untrusted" }
+            );
+            let (created, notes, told, asked, recorded, _) = turn_under(
+                &format!("read-only-tools-control-{case}"),
+                WorkspaceWrite,
+                mode,
+                trusted,
+            );
+            assert!(created, "{case}: the control did not write");
+            // An edit to a file nobody vouched for does not land in any mode, so the untrusted
+            // control says nothing about `edit_file`; the refusal count below still does.
+            if trusted {
+                assert_eq!(
+                    notes, "keep\nnew\ntail\n",
+                    "{case}: the control did not edit"
+                );
+            }
+            assert_eq!(told, 0, "{case}: the control was refused for read-only");
+            assert_eq!(
+                asked > 0,
+                mode == Ask && !trusted,
+                "{case}: the control asked about {asked} writes"
+            );
+            assert!(
+                recorded.is_empty(),
+                "{case}: the control recorded {recorded:?}"
+            );
+
+            let (created, notes, told, asked, recorded, clean) = turn_under(
+                &format!("read-only-tools-held-{case}"),
+                ReadOnly,
+                mode,
+                trusted,
+            );
+            assert!(!created, "{case}: write_file wrote under read-only");
+            assert_eq!(
+                notes, "keep\nold\ntail\n",
+                "{case}: edit_file edited under read-only"
+            );
+            assert_eq!(
+                told, 4,
+                "{case}: each of the four calls was not refused for the mode"
+            );
+            assert_eq!(
+                asked, 0,
+                "{case}: the person was asked about a write under read-only"
+            );
+            assert_eq!(
+                recorded,
+                [
+                    "write_file: the read-only sandbox mode refuses a write, so nothing was written",
+                    "edit_file: the read-only sandbox mode refuses a write, so nothing was written",
+                    "download_url: the read-only sandbox mode refuses a write, so nothing was written",
+                    "apply_checkout: the read-only sandbox mode refuses a write, so nothing was written",
+                ],
+                "{case}: the refused writes were not recorded once each, under the tool"
+            );
+            assert!(
+                !clean,
+                "{case}: a turn whose writes were refused read as clean"
+            );
+        }
+    }
+}
+
+/// SANDBOX-22, DELEGATE-15: a delegate's file tools are held to the sandbox mode of the turn that
+/// started it. The regression it rejects is a delegate that takes the default mode for its file
+/// tools, which the lead session's own test cannot see because the lead's `Tools` are built from
+/// the lead's task. The control is the same delegate under `workspace-write`, where its write lands.
+#[test]
+fn under_read_only_a_delegate_cannot_write_the_session() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let delegate_writes_under = |name: &str, sandbox| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-WRITE-A-FILE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"WRITE-THE-FILE-NOW"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "WRITE-THE-FILE-NOW",
+                vec![
+                    tool_request("write_file", r#"{"path":"created.md","contents":"hi"}"#),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let mut approving = RecordingConfirmer::approving();
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-WRITE-A-FILE")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            &mut bravebot_agent::Confining::new(
+                &mut approving,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            ),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        scratch.path.join("created.md").exists()
+    };
+
+    assert!(
+        delegate_writes_under("read-only-delegate-control", WorkspaceWrite),
+        "the control delegate did not write"
+    );
+    assert!(
+        !delegate_writes_under("read-only-delegate-held", ReadOnly),
+        "a delegate wrote the session under read-only"
     );
 }
 

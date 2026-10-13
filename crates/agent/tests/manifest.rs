@@ -908,6 +908,95 @@ fn plan_mode_runs_a_plan_that_writes_nothing() {
     );
 }
 
+/// SANDBOX-22: under the sandbox mode `read-only` a plan with a step that writes a file is refused
+/// from the plan, in the mode that approves the plan and every write in it, so the refusal is the
+/// sandbox mode's. The control is the same plan under `workspace-write`, where the file is written,
+/// and a plan that writes nothing still runs under `read-only`, since the mode holds back writes
+/// and not runs.
+#[test]
+fn under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let plan_under = |name: &str, sandbox, steps| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![any_shape(), plan(steps)]);
+        let mut sink = RecordingSink::new();
+        let outcome = manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write a summary")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            skipping_permissions!(),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .map(|outcome| outcome.reply_for_display().to_string())
+        .map_err(|failure| failure.to_string());
+        let refused: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        (outcome, scratch.path.join("out.md").exists(), refused)
+    };
+    let writing = || {
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])
+    };
+
+    let (control, written, refused) =
+        plan_under("read-only-plan-control", WorkspaceWrite, writing());
+    assert!(control.is_ok(), "the control was refused: {control:?}");
+    assert!(written, "the control did not write");
+    assert!(refused.is_empty(), "the control recorded {refused:?}");
+
+    let (held, written, refused) = plan_under("read-only-plan-held", ReadOnly, writing());
+    let failure = held.expect_err("read-only must refuse a plan that writes");
+    assert!(
+        failure.contains("the sandbox mode is read-only, and step 2 of this plan writes a file"),
+        "got: {failure}"
+    );
+    assert!(!written, "a manifest run wrote a file under read-only");
+    assert_eq!(
+        refused,
+        ["step 2: write_file: the read-only sandbox mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes"
+    );
+
+    let (reading, _, refused) = plan_under(
+        "read-only-plan-reads",
+        ReadOnly,
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ]),
+    );
+    assert!(
+        reading
+            .as_deref()
+            .is_ok_and(|reply| reply.contains("raw text")),
+        "a plan that writes nothing did not run under read-only: {reading:?}"
+    );
+    assert!(
+        refused.is_empty(),
+        "a plan that writes nothing recorded {refused:?}"
+    );
+}
+
 /// A write destination comes from the routing lock, which was fixed while the task string was
 /// the only input in existence. Nothing read afterwards can move it.
 #[test]
