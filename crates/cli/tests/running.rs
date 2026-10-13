@@ -827,6 +827,58 @@ fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
     );
 }
 
+/// SANDBOX-22: under the person's `read-only`, `doctor` gives the mode as `read-only` from their
+/// file and says the checkout's `strict` is not obeyed, naming both files.
+///
+/// The settings tests check the accessors. The process is where the settings a session starts
+/// under are loaded and `doctor` is the only place that turns a dropped `strict` into a line, so a
+/// report naming the checkout's `strict` as the mode, or saying nothing of it, would leave those
+/// tests passing.
+#[test]
+fn doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only() {
+    let scratch = Scratch::new("cli-running-doctor-strict-under-read-only")
+        .with_settings(r#"{"sandbox": {"mode": "read-only"}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"mode": "strict"}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let home = scratch.settings().display().to_string();
+    let mode = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("sandbox mode"))
+        .unwrap_or_else(|| panic!("the report gave no sandbox mode: {stdout}{stderr}"));
+    assert!(
+        mode.contains(&format!("read-only from {home}")),
+        "the checkout's strict replaced the person's read-only: {stdout}"
+    );
+    let ignored = line("sandbox.mode strict in");
+    assert!(
+        ignored.contains("not obeyed")
+            && ignored.contains(&checkout.join(".bravebot").display().to_string())
+            && ignored.contains(&format!("read-only from {home}")),
+        "the checkout's strict went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
