@@ -22,7 +22,7 @@ that is merely carried.
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
-| [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
+| [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
@@ -659,6 +659,7 @@ the planner as text.
 |---|---|
 | `ref` | the reference a `run` handed back |
 | `offset` | for output the planner may read that was too long for one result, the byte to start from; defaults to 0 |
+| `pattern` | for output the planner may read, a regular expression (or a list of them) to search it for instead of paging it |
 
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
 `which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
@@ -676,6 +677,16 @@ hands back the rest a page at a time from `offset`. Each page is no longer than
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) and ends with the offset of the next.
 Nobody is asked, since there is nothing for you to decide: only the length kept it out. An `offset`
 on output the planner may not read is refused before you are asked anything.
+
+**A pattern searches that output rather than paging it.** On output the planner may already read,
+`pattern` answers with the lines matching the regular expression, each numbered with its line and
+with the byte it starts at, two lines of context either side. The planner passes one of those bytes
+as `offset` to read the page from there, so a long log is narrowed without running anything again.
+At most 100 matches come back, within the same output cap, and a closing line says how many matched
+and where the next undrawn one starts. A `pattern` on output the planner may not read is refused
+before you are asked anything, for the same reason an `offset` is: which lines matched and how many
+there are would be worked out from bytes nobody vouched for. `pattern` and `offset` together are
+refused.
 
 ## `vet_content`
 

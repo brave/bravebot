@@ -1140,7 +1140,10 @@ fn table(
              \
              Output you were shown the beginning and end of, because the whole was too long for \
              one result, is the exception: you may read all of it, so nobody is asked, and it \
-             comes back a page at a time from the offset you give.",
+             comes back a page at a time from the offset you give. A pattern searches that output \
+             instead of paging it: you get the matching lines, each numbered with the byte it \
+             starts at, so a second call with that byte as the offset reads on from the match you \
+             wanted. A pattern on output you may not read is refused rather than asked about.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1154,6 +1157,20 @@ fn table(
                                         from: the sample you were shown says where its middle \
                                         begins, and each page names the offset of the next. \
                                         Defaults to 0. Not for output you were not shown."
+                    },
+                    "pattern": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Regular expression to find in output you may already \
+                                        read, in the subset search accepts. Answers with the \
+                                        matching lines, each numbered with the byte it starts at, \
+                                        and a little context either side. Use the byte of the \
+                                        match you want as the offset of a second call to read on \
+                                        from there. May be a list, in which case a line matches \
+                                        if it matches any of them. Not with offset, and not for \
+                                        output you were not shown."
                     }
                 },
                 "required": ["ref"]
@@ -7216,17 +7233,52 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         },
     };
 
+    // A routing string rather than a literal, so it comes through the gate every one of those
+    // comes through. Read here, before the label decides which route the call takes, so that a
+    // pattern on a quarantined slot is refused for the slot and not for anything in the pattern.
+    let proposed_patterns = patterns_in(arguments);
+    let mut patterns = Vec::with_capacity(proposed_patterns.len());
+    for proposed in &proposed_patterns {
+        match policy.promote_confined_read("read_output", "pattern", proposed) {
+            Ok(pattern) => patterns.push(pattern),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        }
+    }
+
     // Output whose label already lets the planner read it, kept out of a result by a cap on the
     // room it takes. Nobody is asked and nothing is endorsed: a yes here would be a person
     // answering for bytes the label had already answered for, and the trail would credit them
     // with a release that was never theirs to make.
     if tools.slots.label_of(&slot).is_some_and(Label::is_trusted) {
-        return read_a_page(policy, tools, &slot, offset.unwrap_or(0));
+        if patterns.is_empty() {
+            return read_a_page(policy, tools, &slot, Shown::Page(offset.unwrap_or(0)));
+        }
+        if offset.is_some() {
+            return Produced::problem(
+                "error: 'pattern' and 'offset' cannot be given together. A pattern searches the \
+                 whole of the output and numbers each match with the byte it starts at; pass one \
+                 of those bytes as 'offset' on its own to read the page from there.",
+            );
+        }
+        let compiled = match compiled_patterns(&patterns) {
+            Ok(compiled) => compiled,
+            Err(problem) => return *problem,
+        };
+        return read_a_page(policy, tools, &slot, Shown::Matches(&compiled));
     }
     if offset.is_some() {
         return Produced::problem(format!(
             "refused: an offset pages through output you may already read, and {slot} is \
              quarantined. Without one, read_output asks the user to show you the whole of it."
+        ));
+    }
+    if !patterns.is_empty() {
+        return Produced::problem(format!(
+            "refused: a pattern searches output you may already read, and {slot} is quarantined. \
+             Which lines matched, how many there are and where the result stopped are all worked \
+             out from the bytes, so searching this one would answer with numbers nobody vouched \
+             for. Without a pattern, read_output asks the user to show you the whole of it, and \
+             run can put the output through a program instead."
         ));
     }
 
@@ -7308,8 +7360,51 @@ fn released_note(done: String, endorsed: Endorsed) -> String {
     }
 }
 
-/// One page of output the planner may already read, from `offset` and no longer than a run's
-/// result may be.
+/// Which shape of output the planner may already read one call asks for: a page from a byte, or
+/// the lines matching the patterns it gave.
+///
+/// Both are the same slot's own bytes, so both are taken inside the one gate below rather than
+/// each opening the content for itself. Nothing here derives from a byte of that content: a page's
+/// offset and a pattern are the planner's own arguments.
+#[derive(Clone, Copy)]
+enum Shown<'a> {
+    Page(usize),
+    Matches(&'a [crate::regex::Regex]),
+}
+
+/// The planner's patterns compiled, or the result to hand back saying why one would not.
+///
+/// Compiled before the slot is opened, as a search's are: a pattern that cannot be parsed is a
+/// mistake in the call and is reported as one, with nothing read.
+fn compiled_patterns(
+    patterns: &[Labelled<String>],
+) -> Result<Vec<crate::regex::Regex>, Box<Produced>> {
+    let mut compiled = Vec::with_capacity(patterns.len());
+    for pattern in patterns {
+        let Ok(needle) = pattern.clone().into_trusted() else {
+            return Err(Box::new(Produced::problem(
+                "refused: a pattern must be your own words, not something you were handed",
+            )));
+        };
+        if needle.is_empty() {
+            return Err(Box::new(Produced::problem(
+                "error: 'pattern' must not be empty, e.g. \"error|warning\"",
+            )));
+        }
+        match crate::regex::Regex::compile(&needle) {
+            Ok(regex) => compiled.push(regex),
+            Err(problem) => {
+                return Err(Box::new(Produced::problem(format!(
+                    "error: that pattern will not compile: {problem}"
+                ))));
+            }
+        }
+    }
+    Ok(compiled)
+}
+
+/// One result of output the planner may already read: a page from an offset, or the lines matching
+/// a pattern, and no longer than a run's result may be.
 ///
 /// The page keeps the slot's label on the way back, so what puts it in the planner's context is the
 /// kernel's `present`, deciding from that label as it would have had the cap not cut it.
@@ -7317,22 +7412,107 @@ fn read_a_page<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
     slot: &SlotId,
-    offset: usize,
+    shown: Shown<'_>,
 ) -> Produced {
     let content = match policy.resolve("read_output", slot, tools.slots) {
         Ok(content) => content,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     let cap = tools.output_cap;
-    let page = policy.render_in_place("read_output", &content, |text| {
-        page_of(&text, slot, offset, cap)
+    let page = policy.render_in_place("read_output", &content, |text| match shown {
+        Shown::Page(offset) => page_of(&text, slot, offset, cap),
+        Shown::Matches(patterns) => matches_of(&text, slot, patterns, cap),
     });
     Produced::new(
         page,
         format!("what {slot} held"),
-        format!("from byte {offset}"),
+        match shown {
+            Shown::Page(offset) => format!("from byte {offset}"),
+            Shown::Matches(_) => "matching lines".to_owned(),
+        },
     )
     .of_content()
+}
+
+/// How many matching lines one search of a slot answers with. The rest are counted and the byte
+/// the next one starts at is named, so a narrower pattern or an offset carries on from there.
+const OUTPUT_MATCH_CAP: usize = 100;
+
+/// Lines of context either side of a match, fixed: this narrows a log down to where to page from
+/// rather than standing in for reading it.
+const OUTPUT_MATCH_CONTEXT: usize = 2;
+
+/// The lines of `text` matching any of `patterns`, each numbered with its line and the byte it
+/// starts at, with context either side, at most `OUTPUT_MATCH_CAP` matches and at most `cap`
+/// bytes.
+///
+/// The byte numbers are the point of it: a match found here is read in full by a second call
+/// naming that byte as `offset`, so a 200 KB log is narrowed without running anything again.
+///
+/// Nothing is decided here. This runs inside `render_in_place`, the gate that releases a slot's
+/// content to a closure, and what it returns is labelled again by the kernel on the way back. The
+/// driver reads none of it, and the route into this function was chosen from the slot's label and
+/// the planner's own arguments before any byte was opened.
+fn matches_of(text: &str, slot: &SlotId, patterns: &[crate::regex::Regex], cap: usize) -> String {
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        lines.push((at, line.trim_end_matches('\n').trim_end_matches('\r')));
+        at += line.len();
+    }
+
+    let matched: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, line))| patterns.iter().any(|pattern| pattern.matches(line)))
+        .map(|(index, _)| index)
+        .collect();
+    if matched.is_empty() {
+        return format!(
+            "(nothing in {slot} matches, out of {} in {} bytes.)",
+            tally(lines.len(), "line", "lines"),
+            text.len()
+        );
+    }
+
+    let mut out = String::new();
+    let mut written: Option<usize> = None;
+    let mut drawn = 0;
+    for index in matched.iter().copied().take(OUTPUT_MATCH_CAP) {
+        if out.len() >= cap {
+            break;
+        }
+        let wanted = index.saturating_sub(OUTPUT_MATCH_CONTEXT);
+        let to = (index + OUTPUT_MATCH_CONTEXT).min(lines.len().saturating_sub(1));
+        if let Some(last) = written
+            && wanted > last + 1
+        {
+            out.push_str("--\n");
+        }
+        let from = written.map_or(wanted, |last| wanted.max(last + 1));
+        for (number, &(byte, line)) in lines.iter().enumerate().take(to + 1).skip(from) {
+            let mark = if number == index { ':' } else { '-' };
+            out.push_str(&format!("{}{mark}{byte}{mark} {line}\n", number + 1));
+        }
+        written = Some(to.max(index));
+        drawn += 1;
+    }
+
+    let total = matched.len();
+    let rest = if drawn < total {
+        let next = lines[matched[drawn]].0;
+        format!(
+            ", and {} further back, the next from byte {next}",
+            tally(total - drawn, "match", "matches")
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{out}\n({} in {slot}, {drawn} shown{rest}. Each line is numbered with the byte it starts \
+         at: read_output with that byte as offset gives the page from there.)",
+        tally(total, "matching line", "matching lines")
+    )
 }
 
 /// `text` from `offset`, at most `cap` bytes of it, with a line saying where it stopped.
@@ -15028,6 +15208,51 @@ mod tests {
         assert_eq!(
             page(7, 100),
             "(ref:3 holds 7 bytes, so nothing starts at byte 7.)"
+        );
+    }
+
+    /// A searched page numbers every line it shows with the byte that line starts at, so the
+    /// planner can read on from a match with one offset call, and separates runs of lines that
+    /// are not adjacent. The cap on matches is reported with the byte the next one starts at
+    /// rather than silently dropping it.
+    #[test]
+    fn matching_lines_carry_the_byte_each_starts_at() {
+        let slot = SlotId::new("ref:3");
+        let text = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\niota\nkappa\n";
+        let one = crate::regex::Regex::compile("gamma").expect("compiles");
+        let found = matches_of(text, &slot, std::slice::from_ref(&one), 4096);
+        // alpha 0, beta 6, gamma 11, delta 17, epsilon 23.
+        assert!(found.contains("1-0- alpha\n"), "{found}");
+        assert!(found.contains("3:11: gamma\n"), "{found}");
+        assert!(found.contains("5-23- epsilon\n"), "{found}");
+        assert!(!found.contains("zeta"), "{found}");
+        assert!(
+            found.contains("1 matching line in ref:3, 1 shown."),
+            "{found}"
+        );
+
+        let far = crate::regex::Regex::compile("alpha|kappa").expect("compiles");
+        let two = matches_of(text, &slot, std::slice::from_ref(&far), 4096);
+        assert!(
+            two.contains("--\n"),
+            "two distant matches ran together: {two}"
+        );
+        assert!(two.contains("2 matching lines in ref:3, 2 shown."), "{two}");
+
+        let nothing = crate::regex::Regex::compile("omega").expect("compiles");
+        assert_eq!(
+            matches_of(text, &slot, std::slice::from_ref(&nothing), 4096),
+            format!(
+                "(nothing in ref:3 matches, out of 10 lines in {} bytes.)",
+                text.len()
+            )
+        );
+
+        let every = crate::regex::Regex::compile("a|e|i|o|u").expect("compiles");
+        let cut = matches_of(text, &slot, std::slice::from_ref(&every), 1);
+        assert!(
+            cut.contains("the next from byte"),
+            "a result stopped by the cap does not say where to carry on: {cut}"
         );
     }
 
