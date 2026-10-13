@@ -5172,6 +5172,35 @@ mod tests {
         assert!(shown.is_empty(), "something was asked about: {shown:?}");
     }
 
+    /// ASK-7: a question in a one-shot run is declined by the confirmer a one-shot run uses, even
+    /// where there is a terminal and a "y" waiting to be read. The planner is told a reply came from
+    /// a person, so an answer this confirmer invented would be taken for theirs.
+    #[test]
+    fn a_one_shot_declines_every_question_even_where_it_may_ask_about_a_plan() {
+        let series = bravebot_core::ask::asking(&bravebot_core::ask::Series::new(vec![
+            bravebot_core::ask::Question::new(
+                "Cache",
+                "Which cache layer?",
+                vec![bravebot_core::ask::Choice::new("HTTP", None)],
+                false,
+            ),
+            bravebot_core::ask::Question::new("Branch", "Which branch?", Vec::new(), false),
+        ]));
+        let mut shown = Vec::new();
+        let mut one_shot = OneShot::new(&b"y\ny\n"[..], &mut shown, true);
+
+        let answers = one_shot.ask_user(&series);
+        assert!(
+            answers
+                .iter()
+                .all(|answer| *answer == bravebot_core::ask::Answer::Declined),
+            "a question was answered for the person: {answers:?}"
+        );
+        drop(one_shot);
+
+        assert!(shown.is_empty(), "a question was put to nobody: {shown:?}");
+    }
+
     /// A home directory and a checkout, each with the settings file a test writes into it.
     ///
     /// `Settings::layered` takes both rather than reading the process's own, so the layers under test

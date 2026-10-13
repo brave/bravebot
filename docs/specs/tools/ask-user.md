@@ -131,6 +131,7 @@ on the user's behalf.
 not asking.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
+`verified-by: bravebot_cli::main::a_one_shot_declines_every_question_even_where_it_may_ask_about_a_plan`
 
 <a id="ASK-8"></a>
 ### ASK-8: an answer is remembered for the session, question by question
