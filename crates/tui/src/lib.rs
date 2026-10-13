@@ -36,6 +36,7 @@ pub mod input;
 pub mod invisible;
 pub mod jobs_command;
 pub mod keybindings;
+pub mod list_picker;
 pub mod logo;
 pub mod loops;
 pub mod manifest_run;
