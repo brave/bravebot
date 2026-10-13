@@ -56,6 +56,21 @@ def quietly(step, *args):
     return code, out.getvalue()
 
 
+def sign_head(cwd):
+    """Replace HEAD with the same commit carrying a signature header; verifying one needs a key, telling one is there does not."""
+    raw = subprocess.run(
+        ["git", "cat-file", "commit", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
+    headers, message = raw.split("\n\n", 1)
+    signature = "gpgsig -----BEGIN SSH SIGNATURE-----\n selftest\n -----END SSH SIGNATURE-----"
+    forged = f"{headers}\n{signature}\n\n{message}"
+    sha = subprocess.run(
+        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+        cwd=cwd, check=True, capture_output=True, text=True, input=forged,
+    ).stdout.strip()
+    git("reset", "-q", "--hard", sha, cwd=cwd)
+
+
 def test_the_base_is_whichever_remote_names_brave_bravebot():
     fork = pr_worktree.github_remotes(FORK_CLONE)
     assert fork["brave/bravebot"][0] == "upstream", fork

@@ -3,7 +3,6 @@
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -23,25 +22,11 @@ def _load(name, path):
     return module
 
 
-# The git, quietly and ssh helpers are shared with the other selftests of this pair.
+# The git, quietly, signing and ssh helpers are shared with the other selftests of this pair.
 helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
 git = helpers.git
 quietly = helpers.quietly
-
-
-def sign_head(cwd):
-    """Replace HEAD with the same commit carrying a signature header; verifying one needs a key, telling one is there does not."""
-    raw = subprocess.run(
-        ["git", "cat-file", "commit", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout
-    headers, message = raw.split("\n\n", 1)
-    signature = "gpgsig -----BEGIN SSH SIGNATURE-----\n selftest\n -----END SSH SIGNATURE-----"
-    forged = f"{headers}\n{signature}\n\n{message}"
-    sha = subprocess.run(
-        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
-        cwd=cwd, check=True, capture_output=True, text=True, input=forged,
-    ).stdout.strip()
-    git("reset", "-q", "--hard", sha, cwd=cwd)
+sign_head = helpers.sign_head
 
 
 def world(root, signed=False):

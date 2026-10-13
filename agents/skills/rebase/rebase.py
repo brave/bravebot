@@ -5,7 +5,8 @@
     rebase.py continue <pr>             stage the resolved files and carry on
     rebase.py check <pr> [target ...]   run the checks the resolved files call for, or the make
                                         targets named, printing only a failure
-    rebase.py push <pr>                 push over the head `start` fetched, and nothing newer
+    rebase.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
+                                        make a signed pull request unsigned
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict. <pr> is a number or a pull request URL.
@@ -196,6 +197,7 @@ def push(pr):
     if now == tip:
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
+    pr_worktree.refuse_unsigning(pr, tip, now, tree)
     pr_worktree.push_head(pr, tree, tip)
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0

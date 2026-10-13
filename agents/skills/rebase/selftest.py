@@ -20,13 +20,14 @@ def _load(name, path):
     return module
 
 
-# The git, quietly and ssh helpers are shared with the other selftests of this pair.
+# The git, quietly, signing and ssh helpers are shared with the other selftests of this pair.
 helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
 git = helpers.git
 quietly = helpers.quietly
+sign_head = helpers.sign_head
 
 
-def world(root):
+def world(root, signed=False):
     """brave/bravebot and a fork as bare repositories, a clone of both, and a conflicting PR."""
     brave, fork, seed, clone = (root / name for name in ("brave.git", "fork.git", "seed", "bravebot"))
     git("init", "-q", "--bare", "-b", "main", str(brave), cwd=root)
@@ -43,6 +44,8 @@ def world(root):
     git("checkout", "-q", "-b", "feature", cwd=seed)
     (seed / "a.txt").write_text("from the pull request\n")
     git("commit", "-q", "-am", "the pull request", cwd=seed)
+    if signed:
+        sign_head(seed)
     git("push", "-q", str(fork), "feature", cwd=seed)
     git("checkout", "-q", "main", cwd=seed)
     (seed / "a.txt").write_text("from main\n")
@@ -117,6 +120,21 @@ def test_a_push_github_refuses_is_retried_with_each_other_key_the_agent_holds():
         assert code == 0 and "person@example.invalid" in out, out
         assert "bot@example.invalid" not in out, out
         assert git("rev-parse", "feature", cwd=remote) == git("rev-parse", "HEAD", cwd=pr.tree)
+
+
+def test_signed_commits_are_not_replaced_by_unsigned_ones():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve(), signed=True)
+        quietly(rebase.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        quietly(rebase.resume, pr())
+        assert not rebase.pr_worktree.signed("HEAD", tree), "the rebase could not sign the commit it wrote"
+        before = git("rev-parse", "feature", cwd=fork)
+
+        code, out = quietly(rebase.push, pr())
+        assert code == 1 and "update-branch" in out and "unsigned" in out, out
+        assert git("rev-parse", "feature", cwd=fork) == before, "nothing was pushed"
 
 
 def test_a_branch_already_rebased_here_is_rebased_again_rather_than_refused():

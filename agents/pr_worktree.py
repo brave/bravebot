@@ -276,6 +276,31 @@ def run_commands(tree, commands, log_name):
     return 1 if failed else 0
 
 
+def signed(sha, cwd):
+    """Whether the commit carries a signature, which needs no key to tell."""
+    headers = git("cat-file", "commit", sha, cwd=cwd).split("\n\n", 1)[0]
+    return any(line.startswith("gpgsig") for line in headers.splitlines())
+
+
+def signatures(onto, head, cwd):
+    """(signed, unsigned) counts for the commits on `head` that `onto` lacks."""
+    flags = [signed(sha, cwd) for sha in git("rev-list", f"{onto}..{head}", cwd=cwd).splitlines()]
+    return flags.count(True), flags.count(False)
+
+
+def refuse_unsigning(pr, tip, now, tree):
+    """Stop a push from `tip` to `now` that leaves more of a signed pull request's commits unsigned."""
+    had_signed, had_unsigned = signatures(pr.onto, tip, tree)
+    unsigned = signatures(pr.onto, now, tree)[1]
+    if had_signed and unsigned > had_unsigned:
+        die(
+            f"{pr.tip} has signed commits and the push would leave {unsigned} commit(s) unsigned, so it "
+            "would replace the author's signed commits with unsigned ones or add unsigned commits to them. "
+            "Report the signing error to the person. Do not rebase the pull request on GitHub with "
+            "`update-branch`, which also leaves its commits unsigned."
+        )
+
+
 def agent_keys():
     listed = run("ssh-add", "-L", check=False)
     if listed.returncode:
