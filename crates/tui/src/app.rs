@@ -1784,6 +1784,36 @@ fn with_standing<R>(
     })
 }
 
+/// Write a compaction down now rather than at the end of the next turn: the shortening is the
+/// change, and a session that compacted and then slept should resume compacted.
+///
+/// Nothing where no turn has been had and nothing is on disk, as with closing a directory: the
+/// conversation is empty, so nothing was shortened, and a session opened and abandoned should leave
+/// no record.
+fn save_compacted(
+    session: &Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+    events: &[Stamped],
+) {
+    if session.turns == 0 && stored.resumable().is_none() {
+        return;
+    }
+    let title = stored.title().to_string();
+    with_standing(
+        session,
+        conversation,
+        trust,
+        programs,
+        workspace,
+        |standing| stored.save(&title, standing),
+    );
+    stored.append_audit(session.turns, events);
+}
+
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
 ///
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
@@ -2793,19 +2823,15 @@ fn event_loop(
                     &answers.trust,
                     &focus,
                 )?;
-
-                // Written now rather than at the end of the next turn: the shortening is the
-                // change, and a session that compacted and then slept should resume compacted.
-                let title = stored.title().to_string();
-                with_standing(
+                save_compacted(
                     &session,
+                    &mut stored,
                     &conversation,
                     &answers.trust,
                     &answers.programs,
                     &workspace,
-                    |standing| stored.save(&title, standing),
+                    &events,
                 );
-                stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
             action @ (Action::Aside(..) | Action::Recap) => {
@@ -25138,6 +25164,123 @@ mod tests {
             t!(session_branch_nothing_written)
         );
         assert!(bravebot_session::sessions::list(&root).is_empty());
+    }
+
+    /// `/compact` before anything was asked has nothing to shorten. A record written then is a
+    /// session nobody asked anything in, offered for resuming as it ends and listed in the picker,
+    /// and the prompt that follows has to be the one that names the session (SESSION-4).
+    #[test]
+    fn compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-first");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        save_compacted(
+            &session,
+            &mut stored,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            &[],
+        );
+        assert_eq!(stored.resumable(), None, "the compaction wrote a record");
+        assert!(
+            sessions::list(&root).is_empty(),
+            "the compaction left a session in the picker"
+        );
+
+        // The first turn, written as the turn arm writes it.
+        let prompt = "fix the parser";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        conversation.push(Message::assistant("fixed"));
+        session.complete("fixed", vec![], 10);
+        session.record_turn(start, &conversation);
+        with_standing(
+            &session,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            |standing| stored.save(prompt, standing),
+        );
+
+        assert_eq!(
+            sessions::load(&root, stored.id())
+                .expect("the turn wrote a record")
+                .title,
+            prompt
+        );
+    }
+
+    /// A `!` command writes a record before the first turn, and a compaction after it changes what
+    /// that record has to hold: a session resumed from the record as the command left it would
+    /// carry the conversation the person had just shortened.
+    #[test]
+    fn a_compaction_before_the_first_turn_is_written_where_a_record_is_already_on_disk() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-after-command");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // What `!ls` leaves: its output in the conversation and a record on disk, with no turn.
+        conversation.push(Message::user("I ran ls"));
+        conversation.push(Message::user("Cargo.toml\nsrc"));
+        with_standing(
+            &session,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            |standing| stored.save("ls", standing),
+        );
+        assert_eq!(session.turns, 0);
+
+        conversation.compacted(1, "the person listed the directory");
+        save_compacted(
+            &session,
+            &mut stored,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            &[],
+        );
+
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        assert_eq!(
+            record.conversation.archive.len(),
+            1,
+            "the record holds the conversation as it was before it was shortened"
+        );
+        assert_eq!(record.title, "ls");
     }
 
     /// `/rename` gives up every rewind point and then writes the record, so the session it wrote
