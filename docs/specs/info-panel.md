@@ -260,8 +260,11 @@ Typed while a turn runs, they are carried out as `/rename` is ([CMD-8](commands.
 
 The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
 set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
-since the number at its end is what tells two apart. A new link reaches an open panel on the next
-frame.
+since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
+address of the shape [PANEL-9](#PANEL-9) gives is drawn as `{owner}/{repo}#{n}` instead, cut from
+the left in the same way. The cells drawn are a terminal link (OSC 8) to the address, and a
+selection over them copies the shorthand. An address of any other shape is drawn as written and is
+not a link. A new link reaches an open panel on the next frame.
 
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
@@ -269,6 +272,11 @@ frame.
 `verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
 `verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`
+`verified-by: bravebot_tui::panel::a_github_address_in_a_link_row_is_drawn_as_its_shorthand`
+`verified-by: bravebot_tui::panel::a_link_row_of_any_other_shape_is_drawn_as_written_and_not_linked`
+`verified-by: bravebot_tui::panel::a_link_row_shorthand_links_to_its_own_address_and_nothing_else_does`
+`verified-by: bravebot_tui::panel::a_long_shorthand_keeps_its_end_and_is_linked_as_drawn`
+`verified-by: bravebot_tui::panel::a_link_row_below_the_panels_height_is_not_linked`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 
 <a id="PANEL-13"></a>
