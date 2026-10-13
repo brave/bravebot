@@ -688,6 +688,10 @@ pub struct Capabilities {
     /// refusal asks this of the backend, so it does not say a refusal is in force where the stage
     /// it applies to is refused.
     pub subtracts_from_a_grant: bool,
+    /// Whether a connect to a unix socket that has a path is held to the policy's write rows
+    /// (SANDBOX-3). Where it is not, a confined program reaches every such socket on the machine,
+    /// the user's D-Bus, the agent `SSH_AUTH_SOCK` names and `docker.sock` among them.
+    pub governs_sockets_with_a_path: bool,
 }
 
 #[cfg(test)]
@@ -819,6 +823,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -832,6 +837,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: false,
         }
     }
 

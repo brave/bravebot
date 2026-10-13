@@ -69,6 +69,11 @@ const HANDLED_ABI: ABI = ABI::V9;
 /// v2 costs is the kernels between 5.13 and 5.19, which have Landlock without that right.
 const MINIMUM_ABI_VERSION: libc::c_long = 2;
 
+/// The Landlock ABI version carrying the right that governs a connect to a unix socket that has
+/// a path, Linux 7.1. A write row grants it and a read row does not, which is the rule SANDBOX-3
+/// states.
+const PATH_SOCKET_ABI_VERSION: libc::c_long = 9;
+
 /// `landlock_create_ruleset`, stable since Linux 5.13.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 
@@ -90,6 +95,14 @@ fn landlock_abi_version() -> libc::c_long {
             LANDLOCK_CREATE_RULESET_VERSION,
         )
     }
+}
+
+/// Whether a kernel reporting `version` holds a connect to a socket that has a path to the
+/// policy's write rows. Below [`PATH_SOCKET_ABI_VERSION`] no ruleset can, and every such socket on
+/// the machine is reachable from a confined process. A version rather than the syscall, for the
+/// reason [`abi_meets_minimum`] takes one.
+fn governs_sockets_with_a_path(version: libc::c_long) -> bool {
+    version >= PATH_SOCKET_ABI_VERSION
 }
 
 /// Whether a kernel reporting `version` carries [`MINIMUM_ABI_VERSION`].
@@ -258,6 +271,7 @@ impl Sandbox for LandlockSandbox {
             // stands for an entry a listing produced is left out instead when its name is gone.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: governs_sockets_with_a_path(landlock_abi_version()),
         }
     }
 
@@ -651,6 +665,26 @@ mod tests {
         assert_eq!(caps.egress_limited_to_a_port, made);
         assert_eq!(caps.mechanisms.contains(&"network-namespace"), made);
         assert_eq!(caps.level, ConfinementLevel::Partial);
+    }
+
+    /// A connect to a socket that has a path is reported governed from the ABI that carries the
+    /// right and on no kernel below it, since below it the user's D-Bus, the agent
+    /// `SSH_AUTH_SOCK` names and `docker.sock` are reachable from a stage. The regressions it
+    /// rejects: the capability reported on every kernel, which lets a strict stage run where those
+    /// sockets are open, a threshold one ABI off, and the right granted by a read row.
+    #[test]
+    fn sockets_with_a_path_are_reported_governed_from_landlock_abi_9() {
+        assert!(!governs_sockets_with_a_path(-1));
+        assert!(!governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION - 1));
+        assert!(governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION));
+        assert!(governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION + 1));
+        assert_eq!(PATH_SOCKET_ABI_VERSION, 9);
+        assert_eq!(
+            LandlockSandbox.capabilities().governs_sockets_with_a_path,
+            landlock_abi_version() >= PATH_SOCKET_ABI_VERSION
+        );
+        assert!(AccessFs::from_all(HANDLED_ABI).contains(AccessFs::ResolveUnix));
+        assert!(!AccessFs::from_read(HANDLED_ABI).contains(AccessFs::ResolveUnix));
     }
 
     /// A kernel that refuses the namespace refuses the stage, with the namespace named. The
