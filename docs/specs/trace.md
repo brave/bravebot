@@ -36,8 +36,8 @@ refusals under `permission_mode`, naming the tool, or the step and its tool, and
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
-isolation argument was not `checkout`, a reader asked for one, the run already works in one, no
-state directory, the checkouts would sit inside the working directory, an opened directory holds
+isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
+sandbox mode is `read-only`, no state directory, the checkouts would sit inside the working directory, an opened directory holds
 the working directory, an opened directory holds the checkouts, the directory for checkouts is
 unusable, or the repository was refused), the directory a person opened where that was the cause,
 and how many of the call's delegates were not started, the withdrawn one included. The delegate

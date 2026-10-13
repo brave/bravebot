@@ -8083,6 +8083,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             ));
         }
     }
+    // Every path the loop above lets through is in a directory the session was opened on, and this
+    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
+    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
+    // tool's write is. The null device is not in the write set.
+    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        return Produced::problem(
+            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
+             which would write the session's files; nothing ran and nothing was asked. Leave the \
+             redirection out, or redirect to /dev/null to discard the output.",
+        );
+    }
 
     // Before the person is asked. A rule refusing something is a statement that it does not run,
     // and there is nothing to show or approve once it has been made.

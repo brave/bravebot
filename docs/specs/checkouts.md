@@ -639,7 +639,9 @@ that is a comparison of bytes.
 A path the status lists as removed is named in the result, and is not removed.
 
 `/checkouts apply` is the same operation, typed by a person, and asks the same questions. The
-number is the person's own typing, so no planner and no turn is involved.
+number is the person's own typing, so no planner and no turn is involved. The sandbox mode
+`read-only` holds `apply_checkout` and not this command, since the person is the one writing
+([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 
 **Why not a merge.** A git merge would put bytes in the person's tree with nothing recorded in the
 map. That is the cost the map already carries for a file another process drops into a trusted

@@ -1777,7 +1777,8 @@ fn stated(
              by the operating system as `Operation not permitted` or `Permission denied`, so a \
              program that reports either for such a path was stopped by the sandbox and not by a \
              fault in the machine. Only the person widens it, by choosing another sandbox mode \
-             (`/add-dir`, `--add-dir`)."
+             (`/add-dir`, `--add-dir`). The file tools write nothing in this mode either, and a \
+             line that redirects output into a file is refused."
         }
         Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
@@ -1809,7 +1810,8 @@ fn stated(
              by the operating system as `Operation not permitted` or `Permission denied`, so a \
              program that reports either for such a path was stopped by the sandbox and not by a \
              fault in the machine. Only the person widens it, by choosing another sandbox mode \
-             (`/add-dir`, `--add-dir`)."
+             (`/add-dir`, `--add-dir`). The file tools write nothing in this mode either, and a \
+             line that redirects output into a file is refused."
         }
         Some(Prelude::Linux | Prelude::MacOs) => {
             "Programs this tool starts are confined. Each may read this machine except the places \
@@ -2924,9 +2926,9 @@ mod tests {
     }
 
     /// SANDBOX-19, SANDBOX-22: the sentence the planner is told under `read-only` says the project
-    /// cannot be written and who widens that, on every platform, and the sentence under
-    /// `workspace-write` does not. The regression it rejects is a planner told it may write the
-    /// project under a mode that refuses it.
+    /// cannot be written, by a program or by the file tools, and who widens that, on every
+    /// platform, and the sentence under `workspace-write` does not. The regression it rejects is a
+    /// planner told it may write the project under a mode that refuses it.
     #[test]
     fn the_planner_is_told_a_read_only_stage_cannot_write_the_project() {
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
@@ -2934,6 +2936,10 @@ mod tests {
                 .expect("a statement");
             assert!(said.contains("cannot write the project"), "{said}");
             assert!(said.contains("choosing another sandbox mode"), "{said}");
+            assert!(
+                said.contains("The file tools write nothing in this mode"),
+                "{said}"
+            );
             assert!(
                 !said.contains("It may write only the directories the session was opened on"),
                 "{said}"
@@ -2946,6 +2952,10 @@ mod tests {
             )
             .expect("a statement");
             assert!(!writing.contains("cannot write the project"), "{writing}");
+            assert!(
+                !writing.contains("The file tools write nothing"),
+                "{writing}"
+            );
         }
     }
 

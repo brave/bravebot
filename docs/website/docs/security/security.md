@@ -251,11 +251,10 @@ says which files disagree. A pin of `strict` also refuses `read-only`, and a pin
 refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
 machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
 reaches the remote with your credentials. Under it the agent's file tools write nothing either,
-a manifest run that writes a file is refused, a delegate is not given a checkout of its own, and a
-request from the agent to write a path is refused, all of these even in accept-edits mode and with
-`--dangerously-skip-permissions`. A redirection such as `> notes.txt` on a command line the agent
-runs is opened by Brave Bot itself rather than by the program, so `read-only` does not stop it. The
-desktop app reads `off` as
+a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a
+command line that redirects output into a file is refused, and a request from the agent to write a
+path is refused, all of these even in accept-edits mode and with `--dangerously-skip-permissions`.
+Redirecting to `/dev/null` still runs. The desktop app reads `off` as
 `workspace-write`. When the mode is not `workspace-write`, the opening screen and `/status` say so,
 and `bravebot doctor` and `/sandbox` say what chose it.
 
