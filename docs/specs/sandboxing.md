@@ -382,16 +382,23 @@ entry point marks itself non-dumpable before it reads its command line, so a pro
 which is a process of the same user, is refused `/proc/<pid>/environ` of this one and finds no
 gateway or signing key there that a person exported. The mark is cleared by `execve`, so it does
 not touch the programs started. Where the kernel refuses to set it, the refusal is said on standard
-error and the run goes on. macOS has no such switch, and a same-user process can read a non-Apple
-process's exec-time environment with `sysctl(KERN_PROCARGS2)`: a variable bravebot received through
-its environment there is readable by a stage, and keeping such a key out of the environment is the
-remedy that remains. Windows is not covered.
+error and the run goes on. On macOS every Seatbelt profile refuses another process's exec-time
+arguments and environment through `sysctl(KERN_PROCARGS2)`. It allows only named machine-information
+sysctls and denies `process-info*`, with a `process-info-pidinfo` exception for the process itself
+because system tools need that query during startup. Both restrictions are required: either a broad
+`sysctl-read` grant or the default process-info access permits the environment read. CPU count,
+page size and the fields of `uname` remain readable for ordinary tools ([SANDBOX-21](#SANDBOX-21)).
+This protects against confined stages, including a child given an empty environment; it does not
+stop an unconfined same-user process reading the exec-time copy, erase that copy, or withhold a
+variable the caller deliberately hands to a child. Windows is not covered.
 
 The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
 process starts in this one's. Naming it grants nothing: a process started in a directory it may not
 read is refused its first read of it, so a caller meaning the process to work there grants the
 directory too.
 
+`verified-by: bravebot_sandbox::exec_environment::a_confined_child_cannot_read_its_parents_exec_time_environment`
+`verified-by: bravebot_sandbox::macos::process_inspection_is_refused_and_sysctls_are_named_machine_queries`
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`

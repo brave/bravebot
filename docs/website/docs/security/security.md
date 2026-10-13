@@ -280,7 +280,10 @@ survives.
 **The environment is the caller's.** A confined process starts with the environment this process
 holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential
 or an agent socket does, so which of its own variables a program is trusted with stays the caller's
-decision rather than something that differs per platform.
+decision rather than something that differs per platform. On macOS a confined process cannot use
+`sysctl(KERN_PROCARGS2)` to read another process's exec-time environment, including bravebot's.
+Machine-information queries needed by ordinary tools remain available. This does not erase the
+kernel's saved environment or protect it from an unconfined process of the same user.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the
