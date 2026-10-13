@@ -2359,6 +2359,7 @@ mod tests {
                 remembered: Vec::new(),
             }],
             reads_the_machine: false,
+            writes_git_directories: false,
         });
 
         let confined = program(&request).join("\n");

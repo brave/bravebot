@@ -293,6 +293,10 @@ pub struct Confined {
     pub requested_reaches: Vec<(String, bravebot_sandbox::scope::Reach)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
+    /// Whether a stage whose program is not git may write a repository's hooks and configuration,
+    /// which is so on a platform whose backend holds no `.git` back for a stage that writes more
+    /// than the temporary directory (SANDBOX-18).
+    pub writes_git_directories: bool,
 }
 
 /// What one ambient authority is, in the words a person reads.
@@ -364,9 +368,11 @@ impl Confined {
 
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
-        match self.reads_the_machine {
-            true => t!(run_confined_machine).to_string(),
-            false => t!(run_confined).to_string(),
+        match (self.reads_the_machine, self.writes_git_directories) {
+            (true, false) => t!(run_confined_machine).to_string(),
+            (true, true) => t!(run_confined_machine_git).to_string(),
+            (false, false) => t!(run_confined).to_string(),
+            (false, true) => t!(run_confined_git).to_string(),
         }
     }
 
@@ -2935,6 +2941,7 @@ mod tests {
                     remembered: Vec::new(),
                 },
             ],
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -2974,6 +2981,7 @@ mod tests {
             }],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -3017,6 +3025,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried,
+            writes_git_directories: false,
         };
 
         let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
@@ -3046,6 +3055,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         };
         let said = confined(Counts {
             allow_read: 1,
@@ -3067,6 +3077,36 @@ mod tests {
             );
         }
         assert!(confined(Counts::default()).sentences().is_empty());
+    }
+
+    /// SANDBOX-18: a hook or a configuration a program writes into a `.git` runs later with no
+    /// sandbox, so where the platform lets a program that is not git write one, the heading the
+    /// person approves under says so, whichever account of the reach it gives, and where it does
+    /// not, the heading is the one it was.
+    #[test]
+    fn a_line_that_can_write_a_repositorys_hooks_says_so_in_its_heading() {
+        let confined = |reads_the_machine, writes_git_directories| Confined {
+            reads_the_machine,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories,
+        };
+
+        for reads_the_machine in [true, false] {
+            let plain = confined(reads_the_machine, false).heading();
+            let said = confined(reads_the_machine, true).heading();
+            assert!(
+                said.contains("hooks and configuration") && said.contains("no sandbox"),
+                "{said}"
+            );
+            assert!(!plain.contains("hooks"), "{plain}");
+            assert!(said.starts_with(plain.trim_end_matches(':')), "{said}");
+            assert!(confined(reads_the_machine, true).sentences().is_empty());
+        }
     }
 
     fn a_run() -> RunRequest {

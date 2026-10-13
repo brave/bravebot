@@ -1428,6 +1428,8 @@ run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
 run-confined = ses fichiers sont confinés à ces répertoires, au répertoire temporaire du système et aux fichiers système dont tout programme a besoin :
 run-confined-machine = il peut lire cette machine sauf les endroits qui contiennent des identifiants, et n'écrire que dans ces répertoires, le répertoire temporaire du système et les caches des chaînes d'outils :
+run-confined-git = ses fichiers sont confinés à ces répertoires, au répertoire temporaire du système et aux fichiers système dont tout programme a besoin, et un de ses programmes autre que git peut écrire les hooks et la configuration d'un dépôt, que git exécute ensuite sans bac à sable :
+run-confined-machine-git = il peut lire cette machine sauf les endroits qui contiennent des identifiants, et n'écrire que dans ces répertoires, le répertoire temporaire du système et les caches des chaînes d'outils, et un de ses programmes autre que git peut écrire les hooks et la configuration d'un dépôt, que git exécute ensuite sans bac à sable :
 run-carries-known-hosts = { $program } ajoute aussi à vos hôtes ssh connus et peut atteindre votre agent ssh
 run-carries-toolchain = { $program } atteint aussi l'installation et le cache de la chaîne d'outils { $toolchain }
 run-carries-loopback = { $program } peut aussi écouter sur des ports de cette machine et s'y connecter
