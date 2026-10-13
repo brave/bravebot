@@ -274,13 +274,7 @@ pub fn assess<S: Sink>(
     // it keep their mark, being the same bytes every check.
     let request = ChatRequest::new(model, check.messages).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Streaming, like every other request this program makes, including the aside this is modelled
     // on. Nothing here shows the answer arriving, so the progress is dropped: what the streaming

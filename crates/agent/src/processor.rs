@@ -110,6 +110,20 @@ pub struct Chat<'a> {
     pub cancel: Option<&'a bravebot_core::cancel::Cancel>,
 }
 
+impl<'a> Chat<'a> {
+    /// The client for one call on `model`, carrying the turn's stop and its tier.
+    pub(crate) fn backend(&mut self, model: &str) -> crate::backend::Backend<'_> {
+        let mut client = crate::backend::Backend::select(self.config, self.egress, model);
+        if let Some(cancel) = self.cancel {
+            client = client.with_cancel(cancel.clone());
+        }
+        if let Some(subscription) = self.subscription.as_deref_mut() {
+            client = client.with_subscription(subscription);
+        }
+        client
+    }
+}
+
 /// What one processor run produced.
 pub struct Processed {
     /// The document it produced, where it named one. Never read on the way past.
@@ -223,13 +237,7 @@ pub fn run<S: Sink>(
     // keep their mark, being the same bytes every time this spec runs.
     let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Streamed for the same reason the planner's rounds are: it is the shape the backend
     // answers in. Nothing watches the pieces go by, since a processor's output is not for
@@ -243,4 +251,112 @@ pub fn run<S: Sink>(
         model: completion.model,
         usage: completion.usage,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Backend;
+    use bravebot_aichat::SubscriptionCredential;
+    use bravebot_config::{DEFAULT_MODEL, env_var};
+    use bravebot_core::cancel::Cancel;
+
+    const GATEWAY_MODEL: &str = "z-ai/glm-4.6";
+
+    struct TheTurns;
+
+    impl Subscription for TheTurns {
+        fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+            Ok(SubscriptionCredential {
+                cookie_name: "credential".to_string(),
+                cookie_value: "the turn's".to_string(),
+            })
+        }
+    }
+
+    /// Brave's endpoint for the default model, and a gateway that lists one other.
+    fn brave_and_a_gateway() -> Config {
+        let mut config = Config::from_lookup(|key| {
+            match key {
+                env_var::SIGNING_KEY => Some("test-signing-key"),
+                env_var::KEY_ID => Some("test-key-id"),
+                env_var::ENDPOINT => Some("https://example.invalid"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+        let serde_json::Value::Object(root) = serde_json::json!({"provider": {"openrouter": {
+            "env": ["A_TOKEN_VARIABLE"],
+            "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+            "models": {GATEWAY_MODEL: {}}
+        }}}) else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+        config
+    }
+
+    /// A side request is part of the turn that asked for it. A stop given to the turn has to end
+    /// it, and it has to spend the turn's tier rather than fall to the free one. Every side request
+    /// builds its client here, so a client that left either out would leave it out of all of them.
+    #[test]
+    fn a_side_request_carries_the_turns_stop_and_subscription() {
+        let config = brave_and_a_gateway();
+        let egress = Egress::new();
+        let stop = Cancel::new();
+        let mut subscription = TheTurns;
+        let mut chat = Chat {
+            config: &config,
+            egress: &egress,
+            subscription: Some(&mut subscription),
+            model: None,
+            cancel: Some(&stop),
+        };
+
+        let Backend::Aichat {
+            cancel,
+            subscription,
+            ..
+        } = chat.backend(DEFAULT_MODEL)
+        else {
+            panic!("Brave's model is not sent to Brave's endpoint");
+        };
+        let carried = cancel.expect("the request carries no stop");
+        let spent = subscription.expect("the request carries no subscription");
+        assert!(!carried.is_cancelled());
+        stop.cancel();
+        assert!(carried.is_cancelled(), "the stop is not the turn's");
+        let credential = spent.next_credential().expect("a credential");
+        assert_eq!(credential.cookie_value, "the turn's");
+    }
+
+    /// Compaction, a goal check and the advisor run on a model the settings name for them, which
+    /// another service may answer for. The client has to be that model's, not the turn's, or the
+    /// request reaches a service that does not serve the model it names.
+    #[test]
+    fn a_side_request_reaches_the_service_of_the_model_it_runs_on() {
+        let config = brave_and_a_gateway();
+        let egress = Egress::new();
+        let stop = Cancel::new();
+        let mut chat = Chat {
+            config: &config,
+            egress: &egress,
+            subscription: None,
+            model: Some(DEFAULT_MODEL),
+            cancel: Some(&stop),
+        };
+
+        assert!(matches!(
+            chat.backend(GATEWAY_MODEL),
+            Backend::Gateway {
+                cancel: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            chat.backend(DEFAULT_MODEL),
+            Backend::Aichat { .. }
+        ));
+    }
 }
