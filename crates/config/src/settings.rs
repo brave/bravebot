@@ -6621,13 +6621,14 @@ mod tests {
     }
 
     /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
-    /// may ask for `strict` and are not obeyed when they name `workspace-write` or `off`, whichever the
-    /// person's own file says. The regression it rejects is a repository loosening the sandbox of
-    /// whoever cloned it.
+    /// may ask for `strict` and are not obeyed when they name `read-only`, `workspace-write` or
+    /// `off`, whichever the person's own file says. The regression it rejects is a repository
+    /// loosening the sandbox of whoever cloned it, including to `read-only`, which writes less than
+    /// `workspace-write` and reads more than `strict`.
     #[test]
     fn a_checkout_may_only_tighten_the_sandbox() {
         for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
-            for loose in ["workspace-write", "off"] {
+            for loose in ["read-only", "workspace-write", "off"] {
                 let body = format!(r#"{{"sandbox": {{"mode": "{loose}"}}}}"#);
                 let layers = Layers::new(&format!("sandbox-loose-{name}-{loose}"));
                 let layers = match text {

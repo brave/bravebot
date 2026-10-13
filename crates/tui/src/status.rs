@@ -1161,10 +1161,11 @@ mod tests {
         trust
     }
 
-    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `workspace-write`, and the
-    /// report draws the mode its facts carry. The regressions it rejects are `off` shown as the
-    /// platform's level alone, which reads as a session whose programs are confined, and a report
-    /// that reads the mode start-up settled and so ignores `/sandbox`.
+    /// SANDBOX-22: the line names `strict`, `read-only` and `off` and says nothing for
+    /// `workspace-write`, and the report draws the mode its facts carry. The regressions it rejects
+    /// are `off` shown as the platform's level alone, which reads as a session whose programs are
+    /// confined, `read-only` shown as `workspace-write`, which hides that a program cannot write the
+    /// project, and a report that reads the mode start-up settled and so ignores `/sandbox`.
     #[test]
     fn the_confinement_line_names_the_mode_unless_it_is_workspace_write() {
         use bravebot_sandbox::SandboxMode;
@@ -1178,13 +1179,19 @@ mod tests {
             strict.starts_with(level) && strict.contains("strict"),
             "{strict}"
         );
+        let read_only = with_the_sandbox_mode(level, SandboxMode::ReadOnly);
+        assert!(
+            read_only.starts_with(level) && read_only.contains("read-only"),
+            "{read_only}"
+        );
         let off = with_the_sandbox_mode(level, SandboxMode::Off);
         assert!(off.starts_with(level) && off.contains("off"), "{off}");
         assert_ne!(off, strict);
+        assert_ne!(read_only, strict);
 
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
-        for mode in [SandboxMode::Strict, SandboxMode::Off] {
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly, SandboxMode::Off] {
             let mut facts = facts(&config, &trust);
             facts.sandbox_mode = mode;
             let shown = report(&facts)
@@ -1198,11 +1205,12 @@ mod tests {
     }
 
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
-    /// the kernel leaves them open, under `workspace-write` alone, with why beside it. The regressions it
-    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
-    /// under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    /// the kernel leaves them open, under `read-only` and `workspace-write`, with why beside it. The
+    /// regressions it rejects: no line on such a kernel, a line under `read-only` that is missing
+    /// because only `workspace-write` was listed, a line where the kernel governs the sockets, and a
+    /// line under `strict`, which refuses the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_reported_under_workspace_write_alone() {
+    fn reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write() {
         use bravebot_sandbox::SandboxMode;
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
@@ -1216,11 +1224,15 @@ mod tests {
                 .find(|line| line.label.trim() == t!(status_path_sockets))
         };
 
-        let line = shown(SandboxMode::WorkspaceWrite, true).expect("the sockets are on the report");
-        assert_eq!(line.value, t!(status_path_sockets_reachable));
-        assert_eq!(line.note, t!(status_path_sockets_why));
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+            let line = shown(mode, true)
+                .unwrap_or_else(|| panic!("{mode}: the sockets are on the report"));
+            assert_eq!(line.value, t!(status_path_sockets_reachable), "{mode}");
+            assert_eq!(line.note, t!(status_path_sockets_why), "{mode}");
+        }
         for (mode, reachable) in [
             (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
         ] {

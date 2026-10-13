@@ -12412,13 +12412,13 @@ mod tests {
 
     /// SANDBOX-29: a request to run one line with no profile is accepted in `workspace-write` of a trusted
     /// workspace in the turn that holds the session, and refused in each other case, one row each:
-    /// `strict` and `off`, an untrusted workspace, a managed closed network and a delegate. The
-    /// first row is the control, so a function that refused everything fails it. The regression it
-    /// rejects is a refusal that was never wired in, which lets that one setting hand the line a
-    /// shell's reach.
+    /// `strict`, `read-only` and `off`, an untrusted workspace, a managed closed network and a
+    /// delegate. The first row is the control, so a function that refused everything fails it. The
+    /// regression it rejects is a refusal that was never wired in, which lets that one setting hand
+    /// the line a shell's reach.
     #[test]
     fn an_unconfined_request_is_accepted_only_where_every_condition_holds() {
-        use bravebot_sandbox::SandboxMode::{Off, Strict, WorkspaceWrite};
+        use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
         for (confine, mode, trusted, pinned, delegated, accepted, why) in [
             (
                 true,
@@ -12430,6 +12430,7 @@ mod tests {
                 "the control",
             ),
             (true, Strict, true, false, false, false, "strict"),
+            (true, ReadOnly, true, false, false, false, "read-only"),
             (true, Off, true, false, false, false, "off"),
             (
                 true,
