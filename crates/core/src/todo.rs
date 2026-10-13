@@ -32,6 +32,8 @@ pub enum Status {
     Active,
     /// Finished.
     Done,
+    /// Dropped without being finished.
+    Cancelled,
 }
 
 impl Status {
@@ -43,12 +45,13 @@ impl Status {
         match text.trim() {
             "in_progress" | "active" => Self::Active,
             "completed" | "done" => Self::Done,
+            "cancelled" | "canceled" => Self::Cancelled,
             _ => Self::Pending,
         }
     }
 
     /// The values the model is told to use.
-    pub const NAMES: [&'static str; 3] = ["pending", "in_progress", "completed"];
+    pub const NAMES: [&'static str; 4] = ["pending", "in_progress", "completed", "cancelled"];
 }
 
 impl fmt::Display for Status {
@@ -57,6 +60,7 @@ impl fmt::Display for Status {
             Self::Pending => write!(f, "pending"),
             Self::Active => write!(f, "in_progress"),
             Self::Done => write!(f, "completed"),
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -108,6 +112,16 @@ impl List {
             .filter(|i| i.status == Status::Done)
             .count()
     }
+
+    /// How many tasks were dropped without being finished.
+    ///
+    /// Separate from [`List::done`], because work abandoned is not work completed.
+    pub fn cancelled(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| i.status == Status::Cancelled)
+            .count()
+    }
 }
 
 /// One line of the list, shaped for a screen.
@@ -125,8 +139,12 @@ pub struct Row {
 
 impl Row {
     /// Whether this line should read as struck through.
+    ///
+    /// Struck means no longer outstanding, which covers a task that was finished and a task that
+    /// was dropped. Striking a dropped task is what keeps the unstruck lines the work still to
+    /// come; the marker is what says which of the two it was.
     pub fn struck(&self) -> bool {
-        self.status == Status::Done
+        matches!(self.status, Status::Done | Status::Cancelled)
     }
 }
 
@@ -134,6 +152,8 @@ impl Row {
 const DONE_MARKER: &str = "✓";
 /// Marker for anything still outstanding, started or not.
 const PENDING_MARKER: &str = "■";
+/// Marker for a task dropped without being finished.
+const CANCELLED_MARKER: &str = "✗";
 
 /// Shape a list into rows for display.
 ///
@@ -148,6 +168,7 @@ pub fn rows(list: &List) -> Vec<Row> {
             content: item.content.clone(),
             marker: match item.status {
                 Status::Done => DONE_MARKER,
+                Status::Cancelled => CANCELLED_MARKER,
                 Status::Pending | Status::Active => PENDING_MARKER,
             },
             status: item.status,
@@ -187,7 +208,7 @@ mod tests {
     /// or a model that invented a word, silently mark work finished.
     #[test]
     fn an_unknown_status_is_outstanding_work() {
-        for text in ["", "cancelled", "COMPLETED", "nearly", "✓"] {
+        for text in ["", "abandoned", "COMPLETED", "nearly", "✓"] {
             assert_eq!(
                 Status::parse(text),
                 Status::Pending,
@@ -200,6 +221,7 @@ mod tests {
     fn familiar_spellings_are_accepted() {
         assert_eq!(Status::parse("done"), Status::Done);
         assert_eq!(Status::parse("active"), Status::Active);
+        assert_eq!(Status::parse("canceled"), Status::Cancelled);
         // Whitespace is the model's formatting, not a different status.
         assert_eq!(Status::parse("  completed "), Status::Done);
     }
@@ -273,5 +295,38 @@ mod tests {
     fn progress_is_counted() {
         assert_eq!(list().done(), 1);
         assert_eq!(list().len(), 3);
+    }
+
+    fn with_a_cancelled_task() -> List {
+        List::new(vec![
+            Item::new("Escape cancels an in-flight request", Status::Done),
+            Item::new("Add prompt history", Status::Cancelled),
+            Item::new("Persist it across sessions", Status::Pending),
+        ])
+    }
+
+    /// TODO-3. A dropped task is no longer outstanding, so it is struck; its marker is its own,
+    /// because the finished tick would read as work that happened.
+    #[test]
+    fn a_cancelled_task_is_struck_through_with_its_own_marker() {
+        let rows = rows(&with_a_cancelled_task());
+        assert!(rows[1].struck());
+        assert_eq!(rows[1].marker, CANCELLED_MARKER);
+        assert_ne!(rows[1].marker, DONE_MARKER);
+    }
+
+    /// TODO-3. Counting a dropped task as finished would overstate what the turn achieved.
+    #[test]
+    fn a_cancelled_task_is_not_counted_as_done() {
+        let list = with_a_cancelled_task();
+        assert_eq!(list.done(), 1);
+        assert_eq!(list.cancelled(), 1);
+        assert_eq!(list.len(), 3);
+    }
+
+    /// A cancelled task is not the one being worked on, so it cannot name the indicator.
+    #[test]
+    fn a_cancelled_task_does_not_name_the_indicator() {
+        assert!(active_label(&with_a_cancelled_task()).is_none());
     }
 }

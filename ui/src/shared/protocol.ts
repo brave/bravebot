@@ -25,7 +25,7 @@ export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
-export type TodoStatus = 'pending' | 'active' | 'done'
+export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
 
 export type Change =
   | { kind: 'kept'; text: string }

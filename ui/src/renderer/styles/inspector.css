@@ -93,6 +93,8 @@
 .todos li.done { color: var(--ink-tertiary); }
 .todos li.done .todo-text { text-decoration: line-through; }
 .todos li.done .marker { color: var(--status-success); }
+.todos li.cancelled { color: var(--ink-tertiary); }
+.todos li.cancelled .todo-text { text-decoration: line-through; }
 .todos li.active { color: var(--ink-primary); font: var(--type-meta-strong); }
 
 .file-row, .confined-row {
