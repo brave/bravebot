@@ -1776,6 +1776,32 @@ mod tests {
         assert_eq!(held[1], chosen("GitHub.com", "ACME", Some("/k/second.pub")));
     }
 
+    /// SANDBOX-16: a key whose path is not text is refused and writes nothing, so the record never
+    /// holds the replacement-character spelling of its name, which names another file for ssh to
+    /// offer. The lookalike is text, and is chosen and read back as itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_whose_path_is_not_text_is_refused_rather_than_kept_as_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let place = Place::new("chosen-key-not-text");
+        let store = Store::new(&place.home);
+        let invalid = ChosenKey {
+            key: Some(PathBuf::from(OsStr::from_bytes(b"/k/\xff.pub"))),
+            ..chosen("github.com", "acme", None)
+        };
+        let lookalike = chosen("github.com", "acme", Some("/k/\u{FFFD}.pub"));
+        assert_ne!(invalid, lookalike);
+
+        assert!(!store.choose_key(&invalid));
+        assert!(!store.path().exists(), "a refused key wrote a line");
+        assert!(store.chosen_keys().is_empty());
+
+        assert!(store.choose_key(&lookalike));
+        assert_eq!(store.chosen_keys(), [lookalike]);
+    }
+
     /// The record holds grants and chosen keys in one file, and neither reader takes the other's
     /// lines: a grant line written in the format earlier builds wrote still reads as that grant and
     /// is no chosen key, a chosen key's line is no grant, and a key line naming a relative path or

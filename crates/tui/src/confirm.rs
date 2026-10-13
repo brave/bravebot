@@ -4698,6 +4698,66 @@ mod tests {
         assert!(drawn.contains("/home/someone/project"), "{drawn}");
     }
 
+    /// SANDBOX-16: a run prompt for a push whose key the person chose at an earlier prompt names the
+    /// owner and the day it was chosen, and the key where one was chosen. A person reading it can
+    /// tell a key they chose, which `/reach keys remove` forgets, from one their `git.identities`
+    /// names.
+    #[test]
+    fn a_run_prompt_names_the_owner_and_the_day_of_a_key_chosen_at_an_earlier_prompt() {
+        let drawn_with = |key: Option<&str>| {
+            let mut request = a_run(false);
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec!["/home/someone/project".into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: vec![bravebot_agent::Carried {
+                    program: "git".into(),
+                    toolchain: None,
+                    scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                    reaches: Vec::new(),
+                    identity: Some(bravebot_agent::confirm::Offered::Chosen(
+                        bravebot_agent::reach::ChosenKey {
+                            address: bravebot_sandbox::scope::Address::spelled(
+                                "github.com",
+                                "acme",
+                            )
+                            .expect("an address"),
+                            key: key.map(Into::into),
+                            allowed: "2026-10-13".to_string(),
+                        },
+                    )),
+                    network: false,
+                    remembered: Vec::new(),
+                }],
+            });
+            rendered_run(&request)
+        };
+
+        let chosen = drawn_with(Some("/home/someone/.ssh/work.pub"));
+        assert!(
+            chosen.contains(
+                "git has ssh offer the key /home/someone/.ssh/work.pub first, which you chose for github.com/acme on 2026-10-13"
+            ),
+            "{chosen}"
+        );
+        assert!(!chosen.contains("git.identities names"), "{chosen}");
+
+        let left_to_ssh = drawn_with(None);
+        assert!(
+            left_to_ssh.contains(
+                "git leaves the key to ssh, which offers your keys in order, as you chose for github.com/acme on 2026-10-13"
+            ),
+            "{left_to_ssh}"
+        );
+        assert!(
+            !left_to_ssh.contains("has ssh offer the key"),
+            "{left_to_ssh}"
+        );
+    }
+
     /// A prompt for a session whose network is closed says so, and names the stage that keeps it,
     /// so a yes is given knowing the one program that can reach out. An open network says nothing,
     /// as it never did.
