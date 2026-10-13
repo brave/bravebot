@@ -19,6 +19,22 @@ const MODES: Record<SandboxMode, ModeChoice> = {
   },
 }
 
+/** On Windows none of these modes reads the machine, and Strict gives what Workspace write does. */
+const ON_WINDOWS: Record<SandboxMode, ModeChoice> = {
+  'workspace-write': {
+    ...MODES['workspace-write'],
+    says: 'Programs read only the session, the system and what their command names, and write only in the session',
+  },
+  'read-only': {
+    ...MODES['read-only'],
+    says: 'Programs read only the session, the system and what their command names. Neither they nor the file tools write in the session',
+  },
+  strict: {
+    ...MODES.strict,
+    says: 'The same reach as Workspace write on Windows. Programs read only the session, the system and what their command names',
+  },
+}
+
 /**
  * What a program the agent runs is held to.
  *
@@ -34,7 +50,8 @@ export function SandboxModePicker({ mode, onChoose }: {
   onChoose: (mode: SandboxMode) => void
 }): React.JSX.Element {
   return (
-    <ModePicker name="sandbox" testId="sandbox" noun="Sandbox mode" modes={MODES}
+    <ModePicker name="sandbox" testId="sandbox" noun="Sandbox mode"
+      modes={window.bravebot.platform === 'win32' ? ON_WINDOWS : MODES}
       choices={SANDBOX_MODES} mode={mode} onChoose={onChoose} />
   )
 }

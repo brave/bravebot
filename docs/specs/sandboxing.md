@@ -1812,7 +1812,10 @@ since making one writes an entry under the repository's `.git`
 `/checkouts apply`, which the person types ([CHECKOUT-14](checkouts.md#CHECKOUT-14)), writes the
 project and is not held to the mode. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
-stage with no profile. The network is not part
+stage with no profile. On Windows no mode but `off` reads the machine: a `workspace-write` stage
+starts under the profile a `strict` one does, so the two grant the same, and `read-only` is that
+profile without the writes to the session's directories, the scratch directory and the toolchain
+caches. The network is not part
 of a mode: whether a stage keeps egress is the setting [SANDBOX-20](#SANDBOX-20) describes, and
 `strict`, `read-only` and `workspace-write` honour it the same way. `off` starts no profile, so under
 it nothing holds a network shut; the floor below is what stops a managed pin from meeting that.
@@ -1820,7 +1823,8 @@ it nothing holds a network shut; the floor below is what stops a managed pin fro
 A mode is looser than another when a program under it can read or write more. `off` is looser than
 every other mode, and `workspace-write` is looser than `read-only`, which reads the same machine and
 writes less. `strict` reads less than `read-only` and writes the session's directories, which
-`read-only` does not, so each of the two is looser than the other.
+`read-only` does not, so each of the two is looser than the other. The ranking is the one Linux and
+macOS give, on every platform.
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
 key of the settings, and from the managed file's pin; the default is `workspace-write`. In the settings, the home file and a `--settings` file outside
@@ -1923,7 +1927,10 @@ mode answers it.
 **What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
-the command line prints it on its opening line. Under bypass, a `workspace-write` stage of the lead
+the command line prints it on its opening line. On Windows, where `read-only` reads no more than
+`strict` and writes less, a pin of `strict` still refuses `read-only`, and the refusal says
+`read-only` reads more of the machine, since the ranking is the one Linux and macOS give. Under
+bypass, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
 a session directory is refused with `Operation not permitted`. Builds, formatters and `git commit`

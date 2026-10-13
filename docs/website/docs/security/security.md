@@ -116,10 +116,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   login, `~/.npmrc` and `~/.netrc`, are readable. On macOS a program cannot listen on a port of the
   machine unless the planner asks for `loopback` on that line and you approve it, and only `git`
   itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
-  clone is refused. On Windows programs are not confined and run
-  with the access your own shell would give them. Their own network requests do not go through the
-  one way out described below, so an approved `curl`, `git push` or package install can read what its
-  profile reaches and send it with nothing here routing or inspecting the traffic.
+  clone is refused. On Windows a program runs in a container that reaches only the directories the
+  session was opened on, its scratch directory, the system temporary directory, the system and
+  program directories, git's configuration files, its toolchain's caches and the credential scope
+  its command names, so in no sandbox mode but `off` does it read the rest of the machine. A
+  program's own network requests do not go through the one way out described below, so an approved
+  `curl`, `git push` or package install can read what its profile reaches and send it with nothing
+  here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
@@ -235,13 +238,16 @@ Confinement bounds a process started to run code Brave Bot did not write, so a s
 none of those is inside no such boundary, and the level is what your machine offers rather than
 something holding the session back.
 
-**Sandbox modes.** The programs the agent runs start under one of four modes. `read-only` reads the
-machine as above and writes nothing in the session's directories, the scratch directory or the
-toolchain caches. `workspace-write` reads the same and also writes the session's directories, the
-scratch directory and the toolchain caches. `strict` reads nothing on the machine beyond what the
-program's binary needs, the session's directories and the credential scope its command names.
-`off` starts programs with no profile. The default is `workspace-write`. Choose one with
-`--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
+**Sandbox modes.** The programs the agent runs start under one of four modes. On Linux and macOS,
+`read-only` reads the machine as above and writes nothing in the session's directories, the scratch
+directory or the toolchain caches. `workspace-write` reads the same and also writes the session's
+directories, the scratch directory and the toolchain caches. `strict` reads nothing on the machine
+beyond what the program's binary needs, the session's directories and the credential scope its
+command names. On Windows no mode but `off` reads the machine: `strict` and `workspace-write` give a
+program the same container, and `read-only` gives it that container without its writes to the
+session's directories, the scratch directory and the toolchain caches. `off` starts programs with no
+profile. The default is `workspace-write`. Choose one with `--sandbox <mode>` or with
+`{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
 earlier name of `workspace-write`, `standard`, is still read in the
 flag, `/sandbox`, the settings files and the managed file, and is reported as `workspace-write`. A repository's `.bravebot/settings.json` can ask for `strict` and
 nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is not obeyed where your
