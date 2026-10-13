@@ -202,8 +202,11 @@ fn main() -> ExitCode {
         }
     }
 
-    // The host list a stage is held to, settled with the lists above for the same reason.
-    bravebot_config::sandbox_network::settle(&bravebot_config::Settings::load());
+    // The host list a stage is held to and the key each owner's repositories are pushed with,
+    // settled with the lists above for the same reason.
+    let layers = bravebot_config::Settings::load();
+    bravebot_config::sandbox_network::settle(&layers);
+    bravebot_config::git_identities::settle(&layers);
 
     // After the mode above is engaged, because an incognito session is given no directory to log
     // into, and before the first thing that could fail in a way worth recording.
@@ -3696,6 +3699,25 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(doctor_settings_ignored),
             t!(
                 doctor_settings_sandbox_hosts_misshapen,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for path in settings.git_identities_ignored() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_git_identities_ignored,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for (path, key) in settings.git_identities_misshapen() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_git_identities_misshapen,
                 key = key,
                 path = path.display().to_string()
             ),

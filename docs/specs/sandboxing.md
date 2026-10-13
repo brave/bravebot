@@ -19,6 +19,7 @@ governs:
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
+  - crates/config/src/git_identities.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
   - crates/sandbox/src/rules.rs
@@ -858,6 +859,32 @@ followed, `~/.ssh/config` is read up to 1 MiB, and at most 32 files are added. A
 be read adds nothing. Only the remote scope reads the configuration. A key that `-i` names in a
 `core.sshCommand` is read only if the configuration also lists it as an `IdentityFile`.
 
+A person chooses the key a push offers the host for one owner's repositories with `git.identities`
+in their settings, an object whose names are `<host>/<owner>` and whose values name a key file:
+`{"git": {"identities": {"github.com/netzenbot": "~/.ssh/netzenbot.pub"}}}`. It applies to a stage
+whose program resolved to `git` and that carries the remote scope by its argv. An argument after the
+operation that does not start with `-` is an ssh address where it is written
+`ssh://[user@]host[:port]/<owner>/...`, the same with `git+ssh://` or `ssh+git://`, or
+`user@host:<owner>/...` with no `/` before the first `:`; a scp-like address needs the user, so a
+refspec such as `HEAD:refs/heads/main` is not one. Where the argv names one such address, or names
+the same host and owner more than once, the entry for that host and owner decides, both compared
+without regard to ASCII case. The stage then starts with `GIT_SSH_COMMAND` set to
+`ssh -i '<key>' -o IdentitiesOnly=yes`, in place of any value the environment held, and reads that
+one file. The value is judged as an `IdentityFile` name is: absolute or beginning `~/`, `.pub` added
+to a name that does not end in it, a regular file named `*.pub` once a link is followed, and outside
+every credential location other than `~/.ssh`. It must also lie outside every directory the plan may
+write (the session's directories, the scratch directory and the temporary directory), and a path
+holding `'` or one that is not valid UTF-8 is refused, since git hands the variable to a shell. A
+refused key, an address with no entry, an argv naming two different addresses and an argv naming
+none leave the stage as it was. The address is read from the argv and nothing else: a remote given
+by name, such as `origin`, has its URL in the repository's configuration, which is workspace content
+a clone or an earlier stage may have written, so it selects no entry. The run prompt names the key
+on the stage it applies to. Only the person's own settings file and a `--settings` file outside the
+workspace set the block, as for `sandbox.mode` ([SANDBOX-22](#SANDBOX-22)). A checkout's project and
+local files and a `--settings` file inside the workspace are not obeyed, and `doctor` names the
+file, as it names an entry whose name is not `<host>/<owner>` or whose value is not a string. A key
+beside `identities` in the block is reported as unread.
+
 A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
 public key and asks the agent for the signature, so a stage that signs needs the one file and the
 agent's socket, and never the private key. The signing scope reads that file and the stage may write
@@ -967,6 +994,13 @@ the person's home that their configuration names, and is read for the same reaso
 keys are. A configuration of the person's is read for it and a repository's is not, because the
 repository's is a file the plan may write. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
+ssh offers an agent's keys in order and GitHub accepts the first one registered to any account, so a
+person whose agent holds two accounts' keys pushes every repository as one account unless a key is
+chosen. The planner cannot choose it, since an assignment in front of the line removes the scope
+and a repository's `core.sshCommand` is not followed. `git.identities` is the person's choice, for an
+owner they named, selected by an address the planner wrote and the person approved, so no byte a
+program or a repository wrote picks the credential. `IdentitiesOnly=yes` stops ssh offering the
+agent's other keys after the named one, and the agent still signs, so the private key is not read.
 
 A repository can set `user.signingkey` to a key the person's own configuration does not name, and
 the repository's configuration is not read, so a stage that signs with it cannot load that public key
@@ -987,7 +1021,12 @@ nothing is lent. This adds no dependency and is not done on Windows. The prompt 
 sentence about the signing key, so that a signature that fails for a key the agent does not hold can
 be told from one the scope never reached.
 
-**What it costs.** The directories counted against a program's file are the plan's own. A path a
+**What it costs.** A `git.identities` entry replaces a `GIT_SSH_COMMAND` the person's environment
+set on the stages it applies to, so the ssh options that variable carried are not passed there. A
+push to a remote given by name gets no entry; the planner has to write the ssh address in the argv
+for the person's choice to apply.
+
+The directories counted against a program's file are the plan's own. A path a
 person lent with `request_path` ([SANDBOX-28](#SANDBOX-28)), an `allowWrite` row
 ([SANDBOX-25](#SANDBOX-25)) and the rows a bypass stage holds without a request are not counted, so a
 program an earlier stage wrote into one of them carries the scope its name has. A session opened on
@@ -1093,6 +1132,19 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
+`verified-by: bravebot_sandbox::scope::an_ssh_address_in_the_argv_names_its_host_and_owner`
+`verified-by: bravebot_sandbox::scope::a_remote_name_a_refspec_or_another_transport_names_no_address`
+`verified-by: bravebot_sandbox::scope::an_identity_key_is_a_public_key_file_and_never_a_private_one`
+`verified-by: bravebot_sandbox::scope::the_ssh_command_offers_one_key_and_refuses_a_path_it_cannot_quote`
+`verified-by: bravebot_sandbox::scope::the_ssh_command_refuses_a_key_whose_path_is_not_text`
+`verified-by: bravebot_config::git_identities::an_entry_is_read_by_host_and_owner_and_found_without_regard_to_case`
+`verified-by: bravebot_config::git_identities::a_misshapen_entry_is_reported_and_the_rest_are_read`
+`verified-by: bravebot_config::git_identities::a_key_beside_identities_is_reported_as_unread`
+`verified-by: bravebot_config::settings::only_the_persons_own_files_choose_a_key_for_an_owner`
+`verified-by: bravebot_agent::confine::an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other`
+`verified-by: bravebot_agent::confine::no_entry_leaves_a_remote_stage_as_it_was`
+`verified-by: bravebot_agent::confine::a_key_the_plan_could_have_written_or_that_is_not_a_public_key_is_not_offered`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_what_a_confined_run_is_held_to`
 
 <a id="SANDBOX-17"></a>
 ### SANDBOX-17: a program `run` starts is started under its plan's profile, or not started
@@ -1352,6 +1404,18 @@ for an `/add-dir` that does nothing. The text is the same for every failure and 
 exit 2. The menu sentence ends the same way, and the `run` description's
 confinement statement names the tool.
 
+Where a step of the line is `git` carrying the remote scope by its argv, the sentence also says,
+before that fixed text, which key such a step offered over ssh ([SANDBOX-16](#SANDBOX-16)): the one
+the person's `git.identities` names for the owner of the ssh address its argv named; whichever key
+ssh tried first, since no entry names a readable public key for that owner; or whichever key ssh
+tried first, since the step named its remote by name or by an address that is not ssh. Each case
+present in the line is said once. It then says that GitHub refuses a push for permission when the
+key offered belongs to an account that cannot write to the repository and refuses the login when no
+key offered is registered, that a retry offers the same key, and that only the person chooses the
+key, with the entry shape and the file it goes in, so the planner asks them rather than retrying.
+The text names no host, owner, address or key path and reads nothing a program printed, so the same
+words follow a rejected push and a typo. A line with no such step says none of it.
+
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
 a fault in the machine, so it chases causes that do not apply and sends the person to run
@@ -1385,6 +1449,7 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
 `verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
+`verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries

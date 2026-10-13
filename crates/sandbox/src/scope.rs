@@ -738,6 +738,127 @@ fn names_an_option(args: &[String], option: &str) -> bool {
     })
 }
 
+/// The host and the owner an ssh address names: the account or organisation whose name is the
+/// first part of the repository's path. A key the person's `git.identities` names is chosen by
+/// these two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Address {
+    pub host: String,
+    pub owner: String,
+}
+
+/// The ssh address the argv of a `git` stage names, read from the argv alone, or `None`.
+///
+/// `args` is the argv after `git`. An argument after the operation that does not start with `-` is
+/// an address where it is written `ssh://[user@]host[:port]/owner/...`, with `git+ssh://` and
+/// `ssh+git://` read the same way, or `user@host:owner/...` with no `/` before the first `:`. A
+/// scp-like address is read only with a user in front, so that a refspec such as
+/// `HEAD:refs/heads/main` is not taken for one. `None` where no argument is an address, which is
+/// the case for a remote given by name such as `origin`: its URL is in the repository's
+/// configuration, which is workspace content and is not read. `None` also where two arguments name
+/// different addresses.
+pub fn ssh_address(args: &[String]) -> Option<Address> {
+    let mut rest = args.iter().map(String::as_str);
+    // Past `-C <directory>` and the operation word.
+    while let "-C" = rest.next()? {
+        rest.next()?;
+    }
+    let mut found: Option<Address> = None;
+    for address in rest
+        .filter(|argument| !argument.starts_with('-'))
+        .filter_map(address_in)
+    {
+        match &found {
+            Some(held) if !held.same_as(&address) => return None,
+            Some(_) => {}
+            None => found = Some(address),
+        }
+    }
+    found
+}
+
+impl Address {
+    /// Whether two addresses name the same host and owner. Both are compared without regard to
+    /// ASCII case, as a host name and a GitHub account are.
+    pub fn same_as(&self, other: &Address) -> bool {
+        self.host.eq_ignore_ascii_case(&other.host) && self.owner.eq_ignore_ascii_case(&other.owner)
+    }
+}
+
+/// The schemes of an address git reaches over ssh.
+const SSH_SCHEMES: [&str; 3] = ["ssh://", "git+ssh://", "ssh+git://"];
+
+/// The address one argument spells, or `None`.
+fn address_in(argument: &str) -> Option<Address> {
+    let (host, path) = match SSH_SCHEMES
+        .iter()
+        .find_map(|scheme| argument.strip_prefix(scheme))
+    {
+        Some(rest) => {
+            let (authority, path) = rest.split_once('/')?;
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            let host = match host.split_once(':') {
+                Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => host,
+                Some(_) => return None,
+                None => host,
+            };
+            (host, path)
+        }
+        None => {
+            if argument.contains("://") {
+                return None;
+            }
+            let (before, path) = argument.split_once(':')?;
+            let (user, host) = before.rsplit_once('@')?;
+            if user.is_empty() || before.contains('/') {
+                return None;
+            }
+            (host, path.strip_prefix('/').unwrap_or(path))
+        }
+    };
+    let host_spelled = !host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
+    let (owner, repository) = path.split_once('/')?;
+    let owner_spelled = !owner.is_empty()
+        && owner
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    (host_spelled && owner_spelled && !repository.is_empty()).then(|| Address {
+        host: host.to_string(),
+        owner: owner.to_string(),
+    })
+}
+
+/// The public key file a `git.identities` entry names, as the sandbox will be told it, or `None`
+/// where it is refused.
+///
+/// The value is read as an `IdentityFile` line's is ([`named_public_keys`]): absolute or beginning
+/// `~/`, with `.pub` added to a name that does not end in it, so an entry naming a private key
+/// reads the public file beside it and never the key. The file must be a regular file named
+/// `*.pub` once a link is followed and outside every credential location other than `~/.ssh`.
+pub fn identity_key(written: &str, home: &Path) -> Option<PathBuf> {
+    let named = PathBuf::from(written);
+    if !(written.starts_with("~/") || named.is_absolute()) {
+        return None;
+    }
+    judged_public_key(&public_name(named)?, home)
+}
+
+/// The `GIT_SSH_COMMAND` that has ssh offer the host `key` and no other, or `None` where the key's
+/// path cannot be written inside single quotes.
+///
+/// git hands the value to a shell, so the path is quoted, and a path holding a `'` or one that is
+/// not valid UTF-8 is refused rather than escaped.
+pub fn ssh_command(key: &Path) -> Option<String> {
+    let key = crate::rules::without_verbatim_prefix(key.to_path_buf());
+    let key = key.to_str().filter(|text| !text.contains('\''))?;
+    Some(format!("ssh -i '{key}' -o IdentitiesOnly=yes"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2136,5 +2257,170 @@ mod tests {
             granted_paths(&Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default()));
         assert_eq!(alone, [home.join("keys/work.pub")]);
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    fn address_of(args: &[&str]) -> Option<(String, String)> {
+        let args: Vec<String> = args.iter().map(|argument| argument.to_string()).collect();
+        ssh_address(&args).map(|address| (address.host, address.owner))
+    }
+
+    fn named(host: &str, owner: &str) -> Option<(String, String)> {
+        Some((host.to_string(), owner.to_string()))
+    }
+
+    /// An ssh address in the argv names the host and owner a key is chosen by, in each spelling git
+    /// reads over ssh. The regression it rejects is an address read in one spelling only, so that
+    /// `ssh://` or a port leaves the push on whichever key ssh offers first.
+    #[test]
+    fn an_ssh_address_in_the_argv_names_its_host_and_owner() {
+        for (args, expected) in [
+            (
+                &["push", "git@github.com:netzenbot/bravebot.git", "main"][..],
+                named("github.com", "netzenbot"),
+            ),
+            (
+                &[
+                    "push",
+                    "git@github.com:netzenbot/bravebot.git",
+                    "HEAD:refs/heads/fix",
+                ][..],
+                named("github.com", "netzenbot"),
+            ),
+            (
+                &["clone", "ssh://git@github.com/brave/bravebot.git", "here"][..],
+                named("github.com", "brave"),
+            ),
+            (
+                &["fetch", "ssh://git@ssh.github.com:443/brave/bravebot"][..],
+                named("ssh.github.com", "brave"),
+            ),
+            (
+                &["-C", "/work", "ls-remote", "git+ssh://github.com/o-1/r"][..],
+                named("github.com", "o-1"),
+            ),
+            (
+                &["push", "--force-with-lease", "me@git.example:/team.x/r.git"][..],
+                named("git.example", "team.x"),
+            ),
+            (
+                &[
+                    "push",
+                    "git@github.com:Brave/a.git",
+                    "ssh://git@GitHub.com/brave/b.git",
+                ][..],
+                named("github.com", "Brave"),
+            ),
+        ] {
+            assert_eq!(address_of(args), expected, "{args:?}");
+        }
+    }
+
+    /// No address is read from a remote named by name, whose URL is the repository's
+    /// configuration, nor from a refspec, an option, an https or local address, or an argv naming
+    /// two different owners. The regression it rejects is a refspec such as `HEAD:refs/heads/x`
+    /// read as host `HEAD` and owner `refs`, which would then make a second address and drop the
+    /// real one.
+    #[test]
+    fn a_remote_name_a_refspec_or_another_transport_names_no_address() {
+        for args in [
+            &["push", "origin", "main"][..],
+            &["push", "origin", "HEAD:refs/heads/fix"][..],
+            &["push", "origin", "main:feature/x"][..],
+            &["clone", "https://github.com/brave/bravebot.git"][..],
+            &["clone", "file:///srv/repo.git"][..],
+            &["clone", "/srv/repo.git"][..],
+            &["clone", "github.com:brave/bravebot.git"][..],
+            &["push", "--repo=git@github.com:brave/bravebot.git"][..],
+            &["push", "git@github.com:bravebot.git"][..],
+            &["push", "git@github.com:brave/"][..],
+            &["push", "ssh://git@github.com:x/brave/r"][..],
+            &["push", "git@git hub.com:brave/r"][..],
+            &["push", "git@github.com:a/r", "git@github.com:b/r"][..],
+            &["push", "git@github.com:a/r", "git@gitlab.com:a/r"][..],
+            &["-C"][..],
+            &[][..],
+        ] {
+            assert_eq!(address_of(args), None, "{args:?}");
+        }
+    }
+
+    /// A `git.identities` entry names a public key as an `IdentityFile` line does: a name without
+    /// `.pub` reads the file beside it, and what is read is a regular `*.pub` file outside the other
+    /// credential locations. The regression it rejects is an entry naming a private key, or a
+    /// `.pub` link to one, being read as the key.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_key_is_a_public_key_file_and_never_a_private_one() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-keys",
+            "",
+            &[
+                ".ssh/work",
+                ".ssh/work.pub",
+                ".ssh/id_leaked",
+                ".aws/creds.pub",
+                "keys/spare.pub",
+            ],
+        );
+        symlink(home.join(".ssh/id_leaked"), home.join(".ssh/leak.pub")).unwrap();
+        symlink(home.join(".aws/creds.pub"), home.join(".ssh/aws.pub")).unwrap();
+        let spare = home.join("keys/spare.pub");
+
+        assert_eq!(
+            identity_key("~/.ssh/work", &home),
+            Some(home.join(".ssh/work.pub"))
+        );
+        assert_eq!(
+            identity_key("~/.ssh/work.pub", &home),
+            Some(home.join(".ssh/work.pub"))
+        );
+        assert_eq!(
+            identity_key(spare.to_str().unwrap(), &home),
+            Some(spare.clone())
+        );
+        for refused in [
+            "~/.ssh/leak.pub",
+            "~/.ssh/aws.pub",
+            "~/.ssh/missing.pub",
+            "~/.ssh/../.aws/creds.pub",
+            "~/.aws/creds",
+            ".ssh/work.pub",
+            "work.pub",
+            "",
+        ] {
+            assert_eq!(identity_key(refused, &home), None, "{refused}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The command offers ssh the one key, quoted for the shell git hands it to. The regression it
+    /// rejects is a path with a quote in it escaping the quoting and running a command of its own.
+    #[test]
+    fn the_ssh_command_offers_one_key_and_refuses_a_path_it_cannot_quote() {
+        assert_eq!(
+            ssh_command(Path::new("/home/person/.ssh/my key.pub")).as_deref(),
+            Some("ssh -i '/home/person/.ssh/my key.pub' -o IdentitiesOnly=yes")
+        );
+        assert_eq!(
+            ssh_command(Path::new("/home/person/.ssh/x';touch pwned;'.pub")),
+            None
+        );
+    }
+
+    /// A key whose path is not text is refused rather than written as its lossy lookalike, which
+    /// would have ssh offer a different file than the one the person named.
+    #[test]
+    #[cfg(unix)]
+    fn the_ssh_command_refuses_a_key_whose_path_is_not_text() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = Path::new(OsStr::from_bytes(b"/home/person/.ssh/key-\xff.pub"));
+        let lookalike = Path::new("/home/person/.ssh/key-\u{FFFD}.pub");
+        assert_eq!(ssh_command(invalid), None);
+        assert_eq!(
+            ssh_command(lookalike).as_deref(),
+            Some("ssh -i '/home/person/.ssh/key-\u{FFFD}.pub' -o IdentitiesOnly=yes")
+        );
     }
 }

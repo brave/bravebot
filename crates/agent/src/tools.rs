@@ -2100,7 +2100,8 @@ impl<'a> Tools<'a> {
                 .with_unasked_writes(
                     !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
                 )
-                .with_host_grants(&self.workspace.granted_hosts());
+                .with_host_grants(&self.workspace.granted_hosts())
+                .with_identities(bravebot_config::git_identities::settled());
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {

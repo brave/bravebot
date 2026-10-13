@@ -506,6 +506,10 @@ doctor-settings-sandbox-hosts-ignored =
     sandbox.network.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un hôte, jamais en autoriser un, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-hosts-misshapen =
     sandbox.network.{ $key } dans { $path } n'est pas une liste de chaînes (onUnlisted : ask ou refuse), donc il est lu comme absent
+doctor-settings-git-identities-ignored =
+    git.identities dans { $path } n'est pas suivi : une copie de travail ne peut pas choisir la clé qu'un push propose, donc il est lu seulement dans ~/.bravebot/settings.json et le fichier nommé par --settings hors de l'espace de travail
+doctor-settings-git-identities-misshapen =
+    { $key } dans { $path } n'est pas lu : git.identities associe un nom <hôte>/<propriétaire> au chemin d'un fichier de clé publique
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il n'impose rien
 doctor-managed-sandbox-unread =
@@ -1417,6 +1421,7 @@ run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans
 run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.docker
 run-carries-signing = { $program } lit aussi la clé publique avec laquelle votre configuration git signe, et signe par votre agent ssh, sans jamais lire de clé privée
 run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
+run-carries-identity = { $program } ne propose à ssh que la clé { $path }, que votre git.identities désigne pour le propriétaire de cette adresse
 run-network-closed = le réseau est fermé aux programmes que cette session lance, sauf à ceux ci-dessous
 run-keeps-network = { $program } atteint aussi le réseau
 run-carries-requested = { $sentence } (demandé par le planificateur pour cette ligne)

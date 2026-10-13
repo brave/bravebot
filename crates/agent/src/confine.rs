@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined, Remembered};
 use crate::exec::ExecError;
 use crate::reach::{Grant, Reached};
+use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
@@ -26,7 +27,10 @@ use bravebot_sandbox::proxy::Proxy;
 use bravebot_sandbox::rules::{
     Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
 };
-use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
+use bravebot_sandbox::scope::{
+    Reach, Requested, Scope, environment_reach, identity_key, requested_reach, ssh_address,
+    ssh_command,
+};
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
@@ -87,6 +91,9 @@ pub struct Confinement {
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
+    /// The key the person chose for each owner's repositories (`git.identities`), offered by a
+    /// `git` stage whose argv names an ssh address of that owner (SANDBOX-16).
+    identities: Identities,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -148,6 +155,7 @@ impl Confinement {
             unasked_writes: false,
             host_grants: Vec::new(),
             requested: Vec::new(),
+            identities: Identities::default(),
             #[cfg(test)]
             unconfinable: None,
         }
@@ -498,6 +506,38 @@ impl Confinement {
         self
     }
 
+    /// This confinement with the key the person chose for each owner's repositories, from the
+    /// person's own settings (SANDBOX-16).
+    #[must_use]
+    pub fn with_identities(mut self, identities: Option<&Identities>) -> Self {
+        self.identities = identities.cloned().unwrap_or_default();
+        self
+    }
+
+    /// What `git.identities` decides for `step`, or `None` for a step that is not `git` carrying
+    /// the remote scope by its argv.
+    ///
+    /// The address is read from the argv, which the planner wrote and the person approved, and
+    /// never from the repository's configuration, which a clone or a stage may have written. The key
+    /// is a public key file in the person's home ([`identity_key`]) outside every directory the plan
+    /// may write, since a key there would be one the plan chose.
+    fn identified(&self, step: &Step) -> Option<Identified> {
+        let home = self.home.as_deref()?;
+        let is_git = step.resolved.file_name() == Some(OsStr::new("git"));
+        if !is_git || self.carries(step).1 != Some(Scope::Remote) {
+            return None;
+        }
+        let Some(address) = ssh_address(&step.args) else {
+            return Some(Identified::NoAddress);
+        };
+        let key = self
+            .identities
+            .for_address(&address.host, &address.owner)
+            .and_then(|entry| identity_key(&entry.key, home))
+            .filter(|key| !self.writable_by_the_plan(key) && ssh_command(key).is_some());
+        Some(key.map_or(Identified::Unchosen, Identified::Key))
+    }
+
     /// Whether a request can be applied: the rows of both kinds are under the account's home.
     pub fn accepts_requests(&self) -> bool {
         self.home.is_some()
@@ -686,12 +726,17 @@ impl Confinement {
                             allowed: grant.allowed.clone(),
                         })
                         .collect();
+                    let identity = match self.identified(step) {
+                        Some(Identified::Key(key)) => Some(key),
+                        _ => None,
+                    };
                     (toolchain.is_some() || scope.is_some() || network || !remembered.is_empty())
                         .then(|| Carried {
                             program: step.program.clone(),
                             toolchain,
                             scope,
                             reaches,
+                            identity,
                             network,
                             remembered,
                         })
@@ -764,6 +809,9 @@ impl Confinement {
                     for reach in reaches(resolved, scope, home, environment) {
                         policy = policy.allow_read(reach.path);
                     }
+                }
+                if let Some(Identified::Key(key)) = self.identified(step) {
+                    policy = policy.allow_read(key);
                 }
                 if matches!(scope, Scope::Remote | Scope::Signing)
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
@@ -894,9 +942,49 @@ impl Confinement {
             ""
         };
         format!(
-            "{}{source}{refusal}{CREDENTIAL_LOCATIONS_SENTENCE}",
-            self.reach(steps)
+            "{}{source}{refusal}{}{CREDENTIAL_LOCATIONS_SENTENCE}",
+            self.reach(steps),
+            self.identity_sentence(steps),
         )
+    }
+
+    /// What the failure sentence says of the key the `git` steps of `steps` offered over ssh, or
+    /// nothing where no step is `git` carrying the remote scope by its argv.
+    ///
+    /// Fixed text chosen by what [`Confinement::identified`] decided for each step, which reads the
+    /// argv and the person's settings and nothing a program printed. It names no host, owner or
+    /// path.
+    fn identity_sentence(&self, steps: &[&Step]) -> String {
+        let decided: Vec<Identified> = steps
+            .iter()
+            .filter_map(|step| self.identified(step))
+            .collect();
+        if decided.is_empty() {
+            return String::new();
+        }
+        let mut said = String::new();
+        for (holds, sentence) in [
+            (
+                decided
+                    .iter()
+                    .any(|held| matches!(held, Identified::Key(_))),
+                IDENTITY_CHOSEN_SENTENCE,
+            ),
+            (
+                decided.contains(&Identified::Unchosen),
+                IDENTITY_UNCHOSEN_SENTENCE,
+            ),
+            (
+                decided.contains(&Identified::NoAddress),
+                IDENTITY_NO_ADDRESS_SENTENCE,
+            ),
+        ] {
+            if holds {
+                said.push_str(sentence);
+            }
+        }
+        said.push_str(IDENTITY_SENTENCE);
+        said
     }
 
     /// Whether a step of `steps` carries the signing scope or was asked to carry it, whether or
@@ -1119,11 +1207,20 @@ impl Confinement {
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
+        let chosen = match self.identified(step) {
+            Some(Identified::Key(key)) => ssh_command(&key),
+            _ => None,
+        };
         let environment = overlay(
             effective_environment(command),
             proxied
                 .iter()
-                .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value)))),
+                .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value))))
+                .chain(
+                    chosen
+                        .iter()
+                        .map(|value| (OsStr::new(GIT_SSH_COMMAND), Some(OsStr::new(value)))),
+                ),
             FOLD_CASE,
         );
         #[cfg(test)]
@@ -1372,6 +1469,39 @@ const SIGNING_KEY_REFUSED_SENTENCE: &str = " A step that signs a commit reads on
      elsewhere and a relative path are not read, so signing fails until the person changes it.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
+/// The variable git runs ssh by, which a `git.identities` entry sets for a stage.
+const GIT_SSH_COMMAND: &str = "GIT_SSH_COMMAND";
+
+/// What [`Confinement::identified`] decided for one `git` stage carrying the remote scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Identified {
+    /// The argv names an ssh address, and this is the key the person chose for its owner.
+    Key(PathBuf),
+    /// The argv names an ssh address, and no entry names a key that can be read for its owner.
+    Unchosen,
+    /// The argv names no ssh address: a remote given by name, or another transport.
+    NoAddress,
+}
+
+const IDENTITY_CHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address offered the \
+     host only the key the person's git.identities setting names for that address's owner.";
+
+const IDENTITY_UNCHOSEN_SENTENCE: &str = " A git step whose argv named an ssh address offered \
+     whichever key ssh tried first, since the person's git.identities setting names no readable \
+     public key for that address's owner.";
+
+const IDENTITY_NO_ADDRESS_SENTENCE: &str = " A git step that named its remote by name, such as \
+     `origin`, or by an address that is not ssh, offered whichever key ssh tried first, since \
+     git.identities is applied only to an ssh address written in the argv.";
+
+const IDENTITY_SENTENCE: &str = " GitHub refuses a push for permission when the key ssh offered \
+     belongs to an account that cannot write to the repository, and refuses the login when no key \
+     offered is registered. ssh offers an agent's keys in order and GitHub accepts the first one \
+     any account holds, so a retry offers the same key. Only the person chooses the key, with an \
+     entry `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
+     ~/.bravebot/settings.json, which applies to a git step whose argv names the ssh address. Ask \
+     the person for one rather than retrying.";
+
 fn requests_menu_sentence() -> String {
     format!(
         "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
@@ -5514,6 +5644,299 @@ mod tests {
                 .profile(&[&step])
                 .contains("every path a request_path"),
             "the line says it without bypass"
+        );
+    }
+
+    /// A home holding the public halves of two keys and the private half of one, and a session
+    /// directory beside it, for the `git.identities` tests.
+    struct IdentityPlaces {
+        home: PathBuf,
+        session: PathBuf,
+    }
+
+    impl IdentityPlaces {
+        fn new(name: &str) -> Self {
+            let top = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-scratch")
+                .join(format!("confine-identities-{name}"));
+            let _ = std::fs::remove_dir_all(&top);
+            for file in [
+                "home/.ssh/work",
+                "home/.ssh/work.pub",
+                "home/.ssh/spare.pub",
+                "session/planted.pub",
+            ] {
+                let path = top.join(file);
+                std::fs::create_dir_all(path.parent().expect("a parent")).expect("directory");
+                std::fs::write(path, "ssh-ed25519 AAAA\n").expect("key file");
+            }
+            Self {
+                home: canonical(&top.join("home")),
+                session: canonical(&top.join("session")),
+            }
+        }
+
+        /// A confinement on a platform that reads the machine, with `entries` as the person's
+        /// `git.identities`.
+        fn confinement(&self, entries: &[(&str, &str)]) -> Confinement {
+            let block: Vec<String> = entries
+                .iter()
+                .map(|(address, key)| format!("{address:?}: {key:?}"))
+                .collect();
+            let settings = bravebot_config::Settings::parse(&format!(
+                r#"{{"git": {{"identities": {{{}}}}}}}"#,
+                block.join(", ")
+            ));
+            Confinement::new(
+                Prelude::Linux,
+                PathBuf::from("/tmp"),
+                Some(&self.home),
+                vec![self.session.clone()],
+                None,
+            )
+            .with_identities(Some(settings.git_identities()))
+        }
+
+        fn work_key(&self) -> PathBuf {
+            self.home.join(".ssh/work.pub")
+        }
+    }
+
+    /// The `GIT_SSH_COMMAND` a stage is started with, from a process environment that sets none.
+    #[cfg(unix)]
+    fn ssh_command_of(
+        confinement: &Confinement,
+        step: &Step,
+        places: &IdentityPlaces,
+    ) -> Option<String> {
+        let mut command = Command::new(&step.resolved);
+        command.args(&step.args).env_remove(GIT_SSH_COMMAND);
+        let prepared = confinement
+            .prepared(&command, step, &places.session)
+            .expect("a stage this platform can confine");
+        prepared
+            .variables
+            .iter()
+            .find(|(name, _)| name == GIT_SSH_COMMAND)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
+
+    /// SANDBOX-16: an entry for one owner has a `git` stage whose argv names that owner's ssh
+    /// address offer the host that key alone: the stage starts with `GIT_SSH_COMMAND` naming it,
+    /// reads that public key, and the prompt names it. A stage addressing another owner, or naming
+    /// its remote by name, gets none of the three. The regressions it rejects are an entry applied to
+    /// every address, which pushes another owner's repository with the wrong account, and the
+    /// variable set without the read, which leaves ssh unable to load the key under the sandbox.
+    #[test]
+    #[cfg(unix)]
+    fn an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other() {
+        let places = IdentityPlaces::new("one-owner");
+        let confined = places.confinement(&[("github.com/acme", "~/.ssh/work")]);
+        let key = places.work_key();
+        let mapped = step(
+            "/usr/bin/git",
+            &[
+                "push",
+                "git@github.com:Acme/widgets.git",
+                "HEAD:refs/heads/fix",
+            ],
+        );
+
+        assert_eq!(
+            ssh_command_of(&confined, &mapped, &places),
+            Some(format!("ssh -i '{}' -o IdentitiesOnly=yes", key.display()))
+        );
+        assert!(reads(
+            &confined.policy(&mapped, &places.session, &[]),
+            key.to_str().unwrap()
+        ));
+        let described = confined.describe(&[&mapped]);
+        assert_eq!(
+            described.carried[0].identity.as_deref(),
+            Some(key.as_path())
+        );
+        assert!(
+            described
+                .sentences()
+                .iter()
+                .any(|sentence| sentence.contains(key.to_str().unwrap())),
+            "{:?}",
+            described.sentences()
+        );
+
+        for unmapped in [
+            step(
+                "/usr/bin/git",
+                &["push", "git@github.com:other/widgets.git"],
+            ),
+            step("/usr/bin/git", &["push", "git@gitlab.com:acme/widgets.git"]),
+            step("/usr/bin/git", &["push", "origin", "main"]),
+            step(
+                "/usr/bin/git",
+                &["status", "git@github.com:acme/widgets.git"],
+            ),
+            step(
+                "/usr/bin/gh",
+                &["repo", "view", "git@github.com:acme/widgets.git"],
+            ),
+        ] {
+            assert_eq!(
+                ssh_command_of(&confined, &unmapped, &places),
+                None,
+                "{:?}",
+                unmapped.args
+            );
+            assert!(
+                !reads(
+                    &confined.policy(&unmapped, &places.session, &[]),
+                    key.to_str().unwrap()
+                ),
+                "{:?}",
+                unmapped.args
+            );
+            assert!(
+                confined
+                    .describe(&[&unmapped])
+                    .carried
+                    .iter()
+                    .all(|carried| carried.identity.is_none()),
+                "{:?}",
+                unmapped.args
+            );
+        }
+        let assigned = Step {
+            environment: vec![("A".to_string(), "b".to_string())],
+            ..mapped.clone()
+        };
+        assert_eq!(ssh_command_of(&confined, &assigned, &places), None);
+    }
+
+    /// With no entry for the owner, a remote stage is started, and held, exactly as it was. The
+    /// regression it rejects is a person with no `git.identities` finding their pushes changed.
+    #[test]
+    #[cfg(unix)]
+    fn no_entry_leaves_a_remote_stage_as_it_was() {
+        let places = IdentityPlaces::new("no-entry");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let without = places.confinement(&[]);
+        let elsewhere = places.confinement(&[("github.com/other", "~/.ssh/work")]);
+
+        for confined in [&without, &elsewhere] {
+            assert_eq!(ssh_command_of(confined, &push, &places), None);
+            assert_eq!(confined.describe(&[&push]), without.describe(&[&push]));
+        }
+        let with_none = without.policy(&push, &places.session, &[]);
+        let with_another = elsewhere.policy(&push, &places.session, &[]);
+        assert_eq!(with_none.readable, with_another.readable);
+        assert_eq!(with_none.unreadable, with_another.unreadable);
+    }
+
+    /// The key is read only where it is a public key file outside every directory the plan may
+    /// write: an entry naming a file in the session, a private key with no public half beside it, or
+    /// a file that is not there offers nothing. The regression it rejects is a key the plan wrote
+    /// into its own directory choosing which agent key signs the push.
+    #[test]
+    #[cfg(unix)]
+    fn a_key_the_plan_could_have_written_or_that_is_not_a_public_key_is_not_offered() {
+        let places = IdentityPlaces::new("refused");
+        let planted = places.session.join("planted.pub");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        for named in [
+            planted.to_str().unwrap(),
+            "~/.ssh/missing.pub",
+            "~/.ssh/work/..",
+            ".ssh/work.pub",
+        ] {
+            let confined = places.confinement(&[("github.com/acme", named)]);
+            assert_eq!(ssh_command_of(&confined, &push, &places), None, "{named}");
+            assert!(!reads(
+                &confined.policy(&push, &places.session, &[]),
+                planted.to_str().unwrap()
+            ));
+            assert_eq!(
+                confined.identified(&push),
+                Some(Identified::Unchosen),
+                "{named}"
+            );
+        }
+    }
+
+    /// SANDBOX-19: a failed line with a `git` step carrying the remote scope says which key that
+    /// step offered and that the person chooses it, in fixed text chosen by what was decided for the
+    /// step, and a line with no such step says nothing of it. The text names no host, owner, address
+    /// or key path, and is the same whatever repository or refspec the step named. The regression it
+    /// rejects is a rejected push ending the turn with nothing that points at the key.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it() {
+        let places = IdentityPlaces::new("sentence");
+        let confined = places.confinement(&[("github.com/acmecorp", "~/.ssh/work")]);
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+
+        let mapped = confined.profile(&[&step(
+            "/usr/bin/git",
+            &["push", "git@github.com:acmecorp/widgetry.git", "main"],
+        )]);
+        let unchosen = confined.profile(&[&step(
+            "/usr/bin/git",
+            &["push", "ssh://git@github.com/zenithco/widgetry.git"],
+        )]);
+        let by_name = confined.profile(&[&step("/usr/bin/git", &["push", "origin", "main"])]);
+        for (line, holds) in [
+            (&mapped, IDENTITY_CHOSEN_SENTENCE),
+            (&unchosen, IDENTITY_UNCHOSEN_SENTENCE),
+            (&by_name, IDENTITY_NO_ADDRESS_SENTENCE),
+        ] {
+            for sentence in [
+                IDENTITY_CHOSEN_SENTENCE,
+                IDENTITY_UNCHOSEN_SENTENCE,
+                IDENTITY_NO_ADDRESS_SENTENCE,
+            ] {
+                assert_eq!(says(line, sentence), sentence == holds, "{line}");
+            }
+            assert!(says(line, IDENTITY_SENTENCE), "{line}");
+            assert!(line.ends_with(CREDENTIAL_LOCATIONS_SENTENCE), "{line}");
+            for named in ["acmecorp", "zenithco", "widgetry", ".ssh/work"] {
+                assert!(!line.contains(named), "{named} is in {line}");
+            }
+            assert!(!line.contains(places.home.to_str().unwrap()), "{line}");
+        }
+
+        let elsewhere = confined.profile(&[&step(
+            "/usr/bin/git",
+            &[
+                "push",
+                "git@github.com:ACMECORP/gizmotron.git",
+                "HEAD:refs/heads/x",
+            ],
+        )]);
+        assert_eq!(mapped, elsewhere);
+
+        for quiet in [
+            step("/usr/bin/git", &["status"]),
+            step(
+                "/usr/bin/git",
+                &["commit", "-m", "git@github.com:acmecorp/widgetry.git"],
+            ),
+            step("/usr/bin/gh", &["pr", "view"]),
+            step("/usr/bin/cargo", &["build"]),
+        ] {
+            let line = confined.profile(&[&quiet]);
+            assert!(!says(&line, IDENTITY_SENTENCE), "{:?}: {line}", quiet.args);
+        }
+
+        let both = confined.profile(&[
+            &step("/usr/bin/git", &["fetch", "origin"]),
+            &step(
+                "/usr/bin/git",
+                &["push", "git@github.com:acmecorp/widgetry.git"],
+            ),
+        ]);
+        assert!(says(&both, IDENTITY_CHOSEN_SENTENCE) && says(&both, IDENTITY_NO_ADDRESS_SENTENCE));
+        assert_eq!(
+            both.matches(IDENTITY_SENTENCE.trim_start()).count(),
+            1,
+            "{both}"
         );
     }
 }

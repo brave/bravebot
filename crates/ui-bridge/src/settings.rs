@@ -9,8 +9,9 @@ pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
 }
 
 /// Settle, for the life of the process and before a session is assembled, the answers every turn
-/// in it reads: the network its programs keep, the lists of paths a person wrote and the hosts a
-/// stage is held to (SANDBOX-20, SANDBOX-25, SANDBOX-24). Nothing a window or a client sends sets
+/// in it reads: the network its programs keep, the lists of paths a person wrote, the hosts a
+/// stage is held to and the key each owner's repositories are pushed with (SANDBOX-20, SANDBOX-25,
+/// SANDBOX-24, SANDBOX-16). Nothing a window or a client sends sets
 /// them; the person's settings, the file the process was started on and the managed pin decide.
 ///
 /// `project` is the directory whose own settings join the person's. A process started in the
@@ -25,6 +26,7 @@ pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
         &layers,
     );
     bravebot_config::sandbox_network::settle(&layers);
+    bravebot_config::git_identities::settle(&layers);
 }
 
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
