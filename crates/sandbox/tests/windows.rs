@@ -13,18 +13,37 @@ use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::windows::AppContainerSandbox;
 use bravebot_sandbox::{
-    ConfinedChild, ConfinedStdin, ConfinedStdout, Environment, Sandbox, SandboxError, Stream,
-    Streams,
+    ConfinedChild, ConfinedStdin, Environment, Sandbox, SandboxError, Stream, Streams,
 };
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 
 fn sandbox() -> AppContainerSandbox {
     AppContainerSandbox::new().expect("a container profile can be created on this machine")
+}
+
+/// Held while this binary starts a process through the standard library, and while a test holds
+/// a handle any process could inherit across the start of a stage.
+///
+/// The standard library lets a process it starts inherit every inheritable handle this process
+/// holds at that moment. The crate's gate keeps such a start apart from a stage being created, but
+/// creating a stage takes that gate itself, so a test that holds an inheritable handle across one
+/// keeps the other starts out with this instead.
+static SPAWNING: Mutex<()> = Mutex::new(());
+
+fn spawning() -> MutexGuard<'static, ()> {
+    SPAWNING.lock().unwrap_or_else(|held| held.into_inner())
+}
+
+/// Start `command` apart from a test's inheritable handle and from a stage being created.
+fn spawned(command: &mut Command) -> std::process::Child {
+    let _spawning = spawning();
+    bravebot_sandbox::process::starting_a_program(|| command.spawn()).expect("the program starts")
 }
 
 /// An empty directory under the workspace `target/test-scratch/`, spelled the ordinary way and
@@ -115,7 +134,7 @@ enum Seen {
 
 /// Read `stdout` on a thread of its own, saying once when `started` has been printed and once when
 /// the pipe reaches its end.
-fn watch(mut stdout: ConfinedStdout) -> mpsc::Receiver<Seen> {
+fn watch(mut stdout: impl Read + Send + 'static) -> mpsc::Receiver<Seen> {
     let (seen, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut printed = Vec::new();
@@ -136,12 +155,12 @@ fn watch(mut stdout: ConfinedStdout) -> mpsc::Receiver<Seen> {
     receiver
 }
 
-/// A stage whose program, `cmd.exe /c cmd`, has started a second `cmd.exe` that reads commands from
-/// the input this process holds, has run the line it was handed, and is waiting for the next one.
+/// A stage whose program, `cmd.exe /c cmd`, starts a second `cmd.exe` that reads commands from the
+/// input this process holds.
 ///
 /// The second is the only process that prints, so `started` arriving is that child running, and it
 /// holds the write end of the stage's output, so the pipe reaching its end is that child gone.
-fn a_stage_with_a_child_waiting_on_its_input(
+fn a_stage_reading_its_input(
     sandbox: &AppContainerSandbox,
     name: &str,
 ) -> (ConfinedChild, ConfinedStdin, mpsc::Receiver<Seen>) {
@@ -159,9 +178,13 @@ fn a_stage_with_a_child_waiting_on_its_input(
             Environment::Inherited,
         )
         .expect("the stage starts");
-    let mut input = child.take_stdin().expect("a stdin that was piped");
+    let input = child.take_stdin().expect("a stdin that was piped");
     let seen = watch(child.take_stdout().expect("a stdout that was piped"));
+    (child, input, seen)
+}
 
+/// Hand the stage's child a line and wait until it has run it, so it is waiting for the next one.
+fn hand_it_a_line(input: &mut impl Write, seen: &mpsc::Receiver<Seen>) {
     input
         .write_all(b"echo started\r\n")
         .expect("the child is handed a line");
@@ -170,6 +193,15 @@ fn a_stage_with_a_child_waiting_on_its_input(
         Ok(Seen::Started),
         "the stage's child never ran the line it was handed"
     );
+}
+
+/// [`a_stage_reading_its_input`], once its child has run a line and is waiting for the next one.
+fn a_stage_with_a_child_waiting_on_its_input(
+    sandbox: &AppContainerSandbox,
+    name: &str,
+) -> (ConfinedChild, ConfinedStdin, mpsc::Receiver<Seen>) {
+    let (child, mut input, seen) = a_stage_reading_its_input(sandbox, name);
+    hand_it_a_line(&mut input, &seen);
     (child, input, seen)
 }
 
@@ -223,14 +255,19 @@ fn a_grant_does_not_reach_through_a_junction_to_where_it_leads() {
     std::fs::write(granted.join("note.txt"), "inside\n").expect("a file");
     std::fs::write(withheld.join("note.txt"), "outside\n").expect("a file");
     let link = granted.join("link");
-    let made = std::process::Command::new("cmd.exe")
-        .arg("/c")
-        .arg("mklink")
-        .arg("/J")
-        .arg(&link)
-        .arg(&withheld)
-        .output()
-        .expect("cmd.exe starts");
+    let made = spawned(
+        Command::new("cmd.exe")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&withheld)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("cmd.exe ends");
     assert!(
         made.status.success(),
         "the junction was not made: {}",
@@ -474,6 +511,126 @@ fn a_stage_let_go_of_while_running_leaves_no_program_behind() {
         ended,
         Ok(Seen::Ended),
         "a program outlived the handle on its stage"
+    );
+}
+
+/// Set when this binary is started again to hold a stage for the test that kills it.
+const HOLDING_A_STAGE: &str = "BRAVEBOT_TEST_HOLDING_A_STAGE";
+
+/// Start a stage that reads and writes this process's own input and output, and keep it until this
+/// process is killed.
+///
+/// Its programs hold this process's output, so the test that started this one sees that output end
+/// only when every one of them is gone. Killed, this process leaves its container profile
+/// registered, as a crash does. Bounded, so a copy whose test died first lets go of the stage and
+/// the profile.
+fn hold_a_stage() -> ! {
+    let sandbox = sandbox();
+    let streams = Streams {
+        stdin: Stream::Inherited,
+        stdout: Stream::Inherited,
+        stderr: Stream::Null,
+    };
+    let stage = sandbox
+        .spawn(
+            "cmd.exe".as_ref(),
+            &[OsString::from("/c"), OsString::from("cmd")],
+            &the_base("held"),
+            streams,
+            Environment::Inherited,
+        )
+        .expect("the stage starts");
+    std::thread::sleep(STARTING + ENDING);
+    drop(stage);
+    drop(sandbox);
+    std::process::exit(1)
+}
+
+/// The regression it rejects: a stage whose programs are ended by this process letting go of it
+/// and not by the platform. A crash runs no code here, so what ends the programs then is the job
+/// ending when its last handle is closed. The test that lets go of a stage passes either way.
+#[test]
+fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    if std::env::var_os(HOLDING_A_STAGE).is_some() {
+        hold_a_stage();
+    }
+    let mut holder = spawned(
+        Command::new(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                "killing_the_process_holding_a_stage_ends_every_program_in_it",
+                "--nocapture",
+                "--quiet",
+                "--test-threads=1",
+            ])
+            .env(HOLDING_A_STAGE, "1")
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit()),
+    );
+    let mut input = holder.stdin.take().expect("a stdin that was piped");
+    let seen = watch(holder.stdout.take().expect("a stdout that was piped"));
+
+    input
+        .write_all(b"echo started\r\n")
+        .expect("the child is handed a line");
+    let started = seen.recv_timeout(STARTING);
+    holder.kill().expect("the holder is killed");
+    let _ = holder.wait();
+    let ended = seen.recv_timeout(ENDING);
+    drop(input);
+
+    assert_eq!(
+        started,
+        Ok(Seen::Started),
+        "the held stage's child never ran the line it was handed: a holder that failed said why \
+         above, and one that said nothing ran no test, so its name above is not this test's"
+    );
+    assert_eq!(
+        ended,
+        Ok(Seen::Ended),
+        "a program the stage started outlived the process holding it"
+    );
+}
+
+/// The regression it rejects: a stage that inherits every inheritable handle this process holds
+/// rather than the three streams it is given. One of those is the write end of a pipe another
+/// process reads, which a stage holding it could write into, and a pipe whose write end a stage
+/// holds does not end when its owner closes it.
+#[test]
+fn a_stage_inherits_no_handle_but_the_streams_it_is_given() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+    let sandbox = sandbox();
+    let spawning = spawning();
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let marked = unsafe {
+        SetHandleInformation(
+            writer.as_raw_handle() as HANDLE,
+            HANDLE_FLAG_INHERIT,
+            HANDLE_FLAG_INHERIT,
+        )
+    };
+    assert_ne!(marked, 0, "{}", std::io::Error::last_os_error());
+    let (child, mut input, seen) = a_stage_reading_its_input(&sandbox, "handles");
+    drop(writer);
+    drop(spawning);
+    hand_it_a_line(&mut input, &seen);
+
+    let ended = watch(reader).recv_timeout(ENDING);
+    drop(input);
+    drop(child);
+
+    assert_eq!(
+        ended,
+        Ok(Seen::Ended),
+        "the stage holds a handle it was not given"
     );
 }
 
