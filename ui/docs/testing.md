@@ -80,7 +80,7 @@ matter:
   modes. No paid inference.
 - `pnpm run drive:sandbox-mode`: the composer's sandbox mode, through the real app and bridge,
   against a model service the script serves itself, in a directory nobody trusted. A session opens
-  in standard, the menu offers strict and standard and no way to turn the sandbox off, and where
+  in workspace-write, the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and where
   the platform confines a program, a program the agent runs is held to the mode chosen for its turn.
   The script writes two small files under the real home and removes them. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
@@ -155,7 +155,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once. Screenshots of a card waiting and read, light and dark |
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
 | `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
-| `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers strict and standard and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
+| `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
 | `pnpm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `pnpm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |

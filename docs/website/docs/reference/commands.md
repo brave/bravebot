@@ -34,7 +34,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/bg` | | Hand this session to a background process that keeps running after the terminal closes |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
-| `/sandbox` | `[strict \| standard \| off]` | Show the sandbox mode, or change it from the next turn |
+| `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
@@ -366,7 +366,7 @@ planner asked for is not remembered, and a line with a `NAME=value` in front of 
 program started with an option such as `git -C dir push`, is not offered either key. The desktop app
 does not offer them.
 
-## `/sandbox [strict | standard | off]`
+## `/sandbox [<mode>]`
 
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
@@ -378,7 +378,7 @@ inside a session keeps the one you set.
 Moving to `off` asks first, because programs then start with no profile at all; answering no keeps the
 mode. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
 `closed`, is refused with a sentence naming that file. Otherwise the command ranks as `--sandbox`
-does, so `/sandbox standard` replaces a checkout's `strict`. Only you can set it: no tool, skill, hook
+does, so `/sandbox workspace-write` replaces a checkout's `strict`. Only you can set it: no tool, skill, hook
 or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
 no such command yet.
 

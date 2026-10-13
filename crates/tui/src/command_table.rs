@@ -391,7 +391,7 @@ pub fn commands() -> [Command; 45] {
         },
         Command {
             name: SANDBOX_COMMAND,
-            argument: "[strict | standard | off]",
+            argument: "[<mode>]",
             description: t!(command_sandbox),
             mid_turn: MidTurn::Waits,
         },

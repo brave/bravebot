@@ -7658,8 +7658,8 @@ const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a 
 
 /// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
 ///
-/// Only in the mode `standard`: `strict` is the person asking for the profile to be held whatever a
-/// planner would rather, and `off` has no profile to remove. Not in a delegate, whose sub-task is
+/// Only in the mode `workspace-write`: `strict` and `read-only` are the person asking for the profile to be
+/// held whatever a planner would rather, and `off` has no profile to remove. Not in a delegate, whose sub-task is
 /// reach the person never set up. Not in a workspace the person has not trusted, and not under a
 /// managed `run.network` of `closed`, for the reason [`bravebot_config::sandbox::resolve`] floors
 /// `off` there: a line with no profile is not held to a closed network. A turn nobody is at to ask
@@ -7689,7 +7689,7 @@ fn unconfined_is_accepted(
     delegated: bool,
 ) -> bool {
     confine_runs
-        && mode == bravebot_sandbox::SandboxMode::Standard
+        && mode == bravebot_sandbox::SandboxMode::WorkspaceWrite
         && workspace_trusted
         && !network_pinned_closed
         && !delegated
@@ -7737,7 +7737,7 @@ fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requ
 
 /// Whether this turn may be asked for a credential scope at all.
 ///
-/// In `strict` and `standard`, where a name from the menu is the one way to widen what a program
+/// In `strict`, `read-only` and `workspace-write`, where a name from the menu is the one way to widen what a program
 /// reaches past the credential table. Not in `off`, which has no profile to add to. Not in a
 /// workspace the person has not trusted, where the files the line names are content nobody vouched
 /// for and a credential lent to a script a checkout wrote is the case SANDBOX-16 keeps scopes
@@ -12410,7 +12410,7 @@ mod tests {
         }
     }
 
-    /// SANDBOX-29: a request to run one line with no profile is accepted in `standard` of a trusted
+    /// SANDBOX-29: a request to run one line with no profile is accepted in `workspace-write` of a trusted
     /// workspace in the turn that holds the session, and refused in each other case, one row each:
     /// `strict` and `off`, an untrusted workspace, a managed closed network and a delegate. The
     /// first row is the control, so a function that refused everything fails it. The regression it
@@ -12418,15 +12418,47 @@ mod tests {
     /// shell's reach.
     #[test]
     fn an_unconfined_request_is_accepted_only_where_every_condition_holds() {
-        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        use bravebot_sandbox::SandboxMode::{Off, Strict, WorkspaceWrite};
         for (confine, mode, trusted, pinned, delegated, accepted, why) in [
-            (true, Standard, true, false, false, true, "the control"),
+            (
+                true,
+                WorkspaceWrite,
+                true,
+                false,
+                false,
+                true,
+                "the control",
+            ),
             (true, Strict, true, false, false, false, "strict"),
             (true, Off, true, false, false, false, "off"),
-            (true, Standard, false, false, false, false, "untrusted"),
-            (true, Standard, true, true, false, false, "managed closed"),
-            (true, Standard, true, false, true, false, "a delegate"),
-            (false, Standard, true, false, false, false, "no confinement"),
+            (
+                true,
+                WorkspaceWrite,
+                false,
+                false,
+                false,
+                false,
+                "untrusted",
+            ),
+            (
+                true,
+                WorkspaceWrite,
+                true,
+                true,
+                false,
+                false,
+                "managed closed",
+            ),
+            (true, WorkspaceWrite, true, false, true, false, "a delegate"),
+            (
+                false,
+                WorkspaceWrite,
+                true,
+                false,
+                false,
+                false,
+                "no confinement",
+            ),
         ] {
             assert_eq!(
                 unconfined_is_accepted(confine, mode, trusted, pinned, delegated),
@@ -17093,13 +17125,13 @@ mod tests {
             state_confinement(
                 &mut not_confining,
                 false,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
             );
             let mut confining = table();
             state_confinement(
                 &mut confining,
                 true,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
             );
 
             assert_eq!(described(&not_confining), plain);
@@ -17152,10 +17184,14 @@ mod tests {
                 Some(String::new())
             );
             let strict = said(bravebot_sandbox::SandboxMode::Strict).expect("appended");
-            let standard = said(bravebot_sandbox::SandboxMode::Standard).expect("appended");
-            assert!(!strict.is_empty() && !standard.is_empty());
+            let workspace_write =
+                said(bravebot_sandbox::SandboxMode::WorkspaceWrite).expect("appended");
+            assert!(!strict.is_empty() && !workspace_write.is_empty());
             assert!(!strict.contains("may read this machine"), "{strict}");
-            assert!(standard.contains("may read this machine"), "{standard}");
+            assert!(
+                workspace_write.contains("may read this machine"),
+                "{workspace_write}"
+            );
         }
 
         pub(super) fn told(

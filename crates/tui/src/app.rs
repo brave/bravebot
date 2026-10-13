@@ -20906,7 +20906,7 @@ mod tests {
             assert_eq!(waiting_prompts(&session), vec![line]);
             assert_eq!(
                 session.sandbox_mode(),
-                bravebot_sandbox::SandboxMode::Standard
+                bravebot_sandbox::SandboxMode::WorkspaceWrite
             );
         }
     }
@@ -24316,7 +24316,7 @@ mod tests {
                 &session,
                 a_record(),
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false,
             ) {
                 Ok(Ended::Background { left, mode }) => {
@@ -24340,7 +24340,7 @@ mod tests {
                 &session,
                 a_record(),
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false
             )
             .unwrap_err(),
@@ -24360,7 +24360,7 @@ mod tests {
             &session,
             a_record(),
             Some("--no-shell"),
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             false,
         )
         .unwrap_err();
@@ -24390,7 +24390,7 @@ mod tests {
                 &session,
                 a_record(),
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false,
             )
             .unwrap_err();
@@ -24399,20 +24399,20 @@ mod tests {
                 t!(
                     session_bg_sandbox_moved,
                     mode = moved.name(),
-                    settled = "standard"
+                    settled = "workspace-write"
                 )
                 .to_string()
             );
         }
         let mut session = Session::new("none");
         session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
-        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Standard);
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite);
         assert!(matches!(
             handed_to_the_background(
                 &session,
                 a_record(),
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false
             ),
             Ok(Ended::Background { .. })
@@ -24444,7 +24444,7 @@ mod tests {
                 &session,
                 None,
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false
             )
             .unwrap_err(),
@@ -24455,7 +24455,7 @@ mod tests {
                 &session,
                 None,
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 true
             )
             .unwrap_err(),
@@ -24469,7 +24469,7 @@ mod tests {
                 &session,
                 a_record(),
                 None,
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 false
             )
             .unwrap_err(),

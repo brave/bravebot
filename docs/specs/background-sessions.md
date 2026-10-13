@@ -88,7 +88,7 @@ session or one with no record yet, after an option that `--bg` refuses (such as 
 other than the one start-up chose, and while a loop, a goal or a watch is running, because the
 background session has none of those ([Not decided](#not-decided)). The background process chooses
 its sandbox mode from the settings and the managed file as start-up did
-([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `standard`
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `workspace-write`
 with nothing said; the refusal names both modes and the `/sandbox` line that moves the session back.
 The background process reads the settings of the directory the session is in when `/bg` is typed,
 and the check compares with the mode start-up chose, so after `/cd` into or out of a checkout whose

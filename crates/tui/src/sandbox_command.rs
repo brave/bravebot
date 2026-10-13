@@ -60,11 +60,9 @@ pub enum Step {
     Move(SandboxMode),
 }
 
-/// The three words a person may type, as they are listed where a word is refused.
+/// The words a person may type, as they are listed where a word is refused.
 fn names() -> String {
-    [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off]
-        .map(SandboxMode::name)
-        .join(", ")
+    SandboxMode::ALL.map(SandboxMode::name).join(", ")
 }
 
 /// The mode in force and the flag or file that chose it, in the words `doctor` uses.
@@ -213,14 +211,14 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// SANDBOX-22: `/sandbox strict` and `/sandbox standard` move the mode the session hands its
+    /// SANDBOX-22: `/sandbox strict` and `/sandbox workspace-write` move the mode the session hands its
     /// next turn, with no question. The regression it rejects is a command that reports a change
     /// and leaves the mode where start-up put it, which is what every turn builder read before
     /// this command existed.
     #[test]
     fn a_named_mode_is_the_mode_the_next_turn_is_built_with() {
         let mut session = Session::new("kernel-enforced");
-        assert_eq!(session.sandbox_mode(), SandboxMode::Standard);
+        assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
 
         run(&mut session, "strict", &Managed::default(), never_asked);
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
@@ -230,8 +228,40 @@ mod tests {
             last_note(&session)
         );
 
+        run(&mut session, "read-only", &Managed::default(), never_asked);
+        assert_eq!(session.sandbox_mode(), SandboxMode::ReadOnly);
+        assert!(
+            last_note(&session).contains("read-only"),
+            "{}",
+            last_note(&session)
+        );
+
+        run(
+            &mut session,
+            "workspace-write",
+            &Managed::default(),
+            never_asked,
+        );
+        assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
+    }
+
+    /// SANDBOX-22, COMPAT-001: `/sandbox standard`, the earlier word for `workspace-write`, still
+    /// moves the session to it and the report names the current word. The regression it rejects is
+    /// a command that answers a word people typed for as long as the mode existed with the list of
+    /// modes.
+    #[test]
+    fn the_earlier_word_for_workspace_write_still_moves_the_mode() {
+        let mut session = Session::new("kernel-enforced");
+        run(&mut session, "strict", &Managed::default(), never_asked);
+        assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
+
         run(&mut session, "standard", &Managed::default(), never_asked);
-        assert_eq!(session.sandbox_mode(), SandboxMode::Standard);
+        assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
+        assert!(
+            last_note(&session).contains("workspace-write"),
+            "{}",
+            last_note(&session)
+        );
     }
 
     /// SANDBOX-22: the session that `/resume` or `/clear` starts is built from the held choice of
@@ -309,7 +339,7 @@ mod tests {
     #[test]
     fn the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing() {
         let strict = pinned("strict", r#"{"sandbox": {"mode": "strict"}}"#);
-        for word in ["standard", "off"] {
+        for word in ["workspace-write", "off"] {
             let mut session = Session::new("kernel-enforced");
             session.set_sandbox_mode(SandboxMode::Strict);
             run(&mut session, word, &strict, never_asked);
@@ -324,7 +354,7 @@ mod tests {
         let closed = pinned("closed", r#"{"run": {"network": "closed"}}"#);
         let mut session = Session::new("kernel-enforced");
         run(&mut session, "off", &closed, never_asked);
-        assert_eq!(session.sandbox_mode(), SandboxMode::Standard);
+        assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
         let said = last_note(&session);
         assert!(
             said.contains("managed.json") && said.contains("run.network"),
@@ -334,7 +364,7 @@ mod tests {
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
     }
 
-    /// SANDBOX-22: a word that is not exactly a mode changes nothing and lists the three, and the
+    /// SANDBOX-22: a word that is not exactly a mode changes nothing and lists the four, and the
     /// bare word reports without changing. The regression it rejects is a near miss, `Strict` or
     /// `strict now`, read as the mode it resembles.
     #[test]
@@ -342,17 +372,24 @@ mod tests {
         let mut session = Session::new("kernel-enforced");
         for word in ["Strict", "strict now", "none", "--strict"] {
             run(&mut session, word, &Managed::default(), never_asked);
-            assert_eq!(session.sandbox_mode(), SandboxMode::Standard, "{word}");
+            assert_eq!(
+                session.sandbox_mode(),
+                SandboxMode::WorkspaceWrite,
+                "{word}"
+            );
             let said = last_note(&session);
             assert!(
-                said.contains("strict") && said.contains("standard") && said.contains("off"),
+                said.contains("strict")
+                    && said.contains("read-only")
+                    && said.contains("workspace-write")
+                    && said.contains("off"),
                 "{said}"
             );
         }
         run(&mut session, "", &Managed::default(), never_asked);
-        assert_eq!(session.sandbox_mode(), SandboxMode::Standard);
+        assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
         assert!(
-            last_note(&session).contains("standard"),
+            last_note(&session).contains("workspace-write"),
             "{}",
             last_note(&session)
         );
@@ -397,7 +434,12 @@ mod tests {
     #[test]
     fn the_mode_already_held_is_said_and_not_asked_about() {
         let mut session = Session::new("kernel-enforced");
-        run(&mut session, "standard", &Managed::default(), never_asked);
+        run(
+            &mut session,
+            "workspace-write",
+            &Managed::default(),
+            never_asked,
+        );
         assert!(
             last_note(&session).contains("already"),
             "{}",

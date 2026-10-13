@@ -251,13 +251,13 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits'
 /**
  * What a program the agent runs is held to, as `session.sandbox` names it.
  *
- * Two of the agent's three. `off` starts a program with no profile, which a window has no way to
+ * Three of the agent's four. `off` starts a program with no profile, which a window has no way to
  * show, so the bridge refuses it from a window (SANDBOX-22).
  */
-export type SandboxMode = 'standard' | 'strict'
+export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
 
 /** The order the sandbox menu lists them. */
-export const SANDBOX_MODES: readonly SandboxMode[] = ['standard', 'strict']
+export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!

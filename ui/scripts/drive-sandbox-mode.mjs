@@ -1,6 +1,7 @@
 // That the sandbox mode chosen in the composer governs the session's next turn: a session opens
-// in standard, the menu offers strict and standard and no way to turn the sandbox off, a program
-// the agent runs is held to the mode chosen, and the choice is the session's own.
+// in workspace-write, the menu offers workspace-write, read-only and strict and no way to turn the
+// sandbox off, a program the agent runs is held to the mode chosen, and the choice is the session's
+// own.
 //
 // The real app and the real bridge, against a model service this script serves itself, in a
 // directory the person did not trust. Nothing is paid for. Whether a program was held to its
@@ -18,8 +19,8 @@ import { _electron as electron } from 'playwright-core'
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-sandbox-')))
 const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
 for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
-// Both outside the project: standard reads the first and refuses a write to the second, strict
-// refuses both. Both are under the real home, because a session may use the temporary directory,
+// Both outside the project: workspace-write and read-only read the first and refuse a write to the
+// second, strict refuses both. Both are under the real home, because a session may use the temporary directory,
 // so a file there would prove nothing. They are removed at the end.
 const outside = join(homedir(), `.bravebot-sandbox-drive-${process.pid}-outside`)
 const planted = join(homedir(), `.bravebot-sandbox-drive-${process.pid}-planted`)
@@ -105,16 +106,16 @@ try {
     return lastToolResult(rounds.at(-1))
   }
 
-  assert.equal(await sandbox.getAttribute('data-mode'), 'standard', 'a session opens in standard')
+  assert.equal(await sandbox.getAttribute('data-mode'), 'workspace-write', 'a session opens in workspace-write')
   assert.equal(await page.locator('[data-test="mode-trigger"]').getAttribute('data-mode'), 'ask', 'the permission mode is a control of its own')
-  await page.screenshot({ path: join(output, 'sandbox-standard.png') })
+  await page.screenshot({ path: join(output, 'sandbox-workspace-write.png') })
 
   await sandbox.click()
   await page.getByRole('menuitemradio', { name: /^Strict/ }).waitFor()
   await page.waitForTimeout(300)
   const offered = await page.locator('[data-test^="sandbox-option-"]').evaluateAll((items) => items.map((item) => item.getAttribute('data-test')))
-  assert.deepEqual(offered, ['sandbox-option-standard', 'sandbox-option-strict'], 'the menu offers strict and standard, and no way to turn the sandbox off')
-  assert.equal(await page.getByRole('menuitemradio', { name: /^Standard/ }).getAttribute('aria-checked'), 'true', 'the mode in force is checked')
+  assert.deepEqual(offered, ['sandbox-option-workspace-write', 'sandbox-option-read-only', 'sandbox-option-strict'], 'the menu offers workspace-write, read-only and strict, and no way to turn the sandbox off')
+  assert.equal(await page.getByRole('menuitemradio', { name: /^Workspace write/ }).getAttribute('aria-checked'), 'true', 'the mode in force is checked')
   await page.screenshot({ path: join(output, 'sandbox-menu.png') })
   await sandbox.click()
   await page.getByRole('menuitemradio', { name: /^Strict/ }).waitFor({ state: 'hidden' })
@@ -125,9 +126,9 @@ try {
   if (!confines) {
     console.log(`  --   this platform did not confine the control program (${String(control).slice(0, 60)}), so what the modes hold a program to is not checked here`)
   } else {
-    assert.match(String(control), /exited 1/, 'standard refused a write outside the session')
+    assert.match(String(control), /exited 1/, 'workspace-write refused a write outside the session')
     const readable = await run('Read a file')
-    assert.match(String(readable), /It exited 0\./, 'standard reads a file outside the session')
+    assert.match(String(readable), /It exited 0\./, 'workspace-write reads a file outside the session')
 
     await sandbox.click()
     await page.getByRole('menuitemradio', { name: /^Strict/ }).click()
@@ -139,10 +140,10 @@ try {
     assert.equal(await sandbox.getAttribute('data-mode'), 'strict', 'the choice holds for the next turn')
 
     await sandbox.click()
-    await page.getByRole('menuitemradio', { name: /^Standard/ }).click()
-    await inMode('standard')
+    await page.getByRole('menuitemradio', { name: /^Workspace write/ }).click()
+    await inMode('workspace-write')
     const again = await run('Read a file')
-    assert.match(String(again), /It exited 0\./, 'standard reads it again from the turn after the change')
+    assert.match(String(again), /It exited 0\./, 'workspace-write reads it again from the turn after the change')
   }
 
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -154,7 +155,7 @@ try {
   await page.emulateMedia({ colorScheme: 'light' })
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: a session opens in standard, the menu offers strict and standard and no way to turn the sandbox off, and a program is held to the mode chosen for its turn. Screenshots in ${output}/sandbox-*.png`)
+  console.log(`PASS: a session opens in workspace-write, the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn. Screenshots in ${output}/sandbox-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'sandbox-failure.png') }).catch(() => undefined)
   throw error

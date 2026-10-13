@@ -111,7 +111,7 @@ that holds the project is opened, and the result says that no delegate is given 
 is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
 reach the path, so it does not ask the person to run `/add-dir`.
 
-The same mode needs no request for programs either, under the sandbox mode `standard` on macOS and
+The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
 Linux: the lead session's stages are given at the start what a request for writing would be
 granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused before the planner
 asks. The file tools are not given that reach, and the request is still how they are.

@@ -919,7 +919,7 @@ mod tests {
     ];
 
     /// A store the catalog lists that no row refuses and SANDBOX-12 does not name as read is a
-    /// store every stage under the mode `standard` reads and, with the network open, can send,
+    /// store every stage under the mode `workspace-write` reads and, with the network open, can send,
     /// while the specs read as though it were held back. The regression it rejects is a row
     /// missing from the table on a platform that keeps the store at that path, a path named as
     /// read that the table refuses, or one named as read that the catalog lists nothing under.

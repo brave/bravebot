@@ -148,7 +148,7 @@ impl Confinement {
             user_cache: None,
             network: Network::Open,
             hosts: None,
-            mode: SandboxMode::Standard,
+            mode: SandboxMode::WorkspaceWrite,
             grants: Vec::new(),
             filesystem: Rules::none(),
             path_reach: Rules::none(),
@@ -289,12 +289,12 @@ impl Confinement {
 
     /// Whether the stages this starts hold every path a request for writing would be granted.
     ///
-    /// Only under `standard`, since a person who chose `strict` asked for less reach than the
+    /// Only under `workspace-write`, since a person who chose `strict` asked for less reach than the
     /// default and `off` has no profile, and only where the machine is read, which is every
     /// platform with a home directory but Windows, where a grant is an access-control entry written
     /// onto each directory and so cannot be made for the entries of the home directory.
     pub fn writes_without_a_request(&self) -> bool {
-        self.unasked_writes && self.mode == SandboxMode::Standard && self.reads_the_machine()
+        self.unasked_writes && self.mode == SandboxMode::WorkspaceWrite && self.reads_the_machine()
     }
 
     /// The entries of the person's filesystem lists, each with what became of it, for a report.
@@ -793,7 +793,8 @@ impl Confinement {
         }
 
         if let Some(home) = self.home.as_deref() {
-            if self.reads_the_machine() {
+            // The caches are written, which `read-only` does not do (SANDBOX-22).
+            if self.reads_the_machine() && self.mode != SandboxMode::ReadOnly {
                 policy = Toolchain::grant_every_cache(policy, self.prelude, home);
             }
             // A step with an assignment in front carries no scope, so this is the socket the
@@ -878,11 +879,20 @@ impl Confinement {
             }
         }
 
+        // The session's directories are read in every mode and written in every mode but
+        // `read-only` (SANDBOX-22). What a person's yes adds below is theirs to widen.
+        let writes_the_session = self.mode != SandboxMode::ReadOnly;
         for root in &self.roots {
-            policy = policy.allow_read(root).allow_write(root);
+            policy = policy.allow_read(root);
+            if writes_the_session {
+                policy = policy.allow_write(root);
+            }
         }
         if let Some(scratch) = &self.scratch {
-            policy = policy.allow_read(scratch).allow_write(scratch);
+            policy = policy.allow_read(scratch);
+            if writes_the_session {
+                policy = policy.allow_write(scratch);
+            }
         }
         let mut policy = self.path_reach.apply(policy);
         let unasked: Vec<PathBuf> = match (self.writes_without_a_request(), self.home.as_deref()) {
@@ -1550,6 +1560,17 @@ fn stated(
         return None;
     }
     let mut said = String::from(match prelude {
+        Some(Prelude::Windows) if mode == SandboxMode::ReadOnly => {
+            "Programs this tool starts are confined and cannot write the project. Each may reach \
+             only the directories the session was opened on and the scratch directory, read, the \
+             temporary directory, read and written, the system and program directories and git's \
+             configuration files, read, and the credential scope its command names. A path \
+             outside those, and a write to the directories the session was opened on, is refused \
+             by the operating system as `Operation not permitted` or `Permission denied`, so a \
+             program that reports either for such a path was stopped by the sandbox and not by a \
+             fault in the machine. Only the person widens it, by choosing another sandbox mode \
+             (`/add-dir`, `--add-dir`)."
+        }
         Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
              session was opened on, the scratch directory and the temporary directory, all read \
@@ -1569,6 +1590,18 @@ fn stated(
              `Operation not permitted` or `Permission denied`, so a program that reports either \
              for such a path was stopped by the sandbox and not by a fault in the machine. Only \
              the person widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
+        }
+        Some(Prelude::Linux | Prelude::MacOs) if mode == SandboxMode::ReadOnly => {
+            "Programs this tool starts are confined and cannot write the project. Each may read \
+             this machine except the places that hold a credential: ssh private keys, cloud and \
+             container logins, keychains, browser profiles and password stores. It may write only \
+             the temporary directory, and reads a credential directory only where the command's \
+             scope names it. A write to the directories the session was opened on, the scratch \
+             directory or the toolchain caches, and a path outside those it may reach, is refused \
+             by the operating system as `Operation not permitted` or `Permission denied`, so a \
+             program that reports either for such a path was stopped by the sandbox and not by a \
+             fault in the machine. Only the person widens it, by choosing another sandbox mode \
+             (`/add-dir`, `--add-dir`)."
         }
         Some(Prelude::Linux | Prelude::MacOs) => {
             "Programs this tool starts are confined. Each may read this machine except the places \
@@ -1613,7 +1646,7 @@ fn stated(
 ///
 /// Such a socket reaches whatever serves it with that server's authority: `systemd-run --user`
 /// through the user's D-Bus starts a program outside the sandbox. Strict keeps a program from
-/// everything it was not granted, so it is refused where that cannot hold. Standard runs the stage,
+/// everything it was not granted, so it is refused where that cannot hold. `workspace-write` runs the stage,
 /// and `doctor`, `/status` and the opening screen say the sockets are reachable (SANDBOX-3).
 fn cannot_keep_strict_from_sockets(
     mode: SandboxMode,
@@ -2438,7 +2471,7 @@ mod tests {
     fn a_strict_stage_does_not_read_the_machine() {
         for prelude in [Prelude::Linux, Prelude::MacOs] {
             let script = step("/bin/sh", &["-c", "gh pr list"]);
-            let standard = reading_confinement(prelude, &["/work/project"]).policy(
+            let workspace_write = reading_confinement(prelude, &["/work/project"]).policy(
                 &script,
                 Path::new("/work/project"),
                 &[],
@@ -2448,7 +2481,7 @@ mod tests {
                 .policy(&script, Path::new("/work/project"), &[]);
 
             assert!(
-                reads(&standard, "/"),
+                reads(&workspace_write, "/"),
                 "{prelude:?}: the control reads nothing"
             );
             assert!(
@@ -2544,6 +2577,76 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: under `read-only` a stage reads the session's directories and the machine, and
+    /// writes none of the session, the scratch directory or a toolchain cache. The temporary
+    /// directory stays writable, since a program does not start without it. The regressions it
+    /// rejects are a session directory or a cache still writable, and a read lost along with the
+    /// writes.
+    #[test]
+    fn a_read_only_stage_reads_the_session_and_writes_neither_it_nor_the_scratch_directory_nor_a_cache()
+     {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let writing = reading_confinement(prelude, &["/work/project", "/work/added"]);
+            let read_only = writing.clone().with_mode(SandboxMode::ReadOnly);
+            for program in ["/usr/bin/make", "/usr/bin/cargo"] {
+                let before = writing.policy(&step(program, &[]), Path::new("/work/project"), &[]);
+                let after = read_only.policy(&step(program, &[]), Path::new("/work/project"), &[]);
+                for directory in ["/work/project", "/work/added", "/var/scratch"] {
+                    assert!(
+                        writes(&before, directory),
+                        "the control does not write {directory}"
+                    );
+                    assert!(
+                        reads(&after, directory) && !writes(&after, directory),
+                        "{prelude:?}: {program} under read-only: {directory}"
+                    );
+                }
+                for cache in [".cargo/registry", ".npm/_cacache"] {
+                    let path = format!("{HOME}/{cache}");
+                    assert!(writes(&before, &path), "the control does not write {cache}");
+                    assert!(
+                        !writes(&after, &path),
+                        "{prelude:?}: {program} under read-only writes {cache}"
+                    );
+                }
+                assert!(
+                    reads(&after, "/"),
+                    "{prelude:?}: read-only stopped reading the machine"
+                );
+                assert!(
+                    writes(&after, "/tmp"),
+                    "{prelude:?}: the temporary directory is not writable"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-19, SANDBOX-22: the sentence the planner is told under `read-only` says the project
+    /// cannot be written and who widens that, on every platform, and the sentence under
+    /// `workspace-write` does not. The regression it rejects is a planner told it may write the
+    /// project under a mode that refuses it.
+    #[test]
+    fn the_planner_is_told_a_read_only_stage_cannot_write_the_project() {
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
+                .expect("a statement");
+            assert!(said.contains("cannot write the project"), "{said}");
+            assert!(said.contains("choosing another sandbox mode"), "{said}");
+            assert!(
+                !said.contains("It may write only the directories the session was opened on"),
+                "{said}"
+            );
+            let writing = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+            )
+            .expect("a statement");
+            assert!(!writing.contains("cannot write the project"), "{writing}");
+        }
+    }
+
     /// SANDBOX-26: a requested scope lifts its own directory on a stage that names nothing, and no
     /// other. The control is the same stage with no request, which refuses all three; the
     /// regression it rejects is a request that lifts every credential, or none.
@@ -2574,16 +2677,16 @@ mod tests {
         }
     }
 
-    /// SANDBOX-26: under `standard` a requested scope lifts the refusal of its own credential
+    /// SANDBOX-26: under `workspace-write` a requested scope lifts the refusal of its own credential
     /// directory on a stage that names nothing, and no other. The control is the same stage with
     /// no request, which is refused all three. The regression it rejects is a request that the
     /// mode accepts and the profile then ignores, or one that lifts every credential.
     #[test]
-    fn a_requested_scope_lifts_its_own_refused_directory_under_standard() {
+    fn a_requested_scope_lifts_its_own_refused_directory_under_workspace_write() {
         for prelude in [Prelude::Linux, Prelude::MacOs] {
             let script = step("/bin/sh", &["-c", "aws s3 ls"]);
             let base = reading_confinement(prelude, &["/work/project"]);
-            assert_eq!(base.mode, SandboxMode::Standard);
+            assert_eq!(base.mode, SandboxMode::WorkspaceWrite);
             let control = base.policy(&script, Path::new("/work/project"), &[]);
             for directory in [".aws", ".kube", ".docker"] {
                 let path = format!("{HOME}/{directory}/credentials");
@@ -2610,11 +2713,11 @@ mod tests {
         }
     }
 
-    /// SANDBOX-26: under `standard` a requested remote scope lends the ssh agent socket to a
+    /// SANDBOX-26: under `workspace-write` a requested remote scope lends the ssh agent socket to a
     /// script that names no `git`, and still refuses the private keys in `~/.ssh`. The controls are
     /// the same stage with no request, and a stage that asked for another scope.
     #[test]
-    fn a_requested_remote_scope_lends_the_agent_socket_under_standard() {
+    fn a_requested_remote_scope_lends_the_agent_socket_under_workspace_write() {
         let socket = "/run/agent.sock";
         let environment = vec![("SSH_AUTH_SOCK".to_string(), socket.to_string())];
         for prelude in [Prelude::Linux, Prelude::MacOs] {
@@ -2814,15 +2917,25 @@ mod tests {
     #[test]
     fn the_planner_is_told_on_macos_that_listening_needs_loopback() {
         let on = |prelude| {
-            stated(true, Some(prelude), Network::Open, SandboxMode::Standard)
-                .expect("says something")
+            stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+            )
+            .expect("says something")
         };
         assert!(on(Prelude::MacOs).contains("unless its line asks for `loopback`"));
         assert!(!on(Prelude::Linux).contains("unless its line asks for `loopback`"));
 
         let closed = |prelude| {
-            stated(true, Some(prelude), Network::Closed, SandboxMode::Standard)
-                .expect("says something")
+            stated(
+                true,
+                Some(prelude),
+                Network::Closed,
+                SandboxMode::WorkspaceWrite,
+            )
+            .expect("says something")
         };
         assert!(closed(Prelude::MacOs).ends_with(MACOS_CLOSED_LOOPBACK_SENTENCE));
         assert!(!on(Prelude::MacOs).contains(MACOS_CLOSED_LOOPBACK_SENTENCE));
@@ -2830,12 +2943,16 @@ mod tests {
     }
 
     /// SANDBOX-14, SANDBOX-19: the planner is told on macOS, in the description and after a
-    /// failed step, that only a step whose program is git writes a `.git`, in both modes that
-    /// confine, and is not told it on Linux or Windows, where nothing is held back. Without it a
+    /// failed step, that only a step whose program is git writes a `.git`, in every mode that
+    /// confines, and is not told it on Linux or Windows, where nothing is held back. Without it a
     /// `make` target that commits is refused with nothing that says why.
     #[test]
     fn the_planner_is_told_on_macos_that_only_git_writes_a_git_directory() {
-        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+        for mode in [
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::ReadOnly,
+            SandboxMode::Strict,
+        ] {
             let described =
                 |prelude| stated(true, Some(prelude), Network::Open, mode).expect("says something");
             let failed = |prelude| {
@@ -2967,7 +3084,7 @@ mod tests {
         );
     }
 
-    /// SANDBOX-19, SANDBOX-26: the failure sentence names the menu in `strict` and in `standard`,
+    /// SANDBOX-19, SANDBOX-26: the failure sentence names the menu in `strict` and in `workspace-write`,
     /// and is built from the confinement and the steps alone, so it is the same words for exit 1
     /// and exit 2. A session that names no home to apply a request under does not name one.
     #[test]
@@ -2980,29 +3097,36 @@ mod tests {
         }
         assert_eq!(line, strict.profile(&[&script]));
 
-        let standard = reading_confinement(Prelude::MacOs, &["/work/project"]);
-        let said = standard.profile(&[&script]);
+        let workspace_write = reading_confinement(Prelude::MacOs, &["/work/project"]);
+        let said = workspace_write.profile(&[&script]);
         assert!(said.contains("scopes` argument"), "{said}");
         for name in Requested::MENU {
             assert!(said.contains(name), "{name} missing from {said}");
         }
-        assert_eq!(said, standard.profile(&[&script]));
+        assert_eq!(said, workspace_write.profile(&[&script]));
     }
 
     /// SANDBOX-26: the planner is told of the argument and its menu where it will be honoured, in
-    /// `strict` and in `standard`, and not in `off`.
+    /// `strict`, `read-only` and `workspace-write`, and not in `off`.
     #[test]
-    fn the_planner_is_told_of_the_menu_in_strict_and_standard() {
+    fn the_planner_is_told_of_the_menu_in_every_mode_but_off() {
         let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode);
-        for mode in [SandboxMode::Strict, SandboxMode::Standard] {
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
             let said = told(mode).expect("says something");
             assert!(said.contains("`scopes`"), "{said}");
             for name in Requested::MENU {
                 assert!(said.contains(name), "{name} missing from {said}");
             }
         }
-        let standard = told(SandboxMode::Standard).unwrap();
-        assert!(!standard.contains("cannot ask for more"), "{standard}");
+        let workspace_write = told(SandboxMode::WorkspaceWrite).unwrap();
+        assert!(
+            !workspace_write.contains("cannot ask for more"),
+            "{workspace_write}"
+        );
         assert_eq!(told(SandboxMode::Off), None);
     }
 
@@ -3072,13 +3196,13 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             ),
             stated(
                 true,
                 Some(Prelude::Windows),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             )
         );
         assert_eq!(
@@ -3086,14 +3210,14 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             )
             .map(|linux| format!("{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}")),
             stated(
                 true,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             )
         );
         assert!(
@@ -3101,7 +3225,7 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             )
             .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
@@ -3481,10 +3605,18 @@ mod tests {
         };
         let home = Path::new("/Users/someone");
 
-        assert!(written(Prelude::MacOs, Some(home), SandboxMode::Standard));
-        assert!(!written(Prelude::Linux, Some(home), SandboxMode::Standard));
+        assert!(written(
+            Prelude::MacOs,
+            Some(home),
+            SandboxMode::WorkspaceWrite
+        ));
+        assert!(!written(
+            Prelude::Linux,
+            Some(home),
+            SandboxMode::WorkspaceWrite
+        ));
         assert!(!written(Prelude::MacOs, Some(home), SandboxMode::Strict));
-        assert!(!written(Prelude::MacOs, None, SandboxMode::Standard));
+        assert!(!written(Prelude::MacOs, None, SandboxMode::WorkspaceWrite));
     }
 
     /// The list a toolchain brings follows the binary the step resolved to, so a `cargo` stage
@@ -4025,7 +4157,7 @@ mod tests {
             true,
             Some(Prelude::Linux),
             Network::Open,
-            SandboxMode::Standard,
+            SandboxMode::WorkspaceWrite,
         )
         .expect("a confining turn says something");
 
@@ -4046,14 +4178,14 @@ mod tests {
             true,
             Some(Prelude::MacOs),
             Network::Open,
-            SandboxMode::Standard,
+            SandboxMode::WorkspaceWrite,
         )
         .expect("says something");
         let closed = stated(
             true,
             Some(Prelude::MacOs),
             Network::Closed,
-            SandboxMode::Standard,
+            SandboxMode::WorkspaceWrite,
         )
         .expect("says something");
         assert!(!open.contains("network"), "{open}");
@@ -4064,12 +4196,12 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Closed,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             ),
             None
         );
-        let unconfined =
-            stated(true, None, Network::Closed, SandboxMode::Standard).expect("says something");
+        let unconfined = stated(true, None, Network::Closed, SandboxMode::WorkspaceWrite)
+            .expect("says something");
         assert!(!unconfined.contains("network is closed"), "{unconfined}");
     }
 
@@ -4082,7 +4214,7 @@ mod tests {
                 false,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             ),
             None
         );
@@ -4091,12 +4223,12 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::Standard
+                SandboxMode::WorkspaceWrite
             ),
             None
         );
         assert_eq!(
-            stated(false, None, Network::Open, SandboxMode::Standard),
+            stated(false, None, Network::Open, SandboxMode::WorkspaceWrite),
             None
         );
     }
@@ -4105,7 +4237,7 @@ mod tests {
     /// is the confined sentence on a platform whose programs run with the person's own access.
     #[test]
     fn a_platform_with_no_base_says_its_programs_are_not_confined() {
-        let said = stated(true, None, Network::Open, SandboxMode::Standard)
+        let said = stated(true, None, Network::Open, SandboxMode::WorkspaceWrite)
             .expect("a confining turn says something");
 
         assert!(said.contains("not confined"), "{said}");
@@ -4178,11 +4310,11 @@ mod tests {
             ("windows", confinement(&roots)),
             ("strict", confinement(&roots).with_mode(SandboxMode::Strict)),
             (
-                "standard linux",
+                "workspace-write linux",
                 reading_confinement(Prelude::Linux, &roots),
             ),
             (
-                "standard macos",
+                "workspace-write macos",
                 reading_confinement(Prelude::MacOs, &roots),
             ),
             (
@@ -4223,7 +4355,7 @@ mod tests {
                 "{needle} missing from {sentence}"
             );
         }
-        for mode in ["strict", "standard", "off"] {
+        for mode in ["strict", "workspace-write", "off"] {
             assert!(!sentence.contains(mode), "{mode} named in {sentence}");
         }
     }
@@ -4340,9 +4472,9 @@ mod tests {
     }
 
     /// SANDBOX-22: strict is refused where a backend cannot hold a connect to a socket that has a
-    /// path, with the mode and the kernel it needs named, and standard is not. The regressions it
+    /// path, with the mode and the kernel it needs named, and workspace-write is not. The regressions it
     /// rejects: a strict stage started where the user's D-Bus and the SSH agent are reachable,
-    /// standard refused along with it, and strict refused on a backend that governs the sockets.
+    /// workspace-write refused along with it, and strict refused on a backend that governs the sockets.
     #[test]
     fn strict_is_refused_where_sockets_with_a_path_are_not_governed() {
         let backend = |governs_sockets_with_a_path| bravebot_sandbox::policy::Capabilities {
@@ -4362,7 +4494,7 @@ mod tests {
         assert!(detail.contains("Landlock ABI 9"), "{detail}");
         assert!(detail.contains("Linux 7.1"), "{detail}");
         assert_eq!(
-            cannot_keep_strict_from_sockets(SandboxMode::Standard, &ungoverned),
+            cannot_keep_strict_from_sockets(SandboxMode::WorkspaceWrite, &ungoverned),
             None
         );
         assert_eq!(
@@ -4373,20 +4505,20 @@ mod tests {
 
     /// A strict stage is prepared on this machine's backend exactly where that backend governs a
     /// connect to a socket that has a path, and refused naming the kernel requirement where it
-    /// does not, while a standard stage is prepared either way. The regression it rejects is the
+    /// does not, while a workspace-write stage is prepared either way. The regression it rejects is the
     /// refusal written and never asked by the path every stage is started through.
     #[test]
     fn a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed() {
-        let (session, standard) = a_session("strict-path-sockets");
-        let strict = standard.clone().with_mode(SandboxMode::Strict);
+        let (session, workspace_write) = a_session("strict-path-sockets");
+        let strict = workspace_write.clone().with_mode(SandboxMode::Strict);
         let cat = step("/bin/cat", &["a"]);
         let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
             return;
         };
 
-        standard
+        workspace_write
             .prepared(&Command::new("/bin/cat"), &cat, &session)
-            .expect("a standard stage is confined whatever the kernel governs");
+            .expect("a workspace-write stage is confined whatever the kernel governs");
         match strict.prepared(&Command::new("/bin/cat"), &cat, &session) {
             Ok(_) => assert!(sandbox.capabilities().governs_sockets_with_a_path),
             Err(error) => {
@@ -5578,7 +5710,7 @@ mod tests {
         .with_unasked_writes(true)
     }
 
-    /// SANDBOX-22, SANDBOX-28: under bypass a `standard` stage on a platform that reads the machine
+    /// SANDBOX-22, SANDBOX-28: under bypass a `workspace-write` stage on a platform that reads the machine
     /// holds the rows a request for writing would be granted, and none of them is the home
     /// directory, a directory above it, or a place that holds a credential. The regression it
     /// rejects is the mode never reaching the policy, or a row wide enough to cover home. The same
@@ -5660,7 +5792,7 @@ mod tests {
     /// confinement whose caller is a delegate or is outside bypass, and a session with no home add no
     /// row. The regression it rejects is a check on bypass alone.
     #[test]
-    fn a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row() {
+    fn a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row() {
         let (home, beside) = unasked_places("none");
         let root = beside.join("project");
         let step = step("/bin/cat", &["f"]);
@@ -5669,7 +5801,7 @@ mod tests {
         for (what, prelude, mode) in [
             ("strict", Prelude::MacOs, SandboxMode::Strict),
             ("off", Prelude::MacOs, SandboxMode::Off),
-            ("windows", Prelude::Windows, SandboxMode::Standard),
+            ("windows", Prelude::Windows, SandboxMode::WorkspaceWrite),
         ] {
             let flagged = bypass_confinement(prelude, &home, &root).with_mode(mode);
             let plain = bypass_confinement(prelude, &home, &root)
@@ -5690,10 +5822,10 @@ mod tests {
         };
         assert!(!homeless(true).writes_without_a_request(), "no home");
         assert_eq!(rows(homeless(true)), rows(homeless(false)), "no home");
-        let standard = bypass_confinement(Prelude::MacOs, &home, &root);
-        assert!(standard.writes_without_a_request());
+        let workspace_write = bypass_confinement(Prelude::MacOs, &home, &root);
+        assert!(workspace_write.writes_without_a_request());
         assert!(
-            !standard
+            !workspace_write
                 .with_unasked_writes(false)
                 .writes_without_a_request()
         );

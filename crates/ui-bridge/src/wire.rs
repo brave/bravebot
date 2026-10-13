@@ -125,14 +125,14 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
 
 /// The sandbox mode a `session.sandbox` asks for.
 ///
-/// `strict` and `standard` only. `off` is refused, and so is any other word, because a window has no
-/// way to show that nothing confines a program (SANDBOX-22). Reading the word as `standard` instead
-/// would leave a client drawing a mode the session is not in.
+/// `strict`, `read-only` and `workspace-write` only. `off` is refused, and so is any other word, because a
+/// window has no way to show that nothing confines a program (SANDBOX-22). Reading the word as
+/// `workspace-write` instead would leave a client drawing a mode the session is not in.
 pub fn sandbox_mode(value: &Value) -> Result<SandboxMode, Failure> {
     match value.as_str().and_then(SandboxMode::parse) {
         Some(mode) if mode != SandboxMode::Off => Ok(mode),
         _ => Err(Failure::bad_request(format!(
-            "`mode` may be `strict` or `standard`, not {value}"
+            "`mode` may be `strict`, `read-only` or `workspace-write`, not {value}"
         ))),
     }
 }

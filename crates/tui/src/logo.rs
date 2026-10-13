@@ -204,7 +204,7 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
 /// mode the next turn runs under and not the one the process started with (SANDBOX-22).
 ///
 /// `sockets_with_a_path_reachable` says this kernel leaves every unix socket that has a path open to
-/// a stage, which the screen says under `standard` (SANDBOX-3).
+/// a stage, which the screen says under `read-only` and `workspace-write` (SANDBOX-3).
 ///
 /// `tier` says whether this build can reach the premium host, and is deliberately about the
 /// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
@@ -349,7 +349,7 @@ mod tests {
     fn rows(width: u16, available: u16) -> Vec<String> {
         lines(
             "kernel-enforced",
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             false,
             "premium available",
             width,
@@ -472,7 +472,7 @@ mod tests {
     fn a_closed_network_is_not_claimed_for_programs_nothing_confines() {
         use bravebot_sandbox::SandboxMode;
         use bravebot_sandbox::network::Network;
-        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Strict] {
             assert_eq!(network_shown(Network::Closed, mode), Network::Closed);
         }
         assert_eq!(
@@ -482,11 +482,11 @@ mod tests {
     }
 
     /// SANDBOX-3: a session whose programs reach every unix socket that has a path says so on the
-    /// screen it opens on, under `standard` alone. The regressions it rejects: no word on such a
+    /// screen it opens on, under `read-only` and `workspace-write` alone. The regressions it rejects: no word on such a
     /// kernel, the line on a kernel that governs the sockets, and the line under `strict`, which
     /// refuses the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_standard_alone() {
+    fn reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone() {
         use bravebot_sandbox::SandboxMode;
         let drawn = |mode, reachable| {
             lines(
@@ -503,10 +503,10 @@ mod tests {
             .join("\n")
         };
         let said = t!(opening_path_sockets_reachable).to_string();
-        let open = drawn(SandboxMode::Standard, true);
+        let open = drawn(SandboxMode::WorkspaceWrite, true);
         assert!(open.contains(&said), "{open}");
         for (mode, reachable) in [
-            (SandboxMode::Standard, false),
+            (SandboxMode::WorkspaceWrite, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
         ] {

@@ -733,7 +733,7 @@ impl Confirmer for BridgeConfirmer {
     /// pair, and it is what every failure here resolves to.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         // A window has no line that shows a program is unconfined, and reads the mode `off` as
-        // `standard` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
+        // `workspace-write` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
         if request.unconfined {
             return RunDecision::reject();
         }

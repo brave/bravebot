@@ -781,9 +781,7 @@ fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
             None => {
                 return Err(t!(
                     cli_sandbox_needs_a_mode,
-                    names = [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off]
-                        .map(SandboxMode::name)
-                        .join(", ")
+                    names = SandboxMode::ALL.map(SandboxMode::name).join(", ")
                 )
                 .to_string());
             }
@@ -3675,7 +3673,7 @@ mod tests {
         assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
     }
 
-    /// SANDBOX-3: below Landlock ABI 9 a program under standard reaches every unix socket that has
+    /// SANDBOX-3: below Landlock ABI 9 a program under read-only or workspace-write reaches every unix socket that has
     /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
     /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
     /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
@@ -6408,11 +6406,13 @@ mod tests {
         }
     }
 
-    /// SANDBOX-22: `--sandbox` takes one of three exact words, the last of a repeat winning, and is
-    /// taken out of the arguments wherever it stood. The regression it rejects is a flag that
-    /// reads a near miss as a mode, or leaves its word behind to be read as the task.
+    /// SANDBOX-22, COMPAT-001: `--sandbox` takes one of four exact words, `standard` still naming
+    /// `workspace-write`, the last of a repeat winning, and is taken out of the arguments wherever
+    /// it stood. The regression it rejects is a flag that reads a near miss as a mode, a script
+    /// written for `standard` that stops working, or a flag that leaves its word behind to be read
+    /// as the task.
     #[test]
-    fn the_sandbox_flag_takes_one_of_three_words_and_the_last_wins() {
+    fn the_sandbox_flag_takes_one_of_four_words_and_the_last_wins() {
         for (typed, expected) in [
             (
                 &["--sandbox", "strict", "-p", "do a thing"][..],
@@ -6423,8 +6423,16 @@ mod tests {
                 SandboxMode::Off,
             ),
             (
-                &["-p", "do a thing", "--sandbox", "standard"][..],
-                SandboxMode::Standard,
+                &["-p", "do a thing", "--sandbox", "workspace-write"][..],
+                SandboxMode::WorkspaceWrite,
+            ),
+            (
+                &["--sandbox", "read-only", "-p", "do a thing"][..],
+                SandboxMode::ReadOnly,
+            ),
+            (
+                &["-p", "--sandbox", "standard", "do a thing"][..],
+                SandboxMode::WorkspaceWrite,
             ),
             (
                 &["--sandbox", "off", "--sandbox", "strict"][..],
@@ -6453,7 +6461,7 @@ mod tests {
         assert_eq!(none, args(&["-p", "do a thing"]));
     }
 
-    /// SANDBOX-22: a missing, blank or unknown word is refused naming the three, and the arguments
+    /// SANDBOX-22: a missing, blank or unknown word is refused naming the four, and the arguments
     /// are left as typed. The regression it rejects is a script whose variable expanded to nothing
     /// being run under the default.
     #[test]
@@ -6467,7 +6475,10 @@ mod tests {
         ] {
             let mut arguments = args(typed);
             let refused = take_sandbox(&mut arguments).expect_err(&format!("{typed:?}"));
-            assert!(refused.contains("strict, standard, off"), "{refused}");
+            assert!(
+                refused.contains("strict, read-only, workspace-write, off"),
+                "{refused}"
+            );
             assert_eq!(arguments, args(typed), "a refusal rewrote the arguments");
         }
     }
@@ -6585,12 +6596,12 @@ mod tests {
 
     /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the
     /// managed file when the settings went under its pin. The regression it rejects is a report
-    /// that says `standard` where a machine pins `strict`.
+    /// that says `workspace-write` where a machine pins `strict`.
     #[test]
     fn doctor_names_the_sandbox_mode_and_where_it_came_from() {
         let unset = sandbox_mode_line(&bravebot_config::Settings::default(), &Managed::default())
             .expect("nothing to refuse");
-        assert!(unset.contains("standard"), "{unset}");
+        assert!(unset.contains("workspace-write"), "{unset}");
         assert!(unset.contains("default"), "{unset}");
 
         let pin = pin_file("pinned", r#"{"sandbox": {"mode": "strict"}}"#);
