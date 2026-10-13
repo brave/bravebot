@@ -176,6 +176,7 @@ share it.
 
 `verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_refused_another`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout`
 `verified-by: bravebot_agent::workspace::a_checkout_is_not_made_from_a_checkout`
 
 ## Making one

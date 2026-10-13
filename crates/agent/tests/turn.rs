@@ -32458,6 +32458,90 @@ fn a_delegate_in_a_checkout_is_refused_another() {
     );
 }
 
+/// CHECKOUT-3. A delegate in a checkout starts its own delegates in that checkout, a reader among
+/// them: the reader reads the committed tree the checkout holds, not the person's edited one, and
+/// a worker it starts writes into the checkout and not the working directory.
+#[test]
+fn a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout() {
+    let scratch = Scratch::new("checkout-shared");
+    let home = Scratch::new("checkout-shared-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    std::fs::write(scratch.path.join("README"), "EDITED-IN-THE-PERSONS-TREE\n").expect("edit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-A-SHARING-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"MIDDLE-SHARES","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "MIDDLE-SHARES",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-READS"}"#),
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"INNER-WRITES"}"#),
+                reply_with("started both"),
+                reply_with("finished"),
+            ],
+        ),
+        (
+            "INNER-READS",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("read it"),
+            ],
+        ),
+        (
+            "INNER-WRITES",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the inner worker"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-A-SHARING-ONE",
+    );
+
+    let reader: Vec<_> = asked
+        .iter()
+        .filter(|body| body.contains("INNER-READS"))
+        .collect();
+    assert!(
+        reader.iter().any(|body| body.contains("committed")),
+        "the reader a delegate in a checkout started did not read the checkout"
+    );
+    assert!(
+        reader
+            .iter()
+            .all(|body| !body.contains("EDITED-IN-THE-PERSONS-TREE")),
+        "the reader a delegate in a checkout started read the working directory"
+    );
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the worker a delegate in a checkout started wrote in the working directory"
+    );
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "a delegate in a checkout made another");
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("out.txt")).expect("written in the checkout"),
+        "from the inner worker"
+    );
+}
+
 /// CHECKOUT-2. A definition asking for a checkout gives its delegate one when the spawn did not
 /// ask, so the planner cannot start it in the working directory.
 #[test]
