@@ -91,7 +91,7 @@ pub struct Report<'a> {
 /// terminal escape cannot repaint the screen of whoever pipes this into `jq` and reads the result.
 /// Everything else goes through as itself: the output is UTF-8, and escaping it to ASCII would
 /// only make a path harder to read.
-fn quoted(text: &str) -> String {
+pub(crate) fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for c in text.chars() {
@@ -121,7 +121,7 @@ fn strings<S: AsRef<str>>(values: impl IntoIterator<Item = S>) -> String {
 }
 
 /// A JSON object from fields already rendered, in the order given.
-fn object(fields: &[(&str, String)]) -> String {
+pub(crate) fn object(fields: &[(&str, String)]) -> String {
     let pairs: Vec<String> = fields
         .iter()
         .map(|(name, value)| format!("{}:{value}", quoted(name)))
@@ -130,7 +130,7 @@ fn object(fields: &[(&str, String)]) -> String {
 }
 
 /// `null`, or the value quoted.
-fn maybe(value: Option<&str>) -> String {
+pub(crate) fn maybe(value: Option<&str>) -> String {
     match value {
         Some(text) => quoted(text),
         None => "null".to_string(),

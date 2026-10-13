@@ -7,6 +7,7 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:cli-usage-sessions-list
 fr:command-hunks
 fr:diff-no-final-newline
 fr:session-hunk-added
@@ -36,3 +37,10 @@ fr:session-hunks-turn-moved
 fr:session-hunks-unavailable
 fr:session-hunks-uncovered
 fr:session-hunks-wrote-nothing
+fr:sessions-list-continuable
+fr:sessions-list-more
+fr:sessions-list-none
+fr:sessions-list-not-continuable
+fr:sessions-list-row
+fr:sessions-list-unknown
+fr:sessions-list-usage

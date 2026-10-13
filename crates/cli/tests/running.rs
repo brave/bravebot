@@ -8387,6 +8387,7 @@ fn the_bash_script_completes_commands_subcommands_and_flags_by_position() {
 
     assert_eq!(completes(&["bravebot", "au"]), ["auth"]);
     assert_eq!(completes(&["bravebot", "auth", "lo"]), ["login", "logout"]);
+    assert_eq!(completes(&["bravebot", "sessions", "li"]), ["list"]);
     assert_eq!(
         completes(&["bravebot", "completion", ""]),
         ["bash", "zsh", "fish"]

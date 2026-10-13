@@ -2995,7 +2995,7 @@ doctor-direnv-ok = disponible dans le PATH
 doctor-direnv-missing = introuvable dans le PATH ; consultez https://direnv.net/ ou lancez `brew install direnv`
 
 status-undecided = non décidé
-sessions-usage = sessions accepte --json, stop et l'identifiant d'une session, import et le nom d'un outil, ou search et un texte
+sessions-usage = sessions accepte --json, stop et l'identifiant d'une session, list, import et le nom d'un outil, ou search et un texte
 sessions-none = Aucune session en arrière-plan.
 sessions-no-home = Il n'y a pas de répertoire d'état où chercher des sessions en arrière-plan.
 sessions-missing = Aucune session en arrière-plan { $id }.
