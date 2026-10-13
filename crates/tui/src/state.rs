@@ -2160,7 +2160,8 @@ impl Session {
         self
     }
 
-    /// The session, told whether this kernel leaves sockets with a path reachable from a stage.
+    /// The value is the inverse of the backend's `governs_sockets_with_a_path`, and false with no
+    /// backend.
     pub fn with_sockets_with_a_path_reachable(mut self, reachable: bool) -> Self {
         self.sockets_with_a_path_reachable = reachable;
         self
