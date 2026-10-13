@@ -489,8 +489,9 @@ test('a call that waited on a model of its own says how long, and one that asked
 
 // A window shows every call and, without this, nothing of what it was for. Rendered through the
 // real row for live and replayed calls alike, because the reason arriving and going undrawn is the
-// fault, and a resumed session is read for exactly this.
-test('a call is drawn with the reason the planner gave for it', () => {
+// fault, and a resumed session is read for exactly this. The reason comes after the call, since a
+// reason drawn ahead of it reads as a heading over the row rather than as part of the call.
+test('a call is drawn with the reason the planner gave for it, after the call', () => {
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
   const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
@@ -499,12 +500,18 @@ test('a call is drawn with the reason the planner gave for it', () => {
   const { Row } = module.exports
   const draw = (entry) => renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
 
+  // True when the reason is drawn and its markup comes after the call's last piece of text.
+  const afterTheCall = (markup, call) => {
+    const reason = markup.search(/<span class="why"[^>]*>see the entry point<\/span>/)
+    return markup.includes(`>${call}<`) && reason > markup.indexOf(`>${call}<`)
+  }
+
   const read = { verb: 'Read', target: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
-  assert.match(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), /<span class="why">see the entry point<\/span>/)
-  assert.match(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), /<span class="why">see the entry point<\/span>/, 'a running call lost its reason')
+  assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), 'src/main.rs'), 'a finished call lost its reason or drew it ahead of the call')
+  assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), 'src/main.rs'), 'a running call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'tool', id: 'row', activity: { ...read, why: '' }, landing: null }), /class="why"/)
 
-  assert.match(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), /<span class="why">see the entry point<\/span>/)
+  assert.ok(afterTheCall(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), 'Read(src/main.rs)'), 'a replayed call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: '' }), /class="why"/)
 })
 
