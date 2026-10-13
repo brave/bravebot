@@ -7451,6 +7451,11 @@ fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[St
 const NOT_ACCEPTING_PATHS: &str = "refused: this session does not accept a request for a path. \
      Say which path the work needs, and what for, so the person can arrange it.";
 
+/// What a request to write a path says where the programs of this session may not write.
+const NOT_ACCEPTING_WRITES: &str = "refused: programs in this session may not be given a path to \
+     write, whatever the person answers; nothing was asked. A request to read a path is still \
+     accepted.";
+
 /// The longest reason a request for a path is drawn with, in characters.
 const LONGEST_PATH_REASON: usize = 300;
 
@@ -7497,6 +7502,11 @@ fn request_path<S: Sink, C: Confirmer>(
 
     if !path_requests_accepted(policy, tools) {
         return Produced::problem(NOT_ACCEPTING_PATHS);
+    }
+    // A yes to a write would hand back what `read-only` withholds, and the mode that answers every
+    // question would give it unasked (SANDBOX-22, SANDBOX-28).
+    if write && tools.sandbox == bravebot_sandbox::SandboxMode::ReadOnly {
+        return Produced::problem(NOT_ACCEPTING_WRITES);
     }
     let Some(confinement) = tools.confinement() else {
         return Produced::problem(NOT_ACCEPTING_PATHS);

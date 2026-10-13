@@ -759,6 +759,20 @@ impl Confinement {
         }
     }
 
+    /// What `toolchain` adds to a stage: its list, and its caches written in every mode but
+    /// `read-only`, which writes nothing a later program reads (SANDBOX-22).
+    fn toolchain_rows(
+        &self,
+        toolchain: Toolchain,
+        policy: SandboxPolicy,
+        home: &Path,
+    ) -> SandboxPolicy {
+        match self.mode {
+            SandboxMode::ReadOnly => toolchain.grant_reads(policy, home),
+            _ => toolchain.grant(policy, self.prelude, home),
+        }
+    }
+
     /// The policy one step runs under, started in `directory`.
     ///
     /// `environment` is the step's own, after the session's variables and the step's assignments
@@ -805,7 +819,7 @@ impl Confinement {
             };
             let (toolchain, scope) = self.carries(step);
             if let Some(toolchain) = toolchain {
-                policy = toolchain.grant(policy, self.prelude, home);
+                policy = self.toolchain_rows(toolchain, policy, home);
             }
             if let Some(scope) = scope {
                 policy = scope.grant(policy, home, &place);
@@ -828,7 +842,7 @@ impl Confinement {
             for request in self.requested_for(step) {
                 policy = match *request {
                     Requested::Loopback => policy.allow_loopback(),
-                    Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
+                    Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
                     Requested::Scope(scope) => {
                         let mut policy = scope.grant(policy, home, &place);
                         if !self.reads_the_machine() {
@@ -2579,7 +2593,7 @@ mod tests {
 
     /// SANDBOX-22: under `read-only` a stage reads the session's directories and the machine, and
     /// writes none of the session, the scratch directory or a toolchain cache. The temporary
-    /// directory stays writable, since a program does not start without it. The regressions it
+    /// directory stays writable, since compilers and shells write scratch files there. The regressions it
     /// rejects are a session directory or a cache still writable, and a read lost along with the
     /// writes.
     #[test]
@@ -2834,6 +2848,47 @@ mod tests {
             .with_requested(&[Requested::Toolchain(Toolchain::Cargo)])
             .policy(&script, Path::new("/work/project"), &[]);
         assert!(writes(&asked, &registry));
+    }
+
+    /// SANDBOX-22, SANDBOX-26: under `read-only` a toolchain brings its list and writes no cache,
+    /// whether the planner asked for it or the program carried it (Windows lists by binary). The
+    /// controls are the same stages in `workspace-write` and `strict`, which write the cache. The
+    /// regression it rejects is a request that writes into `read-only` what the mode withholds.
+    #[test]
+    fn under_read_only_a_toolchain_writes_no_cache() {
+        let script = step("/bin/sh", &["-c", "cargo build"]);
+        let cargo = step("/usr/bin/cargo", &["build"]);
+        let registry = format!("{HOME}/.cargo/registry");
+        let work = Path::new("/work/project");
+        for (prelude, stage, requested) in [
+            (Prelude::MacOs, &script, true),
+            (Prelude::Linux, &script, true),
+            (Prelude::Windows, &script, true),
+            (Prelude::Windows, &cargo, false),
+        ] {
+            let requests: &[Requested] = match requested {
+                true => &[Requested::Toolchain(Toolchain::Cargo)],
+                false => &[],
+            };
+            let at = |mode| {
+                reading_confinement(prelude, &["/work/project"])
+                    .with_mode(mode)
+                    .with_requested(requests)
+                    .policy(stage, work, &[])
+            };
+            let writing = match prelude {
+                Prelude::Windows => at(SandboxMode::WorkspaceWrite),
+                _ => at(SandboxMode::Strict),
+            };
+            assert!(
+                writes(&writing, &registry),
+                "{prelude:?}: the control does not write the cache"
+            );
+            assert!(
+                !writes(&at(SandboxMode::ReadOnly), &registry),
+                "{prelude:?}: read-only wrote the cache"
+            );
+        }
     }
 
     /// SANDBOX-3, SANDBOX-26: a requested `loopback` lends loopback to a stage and nothing else:

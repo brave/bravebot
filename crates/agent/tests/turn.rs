@@ -49600,6 +49600,65 @@ fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedA
     bravebot_agent::Confining::new(asked, bravebot_agent::PermissionMode::Bypass, false)
 }
 
+/// SANDBOX-22, SANDBOX-28, MODE-4: under `read-only` a request to write a path is refused before
+/// anyone is asked, even in the mode that answers every question, so a program still cannot write
+/// it; a request to read is granted. The control is the same turn under `workspace-write`, where
+/// the request is granted and the write lands. The regression it rejects is a `read-only` session
+/// whose programs get the project back by asking.
+#[test]
+fn under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+    let turn_under = |name: &str, mode| {
+        let places = PathPlaces::new(name);
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            name,
+            &places,
+            &[
+                asking_for(&places.beside, true),
+                running(&places.writing_line()),
+                asking_for(&places.beside, false),
+            ],
+            mode,
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            None,
+            &mut bypassing(&mut asked),
+        );
+        let landed = places.lands().exists();
+        let asked_anyone = !paths.lock().unwrap().is_empty();
+        (turn, landed, asked_anyone)
+    };
+
+    let (control, control_landed, _) = turn_under("read-only-write-control", WorkspaceWrite);
+    assert!(path_result(&control.results[0]).starts_with("approved"));
+    assert!(control_landed, "the control did not write the path");
+
+    let (held, landed, asked_anyone) = turn_under("read-only-write-held", ReadOnly);
+    let said = path_result(&held.results[0]);
+    assert!(
+        said.starts_with("refused") && said.contains("nothing was asked"),
+        "{said}"
+    );
+    assert!(!asked_anyone, "the person was asked");
+    assert!(!landed, "a read-only program wrote the path after asking");
+    // The third request carries all three results; the last `request_path` one is the read's.
+    let read = held.results[2]
+        .rsplit("Result of request_path")
+        .next()
+        .and_then(|tail| tail.split("\"role\"").next())
+        .unwrap_or_default();
+    assert!(
+        read.contains("approved") && !read.contains("refused"),
+        "a request to read was refused: {read}"
+    );
+}
+
 /// PATHREQ-7, TRUST-10, MODE-4: in bypass mode a granted path is also open to the file tools, as
 /// `/add-dir` leaves it. Each tool is a separate call because a fault that opened the directory to
 /// reads alone would pass a test that only read. The planner is told so, which is what stops it

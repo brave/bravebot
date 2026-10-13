@@ -1717,8 +1717,15 @@ nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a sta
 unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
 starts a stage with the reads of `workspace-write` and without its writes to the session: the
 directories the session was opened on, the scratch directory and the toolchain caches can be read and
-cannot be written, and the temporary directory and the null device stay writable because a program
-does not start without them. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
+cannot be written, and the temporary directory and the null device stay writable, since compilers,
+test runners and shells write scratch files there. A toolchain a stage carries or asks for brings
+its list and writes no cache, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
+refused before anyone is asked, so the mode that answers every question cannot hand the session's
+directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and the write
+grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` holds back writes on
+this machine and nothing else: the network follows [SANDBOX-20](#SANDBOX-20) as in every mode, and a
+stage whose argv carries the remote scope ([SANDBOX-16](#SANDBOX-16)), such as `git push` or
+`gh pr create`, still reaches the remote with the person's credentials. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
 stage with no profile. The network is not part
 of a mode: whether a stage keeps egress is the setting [SANDBOX-20](#SANDBOX-20) describes, and
@@ -1828,6 +1835,8 @@ writable, since that directory is writable in every mode. A person who wants the
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`
 `verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
+`verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
+`verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::mode::the_default_mode_is_workspace_write`
 `verified-by: bravebot_config::sandbox::a_mode_is_read_from_the_block_and_nothing_near_it_is`
 `verified-by: bravebot_sandbox::mode::the_word_workspace_write_replaced_still_names_it`
@@ -2542,7 +2551,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   answered beside a write held leaves the write. The person may end a grant with
   `/reach paths remove <number>`.
 - **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
-  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). The result says so and nothing is asked. No
+  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). A request to write is not accepted under
+  `read-only` ([SANDBOX-22](#SANDBOX-22)), whatever the permission mode, and a request to read is.
+  The result says so and nothing is asked. No
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
@@ -2610,6 +2621,7 @@ the whole of what is held back.
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
 `verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`

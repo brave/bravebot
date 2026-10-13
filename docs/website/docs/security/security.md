@@ -243,7 +243,10 @@ flag, `/sandbox`, the settings files and the managed file, and is reported as `w
 nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
 says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
-refuses `strict`, since `strict` writes the session's directories. The desktop app reads `off` as
+refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
+machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
+reaches the remote with your credentials. A request from the agent to write a path is refused under
+it, even with `--dangerously-skip-permissions`. The desktop app reads `off` as
 `workspace-write`. When the mode is not `workspace-write`, the opening screen and `/status` say so,
 and `bravebot doctor` and `/sandbox` say what chose it.
 

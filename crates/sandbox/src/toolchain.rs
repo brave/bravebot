@@ -99,11 +99,18 @@ impl Toolchain {
     /// has not run the toolchain yet gets an empty cache rather than a build that fails on a row
     /// the resolution left out.
     pub fn grant(self, policy: SandboxPolicy, prelude: Prelude, home: &Path) -> SandboxPolicy {
+        let policy = self.grant_reads(policy, home);
+        self.grant_caches(policy, prelude, home)
+    }
+
+    /// `policy` with this toolchain's installs and configuration readable and nothing written, for
+    /// a stage that may not write (the mode `read-only`).
+    pub fn grant_reads(self, policy: SandboxPolicy, home: &Path) -> SandboxPolicy {
         let mut policy = policy;
         for row in self.installs().iter().chain(self.configurations()) {
             policy = policy.allow_read(under(home, row));
         }
-        self.grant_caches(policy, prelude, home)
+        policy
     }
 
     /// `policy` with every toolchain's caches added to it, whatever program the stage runs.
