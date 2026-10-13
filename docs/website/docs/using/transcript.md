@@ -84,7 +84,9 @@ and takes none of the colour of the one before it.
 program was run, the end of the turn tells you plainly that nothing was built or tested, whether it
 answered, failed, or you stopped it: the files are changed either way. Nothing else
 on your screen distinguishes that diff from a checked one. It is not a reproach: plenty of turns have
-nothing to build, and one of those says nothing.
+nothing to build, and one of those says nothing. A file a delegate changed and a program a delegate
+ran count as the turn's, except in a [checkout of its own](../customize/agents.md#a-checkout-of-its-own),
+which holds none of the turn's changes.
 
 The planner is asked the same question while the turn is still going, a set number of rounds after its
 first write, and pointed at a [checker delegate](../reference/tools.md#spawn_agent) where the log

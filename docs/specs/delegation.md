@@ -377,6 +377,10 @@ its own record: where a delegate's checkout is and the commit it holds, or that 
 for a kept one the paths written in it whose names the delegate typed. A write through a reference
 is counted, so the name a reference held stays with the delegate.
 
+The driver's own record of whether a delegate changed a file and whether it ran a program comes
+back too, and a parent whose workspace the delegate worked in counts both as its own for
+[TURN-4](turns.md#TURN-4)'s question and closing line.
+
 The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
 trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
 
@@ -384,6 +388,7 @@ trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRAC
 its parent's context would have moved the log rather than absorbed it.
 
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
