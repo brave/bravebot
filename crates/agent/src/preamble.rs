@@ -409,7 +409,8 @@ fn fence_for(text: &str) -> String {
 /// is not there costs a turn the run that finds out.
 ///
 /// One fact carries an imperative, gated on what the probe found: what the session's own directory
-/// is for. A probe that only produces a fact is a line on every turn that changes nothing, and a
+/// is for, which includes standing in for something a program needs and the machine lacks. A
+/// probe that only produces a fact is a line on every turn that changes nothing, and a
 /// gate is what keeps an imperative from naming something this machine does not have. What the
 /// GitHub CLI is for is the same argument and is [`github_cli_guidance`], which goes to the person's
 /// own turn rather than into this block.
@@ -455,6 +456,17 @@ fn environment(workspace: &Workspace, github_cli: bool) -> String {
              inside, rather than in the project where somebody has to notice it and delete it. It \
              is removed when this session ends, and a program a `run` starts reads the same path \
              from BRAVEBOT_SCRATCH_DIR.\n",
+        );
+        out.push_str(
+            "\nA program can fail because this machine lacks something it needs, such as a \
+             module a script imports. Before asking the user to install anything or to change \
+             the script, find out what is installed with a line that only reads. Where an \
+             installed package can stand in under the missing name, write a small module of that \
+             name in the scratch directory that re-exports the package, and put that directory \
+             on the program's module search path for that one line: \
+             `PYTHONPATH=<the scratch directory> python3 script.py`. The assignment is part of \
+             the line the user approves, the script stays as it was, and nothing is installed. \
+             Where nothing installed can stand in, say what is missing.\n",
         );
     }
     out

@@ -214,6 +214,15 @@ A file there is read and written by its absolute path, but it prompts exactly wh
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
 
+The planner is also told what to do when a program fails because the machine lacks something it
+needs, such as a module a script imports. It looks at what is installed with a command that only
+reads. Where an installed package can stand in under the missing name, it writes a small module of
+that name in the scratch directory and starts the program with the directory on its search path for
+that one run, as `PYTHONPATH=<scratch directory> python3 script.py`. A Python 3.9 script that imports
+`tomllib` runs this way where `tomli` is installed. The assignment is part of the command you are
+shown, and the script is not changed and nothing is installed. Where nothing installed can stand in,
+the planner says what is missing.
+
 ### The GitHub CLI
 
 Where `gh` is on your `$PATH`, the block says so and adds the commands that read a GitHub URL:

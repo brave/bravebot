@@ -884,6 +884,93 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
     }
 }
 
+/// A planner shown a script failing for want of a module reached for a newer interpreter, found
+/// none, and handed the person a choice between installing one and editing the script. It named
+/// the installed package that could stand in and never checked it was installed. The paragraph is
+/// in the text a delegate reads as well as the person's, since both run programs on this machine.
+#[test]
+fn a_session_with_a_directory_of_its_own_is_told_to_stand_in_for_what_a_program_lacks_from_it() {
+    let tree = Scratch::new("stand-in-stated");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    for (said, why) in [
+        (
+            "Before asking the user to install anything or to change the script",
+            "what is installed is looked at before anyone is asked",
+        ),
+        (
+            "with a line that only reads",
+            "the look at what is installed is a read",
+        ),
+        (
+            "write a small module of that name in the scratch directory",
+            "the stand-in is written in the session's own directory",
+        ),
+        (
+            "`PYTHONPATH=<the scratch directory> python3 script.py`",
+            "the line is the assignment the compiler accepts in front of a program",
+        ),
+        (
+            "Where nothing installed can stand in, say what is missing.",
+            "a stand-in is not made up where nothing installed can be one",
+        ),
+    ] {
+        assert!(
+            preamble.text.contains(said),
+            "the preamble does not say it ({why}): {}",
+            preamble.text
+        );
+    }
+}
+
+/// Without a directory of its own there is nowhere to put the stand-in, and a planner told to put
+/// one there spends the write that finds out.
+#[test]
+fn a_session_with_no_directory_of_its_own_is_not_told_to_stand_in_from_it() {
+    let tree = Scratch::new("stand-in-absent");
+    let project = tree.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    for absent in ["stand in", "PYTHONPATH"] {
+        assert!(
+            !preamble.text.contains(absent),
+            "`{absent}` is stated for a session that has no directory of its own: {}",
+            preamble.text
+        );
+    }
+}
+
 /// A condition waiting on something outside the session is the case a goal handles worst if the
 /// turn is left to work it out: answering so as to be sent back spends a round of the goal's
 /// budget and a judge's reading of the whole conversation, and ten of those give up minutes

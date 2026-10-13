@@ -213,8 +213,14 @@ none has nothing said about one. These are facts about the machine, and the prom
 
 One of them carries an imperative, and those are the terms on which one is admitted here: gated on
 what the probe found, and naming the one case rather than stating a preference. The session's own
-directory is stated with what to put in it. The rest are facts alone and nothing is asked of the
-planner on their account.
+directory is stated with what to put in it, and that includes a stand-in for something a program
+needs and the machine lacks: where a program fails for want of a module, the planner is told to look
+at what is installed with a line that only reads, and where an installed package can stand in under
+the missing name, to write a small module of that name in the directory that re-exports the package
+and to start the program with `PYTHONPATH=<the directory> python3 script.py`. It is told to do that
+before asking the person to install anything or to change the script, and to say what is missing
+where nothing installed can stand in. The rest are facts alone and nothing is asked of the planner
+on their account.
 
 What an installed GitHub CLI is for is said on the same terms, and to the turn a person is watching
 rather than in this block: the commands that read a pull request or an issue, with fetching the URL
@@ -245,6 +251,22 @@ part of the project and writes one into the project instead, which is the file a
 a reviewer each have to deal with. Saying nothing where there is no such directory is the same
 argument the other way: a path to a directory that is not there costs a turn the run that finds out.
 
+The stand-in is stated because a planner shown a script failing on `import tomllib` under Python 3.9
+looked for a newer interpreter, found none, and asked the person to choose between installing one and
+editing the script. It had named `tomli` as a replacement and had not looked for it on the machine,
+and it did not consider supplying `tomllib` from the directory. The paragraph names no module. It
+asks for nothing the planner could not already do: the stand-in is a file written into the directory
+([TRUST-16](trust-map.md#TRUST-16)), and the assignment is part of the compiled plan a person
+approves and is asked about every time ([RUN-8](tools/run.md#RUN-8)).
+
+The driver does not build the stand-in itself. The only evidence that a module is missing is the
+program's standard error, which the driver does not read ([RUN-4](tools/run.md#RUN-4),
+[RUN-13](tools/run.md#RUN-13)), and a rule that matched it would branch on bytes a program printed.
+Putting the directory on the search path of every stage is refused for the reason `TMPDIR` is left
+alone ([TRUST-17](trust-map.md#TRUST-17)): a file written there from a quarantined reference would be
+imported by a program whose plan never named it. The assignment on the line stays the routing field,
+which a person can read and approve.
+
 The GitHub CLI is the one whose fact would change nothing on its own, which is why the imperative
 goes with it. A URL arrives, there is a tool for URLs, and taking it fetches a whole page to read a
 fraction of it. The saving is the bytes and not the round: unvouched `run` output is `(U,priv)` just
@@ -266,6 +288,9 @@ to `fetch_url` spends a round on a name that resolves to nothing.
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
+`verified-by: bravebot_agent::preamble::a_session_with_a_directory_of_its_own_is_told_to_stand_in_for_what_a_program_lacks_from_it`
+`verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_not_told_to_stand_in_from_it`
+`verified-by: bravebot_agent::confine::a_confined_python_imports_a_module_written_in_the_sessions_own_directory`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 `verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`
 `verified-by: bravebot_agent::preamble::a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one`

@@ -364,6 +364,48 @@ fn a_confined_program_reads_and_writes_inside_the_session() {
     assert!(places.session.join("made.txt").exists());
 }
 
+/// The route the system prompt names for a program that lacks a module: a stand-in written in the
+/// session's own directory, and a line that puts that directory on the program's search path for
+/// one run. The regression it rejects is a profile that keeps the assignment from the program or
+/// the directory from its reads, which would leave the planner told to do what the kernel then
+/// refuses. The same line without the assignment is the control that the module is found by the
+/// assignment and not by some other path, and the unconfined run is the control that the program
+/// works here. A machine with no `python3` skips.
+#[cfg(unix)]
+#[test]
+fn a_confined_python_imports_a_module_written_in_the_sessions_own_directory() {
+    if !can_confine()
+        || !std::process::Command::new("python3")
+            .args(["-c", "pass"])
+            .status()
+            .is_ok_and(|status| status.success())
+    {
+        return;
+    }
+    let places = Places::new("stand-in");
+    let own = places.beside.join("own");
+    std::fs::create_dir(&own).expect("the session's own directory");
+    std::fs::write(own.join("stand_in.py"), "VALUE = 'from the session'\n")
+        .expect("the stand-in module");
+    let confinement =
+        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
+            .expect("a platform with a base");
+    let import = "python3 -c 'import stand_in; print(stand_in.VALUE)'";
+    let assigned = format!("PYTHONPATH='{}' {import}", own.display());
+
+    let unconfined = places.run(&assigned, None);
+    let without = places.run(import, Some(&confinement));
+    let with = places.run(&assigned, Some(&confinement));
+
+    assert_eq!(unconfined.stdout, "from the session\n", "{unconfined:?}");
+    assert!(
+        !without.ended_well,
+        "the module was found without the assignment: {without:?}"
+    );
+    assert!(with.ended_well, "{with:?}");
+    assert_eq!(with.stdout, "from the session\n", "{with:?}");
+}
+
 /// The regression it rejects: a write row wider than the session, which lets a program change a
 /// file it was never given.
 #[test]
