@@ -188,11 +188,68 @@ impl WriteAnswer {
     }
 }
 
-/// Draw the prompt and wait for an answer.
+/// What a key press did at a question, as far as the loop asking it is concerned.
 ///
-/// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
-/// worker thread cannot hold the terminal: the main thread calls this on its behalf.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> WriteAnswer {
+/// Made from a key function's response, which [`Drawn::take`] has already had its say over, so
+/// the conversion approves nothing the key function did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step<A> {
+    Answer(A),
+    /// Move the body by this many rows, positive being further down.
+    Scroll(i16),
+}
+
+/// What reading the terminal gave a prompt waiting on a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Next {
+    Press(KeyEvent),
+    /// Nothing a prompt answers, so it is drawn again and waits on.
+    Skip,
+    /// The event stream is gone.
+    Lost,
+}
+
+/// What one read of the terminal means to a prompt.
+fn next_from(read: std::io::Result<TermEvent>) -> Next {
+    match read {
+        // Presses only: asking for disambiguated keys reports releases too, and a release
+        // taken for a press approves whatever the press had just approved, twice.
+        Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => Next::Skip,
+        Ok(TermEvent::Key(key)) => Next::Press(key),
+        Ok(_) => Next::Skip,
+        // Losing the event stream must not approve anything.
+        Err(_) => Next::Lost,
+    }
+}
+
+/// Wait for what the terminal does next.
+fn next_press() -> Next {
+    next_from(input::read())
+}
+
+/// Draw a question with `draw` and wait for an answer, interpreting each press with `key`.
+///
+/// The answer is `refused` wherever the question cannot be drawn or the terminal cannot be read.
+/// The two closures are the only code that sees the request, and the only code deciding whether a
+/// yes is taken: this loop goes by whether the draw succeeded, the kind of event, and what `key`
+/// replied.
+fn ask_scrolled<B: Backend, A>(
+    terminal: &mut Terminal<B>,
+    refused: A,
+    draw: impl FnMut(&mut ratatui::Frame, u16, &mut Seen) -> Drawn,
+    key: impl FnMut(KeyEvent, &Drawn) -> Option<Step<A>>,
+) -> A {
+    ask_scrolled_reading(terminal, refused, draw, key, next_press)
+}
+
+/// [`ask_scrolled`], taking each event from `next`, so a test can stand in for the terminal.
+fn ask_scrolled_reading<B: Backend, A>(
+    terminal: &mut Terminal<B>,
+    refused: A,
+    mut draw: impl FnMut(&mut ratatui::Frame, u16, &mut Seen) -> Drawn,
+    mut key: impl FnMut(KeyEvent, &Drawn) -> Option<Step<A>>,
+    mut next: impl FnMut() -> Next,
+) -> A {
     let mut scroll = 0u16;
     let mut seen = Seen::default();
     loop {
@@ -202,28 +259,35 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Wr
         // been laid out at the width it will be drawn at, so they come back out of the closure.
         let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| drawn = draw(frame, request, scroll, &mut seen))
+            .draw(|frame| drawn = draw(frame, scroll, &mut seen))
             .is_err()
         {
-            return WriteAnswer::Reject;
+            return refused;
         }
 
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match write_answer_for(key, request, &drawn) {
-                Some(WriteResponse::Answer(answer)) => return answer,
-                Some(WriteResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
+        match next() {
+            Next::Skip => continue,
+            Next::Lost => return refused,
+            Next::Press(pressed) => match key(pressed, &drawn) {
+                Some(Step::Answer(answer)) => return answer,
+                Some(Step::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
-            Ok(_) => continue,
-            // Losing the event stream must not approve anything.
-            Err(_) => return WriteAnswer::Reject,
         }
     }
+}
+
+/// Draw the prompt and wait for an answer.
+///
+/// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
+/// worker thread cannot hold the terminal: the main thread calls this on its behalf.
+pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> WriteAnswer {
+    ask_scrolled(
+        terminal,
+        WriteAnswer::Reject,
+        |frame, scroll, seen| draw(frame, request, scroll, seen),
+        |key, drawn| write_answer_for(key, request, drawn).map(Step::from),
+    )
 }
 
 /// What a key press did at a write prompt.
@@ -274,6 +338,15 @@ impl pinned::Approving for WriteResponse {
     }
 }
 
+impl From<WriteResponse> for Step<WriteAnswer> {
+    fn from(response: WriteResponse) -> Self {
+        match response {
+            WriteResponse::Answer(answer) => Step::Answer(answer),
+            WriteResponse::Scroll(by) => Step::Scroll(by),
+        }
+    }
+}
+
 /// What a key press did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Response {
@@ -290,6 +363,15 @@ impl pinned::Approving for Response {
                 Answer::Reject | Answer::Interrupt => false,
             },
             Response::Scroll(_) => false,
+        }
+    }
+}
+
+impl From<Response> for Step<Answer> {
+    fn from(response: Response) -> Self {
+        match response {
+            Response::Answer(answer) => Step::Answer(answer),
+            Response::Scroll(by) => Step::Scroll(by),
         }
     }
 }
@@ -890,13 +972,11 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             return RunAnswer::Reject;
         }
 
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match drawn.response_to(key, request) {
+        match next_press() {
+            Next::Skip => continue,
+            // Losing the event stream must not run anything.
+            Next::Lost => return RunAnswer::Reject,
+            Next::Press(key) => match drawn.response_to(key, request) {
                 Some(RunResponse::Answer(answer)) => return answer,
                 Some(RunResponse::Scroll(by)) => scroll = drawn.moved(scroll, i32::from(by)),
                 Some(RunResponse::Page(by)) => {
@@ -904,9 +984,6 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
                 }
                 None => continue,
             },
-            Ok(_) => continue,
-            // Losing the event stream must not run anything.
-            Err(_) => return RunAnswer::Reject,
         }
     }
 }
@@ -1619,35 +1696,15 @@ pub(crate) fn scroll_hint(below: u16) -> String {
 /// reuses the write prompt's keys and scrolling, because the answer is the same shape: yes, no, or
 /// stop.
 pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputRequest) -> VetAnswer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        // A terminal that cannot be drawn to cannot show the output, and approving output nobody
-        // was shown is the one thing this question cannot mean. The verdict does not rescue it: a
-        // word from a model is not a person having read something.
-        if terminal
-            .draw(|frame| drawn = draw_output(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return VetAnswer::Reject;
-        }
-
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match output_answer_for(key, request, &drawn) {
-                Some(VetResponse::Answer(answer)) => return answer,
-                Some(VetResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return VetAnswer::Reject,
-        }
-    }
+    // A terminal that cannot be drawn to cannot show the output, and approving output nobody
+    // was shown is the one thing this question cannot mean. The verdict does not rescue it: a
+    // word from a model is not a person having read something.
+    ask_scrolled(
+        terminal,
+        VetAnswer::Reject,
+        |frame, scroll, seen| draw_output(frame, request, scroll, seen),
+        |key, drawn| output_answer_for(key, request, drawn).map(Step::from),
+    )
 }
 
 /// Draw the output for reading, returning what the draw decided for its keys.
@@ -1833,6 +1890,15 @@ impl pinned::Approving for VetResponse {
     }
 }
 
+impl From<VetResponse> for Step<VetAnswer> {
+    fn from(response: VetResponse) -> Self {
+        match response {
+            VetResponse::Answer(answer) => Step::Answer(answer),
+            VetResponse::Scroll(by) => Step::Scroll(by),
+        }
+    }
+}
+
 /// Interpret one key press at the `vet_content` prompt, or `None` for a key that answers nothing.
 fn vet_answer_for(key: KeyEvent, request: &VetRequest, drawn: &Drawn) -> Option<VetResponse> {
     vetting_answer_for(key, request.verdict, drawn)
@@ -1920,19 +1986,14 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             }
         }
 
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match vet_answer_for(key, request, &drawn) {
+        match next_press() {
+            Next::Skip => continue,
+            Next::Lost => return VetAnswer::Reject,
+            Next::Press(key) => match vet_answer_for(key, request, &drawn) {
                 Some(VetResponse::Answer(answer)) => return answer,
                 Some(VetResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
-            Ok(_) => continue,
-            Err(_) => return VetAnswer::Reject,
         }
     }
 }
@@ -2213,30 +2274,12 @@ fn draw_vet(
 
 /// Ask whether to fetch a URL, blocking until answered.
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_fetch(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_fetch(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Put the language-server question to the user.
@@ -2244,32 +2287,14 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
 /// Its own prompt rather than a run's, because what a yes grants has a different shape: a process
 /// that lives for the session rather than one argv that exits. LSP-5 is where that is settled.
 pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_server(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                // The question is a binary, a directory and two sentences, but the binary and the
-                // directory can each be longer than the box.
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_server(frame, request, scroll, seen),
+        // Scrolls as well as answers: the question is a binary, a directory and two sentences, but
+        // the binary and the directory can each be longer than the box.
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the language-server question.
@@ -2813,30 +2838,12 @@ fn draw_fetch(
 
 /// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
 pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_move(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_move(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the question of whether a server moved.
@@ -2907,30 +2914,12 @@ fn draw_move(
 
 /// Ask whether programs may reach one more path for the session, blocking until answered.
 pub fn ask_path<B: Backend>(terminal: &mut Terminal<B>, request: &PathRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_path(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_path(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the question of whether programs may reach a path.
@@ -2974,30 +2963,12 @@ fn draw_path(
 /// Ask whether programs may reach hosts the allowed-hosts list does not cover, for the session,
 /// blocking until answered.
 pub fn ask_host<B: Backend>(terminal: &mut Terminal<B>, request: &HostRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_host(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_host(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the question of whether programs may reach the hosts they asked for.
@@ -3044,30 +3015,12 @@ pub fn ask_remove_checkout<B: Backend>(
     terminal: &mut Terminal<B>,
     checkout: &bravebot_agent::workspace::SessionCheckout,
 ) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_remove_checkout(frame, checkout, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_remove_checkout(frame, checkout, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the question of whether to remove a checkout.
@@ -3140,32 +3093,12 @@ fn draw_remove_checkout(
 
 /// Draw the offer to vouch for a quarantined file, and wait for an answer.
 pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_vouch(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_vouch(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the vouch offer, returning what the draw decided for its keys.
@@ -3278,32 +3211,12 @@ fn draw_vouch(
 /// Answered with `1` or `2`, which are the rows it draws, and with `y` and `n` as at every other
 /// prompt here. A standing decision like the vouch offer, so the keys are the vouch offer's too.
 pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_tool_list(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            // Presses only: asking for disambiguated keys reports releases too, and a release
-            // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match tool_list_answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_tool_list(frame, request, scroll, seen),
+        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// One key at the tool list, or `None` for a key that answers nothing.
@@ -3526,18 +3439,15 @@ pub fn ask_mcp_call<B: Backend>(
             return CallAnswer::Reject;
         }
 
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match call_answer_for(key, request, &drawn) {
+        match next_press() {
+            Next::Skip => continue,
+            Next::Lost => return CallAnswer::Reject,
+            Next::Press(key) => match call_answer_for(key, request, &drawn) {
                 Some(CallResponse::Answer(answer)) => return answer,
                 Some(CallResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 Some(CallResponse::Expand) => expanded = !expanded,
                 None => continue,
             },
-            Ok(_) => continue,
-            Err(_) => return CallAnswer::Reject,
         }
     }
 }
@@ -3677,32 +3587,14 @@ fn draw_mcp_call(
 /// leaves the machine; what a yes agrees to is that the file's text goes into a model's context,
 /// and so to whoever performs inference. CRED-15 is where that is settled.
 pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        // A terminal that cannot be drawn to cannot show what was found, and sending a credential
-        // to a model nobody warned anybody about is the one thing this question cannot mean.
-        if terminal
-            .draw(|frame| drawn = draw_exposure(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    // A terminal that cannot be drawn to cannot show what was found, and sending a credential
+    // to a model nobody warned anybody about is the one thing this question cannot mean.
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_exposure(frame, request, scroll, seen),
+        |key, drawn| answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the exposure question, returning what the draw decided for its keys.
@@ -3775,34 +3667,16 @@ fn draw_exposure(
 /// again and nothing a step reads can add to it: what is on the screen is the whole of what will
 /// happen. MANIFEST-10 is where that is settled.
 pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRequest) -> Answer {
-    let mut scroll = 0u16;
-    let mut seen = Seen::default();
-    loop {
-        let mut drawn = Drawn::default();
-        // A terminal that cannot be drawn to cannot show the plan, and running a program nobody was
-        // shown is the one thing this question cannot mean.
-        if terminal
-            .draw(|frame| drawn = draw_manifest(frame, request, scroll, &mut seen))
-            .is_err()
-        {
-            return Answer::Reject;
-        }
-
-        match input::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
-                continue;
-            }
-            Ok(TermEvent::Key(key)) => match manifest_answer_for(key, &drawn) {
-                Some(Response::Answer(answer)) => return answer,
-                // A plan longer than the box is the one most worth reading before answering, since
-                // approving it approves the steps below the fold as well.
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
-                None => continue,
-            },
-            Ok(_) => continue,
-            Err(_) => return Answer::Reject,
-        }
-    }
+    // A terminal that cannot be drawn to cannot show the plan, and running a program nobody was
+    // shown is the one thing this question cannot mean.
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_manifest(frame, request, scroll, seen),
+        // Scrolls as well as answers: a plan longer than the box is the one most worth reading
+        // before answering, since approving it approves the steps below the fold as well.
+        |key, drawn| manifest_answer_for(key, drawn).map(Step::from),
+    )
 }
 
 /// Draw the plan, returning what the draw decided for its keys.
@@ -9280,5 +9154,200 @@ mod tests {
                 assert_eq!(run_answer_for(ctrl, &request), None, "ctrl-{letter}");
             }
         }
+    }
+
+    /// A release follows a press that has already been answered. Taken for a press, it would
+    /// approve whatever that press had just approved a second time, so only the press reaches a
+    /// prompt's keys.
+    #[test]
+    fn only_a_key_press_reaches_a_prompt() {
+        let y = press(KeyCode::Char('y'));
+        assert_eq!(next_from(Ok(TermEvent::Key(y))), Next::Press(y));
+        let released = KeyEvent::new_with_kind(
+            KeyCode::Char('y'),
+            KeyModifiers::NONE,
+            event::KeyEventKind::Release,
+        );
+        assert_eq!(next_from(Ok(TermEvent::Key(released))), Next::Skip);
+    }
+
+    /// A resize, a change of focus or a paste is not a key, so a prompt draws itself again and
+    /// waits for one rather than answering.
+    #[test]
+    fn an_event_that_is_not_a_key_answers_nothing() {
+        for other in [
+            TermEvent::Resize(60, 15),
+            TermEvent::FocusGained,
+            TermEvent::Paste("y".into()),
+        ] {
+            assert_eq!(next_from(Ok(other.clone())), Next::Skip, "{other:?}");
+        }
+    }
+
+    /// A read that fails ends the question, which every prompt then refuses. Skipped like an event
+    /// that is not a key, it would leave the prompt reading a stream that is gone.
+    #[test]
+    fn a_failed_read_is_a_lost_stream() {
+        assert_eq!(
+            next_from(Err(std::io::Error::other("the terminal is gone"))),
+            Next::Lost
+        );
+    }
+
+    /// A terminal every frame fails to reach, as one that has gone away does. Everything but the
+    /// write answers as [`TestBackend`] does.
+    struct Unwritable(TestBackend);
+
+    impl Backend for Unwritable {
+        type Error = std::io::Error;
+
+        fn draw<'a, I>(&mut self, _: I) -> std::io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+        {
+            Err(std::io::Error::other("the terminal is gone"))
+        }
+
+        fn hide_cursor(&mut self) -> std::io::Result<()> {
+            self.0.hide_cursor().map_err(|never| match never {})
+        }
+
+        fn show_cursor(&mut self) -> std::io::Result<()> {
+            self.0.show_cursor().map_err(|never| match never {})
+        }
+
+        fn get_cursor_position(&mut self) -> std::io::Result<ratatui::layout::Position> {
+            self.0.get_cursor_position().map_err(|never| match never {})
+        }
+
+        fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+            &mut self,
+            position: P,
+        ) -> std::io::Result<()> {
+            self.0
+                .set_cursor_position(position)
+                .map_err(|never| match never {})
+        }
+
+        fn clear(&mut self) -> std::io::Result<()> {
+            self.0.clear().map_err(|never| match never {})
+        }
+
+        fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+            self.0
+                .clear_region(clear_type)
+                .map_err(|never| match never {})
+        }
+
+        fn size(&self) -> std::io::Result<Size> {
+            self.0.size().map_err(|never| match never {})
+        }
+
+        fn window_size(&mut self) -> std::io::Result<ratatui::backend::WindowSize> {
+            self.0.window_size().map_err(|never| match never {})
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush().map_err(|never| match never {})
+        }
+    }
+
+    /// A question the terminal could not draw is refused, even where the draw would have taken a
+    /// yes. It is not drawn again, nothing is read, and no key is answered. Every prompt asking
+    /// through this loop refuses a failed draw here.
+    #[test]
+    fn a_question_the_terminal_cannot_draw_is_refused_and_not_asked_again() {
+        let mut terminal = Terminal::new(Unwritable(TestBackend::new(30, 8))).expect("terminal");
+        let mut draws = 0;
+        let answer = ask_scrolled_reading(
+            &mut terminal,
+            Answer::Reject,
+            |_, _, _| {
+                draws += 1;
+                assert_eq!(draws, 1, "drawn again after a draw that failed");
+                Drawn::taking_yes()
+            },
+            |key, _| panic!("{key:?} was answered after a draw that failed"),
+            || panic!("the terminal was read after a draw that failed"),
+        );
+        assert_eq!(answer, Answer::Reject);
+        assert_eq!(
+            draws, 1,
+            "the question was never drawn, so this tested nothing"
+        );
+    }
+
+    /// A question whose event stream is lost is refused, even at a draw that would take a yes,
+    /// rather than read again from a stream that is gone.
+    #[test]
+    fn a_question_whose_event_stream_is_lost_is_refused() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
+        let mut reads = 0;
+        let answer = ask_scrolled_reading(
+            &mut terminal,
+            Answer::Reject,
+            |_, _, _| Drawn::taking_yes(),
+            |key, _| panic!("{key:?} was answered with no key pressed"),
+            || {
+                reads += 1;
+                assert_eq!(reads, 1, "read again after the event stream was lost");
+                Next::Lost
+            },
+        );
+        assert_eq!(answer, Answer::Reject);
+    }
+
+    /// An event that is not a key press draws the question again before the next key is read, so
+    /// the key is answered against a draw of the terminal as it is now, a resized one included.
+    #[test]
+    fn an_event_that_is_not_a_key_press_draws_the_question_again() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
+        let draws = std::cell::Cell::new(0);
+        let mut events = [Next::Skip, Next::Press(press(KeyCode::Char('y')))].into_iter();
+        let answer = ask_scrolled_reading(
+            &mut terminal,
+            Answer::Reject,
+            |_, _, _| {
+                draws.set(draws.get() + 1);
+                Drawn::taking_yes()
+            },
+            |key, _| {
+                assert_eq!(
+                    draws.get(),
+                    2,
+                    "{key:?} was answered against the draw before the event"
+                );
+                Some(Step::Answer(Answer::Approve))
+            },
+            || events.next().expect("read past the last event"),
+        );
+        assert_eq!(answer, Answer::Approve);
+    }
+
+    /// A key that answers nothing leaves the question up, a key that scrolls draws it again where
+    /// the draw moved it, and the first key that answers is the answer.
+    #[test]
+    fn a_question_scrolls_and_waits_until_a_key_answers_it() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
+        let mut scrolls = Vec::new();
+        let mut events = [KeyCode::Char('x'), KeyCode::Down, KeyCode::Char('y')]
+            .map(|code| Next::Press(press(code)))
+            .into_iter();
+        let answer = ask_scrolled_reading(
+            &mut terminal,
+            Answer::Reject,
+            |_, scroll, _| {
+                scrolls.push(scroll);
+                Drawn::taking_yes()
+            },
+            |key, _| match key.code {
+                KeyCode::Down => Some(Step::Scroll(1)),
+                KeyCode::Char('y') => Some(Step::Answer(Answer::Approve)),
+                _ => None,
+            },
+            || events.next().expect("read past the last event"),
+        );
+        assert_eq!(answer, Answer::Approve);
+        assert_eq!(scrolls, [0, 0, 1]);
     }
 }
