@@ -159,6 +159,7 @@ const READ_KEYS: &[&str] = &[
     SANDBOX_BLOCK,
     "search",
     "suggestions",
+    "style",
     "summaryModel",
     "terminalTitle",
     "tui",
@@ -385,6 +386,16 @@ pub struct Settings {
     /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
     /// for where a checkout wrote it, so only a file the person wrote or named can choose one.
     agent_ignored: Vec<PathBuf>,
+    /// What the top-level `style` key named, if it named anything.
+    ///
+    /// The word as the file spelled it. Whether it names a style is settled where the styles are
+    /// looked up (INSTR-12), which is the crate that holds them.
+    style: Option<String>,
+    /// The layers that named `style` and were not obeyed, weakest first.
+    ///
+    /// Kept because a style's words open the system prompt, so which one a session starts in is the
+    /// person's to say and not a checkout's.
+    style_ignored: Vec<PathBuf>,
     /// The layers that named `references` and were not obeyed, weakest first.
     ///
     /// Kept because an entry makes a directory reachable and puts its description in front of the
@@ -736,6 +747,7 @@ impl Settings {
         let mut fallback_ignored = Vec::new();
         let mut summary_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
+        let mut style_ignored = Vec::new();
         let mut references_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
@@ -805,6 +817,9 @@ impl Settings {
                 }
                 if root.remove("agent") {
                     agent_ignored.push(path.clone());
+                }
+                if root.remove("style") {
+                    style_ignored.push(path.clone());
                 }
                 if root.remove(REFERENCES_BLOCK) {
                     references_ignored.push(path.clone());
@@ -1012,6 +1027,7 @@ impl Settings {
         settings.fallback_ignored = fallback_ignored;
         settings.summary_ignored = summary_ignored;
         settings.agent_ignored = agent_ignored;
+        settings.style_ignored = style_ignored;
         settings.references_ignored = references_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
@@ -1182,6 +1198,8 @@ impl Settings {
             fallback_ignored: Vec::new(),
             summary_ignored: Vec::new(),
             agent_ignored: Vec::new(),
+            style: word(root, "style"),
+            style_ignored: Vec::new(),
         }
     }
 
@@ -1710,6 +1728,8 @@ impl Settings {
             && self.fallback_ignored.is_empty()
             && self.summary_ignored.is_empty()
             && self.agent_ignored.is_empty()
+            && self.style_ignored.is_empty()
+            && self.style.is_none()
             && self.references_ignored.is_empty()
     }
 
@@ -1751,6 +1771,16 @@ impl Settings {
     pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
         self.summary_ignored.iter().map(PathBuf::as_path)
     }
+    /// The output style the settings in force named, as the file spelled it (INSTR-12).
+    pub fn style(&self) -> Option<&str> {
+        self.style.as_deref()
+    }
+
+    /// The files that named `style` from a layer not entitled to, weakest first.
+    pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.style_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// The files that named `agent` from a layer not entitled to, weakest first.
     pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
         self.agent_ignored.iter().map(PathBuf::as_path)
@@ -1815,6 +1845,7 @@ impl Settings {
             .chain(self.summary_model.is_some().then_some("summaryModel"))
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
+            .chain(self.style.is_some().then_some("style"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
@@ -6240,6 +6271,50 @@ mod tests {
             .read();
         assert_eq!(named.agent(), Some("named-reviewer"));
         assert_eq!(named.agent_ignored().count(), 0);
+    }
+
+    /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.
+    #[test]
+    fn a_project_layer_cannot_name_the_style() {
+        let settings = Layers::new("style-layers")
+            .global(r#"{"style": " concise "}"#)
+            .project(r#"{"style": "proactive"}"#)
+            .local(r#"{"style": "explanatory"}"#)
+            .read();
+        assert_eq!(settings.style(), Some("concise"));
+        assert_eq!(settings.style_ignored().count(), 2);
+
+        let only_project = Layers::new("style-only-project")
+            .project(r#"{"style": "proactive"}"#)
+            .read();
+        assert_eq!(only_project.style(), None);
+        assert_eq!(only_project.style_ignored().count(), 1);
+
+        let named = Layers::new("style-named")
+            .global(r#"{"style": "concise"}"#)
+            .named(r#"{"style": "terse"}"#)
+            .read();
+        assert_eq!(named.style(), Some("terse"));
+        assert_eq!(named.style_ignored().count(), 0);
+    }
+
+    /// INSTR-12: a blank or non-string `style` names nothing.
+    #[test]
+    fn a_style_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"style": ""}"#,
+            r#"{"style": "  "}"#,
+            r#"{"style": 1}"#,
+            r#"{"style": ["concise"]}"#,
+        ] {
+            assert_eq!(Settings::parse(text).style(), None, "{text} named a style");
+        }
+        assert_eq!(
+            Settings::parse(r#"{"style": "concise"}"#)
+                .names()
+                .collect::<Vec<_>>(),
+            ["style"]
+        );
     }
 
     /// REFER-1: an entry is a path or an object, and one that cannot be used is named and leaves

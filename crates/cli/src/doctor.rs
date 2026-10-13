@@ -467,6 +467,15 @@ pub(crate) fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for path in settings.style_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_style_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
             for path in settings.references_ignored() {
                 fact(
                     t!(doctor_settings_ignored),

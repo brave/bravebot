@@ -2142,6 +2142,7 @@ fn begin_session(
     // and `/effort` is how this one is changed.
     session.adopt_effort(&settings);
     session.adopt_limit(&settings);
+    adopt_style(&mut session, settings.style());
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
     // line's switch is read here and nowhere else in the interface.
@@ -4248,6 +4249,28 @@ fn set_limit(session: &mut Session, figure: &str) {
         });
     } else {
         session.note(t!(session_limit_unknown, figure = figure));
+    }
+}
+
+/// Start the session in the style the settings name, if they name one (INSTR-12).
+///
+/// Looked up as `/style` looks a name up, so a name that is not a style is said and leaves none in
+/// force. Nothing is said for one that is, and a `--system-prompt` run holds it as `/style` does.
+fn adopt_style(session: &mut Session, named: Option<&str>) {
+    adopt_style_in(session, named, bravebot_agent::home::directory().as_deref());
+}
+
+/// [`adopt_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
+fn adopt_style_in(session: &mut Session, named: Option<&str>, home: Option<&std::path::Path>) {
+    let Some(word) = named else {
+        return;
+    };
+    match bravebot_agent::styles::find(home, word) {
+        Some(style) => session.choose_style(Some(style)),
+        None => {
+            let styles = bravebot_agent::styles::available(home).join(", ");
+            session.note(t!(session_style_unknown, style = word, styles = styles));
+        }
     }
 }
 
@@ -14714,6 +14737,29 @@ mod tests {
             );
             assert_eq!(session.spend_limit().limit(), None);
         }
+    }
+
+    /// INSTR-12: a style the settings name is in force before any turn, and a name that is no style is
+    /// said and leaves none.
+    #[test]
+    fn a_style_the_settings_name_is_in_force_from_the_first_turn_and_a_wrong_name_is_said() {
+        let mut session = Session::new("none");
+        adopt_style_in(&mut session, None, None);
+        assert!(session.style().is_none());
+
+        adopt_style_in(&mut session, Some("concise"), None);
+        assert_eq!(session.style().map(|s| s.name.as_ref()), Some("concise"));
+
+        let mut wrong = Session::new("none");
+        adopt_style_in(&mut wrong, Some("no-such-style"), None);
+        assert!(wrong.style().is_none());
+        let said = wrong
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(said.contains("no style called no-such-style"), "{said}");
     }
 
     /// A file under `~/.bravebot/styles` is listed and picked as the built-ins are, its words reach
