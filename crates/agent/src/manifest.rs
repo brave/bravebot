@@ -571,12 +571,6 @@ struct Accounting {
 }
 
 impl Accounting {
-    fn add(&mut self, usage: bravebot_aichat::protocol::Usage) {
-        self.spent.tokens += usage.total();
-        self.spent.output_tokens += usage.completion_tokens;
-        self.spent.cached.add(usage.cached);
-    }
-
     fn publish(&mut self, reporter: &mut impl Reporter) {
         self.spent.timing = self.elapsed.finish();
         reporter.spent(self.spent);
@@ -1003,7 +997,7 @@ fn ask<S: Sink, R: Reporter>(
         Err(error) => error.completed_usage(),
     };
     if let Some(usage) = usage {
-        accounting.add(usage);
+        accounting.spent.add_usage(usage);
     }
     accounting.publish(reporter);
     let completion = completion?;
@@ -1477,7 +1471,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 Err(_) => None,
             };
             if let Some(usage) = usage {
-                accounting.add(usage);
+                accounting.spent.add_usage(usage);
             }
             accounting.publish(reporter);
             let processed = processed.map_err(|e| e.to_string())?;
