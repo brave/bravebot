@@ -7,6 +7,7 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:home-skills-reached-through-the-workspace
 fr:host-asked
 fr:host-explained
 fr:host-no

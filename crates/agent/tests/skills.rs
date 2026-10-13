@@ -777,6 +777,271 @@ fn a_home_skill_is_not_labelled_by_a_rule_meant_for_the_workspace() {
     assert_eq!(body_of(&catalogue, "commit-style"), "body");
 }
 
+/// A session started in the home directory has `~/.bravebot/skills` inside its workspace, where a
+/// turn that read untrusted content can write a skill file and the trust map records it untrusted.
+/// Labelling that file from provenance would put a skill the map distrusts into the system prompt,
+/// so the map decides it as it decides any project file, and a skill it still trusts is offered as
+/// the project's.
+#[test]
+fn a_session_started_in_the_home_directory_reads_its_skills_through_the_trust_map() {
+    let scratch = Scratch::new("home-is-the-workspace");
+    let state = scratch.path.join(".bravebot");
+    write_skill(
+        &state,
+        "poisoned",
+        "poisoned",
+        "written by a turn that read a web page",
+        "body",
+    );
+    write_skill(&state, "own", "own", "the person's own", "own body");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust(".bravebot/skills/poisoned/SKILL.md");
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+        skills::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert_eq!(
+        from_disk(&catalogue),
+        ["own"],
+        "a skill the trust map distrusts was offered, or a trusted one was not"
+    );
+    assert_eq!(
+        catalogue.get("own").expect("offered").source,
+        skills::Source::Workspace,
+        "a workspace file was labelled from provenance"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        ["1 skill in .bravebot/skills was not loaded: the file is not trusted"],
+        "the person was not told, or was told twice"
+    );
+}
+
+/// What a person is told of one skill in `~/.bravebot/skills` that the workspace reaches and no
+/// project skill directory offered.
+const ONE_HOME_SKILL_REACHED: &str = "1 skill in ~/.bravebot/skills was not loaded: the way to its \
+                                      file goes through a directory this session can write to";
+
+/// A working directory that holds the home directory, such as `/Users`, holds the person's skills
+/// too, under a path no project skill directory is at. Nothing there is vouched for, so a file in it
+/// is untrusted workspace content and is not offered from provenance, and the person is told one
+/// was left out so that silence does not read as having no skills.
+#[test]
+fn a_skill_inside_a_working_directory_that_holds_the_home_directory_is_not_offered() {
+    let scratch = Scratch::new("workspace-holds-home");
+    let state = scratch.home().join(".bravebot");
+    write_skill(&state, "planted", "planted", "INJECTED", "body");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "an unvouched workspace file was offered as the person's own"
+    );
+    assert!(
+        !catalogue.describe_for_prompt().contains("INJECTED"),
+        "its description reached what the prompt advertises"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(told, [ONE_HOME_SKILL_REACHED], "the person was not told");
+}
+
+/// A project skill that happens to share a name with one in `~/.bravebot/skills` is another file.
+/// What the project's pass says about its own does not account for the person's, so the person's
+/// is still counted.
+#[test]
+fn a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name() {
+    let scratch = Scratch::new("home-skill-and-project-skill-share-a-name");
+    let state = scratch.home().join(".bravebot");
+    write_skill(&state, "review", "review", "the person's own", "body");
+    write_skill(
+        &scratch.path.join(".claude"),
+        "review",
+        "review",
+        "the project's own",
+        "body",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert!(from_disk(&catalogue).is_empty(), "a skill was offered");
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        [
+            "1 skill in .claude/skills was not loaded: this directory is not trusted",
+            ONE_HOME_SKILL_REACHED,
+        ],
+        "the person's own skill was not counted"
+    );
+}
+
+/// The working directory is resolved through links and the home directory often is not, so a home
+/// directory reached through a link into the workspace is still inside it.
+#[cfg(unix)]
+#[test]
+fn a_home_directory_reached_through_a_link_into_the_workspace_is_inside_it() {
+    let scratch = Scratch::new("home-through-a-link");
+    let real = scratch.path.join("real");
+    std::fs::create_dir_all(&real).expect("create the directory");
+    std::os::unix::fs::symlink(&real, scratch.path.join("alias")).expect("link");
+    let state = scratch.path.join("alias").join(".bravebot");
+    write_skill(&state, "planted", "planted", "INJECTED", "body");
+    let workspace = Workspace::new(&real).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state)).0
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a workspace file reached through a link was offered as the person's own"
+    );
+}
+
+/// A link inside the workspace is the workspace's to change: a turn can point it at a file of its
+/// own outside the project, such as one in the session's directory. Where the link leads therefore
+/// says nothing about who wrote what is there, and a skill named inside the workspace is not
+/// labelled from provenance whatever the link resolves to.
+#[cfg(unix)]
+#[test]
+fn a_home_skill_named_inside_the_workspace_is_not_offered_through_a_link_out_of_it() {
+    let scratch = Scratch::new("home-skill-links-out");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    let state = workspace.root().join(".bravebot");
+    let elsewhere = scratch.path.join("elsewhere");
+    write_skill(&elsewhere, "linked", "linked", "INJECTED", "body");
+    std::fs::create_dir_all(state.join("skills")).expect("create the skills directory");
+    std::os::unix::fs::symlink(
+        elsewhere.join("skills").join("linked"),
+        state.join("skills").join("linked"),
+    )
+    .expect("link");
+
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state)).0
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a skill named inside the workspace was offered as the person's own"
+    );
+}
+
+/// The same holds for a link met partway: `~/.bravebot/skills` may lead into a project, and a link
+/// there may lead back out to a file a turn wrote. Neither the path as written nor where it ends is
+/// inside the workspace, but the way to the file goes through it, so it is not the person's own.
+#[cfg(unix)]
+#[test]
+fn a_home_skill_reached_through_a_link_inside_the_workspace_is_not_offered() {
+    let scratch = Scratch::new("home-skills-through-a-workspace-link");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    let elsewhere = scratch.path.join("elsewhere");
+    write_skill(&elsewhere, "planted", "planted", "INJECTED", "body");
+    let hop = workspace.root().join("skills-link");
+    std::os::unix::fs::symlink(elsewhere.join("skills"), &hop).expect("link out");
+    let state = scratch.home().join(".bravebot");
+    std::fs::create_dir_all(&state).expect("create the state directory");
+    std::os::unix::fs::symlink(&hop, state.join("skills")).expect("link in");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a skill reached through a workspace link was offered as the person's own"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(told, [ONE_HOME_SKILL_REACHED], "the person was not told");
+}
+
+/// On a volume that folds case, a home directory spelled in another case than the disk spells it is
+/// the same directory, so a session started there still has it inside the workspace. The workspace
+/// root is spelled as the disk spells it, and a comparison of the two spellings by their letters
+/// would find nothing in common.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is() {
+    let scratch = Scratch::new("home-in-another-case");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    let respelled = scratch.path.join("PROJECT");
+    // A case-sensitive volume holds no such directory, and then there is nothing to compare.
+    if !respelled.is_dir() {
+        return;
+    }
+    let state = respelled.join(".bravebot");
+    write_skill(&state, "planted", "planted", "INJECTED", "body");
+
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state)).0
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a workspace file under another spelling was offered as the person's own"
+    );
+}
+
+/// A directory opened beside the project is one a turn can write to and the trust map answers for
+/// (TRUST-9), so one that holds the home directory reaches `~/.bravebot/skills` as the project
+/// does.
+#[test]
+fn a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered() {
+    let scratch = Scratch::new("home-inside-an-opened-directory");
+    let home = scratch.home();
+    let state = home.join(".bravebot");
+    write_skill(&state, "planted", "planted", "INJECTED", "body");
+    let mut workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    workspace
+        .add_directory(home.to_str().expect("a scratch path is text"))
+        .expect("open the home directory");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a file inside an opened directory was offered as the person's own"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(told, [ONE_HOME_SKILL_REACHED], "the person was not told");
+}
+
 /// Most specific wins, as it does in the trust map. A project that ships its own version of a
 /// skill means it, and a global one silently overriding it would be the wrong way round.
 #[test]
