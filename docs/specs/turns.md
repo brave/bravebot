@@ -92,6 +92,12 @@ so the line says what to do if a change was wanted and to carry on if it was not
 **A requested write counts, not a completed one.** A write the user refused is a planner that
 tried to deliver, and telling it to start delivering would answer something nobody asked.
 
+**Plan mode is a turn where no write is possible.** It offers the write tools and refuses every
+call to them ([MODE-3](permission-modes.md#MODE-3)), so the line is not said while it is in force.
+The mode is read when the round ends, because the person can change it while the turn runs
+([MODE-8](permission-modes.md#MODE-8)), and rounds read in plan mode count toward the number once
+it has ended.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -102,6 +108,9 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_a_write_asked_for_since_the_last_answer`
