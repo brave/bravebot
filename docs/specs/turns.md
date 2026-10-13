@@ -133,6 +133,13 @@ builds nothing. This is the opposite of [TURN-3](#TURN-3)'s nudge and for the op
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on.
 
+**Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
+a file it changed and a program it ran count as the turn's, however the delegate ended, from the
+round the turn takes it back in. A delegate in a checkout of its own
+([CHECKOUT-7](checkouts.md#CHECKOUT-7)) builds the commit the checkout holds, which has none of
+the turn's changes in it, so nothing it does there counts. A delegate still working when the
+question falls due has not been taken back, so a build it has started does not stop the question.
+
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
@@ -142,6 +149,10 @@ about to act on.
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
 
 <a id="TURN-5"></a>
 ### TURN-5: completed work remains charged when a turn fails or stops

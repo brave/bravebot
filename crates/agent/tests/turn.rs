@@ -12362,6 +12362,350 @@ fn a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built() {
     );
 }
 
+/// A parent turn's script for TURN-4's delegate cases: one call before the spawn, the spawn, a
+/// wait for the delegate, then enough rounds after it to pass the round the question falls due.
+fn writing_then_delegating(before: String, spawn: &str) -> Vec<String> {
+    let mut replies = vec![before, tool_request("spawn_agent", spawn)];
+    replies.push(reply_with("waiting on the delegate"));
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+    replies
+}
+
+/// A program a delegate runs in the turn's own workspace is a program the turn ran, so a turn that
+/// hands its build to a checker is neither asked whether any of it runs nor reported to the person
+/// as unbuilt.
+///
+/// The question itself tells the planner to hand a long log to a checker, so a turn that took that
+/// advice and was then told nothing had been run would be contradicted by its own driver.
+#[test]
+fn a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own() {
+    let scratch = Scratch::new("delegate-ran-the-build");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "WRITE-THEN-HAND-OFF-THE-BUILD",
+            writing_then_delegating(
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                r#"{"kind":"checker","task":"RUN-THE-CHECKS"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-CHECKS",
+            vec![
+                tool_request("run", r#"{"command":"printf checked"}"#),
+                reply_with("the checks pass"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WRITE-THEN-HAND-OFF-THE-BUILD"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let asked = every_request(&received);
+    let parent: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("WRITE-THEN-HAND-OFF-THE-BUILD"))
+        .collect();
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("WRITE-THEN-HAND-OFF-THE-BUILD")
+                && body.contains("It exited 0.")),
+        "the checker's line never ran, so nothing here was tested"
+    );
+    assert!(
+        parent.len() > ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 2,
+        "the turn ended before the question would have fallen due, so its absence proves nothing"
+    );
+    assert!(
+        !parent
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a turn whose checker ran the build was asked why nothing had been run"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told a change a checker built was never built: {:?}",
+        reporter.narration
+    );
+}
+
+/// A file a delegate changes in the turn's own workspace is a change the turn made, so when nothing
+/// then builds it the planner is asked and the person is told, by the turn and not only by the
+/// delegate.
+///
+/// A worker that writes and answers is told it ran nothing in its own closing line, which a person
+/// watching several runs reads as being about the worker's part. The turn that asked for the work is
+/// the one whose diff they are about to act on.
+#[test]
+fn a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built() {
+    /// What was narrated, beside the run it came from: `None` for the turn's own lines.
+    #[derive(Default)]
+    struct NarrationByRun {
+        from: Option<bravebot_agent::report::DelegateId>,
+        said: Vec<(Option<bravebot_agent::report::DelegateId>, String)>,
+    }
+
+    impl bravebot_agent::report::Reporter for NarrationByRun {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn reporting_for(&mut self, delegate: Option<bravebot_agent::report::DelegateId>) {
+            self.from = delegate;
+        }
+
+        fn narration(&mut self, text: String) {
+            self.said.push((self.from, text));
+        }
+    }
+
+    let scratch = Scratch::new("delegate-wrote-never-ran");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAND-OFF-THE-SLICE",
+            writing_then_delegating(
+                tool_request("list_files", r#"{"directory":"."}"#),
+                r#"{"kind":"worker","task":"WRITE-THE-SLICE"}"#,
+            ),
+        ),
+        (
+            "WRITE-THE-SLICE",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = NarrationByRun::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-OFF-THE-SLICE"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).ok(),
+        Some("first slice".to_string()),
+        "the worker's write did not land, so nothing here was tested"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked.iter().any(
+            |body| body.contains("HAND-OFF-THE-SLICE") && body.contains("nothing has been run")
+        ),
+        "the turn was not asked about a change its worker made and nothing built"
+    );
+    assert!(
+        reporter
+            .said
+            .iter()
+            .any(|(from, said)| from.is_none() && said.contains("no command was run")),
+        "the turn did not tell the person a change its worker made was never built: {:?}",
+        reporter.said
+    );
+}
+
+/// A delegate that fails after writing has still left the file changed, so its write counts for
+/// the turn as one from a delegate that answered does.
+///
+/// Failing a round later is the ordinary way a delegate ends short, and a record of its work that
+/// came back only from one that reported would leave its edit out of the one line that says it was
+/// never built.
+#[test]
+fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built() {
+    let scratch = Scratch::new("delegate-wrote-then-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The worker writes and is then left with nothing to answer its next request, so its run ends
+    // in a failure with the file already written.
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAND-OFF-A-SLICE",
+            writing_then_delegating(
+                tool_request("list_files", r#"{"directory":"."}"#),
+                r#"{"kind":"worker","task":"WRITE-A-SLICE-THEN-FAIL"}"#,
+            ),
+        ),
+        (
+            "WRITE-A-SLICE-THEN-FAIL",
+            vec![tool_request(
+                "write_file",
+                r#"{"path":"notes.txt","contents":"first slice"}"#,
+            )],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-OFF-A-SLICE"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn survives a delegate that did not");
+
+    assert!(
+        reporter
+            .delegates_finished
+            .iter()
+            .any(|(_, _, failed)| *failed),
+        "the worker answered instead of failing, so this proves nothing: {:?}",
+        reporter.delegates_finished
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).ok(),
+        Some("first slice".to_string()),
+        "the worker's write did not land, so nothing here was tested"
+    );
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains("HAND-OFF-A-SLICE") && body.contains("nothing has been run")),
+        "the turn was not asked about a change a failed worker made and nothing built"
+    );
+}
+
+/// A delegate in a checkout of its own builds the commit the checkout holds, and none of the turn's
+/// changes are in it, so a program it runs there leaves the turn's change unbuilt.
+///
+/// Counting it would tell the person their diff had been built on the strength of a build of the
+/// tree as it was before the turn touched it.
+#[test]
+fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built() {
+    let scratch = Scratch::new("checkout-delegate-ran");
+    let home = Scratch::new("checkout-delegate-ran-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "WRITE-THEN-CHECK-APART",
+            writing_then_delegating(
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                r#"{"kind":"checker","task":"RUN-THE-CHECKS-APART","isolation":"checkout"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-CHECKS-APART",
+            vec![
+                tool_request("run", r#"{"command":"printf checked"}"#),
+                reply_with("the checks pass"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WRITE-THEN-CHECK-APART").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("WRITE-THEN-CHECK-APART")
+                && body.contains("working in a checkout of commit")
+                && body.contains("It exited 0.")),
+        "the checker did not run its line in a checkout, so this is not the case under test"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("WRITE-THEN-CHECK-APART")
+                && body.contains("nothing has been run")),
+        "a build of the checkout was counted as a build of the turn's change"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the turn's change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// A turn that has read for a long time and written nothing is told so, once.
 ///
 /// The failure this is for produced nothing at all: fourteen minutes of reading, a plan the
