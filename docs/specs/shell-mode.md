@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/shell.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
 guards:
   - symbol: Policy::label_user_command_output
 documented-by: docs/website/docs/using/shell-mode.md
