@@ -4096,12 +4096,26 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
     }
 }
 
-/// Concrete in the backend rather than generic: the loop is only ever driven by a real
-/// terminal, and a generic backend's error type carries no bounds to convert from.
+/// The locals `event_loop` keeps from its startup. `event_loop` binds them in the order of these
+/// fields, which is the order the startup creates them, so they drop in the reverse of it.
+struct Begun {
+    workspace: Workspace,
+    settings: bravebot_config::Settings,
+    session: Session,
+    conversation: Conversation,
+    stored: bravebot_session::sessions::Handle,
+    scratch: Option<SessionScratch>,
+    answers: Answers,
+}
+
+/// Everything `event_loop` settles before its first pass: the session, a resumed record, the
+/// trust question, the scratch directory, the rules, the named directories and an addressed
+/// definition, in that order.
 ///
-/// Returns the session left behind, where there is one to pick up again.
+/// `Err` is a session that ended before it began: the person left at one of the questions, or the
+/// definition it was started under was refused.
 #[allow(clippy::too_many_arguments)]
-fn event_loop(
+fn begin_session(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
@@ -4113,8 +4127,7 @@ fn event_loop(
     named: Option<String>,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
-    switch: &mut Option<Switch>,
-) -> io::Result<Ended> {
+) -> Result<Begun, Ended> {
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -4176,7 +4189,7 @@ fn event_loop(
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
-    let (mut conversation, mut stored, programs) = match start {
+    let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
@@ -4267,13 +4280,13 @@ fn event_loop(
         beginning,
         stored.id(),
     ) else {
-        return Ok(left_behind(&stored));
+        return Err(left_behind(&stored));
     };
 
     // Somewhere of its own to write what is not part of the project, held for as long as the
     // session: dropping it takes the directory and everything in it. After the question, so a
     // person who left at it has nothing created for a session they declined to have.
-    let mut scratch = opened_scratch(&mut session, &mut workspace);
+    let scratch = opened_scratch(&mut session, &mut workspace);
 
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
@@ -4328,7 +4341,7 @@ fn event_loop(
         stored.id(),
         |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
     ) else {
-        return Ok(left_behind(&stored));
+        return Err(left_behind(&stored));
     };
     // Said out loud, as a rule that parses as nothing is, and it matters more: this one is not a
     // rule that quietly does nothing but every rule at once. Said before the first prompt can
@@ -4359,7 +4372,7 @@ fn event_loop(
             let mut carried = String::new();
             let accepted = match crate::trust_prompt::ask_named(terminal, &paths, &mut carried) {
                 Some(accepted) => accepted,
-                None => return Ok(left_behind(&stored)),
+                None => return Err(left_behind(&stored)),
             };
             if !carried.is_empty() {
                 session.paste_text(&carried);
@@ -4368,7 +4381,7 @@ fn event_loop(
         }
     };
     open_named(&mut session, &mut workspace, &mut trust, &opening);
-    let mut answers = Answers::opening(
+    let answers = Answers::opening(
         trust,
         programs,
         Rules {
@@ -4392,8 +4405,63 @@ fn event_loop(
         recorded.as_deref(),
         settings.agent(),
     ) {
-        return Ok(Ended::Refused(refused));
+        return Err(Ended::Refused(refused));
     }
+
+    Ok(Begun {
+        workspace,
+        settings,
+        session,
+        conversation,
+        stored,
+        scratch,
+        answers,
+    })
+}
+
+/// Concrete in the backend rather than generic: the loop is only ever driven by a real
+/// terminal, and a generic backend's error type carries no bounds to convert from.
+///
+/// Returns the session left behind, where there is one to pick up again.
+#[allow(clippy::too_many_arguments)]
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    config: &mut Config,
+    workspace: &Workspace,
+    confinement: String,
+    sockets_with_a_path_reachable: bool,
+    sandbox: crate::sandbox_command::Sandboxed,
+    servers: &mut crate::state::Servers,
+    start: Start,
+    named: Option<String>,
+    skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
+    switch: &mut Option<Switch>,
+) -> io::Result<Ended> {
+    let Begun {
+        mut workspace,
+        settings,
+        mut session,
+        mut conversation,
+        mut stored,
+        mut scratch,
+        mut answers,
+    } = match begin_session(
+        terminal,
+        config,
+        workspace,
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        servers,
+        start,
+        named,
+        skip_permissions,
+        prompts,
+    ) {
+        Ok(begun) => begun,
+        Err(ended) => return Ok(ended),
+    };
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
