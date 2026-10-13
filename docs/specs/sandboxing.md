@@ -1880,7 +1880,8 @@ name the mode in force after the command.
 
 The desktop window has a control of its own in the composer, beside the permission mode. It shows
 the mode in force and offers `strict`, `read-only` and `workspace-write`. It offers no `off`, and the bridge refuses a
-request for `off`, or for any word that is not one of the three, whatever the window sends. A choice is
+request for `off`, or for any word that is not one of the three or `standard`, whatever the window
+sends. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
 started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
 file and saying which of reading and writing the mode does more of, and a choice is met with the
