@@ -1122,8 +1122,9 @@ backend the three standard streams it has made and keeps the sandbox alive for a
 process, because the entries the backend wrote are removed as it is dropped. A batch file (`.bat`
 or `.cmd`) is refused there, because the command interpreter reads its argument line by its own
 rules and a quoting that is safe for every other program is not safe for it. Any other program the
-platform cannot confine is refused as it is elsewhere. The stage is created suspended and put in a
-job of its own before it runs, so every program it starts is in that job too. Killing the stage
+platform cannot confine is refused as it is elsewhere. The stage is created in a job of its own,
+which the creation call names, so it is in the job before it runs and every program it starts is in
+that job too. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
