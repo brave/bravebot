@@ -6,6 +6,9 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
   - crates/tui/src/render.rs
+  - crates/tui/src/render/transcript.rs
+  - crates/tui/src/render/prompt.rs
+  - crates/tui/src/render/beneath.rs
   - crates/core/src/delegate.rs
   - crates/core/src/policy.rs
   - crates/agent/src/agents.rs

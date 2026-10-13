@@ -5,6 +5,11 @@ status: normative
 governs:
   - crates/tui/src/state.rs
   - crates/tui/src/render.rs
+  - crates/tui/src/render/watching.rs
+  - crates/tui/src/render/transcript.rs
+  - crates/tui/src/render/prompt.rs
+  - crates/tui/src/render/beneath.rs
+  - crates/tui/src/render/hint.rs
   - crates/tui/src/app.rs
   - crates/agent/src/aside.rs
 documented-by: docs/website/docs/using/interactive-mode.md
