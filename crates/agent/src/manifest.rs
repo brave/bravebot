@@ -693,6 +693,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         cancel,
         task.model.as_deref(),
         &task.prompt,
+        &task.permission_mode,
         &mut attempt,
         accounting,
     );
@@ -824,6 +825,7 @@ fn plan<S: Sink, R: Reporter>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    policy.record_manifest_permission_mode(task.permission_mode.get().name());
 
     reporter.phase(Phase::Planning);
 
@@ -1032,6 +1034,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     cancel: &Cancel,
     chosen_model: Option<&str>,
     task: &str,
+    permission_mode: &crate::LiveMode,
     attempt: &mut Attempt,
     accounting: &mut Accounting,
 ) -> Result<Outcome, TurnError> {
@@ -1167,6 +1170,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut slots,
                 &mut chat,
                 &mut asking,
+                permission_mode,
                 index,
                 step,
                 entry,
@@ -1328,6 +1332,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     slots: &mut SlotStore,
     chat: &mut Chat<'_>,
     confirmer: &mut C,
+    permission_mode: &crate::LiveMode,
     index: usize,
     step: &Step,
     entry: &'static Advertised,
@@ -1509,7 +1514,16 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 ..Done::default()
             })
         }
-        "write_file" => write(policy, workspace, recording, slots, confirmer, index, step),
+        "write_file" => write(
+            policy,
+            workspace,
+            recording,
+            slots,
+            confirmer,
+            permission_mode,
+            index,
+            step,
+        ),
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -1601,12 +1615,14 @@ fn locked_filter<S: Sink>(
 /// The same shape a turn's write has, and for the same reasons: the person sees the exact path
 /// and the exact body before any endorsement exists, and the endorsement is minted for what they
 /// saw. What differs is where the path came from, which here is the routing lock.
+#[allow(clippy::too_many_arguments)]
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
     slots: &SlotStore,
     confirmer: &mut C,
+    permission_mode: &crate::LiveMode,
     index: usize,
     step: &Step,
 ) -> Result<Done, String> {
@@ -1741,7 +1757,13 @@ fn write<S: Sink, C: Confirmer>(
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
+        // Read as the question is put, exactly as a turn's write reads it.
+        let mode = permission_mode.get();
         let answer = confirmer.confirm_write(&request);
+        policy.record_answer(
+            mode.answers_a_write_unasked(!request.credentials.is_empty())
+                .then(|| mode.name()),
+        );
         if !answer.approved() {
             return Err(format!("the user did not approve writing {path}"));
         }

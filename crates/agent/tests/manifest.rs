@@ -1689,6 +1689,191 @@ fn bypassing_answers_a_credential_a_plan_writes() {
     );
 }
 
+/// TRACE-7 over a planned run. The policy's entry ending in "asking" reads as a person having been
+/// asked, so a step's write it put to somebody is followed by an entry saying what answered, as a
+/// turn's is. Without one, a run the mode answered reads as a run a person approved.
+#[test]
+fn a_planned_write_names_what_answered_it() {
+    use bravebot_agent::PermissionMode;
+    // One step writing `contents` to `notes.md`, with a person behind the mode who says yes, held
+    // to both what the trail says answered and how many writes the person was shown. `vouched`
+    // vouches for the whole tree, which leaves a credential as the only thing that puts the write
+    // to anybody.
+    let check = |mode: PermissionMode, contents: &str, vouched: bool, answered: &[&str], shown| {
+        let scratch = Scratch::new("planned-write-answered");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": contents}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        if vouched {
+            trust.trust(".");
+        }
+        let mut sink = RecordingSink::new();
+        let mut person = RecordsEveryQuestion::default();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write the notes").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut person, mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } if detail.starts_with("answered by")
+                    || detail.starts_with("no mode answered") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, answered, "{mode:?}, vouched: {vouched}");
+        assert_eq!(
+            person.writes.len(),
+            shown,
+            "{mode:?}, vouched: {vouched}: the writes the person was shown"
+        );
+    };
+
+    // A path nobody vouched for puts the write to somebody, and accepting edits answers it as
+    // bypassing does.
+    let plain = "notes\n";
+    check(
+        PermissionMode::Ask,
+        plain,
+        false,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::AcceptEdits,
+        plain,
+        false,
+        &["answered by accept-edits mode, nobody was asked"],
+        0,
+    );
+    check(
+        PermissionMode::Bypass,
+        plain,
+        false,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A credential is put to the person under accepting edits, so no mode answered it there.
+    let credential = format!("{GENERATED_SECRET}\n");
+    check(
+        PermissionMode::AcceptEdits,
+        &credential,
+        true,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::Bypass,
+        &credential,
+        true,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A write the policy did not put to anybody was not answered by anything.
+    check(PermissionMode::Bypass, plain, true, &[], 0);
+}
+
+/// TRACE-7 over a planned run: the trail names the permission mode the run began in, once, before
+/// the plan is frozen and so before any step runs. A run under the flag that skips permissions and
+/// one that asked look the same once the key has moved off bypass, and the trail is the only record
+/// that outlives the screen.
+#[test]
+fn a_manifest_run_records_the_mode_it_began_with() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Bypass,
+    ] {
+        // A plan that writes nothing, so plan mode runs it as the other three do.
+        let scratch = Scratch::new("records-the-mode");
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("what is in a.md").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut RecordsEveryQuestion::default(), mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let trail = sink.events();
+        let recorded: Vec<(usize, &str)> = trail
+            .iter()
+            .enumerate()
+            .filter_map(|(at, event)| match event {
+                Event::GatePassed {
+                    gate: "permission_mode",
+                    detail,
+                } => Some((at, detail.as_str())),
+                _ => None,
+            })
+            .collect();
+        let expected = format!("the manifest run began in {} mode", mode.name());
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(_, detail)| *detail)
+                .collect::<Vec<_>>(),
+            [expected.as_str()],
+            "{mode:?}: {trail:?}"
+        );
+        let frozen = trail
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::GatePassed {
+                        gate: "manifest",
+                        ..
+                    }
+                )
+            })
+            .expect("the plan was frozen");
+        assert!(
+            recorded[0].0 < frozen,
+            "{mode:?}: the mode was recorded after the plan was frozen: {trail:?}"
+        );
+    }
+}
+
 /// CRED-13's `a` over a planned run: a second step putting another secret in the same file is not
 /// asked about, and the run ends with the last value in it. The control is the same plan answered
 /// with a plain yes, which is asked twice.

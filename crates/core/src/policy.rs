@@ -6396,6 +6396,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
     }
 
+    /// [`Policy::record_permission_mode`] for a manifest run, which is not a turn and is not
+    /// called one in the trail.
+    pub fn record_manifest_permission_mode(&mut self, mode: &'static str) {
+        self.allow(
+            "permission_mode",
+            format!("the manifest run began in {mode} mode"),
+        );
+    }
+
     /// Record the output style whose words open a turn's system prompt, by name and by whether the
     /// person's own file or this build supplied it (INSTR-12).
     ///
