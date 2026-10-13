@@ -369,6 +369,7 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
 `verified-by: bravebot_tui::model_prompt::a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit`
 `verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
+`verified-by: bravebot_tui::model_prompt::no_row_on_screen_is_without_its_service_heading_wherever_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
 `verified-by: bravebot_tui::model_prompt::the_list_shows_names_a_person_reads`
