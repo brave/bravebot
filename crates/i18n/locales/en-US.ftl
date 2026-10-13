@@ -1031,6 +1031,8 @@ mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
     a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
+mcp-bearer-env-needs-a-name = --bearer-env needs the name of an environment variable
+mcp-header-env-needs-a-pair = --header-env needs <HEADER>=<ENVIRONMENT_VARIABLE>
 mcp-env-needs-a-name = -e needs NAME=value, or the name of a variable read from your environment
 mcp-env-after-the-alias =
     -e and --env come after the alias, as in add weather -e KEY=value -- weather-mcp
@@ -1067,6 +1069,7 @@ mcp-problem-directory = the directory is not an absolute path
 mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
+mcp-problem-header = { $name } is not a valid HTTP header token
 mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
 mcp-problem-tool = { $name } is not a tool name
@@ -1086,6 +1089,8 @@ mcp-no-state-directory =
 mcp-not-written = { $path } could not be written ({ $error })
 mcp-declared = declared { $alias } in { $path }
 mcp-variables = variables: { $names }
+# HTTP headers sent from environment variables, shown as "Header: $VAR"
+mcp-headers = headers: { $headers }
 # A variable given its value at add, which is kept in mcp.json and is never shown.
 mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.

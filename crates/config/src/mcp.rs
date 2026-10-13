@@ -164,6 +164,31 @@ pub fn is_variable_name(name: &str) -> bool {
         && characters.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Whether `name` is a valid HTTP header token (RFC 9110).
+pub fn is_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
 /// What is wrong with one entry, or with one flag that would have made it.
 ///
 /// Nothing here carries a value. The variants that name a variable name one [`is_variable_name`]
@@ -196,6 +221,8 @@ pub enum Problem {
     Url,
     /// `url` carries a user or a password.
     Credentials,
+    /// A header name is not a valid HTTP token.
+    Header(String),
     /// A remote server was given something only a process can use, and this is the key.
     Remote(&'static str),
     /// A timeout, by the key the file spells it with, is not a whole number of seconds from one to
@@ -303,6 +330,11 @@ pub enum Declaration {
     Http {
         /// Where it is, as somebody wrote it.
         url: String,
+        /// Headers to send to the server, mapping header name to the environment variable name
+        /// read at launch.
+        env_http_headers: BTreeMap<String, String>,
+        /// Environment variable name for a bearer token to send in `Authorization: Bearer <token>`.
+        bearer_env: Option<String>,
         /// How long it has for its handshake and for each call.
         timeouts: Timeouts,
         /// The tools this server offers where a filter was given, each once. Empty where every
@@ -338,12 +370,16 @@ impl std::fmt::Debug for Declaration {
                 .finish(),
             Self::Http {
                 url,
+                env_http_headers,
+                bearer_env,
                 timeouts,
                 tools,
                 exclude_tools,
             } => f
                 .debug_struct("Http")
                 .field("url", url)
+                .field("env_http_headers", env_http_headers)
+                .field("bearer_env", bearer_env)
                 .field("timeouts", timeouts)
                 .field("tools", tools)
                 .field("exclude_tools", exclude_tools)
@@ -364,6 +400,9 @@ pub enum Field {
     Reads,
     Directory,
     Url,
+    /// The headers for a remote server, with the name of each header whose mapping was added,
+    /// changed or removed.
+    Headers(Vec<String>),
     Tools,
     ExcludeTools,
 }
@@ -379,6 +418,7 @@ impl Field {
             Self::Reads => "reads",
             Self::Directory => "directory",
             Self::Url => "url",
+            Self::Headers(_) => "env_http_headers",
             Self::Tools => "tools",
             Self::ExcludeTools => "exclude_tools",
         }
@@ -518,11 +558,15 @@ impl Declaration {
             },
             Self::Http {
                 url,
+                env_http_headers,
+                bearer_env,
                 tools,
                 exclude_tools,
                 ..
             } => Self::Http {
                 url,
+                env_http_headers,
+                bearer_env,
                 timeouts,
                 tools,
                 exclude_tools,
@@ -573,8 +617,16 @@ impl Declaration {
                 tools,
                 exclude_tools,
             },
-            Self::Http { url, timeouts, .. } => Self::Http {
+            Self::Http {
                 url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                ..
+            } => Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
                 timeouts,
                 tools,
                 exclude_tools,
@@ -594,10 +646,87 @@ impl Declaration {
         remote(&url)?;
         Ok(Self::Http {
             url,
+            env_http_headers: BTreeMap::new(),
+            bearer_env: None,
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
         })
+    }
+
+    /// This declaration with headers to send over HTTP, each mapping a header name to an
+    /// environment variable name, and an optional variable name for a Bearer authorization header.
+    ///
+    /// The names are checked as a file's entry is. Setting headers on a stdio declaration is refused.
+    pub fn heading(
+        self,
+        env_http_headers: BTreeMap<String, String>,
+        bearer_env: Option<String>,
+    ) -> Result<Self, Problem> {
+        let Self::Http {
+            url,
+            timeouts,
+            tools,
+            exclude_tools,
+            ..
+        } = self
+        else {
+            return match env_http_headers.is_empty() && bearer_env.is_none() {
+                true => Ok(self),
+                false => Err(Problem::Remote("env_http_headers")),
+            };
+        };
+        let mut seen = BTreeSet::new();
+        for (header, var) in &env_http_headers {
+            if !is_header_name(header) {
+                return Err(Problem::Header(header.clone()));
+            }
+            if !is_variable_name(var) {
+                return Err(Problem::Name);
+            }
+            if !seen.insert(header.to_ascii_lowercase()) {
+                return Err(Problem::Twice(header.clone()));
+            }
+        }
+        if let Some(var) = &bearer_env {
+            if !is_variable_name(var) {
+                return Err(Problem::Name);
+            }
+            if seen.contains("authorization") {
+                return Err(Problem::Twice("Authorization".to_string()));
+            }
+        }
+        Ok(Self::Http {
+            url,
+            env_http_headers,
+            bearer_env,
+            timeouts,
+            tools,
+            exclude_tools,
+        })
+    }
+
+    /// The headers this remote server receives, mapping each header name to an environment
+    /// variable name.
+    pub fn env_http_headers(&self) -> impl Iterator<Item = (&str, &str)> {
+        let headers = match self {
+            Self::Http {
+                env_http_headers, ..
+            } => Some(env_http_headers),
+            Self::Stdio { .. } => None,
+        };
+        headers
+            .into_iter()
+            .flat_map(|headers| headers.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
+    /// The environment variable name for a Bearer authorization header. None for a stdio server
+    /// or where not declared.
+    pub fn bearer_env(&self) -> Option<&str> {
+        match self {
+            Self::Http { bearer_env, .. } => bearer_env.as_deref(),
+            Self::Stdio { .. } => None,
+        }
     }
 
     /// The transport's name, as the file spells it.
@@ -679,11 +808,26 @@ impl Declaration {
             }
             Self::Http {
                 url,
+                env_http_headers,
+                bearer_env,
                 tools,
                 exclude_tools,
                 ..
             } => {
                 let mut form = vec![DIGEST_FORM.into(), "http".into(), serde_json::json!(url)];
+                if !env_http_headers.is_empty() || bearer_env.is_some() {
+                    let mut extra = serde_json::Map::new();
+                    if !env_http_headers.is_empty() {
+                        extra.insert(
+                            "env_http_headers".into(),
+                            serde_json::json!(env_http_headers),
+                        );
+                    }
+                    if let Some(bearer) = bearer_env {
+                        extra.insert("bearer_env".into(), serde_json::json!(bearer));
+                    }
+                    form.push(serde_json::Value::Object(extra));
+                }
                 if !tools.is_empty() || !exclude_tools.is_empty() {
                     let tools: BTreeSet<&String> = tools.iter().collect();
                     let exclude_tools: BTreeSet<&String> = exclude_tools.iter().collect();
@@ -753,12 +897,16 @@ impl Declaration {
             (
                 Self::Http {
                     url,
+                    env_http_headers,
+                    bearer_env,
                     tools,
                     exclude_tools,
                     ..
                 },
                 Self::Http {
                     url: other_url,
+                    env_http_headers: other_env_http_headers,
+                    bearer_env: other_bearer_env,
                     tools: other_tools,
                     exclude_tools: other_exclude_tools,
                     ..
@@ -768,6 +916,23 @@ impl Declaration {
                 let mut changed = Vec::new();
                 if url != other_url {
                     changed.push(Field::Url);
+                }
+                let mut header_diffs = BTreeSet::new();
+                for (k, v) in env_http_headers {
+                    if other_env_http_headers.get(k) != Some(v) {
+                        header_diffs.insert(k.clone());
+                    }
+                }
+                for k in other_env_http_headers.keys() {
+                    if !env_http_headers.contains_key(k) {
+                        header_diffs.insert(k.clone());
+                    }
+                }
+                if bearer_env != other_bearer_env {
+                    header_diffs.insert("Authorization".to_string());
+                }
+                if !header_diffs.is_empty() {
+                    changed.push(Field::Headers(header_diffs.into_iter().collect()));
                 }
                 if set(tools) != set(other_tools) {
                     changed.push(Field::Tools);
@@ -812,8 +977,26 @@ impl Declaration {
                     entry.insert("directory".into(), directory.clone().into());
                 }
             }
-            Self::Http { url, .. } => {
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                ..
+            } => {
                 entry.insert("url".into(), url.clone().into());
+                if !env_http_headers.is_empty() {
+                    let headers = env_http_headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .collect();
+                    entry.insert(
+                        "env_http_headers".into(),
+                        serde_json::Value::Object(headers),
+                    );
+                }
+                if let Some(bearer) = bearer_env {
+                    entry.insert("bearer_env".into(), bearer.clone().into());
+                }
             }
         }
         if !self.tools().is_empty() {
@@ -846,6 +1029,8 @@ impl Declaration {
             Some("http") => &[
                 "transport",
                 "url",
+                "env_http_headers",
+                "bearer_env",
                 "tools",
                 "exclude_tools",
                 Timeouts::STARTUP_KEY,
@@ -881,7 +1066,25 @@ impl Declaration {
         let exclude_tools = parse_tools("exclude_tools")?;
         if allowed.contains(&"url") {
             let url = entry.get("url").and_then(|url| url.as_str());
+            let env_http_headers = match entry.get("env_http_headers") {
+                None => BTreeMap::new(),
+                Some(serde_json::Value::Object(headers)) => {
+                    let mut map = BTreeMap::new();
+                    for (header, var) in headers {
+                        let var_str = var.as_str().ok_or(Problem::Name)?;
+                        map.insert(header.clone(), var_str.to_string());
+                    }
+                    map
+                }
+                Some(_) => return Err(Problem::Header("env_http_headers".to_string())),
+            };
+            let bearer_env = match entry.get("bearer_env") {
+                None => None,
+                Some(serde_json::Value::String(name)) => Some(name.clone()),
+                Some(_) => return Err(Problem::Name),
+            };
             return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?
+                .heading(env_http_headers, bearer_env)?
                 .filtering(tools, exclude_tools)?
                 .timing(timeouts));
         }
@@ -2078,6 +2281,126 @@ mod tests {
         );
         let remote = Declaration::http("https://weather.example.com".into()).unwrap();
         assert_eq!(weather().changes(&remote), vec![Field::Transport]);
+        let with_headers = remote
+            .clone()
+            .heading(
+                BTreeMap::from([("X-Key".into(), "KEY_VAR".into())]),
+                Some("TOKEN_VAR".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            remote.changes(&with_headers),
+            vec![Field::Headers(words(&["Authorization", "X-Key"]))]
+        );
+    }
+
+    #[test]
+    fn a_header_name_is_an_http_token() {
+        assert!(is_header_name("Authorization"));
+        assert!(is_header_name("X-Api-Key"));
+        assert!(is_header_name("content-type"));
+        assert!(is_header_name("Accept"));
+        assert!(is_header_name("custom_header"));
+        assert!(is_header_name("my-header.v1"));
+        for refused in [
+            "",
+            "header with spaces",
+            "header:colon",
+            "header/slash",
+            "header@at",
+            "header?query",
+            "header=value",
+            "non-ascii-é",
+            "\t",
+            "\n",
+        ] {
+            assert!(
+                !is_header_name(refused),
+                "{refused:?} was taken for a header token"
+            );
+        }
+    }
+
+    #[test]
+    fn http_headers_and_bearer_env_are_validated_digested_and_roundtripped() {
+        let remote = Declaration::http("https://api.example.com/mcp".into()).unwrap();
+
+        // Stdio rejects heading
+        assert_eq!(
+            weather().heading(BTreeMap::from([("X-Key".into(), "VAR".into())]), None,),
+            Err(Problem::Remote("env_http_headers"))
+        );
+
+        // Invalid header name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::from([("Bad:Header".into(), "VAR".into())]), None,),
+            Err(Problem::Header("Bad:Header".into()))
+        );
+
+        // Invalid env variable name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::from([("X-Key".into(), "BAD-VAR".into())]), None,),
+            Err(Problem::Name)
+        );
+
+        // Invalid bearer env variable name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::new(), Some("BAD-VAR".into()),),
+            Err(Problem::Name)
+        );
+
+        // Duplicate header under different casing
+        assert_eq!(
+            remote.clone().heading(
+                BTreeMap::from([
+                    ("X-Key".into(), "VAR1".into()),
+                    ("x-key".into(), "VAR2".into()),
+                ]),
+                None,
+            ),
+            Err(Problem::Twice("x-key".into()))
+        );
+
+        // Bearer env conflicting with Authorization header
+        assert_eq!(
+            remote.clone().heading(
+                BTreeMap::from([("authorization".into(), "AUTH_VAR".into())]),
+                Some("BEARER_VAR".into()),
+            ),
+            Err(Problem::Twice("Authorization".into()))
+        );
+
+        // Digest backward compatibility when no headers are declared
+        let legacy_json = serde_json::json!([DIGEST_FORM, "http", "https://api.example.com/mcp"]);
+        let expected_legacy = Digest(Sha256::digest(legacy_json.to_string().as_bytes()).into());
+        assert_eq!(remote.digest(), expected_legacy);
+
+        // Valid headers and bearer env
+        let configured = remote
+            .clone()
+            .heading(
+                BTreeMap::from([("X-Api-Key".into(), "API_KEY".into())]),
+                Some("BEARER_TOKEN".into()),
+            )
+            .unwrap();
+        assert_ne!(configured.digest(), remote.digest());
+        assert_eq!(configured.bearer_env(), Some("BEARER_TOKEN"));
+        assert_eq!(
+            configured.env_http_headers().collect::<Vec<_>>(),
+            [("X-Api-Key", "API_KEY")]
+        );
+
+        // JSON serialization and deserialization roundtrip
+        let mut declarations = Declarations::default();
+        declarations.insert("api", &configured);
+        let parsed = Declarations::parse(&declarations.to_text()).unwrap();
+        assert_eq!(parsed.get("api").unwrap().declaration, Ok(configured));
     }
 
     #[test]

@@ -31,6 +31,7 @@ use std::time::Duration;
 pub struct HttpServer {
     url: String,
     name: String,
+    headers: Vec<(String, String)>,
     next_id: u64,
     /// Set from the initialize response, and echoed on later requests. Servers that keep
     /// state across calls require it.
@@ -48,11 +49,18 @@ impl HttpServer {
         Self {
             url: url.into(),
             name: name.into(),
+            headers: Vec::new(),
             next_id: 1,
             session: None,
             bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
             startup: Duration::from_secs(bravebot_config::mcp::STARTUP_SECS),
         }
+    }
+
+    /// Add configured headers to send to this server on its declared socket.
+    pub fn with_headers(mut self, headers: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.headers.extend(headers);
+        self
     }
 
     /// Give the handshake's replies `bound`, which [`HttpServer::startup`] says again, and no
@@ -119,6 +127,10 @@ impl HttpServer {
 
         if let Some(session) = &self.session {
             request = request.header("mcp-session-id", session);
+        }
+
+        for (name, value) in &self.headers {
+            request = request.socket_header(name, value);
         }
 
         // The declaration names one destination, so the gate holds the hops to it rather than
