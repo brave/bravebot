@@ -772,6 +772,61 @@ fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
     );
 }
 
+/// SANDBOX-16: `doctor` says a checkout's `git.identities` is not obeyed, and names an entry of the
+/// person's own that it cannot read and one whose key a push would not be given, each with its
+/// file.
+///
+/// The settings tests check the accessors. `doctor` is the only place that turns them into lines
+/// for a person, so a missing call would leave a checkout's attempt to choose a push key, and a
+/// person's mistyped entry or key path, without a word.
+#[test]
+fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
+    let scratch = Scratch::new("cli-running-doctor-git-identities").with_settings(
+        r#"{"git": {"identities": {"github.com": "~/.ssh/no-owner.pub", "github.com/acme": "~/.ssh/missing.pub"}}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let ignored = line("git.identities in");
+    assert!(
+        ignored.contains("not obeyed")
+            && ignored.contains(&checkout.join(".bravebot").display().to_string()),
+        "a checkout's key choice went unreported: {stdout}"
+    );
+    let misshapen = line("git.identities.github.com in");
+    assert!(
+        misshapen.contains("is not read") && misshapen.contains("settings.json"),
+        "an entry the person's file holds went unreported: {stdout}"
+    );
+    let refused = line("git.identities.github.com/acme");
+    assert!(
+        refused.contains("~/.ssh/missing.pub")
+            && refused.contains("not a key a push can be given")
+            && refused.contains("settings.json"),
+        "a key a push would not be given went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -2836,6 +2891,83 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
             body.len()
         )
     })
+}
+
+/// SANDBOX-16: the person's key choice reaches the git process started by `run`, and an entry for
+/// another owner or no entry leaves its ssh command unset. Starting a CLI process exercises both
+/// startup settlement and `Tools::confinement`; tests that supply identities directly miss either
+/// link being dropped. A fake git records its environment without contacting a remote.
+#[cfg(unix)]
+#[test]
+fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping git identity run-stage test: confinement is unavailable");
+        return;
+    }
+    for (name, owner) in [
+        ("cli-running-identity-matching", Some("acme")),
+        ("cli-running-identity-other", Some("other")),
+        ("cli-running-identity-absent", None),
+    ] {
+        let gateway =
+            a_gateway_asking_to_run("git push git@example.invalid:acme/widgets.git > identity.txt");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings for a gateway");
+        if let Some(owner) = owner {
+            settings["git"] = serde_json::json!({
+                "identities": {format!("example.invalid/{owner}"): "~/.ssh/work"}
+            });
+        }
+        // The key is outside the project and the system temporary directory, so the plan cannot
+        // write it. Only the public half exists, though the entry names the private half.
+        let scratch = Scratch::new(name)
+            .with_settings(&settings.to_string())
+            .with_file(".ssh/work.pub", "ssh-ed25519 AAAA\n")
+            .with_file(
+                "bin/git",
+                "#!/bin/sh\n[ \"$1\" = push ] || exit 1\nprintf '%s\\n' \"${GIT_SSH_COMMAND-unset}\"\n",
+            );
+        std::fs::set_permissions(
+            scratch.path.join("bin/git"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("make fake git executable");
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", &path));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[
+                "--dangerously-skip-permissions",
+                "-p",
+                "record the push identity",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{name}: {stdout}{stderr}");
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        let actual =
+            std::fs::read_to_string(project.join("identity.txt")).unwrap_or_else(|error| {
+                panic!("{name}: git did not record its identity: {error}; {stdout}{stderr}")
+            });
+        let expected = match owner {
+            Some("acme") => format!(
+                "ssh -i '{}' -o IdentitiesOnly=yes\n",
+                scratch.path.join(".ssh/work.pub").display()
+            ),
+            _ => "unset\n".to_string(),
+        };
+        assert_eq!(actual, expected, "{name}: {stdout}{stderr}");
+    }
 }
 
 /// SANDBOX-24: a person's `sandbox.network.allowedHosts` reaches the programs `run` starts as a

@@ -324,6 +324,9 @@ pub struct Carried {
     /// What the person's environment moves that scope to, beyond its fixed rows, each named with
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
+    /// The public key the person's `git.identities` chose for the owner the argv's ssh address
+    /// names, which ssh offers the host first.
+    pub identity: Option<std::path::PathBuf>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,
     /// What a person attached to this command with `/reach`, each with the day it was allowed.
@@ -437,6 +440,16 @@ impl Confined {
                         program = program,
                         variable = reach.variable,
                         path = reach.path.display().to_string()
+                    )
+                    .to_string(),
+                );
+            }
+            if let Some(key) = &stage.identity {
+                sentences.push(
+                    t!(
+                        run_carries_identity,
+                        program = program,
+                        path = key.display().to_string()
                     )
                     .to_string(),
                 );
@@ -2896,6 +2909,7 @@ mod tests {
             toolchain: None,
             scope: Some(scope),
             reaches: Vec::new(),
+            identity: None,
             network: false,
             remembered: Vec::new(),
         };
@@ -2917,6 +2931,7 @@ mod tests {
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
                     scope: None,
                     reaches: Vec::new(),
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -2954,6 +2969,7 @@ mod tests {
                 toolchain: None,
                 scope: Some(Scope::Remote),
                 reaches: Vec::new(),
+                identity: None,
                 network: false,
                 remembered: Vec::new(),
             }],
@@ -2990,6 +3006,7 @@ mod tests {
             toolchain: None,
             scope: None,
             reaches: Vec::new(),
+            identity: None,
             network: true,
             remembered: Vec::new(),
         };

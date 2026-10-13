@@ -2353,6 +2353,7 @@ mod tests {
                     variable: "DOCKER_CONFIG",
                     path: "/home/someone/docker-work".into(),
                 }],
+                identity: None,
                 network: false,
                 remembered: Vec::new(),
             }],

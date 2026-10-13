@@ -577,6 +577,12 @@ doctor-settings-sandbox-hosts-ignored =
     sandbox.network.{ $key } in { $path } is not obeyed: a checkout can refuse a host and never allow one, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-hosts-misshapen =
     sandbox.network.{ $key } in { $path } is not a list of strings (onUnlisted: ask or refuse), so it is read as absent
+doctor-settings-git-identities-ignored =
+    git.identities in { $path } is not obeyed: a checkout cannot choose which key a push offers, so it is read from ~/.bravebot/settings.json and the file --settings names outside the workspace only
+doctor-settings-git-identities-misshapen =
+    { $key } in { $path } is not read: git.identities maps a name <host>/<owner> to the path of a public key file
+doctor-settings-git-identities-key-refused =
+    { $key } in { $path } names { $value }, which is not a key a push can be given: it has to be a regular *.pub file outside every credential location but ~/.ssh, such as ~/.aws, with no ', % or $ in its path, so ssh offers its default key for that owner
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =
@@ -1621,6 +1627,7 @@ run-carries-kubernetes = { $program } also reads your kubernetes credentials in 
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
 run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
+run-carries-identity = { $program } has ssh offer the key { $path } first, which your git.identities names for the owner of this address, and after it only keys your ssh configuration names
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
