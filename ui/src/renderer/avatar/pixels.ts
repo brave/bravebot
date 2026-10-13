@@ -254,11 +254,6 @@ function along(stops: Lch[], t: number): Lch {
 const pick = <T,>(seed: string, key: string, from: readonly T[]): T =>
   from[Math.floor(stream(`${seed}/${key}`)() * from.length)]!
 
-/** Which figure a seed describes, without drawing it. */
-export function traitsOf(seed: string): Traits {
-  return spriteOf(seed).traits
-}
-
 const cache = new Map<string, Sprite>()
 
 /** The face a seed describes. Memoised, since every row of a list asks for it on each render. */

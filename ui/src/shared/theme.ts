@@ -39,6 +39,3 @@ export function parseAppearance(value: unknown): Appearance {
   // palette name falls back the same way: follow the system rather than invent a mapping.
   return SYSTEM
 }
-
-/** @deprecated Prefer `parseAppearance`. Kept so older call sites and tests still compile while they move. */
-export const parseChosenTheme = parseAppearance

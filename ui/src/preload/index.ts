@@ -285,8 +285,8 @@ const api = {
    * Listen for menu items being chosen. Returns an unsubscribe.
    *
    * One channel carrying one id, not a general "run this in the renderer" hook. The id is
-   * checked against the command list on the way out and again on the way in, and that list
-   * contains nothing that answers a question the agent asked — those are answered in the
+   * typed as `CommandId | ContextCommandId` where main sends it (`menu.ts` `choose`), and neither
+   * union contains a command that answers a question the agent asked; those are answered in the
    * transcript, beside the evidence, and a menu is not beside anything.
    */
   onCommand(
