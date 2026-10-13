@@ -48,7 +48,16 @@ use std::process::ExitCode;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
-    // First of all, because it has to be true before the first credential is in memory and the
+    // First of all, before the command line is read: what this process was started with, its
+    // environment included, is readable from `/proc/<pid>/environ` by any process of the same
+    // user until the kernel is told otherwise, and a program a stage starts is one. The mark is
+    // cleared by `execve`, so the programs this process starts are not affected. A refusal is
+    // said and the run goes on, since the remedy is outside the program. See SANDBOX-8.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot: {notice}");
+    }
+
+    // Next, because it has to be true before the first credential is in memory and the
     // signing key is unmasked while the command line is still being read. A crash after this
     // writes no image of this process, which is where a key and a live session credential would
     // otherwise be recovered from. Nothing is done about a platform that refuses: the remedy is
@@ -193,8 +202,11 @@ fn main() -> ExitCode {
         }
     }
 
-    // The host list a stage is held to, settled with the lists above for the same reason.
-    bravebot_config::sandbox_network::settle(&bravebot_config::Settings::load());
+    // The host list a stage is held to and the key each owner's repositories are pushed with,
+    // settled with the lists above for the same reason.
+    let layers = bravebot_config::Settings::load();
+    bravebot_config::sandbox_network::settle(&layers);
+    bravebot_config::git_identities::settle(&layers);
 
     // After the mode above is engaged, because an incognito session is given no directory to log
     // into, and before the first thing that could fail in a way worth recording.
@@ -1003,10 +1015,11 @@ fn print_help() {
     // word that no longer works. The interface offers the same list when a slash is typed.
     println!("{}", t!(cli_commands_heading));
     for command in bravebot_tui::app::commands() {
-        let word = if command.argument.is_empty() {
+        let hint = command.typed_hint();
+        let word = if hint.is_empty() {
             command.name.to_string()
         } else {
-            format!("{} {}", command.name, command.argument)
+            format!("{} {hint}", command.name)
         };
         println!("  {word:<20}  {}", command.description);
     }
@@ -2185,15 +2198,11 @@ fn run_task(
             let ending = exit::ending_of(&cause);
             let stopped = fail(ending, &cause);
             say_notices(&mut std::io::stderr().lock(), reporter.notices());
-            let report = attempt.describe();
-            if !report.is_empty() {
-                eprintln!();
-                eprint!("{report}");
-            }
-            if trace {
-                eprintln!();
-                print_trace(&mut std::io::stderr().lock(), sink.recorded());
-            }
+            say_what_a_stopped_manifest_produced(
+                &mut std::io::stderr().lock(),
+                &attempt,
+                trace.then(|| sink.recorded()),
+            );
             if as_json {
                 say_the_result(&what_ran(
                     ending,
@@ -2922,6 +2931,26 @@ fn say_notices(beside: &mut impl Write, notices: &[String]) {
     }
 }
 
+/// What a manifest run that stopped leaves for a person to read (MANIFEST-3): the plan or the
+/// document that would not become one, and the steps that ran. Only the audit trail waits on
+/// `--trace`; the attempt is printed either way, since a failed plan with no plan to look at is a
+/// one-line complaint about a document nobody can see.
+fn say_what_a_stopped_manifest_produced(
+    output: &mut impl Write,
+    attempt: &bravebot_agent::manifest::Attempt,
+    trail: Option<&RecordingSink>,
+) {
+    let report = attempt.describe();
+    if !report.is_empty() {
+        let _ = writeln!(output);
+        let _ = write!(output, "{report}");
+    }
+    if let Some(trail) = trail {
+        let _ = writeln!(output);
+        print_trace(output, trail);
+    }
+}
+
 /// Print the audit trail: what was checked, allowed, and refused.
 ///
 /// A failed write is dropped, as it is for progress. The trail describes a turn that has already
@@ -3107,11 +3136,22 @@ fn interactive(
 
     // What the platform offers, which is what the session reports: this confines a process running
     // code we did not write, which is an MCP server this session starts and nothing else it runs.
-    // Read once here because the answer cannot change while the session runs.
-    let confinement = match bravebot_sandbox::for_current_platform() {
-        Ok(sandbox) => named(sandbox.capabilities().level),
-        Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
-    };
+    // Read once here because the answer cannot change while the session runs. With no backend no
+    // stage starts, so nothing is said about the sockets one would reach.
+    let (confinement, sockets_with_a_path_reachable) =
+        match bravebot_sandbox::for_current_platform() {
+            Ok(sandbox) => {
+                let capabilities = sandbox.capabilities();
+                (
+                    named(capabilities.level),
+                    !capabilities.governs_sockets_with_a_path,
+                )
+            }
+            Err(_) => (
+                named(bravebot_sandbox::policy::ConfinementLevel::None),
+                false,
+            ),
+        };
 
     // Settled on the plain terminal before the screen takes it, so a question about a server this
     // checkout requests is a line somebody answers rather than a dialog drawn over a session that
@@ -3138,6 +3178,7 @@ fn interactive(
         &mut config,
         &workspace,
         confinement,
+        sockets_with_a_path_reachable,
         started,
         start,
         agent,
@@ -3662,6 +3703,50 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 path = path.display().to_string()
             ),
         );
+    }
+    for path in settings.git_identities_ignored() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_git_identities_ignored,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for (path, key) in settings.git_identities_misshapen() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_git_identities_misshapen,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    // Judged as a stage judges it, so a key a push would not be given is named before the push.
+    if let Some(home) = bravebot_agent::home::profile() {
+        for entry in &settings.git_identities().entries {
+            let lent = bravebot_sandbox::scope::identity_key(&entry.key, &home)
+                .and_then(|key| bravebot_sandbox::scope::ssh_command(&key));
+            if lent.is_none() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_git_identities_key_refused,
+                        key = format!(
+                            "git.identities.{}/{}",
+                            entry.address.host, entry.address.owner
+                        ),
+                        value = entry.key.clone(),
+                        path = entry
+                            .by
+                            .as_deref()
+                            .map(|by| by.display().to_string())
+                            .unwrap_or_default()
+                    ),
+                );
+            }
+        }
     }
     for list in managed.filesystem_unreadable() {
         fact(
@@ -4286,6 +4371,12 @@ fn doctor() -> ExitCode {
         bravebot_sandbox::for_current_platform().map(|sandbox| sandbox.capabilities()),
     ) {
         doctor_found(&mut ending, Ending::Failed, problem);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(note) =
+        network_namespace_note(bravebot_sandbox::linux::network_namespace_unavailable().as_deref())
+    {
+        println!("{note}");
     }
 
     // Beside the confinement the platform offers, since the two answers are read together: what
@@ -5098,7 +5189,7 @@ fn report_confinement(found: Result<Capabilities, SandboxError>) -> Option<Strin
 fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
     match found {
         Ok(caps) => Confinement {
-            lines: vec![
+            lines: [
                 t!(doctor_confinement, level = named(caps.level)).to_string(),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
@@ -5110,7 +5201,13 @@ fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
                     },
                     DETAIL,
                 ),
-            ],
+            ]
+            .into_iter()
+            .chain(
+                (!caps.governs_sockets_with_a_path)
+                    .then(|| t!(doctor_sockets_with_a_path_reachable).to_string()),
+            )
+            .collect(),
             established: true,
         },
         Err(err) => Confinement {
@@ -5121,6 +5218,14 @@ fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
             established: false,
         },
     }
+}
+
+/// What `doctor` says where a stage cannot be given a network namespace of its own, which is what
+/// a closed network and `sandbox.network.allowedHosts` are applied with on Linux, and nothing
+/// where it can.
+#[cfg(any(target_os = "linux", test))]
+fn network_namespace_note(unavailable: Option<&str>) -> Option<String> {
+    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason).to_string())
 }
 
 #[cfg(test)]
@@ -5386,6 +5491,7 @@ mod tests {
             // Nothing `doctor` prints depends on this, so the report reads the same either way.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }))
         .lines
     }
@@ -5443,6 +5549,54 @@ mod tests {
             confinement_report(ConfinementLevel::Kernel, false).last(),
             "the report reads the same whether or not the kernel enforces network denial"
         );
+    }
+
+    /// A person whose kernel refuses user namespaces is refused every stage with no network or
+    /// under an allowed-hosts list, and is told why only here. The regressions it rejects: no word
+    /// at all, and a word that omits the reason or the setting it costs.
+    #[test]
+    fn doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs() {
+        assert_eq!(network_namespace_note(None), None);
+        let note = network_namespace_note(Some("Permission denied (os error 13)"))
+            .expect("a note where the namespace cannot be made");
+        assert!(note.contains("Permission denied (os error 13)"), "{note}");
+        assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
+    }
+
+    /// SANDBOX-3: below Landlock ABI 9 a program under standard reaches every unix socket that has
+    /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
+    /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
+    /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
+    #[test]
+    fn doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs() {
+        let report = |governs_sockets_with_a_path| {
+            confinement(Ok(Capabilities {
+                level: ConfinementLevel::Partial,
+                mechanisms: vec!["landlock"],
+                network_denial_enforced: true,
+                egress_limited_to_a_port: true,
+                grants_paths_that_do_not_exist: false,
+                subtracts_from_a_grant: true,
+                governs_sockets_with_a_path,
+            }))
+            .lines
+        };
+        let (governed, reachable) = (report(true), report(false));
+
+        let expected = t!(doctor_sockets_with_a_path_reachable).to_string();
+        assert!(!governed.contains(&expected), "{governed:?}");
+        assert_eq!(reachable.len(), governed.len() + 1, "{reachable:?}");
+        assert_eq!(reachable.last(), Some(&expected));
+        for word in [
+            "D-Bus",
+            "SSH_AUTH_SOCK",
+            "docker.sock",
+            "ABI 9",
+            "Linux 7.1",
+            "strict",
+        ] {
+            assert!(expected.contains(word), "{word}: {expected}");
+        }
     }
 
     /// Without a backend, untrusted work is refused rather than run unconfined, so this is a thing
@@ -8002,6 +8156,34 @@ mod tests {
         assert!(!reply.contains("not usable"));
     }
 
+    /// A manifest run that stopped is the one worth looking at, so what it produced is printed
+    /// whether or not `--trace` was asked for. Only the audit trail is the flag's to add.
+    #[test]
+    fn a_stopped_manifest_prints_what_it_produced_without_the_trace_flag() {
+        let attempt = bravebot_agent::manifest::Attempt {
+            proposed: Some("not JSON at all".to_string()),
+            steps: vec!["1. read notes.md: done".to_string()],
+            ..Default::default()
+        };
+        let sink = trail_of(vec![Event::GatePassed {
+            gate: "display",
+            detail: "assistant reply shown to the user".into(),
+        }]);
+
+        let mut untraced = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut untraced, &attempt, None);
+        let untraced = String::from_utf8(untraced).expect("utf-8");
+        assert!(untraced.contains("not JSON at all"), "got: {untraced}");
+        assert!(untraced.contains("read notes.md"), "got: {untraced}");
+        assert!(!untraced.contains("audit trail"), "got: {untraced}");
+
+        let mut traced = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut traced, &attempt, Some(&sink));
+        let traced = String::from_utf8(traced).expect("utf-8");
+        assert!(traced.contains("not JSON at all"), "got: {traced}");
+        assert!(traced.contains("audit trail"), "got: {traced}");
+    }
+
     /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers
     /// nothing: there is no prompt for it to reach. Without the flag an allow rule decides no
     /// more than a line nobody wrote, while the two lists that refuse and that force an ask carry
@@ -8260,6 +8442,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant,
+            governs_sockets_with_a_path: true,
         };
         let cannot = t!(sandbox_rule_cannot_subtract).to_string();
         let flag = t!(doctor_sandbox_filesystem_source_flag);

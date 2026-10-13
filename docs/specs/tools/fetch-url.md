@@ -8,6 +8,7 @@ governs:
   - crates/core/src/url.rs
   - crates/net/src/address.rs
   - crates/net/src/lib.rs
+  - crates/sandbox/src/address.rs
 guards:
   - symbol: Policy::before_fetch_rules
   - symbol: Policy::before_fetch
@@ -273,9 +274,9 @@ public half of a mixed answer is trusted only as far as the server that wrote th
 for the proxy itself, so a proxied fetch is not classified here. The proxy is the one that
 connects, and what it is allowed to reach is its own configuration's.
 
-`verified-by: bravebot_net::address::every_class_the_issue_names_is_not_public`
-`verified-by: bravebot_net::address::a_public_address_is_public`
-`verified-by: bravebot_net::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
+`verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
+`verified-by: bravebot_sandbox::address::a_public_address_is_public`
+`verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
 `verified-by: bravebot_net::address::a_host_written_as_an_address_is_not_a_name`
 `verified-by: bravebot_net::lib::a_name_resolving_to_a_non_public_address_is_refused_before_any_request_is_sent`
 `verified-by: bravebot_net::lib::a_refused_address_is_never_connected_to`

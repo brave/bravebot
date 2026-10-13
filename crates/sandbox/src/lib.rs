@@ -14,10 +14,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod address;
 pub mod agent;
 pub mod base;
 pub mod crash;
 pub mod hosts;
+pub mod inspection;
 #[cfg(target_os = "linux")]
 pub mod linux;
 // Compiled under test on any Unix as well as on the platform it confines, so what this
@@ -29,6 +31,8 @@ pub mod linux;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
 pub mod mode;
+#[cfg(target_os = "linux")]
+pub(crate) mod netns;
 pub mod network;
 pub mod policy;
 pub mod process;
@@ -264,6 +268,7 @@ impl Sandbox for Unavailable {
             // would be a claim about a process this backend never starts.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: false,
         }
     }
 

@@ -44,6 +44,10 @@ pub struct SandboxPolicy {
     /// `None` is egress to any address. A unix socket under a write row is reached as before, and
     /// no resolver is granted: the proxy resolves the names it is asked for.
     pub egress_only_to: Option<u16>,
+    /// The unix socket the proxy behind `egress_only_to` also listens on, for a backend that
+    /// holds the process in a network of its own and so cannot reach the proxy's port. Linux
+    /// relays the port to this socket from inside that network; the other backends ignore it.
+    pub egress_through: Option<PathBuf>,
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
     pub allow_subprocesses: bool,
@@ -77,6 +81,7 @@ impl SandboxPolicy {
             writable: Vec::new(),
             allow_network: false,
             egress_only_to: None,
+            egress_through: None,
             allow_subprocesses: false,
             starting_in: None,
             git_directories_writable: false,
@@ -118,6 +123,23 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Unsaid,
+            listed: false,
+        });
+        self
+    }
+
+    /// Permit writing an entry that a listing of its directory produced.
+    ///
+    /// For the rows that stand for every entry of a directory except what is refused beneath it.
+    /// They are the entries the directory had when it was listed, and one can be removed before a
+    /// backend opens it. A backend that opens every row before it starts the process leaves out
+    /// a listed row whose name is gone, where it refuses the policy over any other row. A path
+    /// the caller named is not listed, whatever directory it is in.
+    pub fn allow_write_listed(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writable.push(WriteGrant {
+            path: path.into(),
+            kind: PathKind::Unsaid,
+            listed: true,
         });
         self
     }
@@ -128,6 +150,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::File,
+            listed: false,
         });
         self
     }
@@ -138,6 +161,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Directory,
+            listed: false,
         });
         self
     }
@@ -161,6 +185,14 @@ impl SandboxPolicy {
         self
     }
 
+    /// Name the unix socket the proxy named by [`SandboxPolicy::allow_network_egress_only_to`]
+    /// listens on as well, which a backend that runs the process in an empty network uses to
+    /// bring the proxy's port into it.
+    pub fn with_egress_through(mut self, socket: impl Into<PathBuf>) -> Self {
+        self.egress_through = Some(socket.into());
+        self
+    }
+
     /// Permit listening on and connecting to a port of the loopback interface, and nothing
     /// that is not this machine. See [`SandboxPolicy::allow_loopback`].
     pub fn allow_loopback(mut self) -> Self {
@@ -173,6 +205,7 @@ impl SandboxPolicy {
     pub fn without_network_egress(mut self) -> Self {
         self.allow_network = false;
         self.egress_only_to = None;
+        self.egress_through = None;
         self
     }
 
@@ -236,6 +269,7 @@ impl SandboxPolicy {
                 writable,
                 allow_network: self.allow_network,
                 egress_only_to: self.egress_only_to,
+                egress_through: self.egress_through.clone(),
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
@@ -443,6 +477,9 @@ pub(crate) fn names_a_filesystem_root(path: &Path) -> bool {
 pub struct WriteGrant {
     pub path: PathBuf,
     pub kind: PathKind,
+    /// Whether the row is an entry a listing of its directory produced
+    /// ([`SandboxPolicy::allow_write_listed`]). Such a row says nothing about what is at it.
+    pub listed: bool,
 }
 
 /// What a write row says is at the path it names.
@@ -651,6 +688,10 @@ pub struct Capabilities {
     /// refusal asks this of the backend, so it does not say a refusal is in force where the stage
     /// it applies to is refused.
     pub subtracts_from_a_grant: bool,
+    /// Whether a connect to a unix socket that has a path is held to the policy's write rows
+    /// (SANDBOX-3). Where it is not, a confined program reaches every such socket on the machine,
+    /// the user's D-Bus, the agent `SSH_AUTH_SOCK` names and `docker.sock` among them.
+    pub governs_sockets_with_a_path: bool,
 }
 
 #[cfg(test)]
@@ -677,6 +718,7 @@ mod tests {
             vec![WriteGrant {
                 path: PathBuf::from("/workspace/out"),
                 kind: PathKind::Unsaid,
+                listed: false,
             }]
         );
     }
@@ -781,6 +823,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -794,6 +837,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: false,
         }
     }
 
@@ -870,6 +914,16 @@ mod tests {
                 .egress_only_to,
             Some(8123)
         );
+
+        let relayed = limited.clone().with_egress_through("/run/proxy.sock");
+        assert_eq!(
+            relayed
+                .nameable_under(&capabilities(false))
+                .policy
+                .egress_through,
+            Some(PathBuf::from("/run/proxy.sock"))
+        );
+        assert_eq!(relayed.without_network_egress().egress_through, None);
 
         let taken_back = limited.without_network_egress();
         assert!(!taken_back.allow_network);
@@ -999,6 +1053,23 @@ mod tests {
             "a row that said nothing was created anyway"
         );
         assert!(created.is_empty());
+    }
+
+    /// A listed row is an entry a directory had when it was listed. Creating the name again
+    /// would put an entry on the user's disk that nothing asked for, in a directory the program
+    /// is only meant to reach the other entries of.
+    #[test]
+    fn a_row_a_listing_produced_is_not_created() {
+        let dir = a_directory_of_this_tests_own("sandbox-policy-listed-row");
+        let gone = dir.join("an-entry-that-was-listed");
+
+        let policy = SandboxPolicy::strict().allow_write_listed(&gone);
+        let created = policy.create_missing_write_rows(&capabilities(false));
+
+        assert!(!gone.exists(), "a listed row was created anyway");
+        assert!(created.is_empty());
+        assert!(policy.writable[0].listed);
+        assert_eq!(policy.writable[0].kind, PathKind::Unsaid);
     }
 
     /// Creating a path costs a write on the user's disk, and a backend that grants a
@@ -1174,6 +1245,7 @@ mod tests {
             vec![WriteGrant {
                 path: wanted,
                 kind: PathKind::Directory,
+                listed: false,
             }]
         );
         assert!(

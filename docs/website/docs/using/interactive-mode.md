@@ -371,6 +371,13 @@ and sending any prompt drops it. It lasts for the session only, is not written t
 and does not appear in the Ctrl-R search. A line put away with Ctrl-S is a separate slot, which a
 clear does not touch.
 
+## Suggested next prompts
+
+With [`suggestions`](../customize/configuration.md#suggestions) set to `true`, the empty box shows the
+next prompt the model expects you to type, dimmed, after a turn that ended with a reply. **Tab** or
+**Right** moves it into the box to edit; nothing sends it. Any other key removes it. It costs a
+request per turn, and none is made in plan mode or an incognito session.
+
 ## Searching the prompts you have sent
 
 **Ctrl-R** opens a search over every prompt in your history, drawn over the transcript in place of the
@@ -447,6 +454,12 @@ lines can be moved.
 The hint is there only while a press would move something. A command joined to another with `&&`
 or `||`, one with a redirection such as `2>&1`, and one a delegate is running cannot be moved, and
 the hint does not appear for them.
+
+**Sending a message moves it too.** A message you send while the turn waits on a command that could
+be moved goes into the turn at its next round, and the turn reaches that round only when the command
+returns. So once the command has run for 10 seconds, the message moves it to the background as the
+key would, and the turn reads your message next. A command, such as `/clear`, or a shell line waiting
+does not move it, since those wait for the turn to end anyway.
 
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,

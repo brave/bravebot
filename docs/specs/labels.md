@@ -16,7 +16,7 @@ guards:
       - crates/agent/src/tools.rs: 27
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
-      - crates/agent/tests/workspace.rs: 35
+      - crates/agent/tests/workspace.rs: 36
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/core/src/policy.rs: 114
@@ -38,7 +38,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 55
+      - crates/agent/tests/workspace.rs: 57
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 63
@@ -53,11 +53,11 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/tools.rs: 21
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 241
+      - crates/agent/tests/workspace.rs: 249
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -529,9 +529,9 @@ arrives at all.
 
 ## Known costs
 
-- **Three places in the policy layer do look at untrusted bytes in order to decide something.**
-  The clauses above say nothing may, so these are exceptions, and they are written down rather
-  than left to be found.
+- **Four places do look at untrusted bytes in order to decide something.** Three are in the policy
+  layer and the fourth is the search, which is in `bravebot-agent`. The clauses above say nothing
+  may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
   holds two things: a remark meant for the person watching, and the document to be written. It
@@ -629,3 +629,56 @@ arrives at all.
   ([CHECK-12](vetting.md#CHECK-12)). While auto-vetting is off, reaching the planner at all is not
   on it either, and a verdict is advice about bytes already on a person's screen. A picture
   ([VET-4](tools/vet-content.md#VET-4)) is a path away from it instead.
+
+- **The fourth is the search comparing its pattern against files nobody vouched for.** The search
+  tool walks the files its directory and `include` select and tests each line against the pattern,
+  whether or not a person vouched for the file. Which lines match, how many do, where the cap on
+  matches and the boundary of a page fall, and whether the walk ran out of time are therefore decided
+  by bytes an attacker may have written. The comparison is in `bravebot-agent`, which is the driver
+  too ([LABEL-4](#LABEL-4)). Where every file the walk reaches is vouched for, the bytes are trusted
+  and the comparison is the case [LABEL-5](#LABEL-5) allows. The rest of this entry is about a walk
+  that also reaches a file nobody vouched for.
+
+  The result is labelled from the paths the walk reached, before any file is opened, and one
+  unvouched path makes the whole result untrusted ([search.md](tools/search.md)). The lines the
+  comparison keeps therefore reach the planner only as a reference. What does reach it is a handful
+  of numbers the comparison decided. Suppose an attacker owns a file the search reads. Everything
+  that buys them is on this list:
+
+  - **Set the result's line and byte counts.** Within the caps the search keeps, which are 200
+    matches, 1,000 context lines and 200 files in a tally, with a line cut at 500 bytes. The
+    planner is shown both numbers for any quarantined content ([LABEL-3](#LABEL-3)), and an attacker
+    who owns a file already sets them for a read of it.
+  - **Make the search report itself incomplete.** By filling the cap on matches, the cap on context
+    lines or the cap on files in a tally, or by making files slow enough to read that the time cap
+    stops the walk before it reaches the rest. The planner is told the result is incomplete and,
+    where the cap on matches was the reason, is given the offset for the next page, which is the
+    offset it asked for plus the cap. Being given that offset also tells it which cap was reached.
+    That is the fact of being cut short, which cap did it, and a number made of the offset the
+    planner supplied and the cap. It can cost the planner searches, since each page reads the tree
+    again, and nothing else.
+  - **Tell the planner how many matches there are.** Only when the planner asks for a page past the
+    last match, and then as one number, which the caps above do not bound.
+  - **Choose which matches fall on which page, and make one of their own files contribute
+    nothing.** The first happens inside a result the planner cannot read. The second is a file that
+    is not valid text, which the search skips.
+  - **Make one search expensive.** The time cap is checked between files and a file is read whole,
+    so a single very large file costs its full size in reading time and memory before any line is
+    tested.
+  - **Set the tally the person sees.** The line shown to the person watching counts the matches and
+    the files read, and the person is shown whatever those came to.
+
+  What is **not** on the list is the thing that would matter. Which files the walk reaches is
+  decided by the directory, the glob, the permission rules and the names in the tree, and never by
+  a byte of any file. The label of the result is decided before any file is read. The pattern, the
+  directory, the glob and the offset are the planner's own arguments, and no byte of a file
+  reaches any of them. No text of any line reaches the planner. Choosing any destination stays the
+  planner's proposal and a person's approval, since a search writes, fetches and runs nothing. The
+  residue is that the planner reads these numbers and can be moved by them, as far as a count, an
+  incomplete notice, an offset and a total can move it.
+
+  Two alternatives cost more than this does. A search that opens only vouched files finds nothing in
+  a tree nobody vouched for, and a workspace whose startup question was declined is such a tree. A
+  search run as a processor job is a model call that produces a document or a remark, so it would no
+  longer be a pattern match. Moving the comparison into `bravebot-core` is not a third, since that
+  crate is the driver as well.

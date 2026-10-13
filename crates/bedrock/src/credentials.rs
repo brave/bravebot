@@ -43,21 +43,20 @@ const AWS: &str = "aws";
 ///
 /// Not left to the operating system's own search of `PATH`: this is a program bravebot starts on its
 /// own account, unconfined and with the person's access to `~/.aws`, and an activated virtualenv
-/// puts a directory a confined stage may write at the front of `PATH`. An `aws` written there would
-/// be the one run. [`bravebot_sandbox::programs::find`] leaves those directories out, so a person
-/// whose only `aws` is in such an environment has none, as far as this is concerned.
+/// puts a directory a confined stage may write at the front of `PATH`. A stage given every path the
+/// account can write may also replace the `aws` in a Homebrew prefix the account owns. An `aws`
+/// written in either place would be the one run. [`bravebot_sandbox::programs::find_on`] leaves
+/// those directories out, so a person whose only `aws` is in one has none, as far as this is
+/// concerned.
 ///
 /// The empty path when there is none, which [`absent`] recognises before anything is started, since
 /// what a platform says on being asked to start it is not the same everywhere.
 fn installed() -> PathBuf {
-    installed_in(
-        &std::env::var_os("PATH").unwrap_or_default(),
-        &bravebot_sandbox::programs::registered(),
-    )
+    installed_in(&std::env::var_os("PATH").unwrap_or_default())
 }
 
-fn installed_in(path: &OsStr, writable: &[PathBuf]) -> PathBuf {
-    bravebot_sandbox::programs::find_in(OsStr::new(AWS), path, writable).unwrap_or_default()
+fn installed_in(path: &OsStr) -> PathBuf {
+    bravebot_sandbox::programs::find_on(OsStr::new(AWS), path).unwrap_or_default()
 }
 
 /// A command for that program, with this agent's own credentials taken off it.
@@ -393,13 +392,33 @@ pub fn sign_in_if_needed(
     login(profile, say)
 }
 
+/// Start `command` with no input and both output streams piped, under the spawn gate. The wait for
+/// the program to finish belongs to the caller and is taken outside the gate, so a slow CLI holds up
+/// no other start.
+fn start_piped(command: &mut Command) -> std::io::Result<std::process::Child> {
+    bravebot_sandbox::process::starting_a_program(|| {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    })
+}
+
+/// Run `command` to its end and collect what it printed, as `Command::output` does. It sets the
+/// standard streams the way `output` does by default and replaces any set before, which is harmless
+/// while `export_command` and `profiles_command` set none.
+fn output_of(command: &mut Command) -> std::io::Result<std::process::Output> {
+    start_piped(command)?.wait_with_output()
+}
+
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
     let mut command = export_command(profile);
     if absent(&command) {
         return Err(CredentialError::NotInstalled);
     }
-    let mut output = command.output().map_err(|e| match e.kind() {
+    let mut output = output_of(&mut command).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
         _ => CredentialError::Refused {
             detail: e.to_string(),
@@ -427,7 +446,7 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// Run only after something has already failed, so the check before every turn still costs one
 /// export and no more.
 fn profiles() -> Option<Vec<String>> {
-    let output = profiles_command().output().ok()?;
+    let output = output_of(&mut profiles_command()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -482,21 +501,16 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
     if absent(&command) {
         return Err(CredentialError::NotInstalled);
     }
-    let mut child = command
-        // Both streams, because which one carries the code is the CLI's business and a person who
-        // cannot see it is stuck either way.
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Nothing is typed at this: the code goes into a browser, and the terminal belongs to
-        // whoever called. A program left able to read stdin would fight for the keys.
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
-            _ => CredentialError::Refused {
-                detail: e.to_string(),
-            },
-        })?;
+    // Both output streams are piped, because which one carries the code is the CLI's business and a
+    // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
+    // browser, and the terminal belongs to whoever called, so a program left able to read stdin
+    // would fight for the keys.
+    let mut child = start_piped(&mut command).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
+        _ => CredentialError::Refused {
+            detail: e.to_string(),
+        },
+    })?;
 
     // Drained on a thread apiece and merged over one channel, so neither stream blocks against a
     // pipe nobody is reading and the lines arrive in the order they were written.
@@ -749,6 +763,19 @@ mod tests {
         }
     }
 
+    /// Every start of the CLI, whether its output is collected or its lines are streamed as they
+    /// arrive, is taken under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_of_the_cli_waits_for_a_channel_being_created() {
+        bravebot_sandbox::process::start_waits_at_the_gate(|| {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "true"]);
+            let output = output_of(&mut command).expect("the program runs");
+            assert!(output.status.success());
+        });
+    }
+
     /// A directory outside the temp directory that starts empty, because one under it is a
     /// directory a stage may write and the lookup would leave it out for that reason alone.
     fn fresh_directory(name: &str) -> PathBuf {
@@ -782,9 +809,10 @@ mod tests {
         executable_aws(&planted);
         let system = fresh_directory("credentials-planted-system");
         let real = executable_aws(&system);
+        bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted, &system]).unwrap();
 
-        let command = command_for(&installed_in(&path, &[session]));
+        let command = command_for(&installed_in(&path));
 
         assert_eq!(command.get_program(), real.as_os_str());
     }
@@ -797,11 +825,32 @@ mod tests {
         let planted = session.join(".venv").join("bin");
         std::fs::create_dir_all(&planted).unwrap();
         executable_aws(&planted);
+        bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted]).unwrap();
 
-        let command = command_for(&installed_in(&path, &[session]));
+        let command = command_for(&installed_in(&path));
 
         assert!(absent(&command));
+    }
+
+    /// A stage given every path the account can write may replace the `aws` in a Homebrew prefix
+    /// the account owns, which is the usual install on Apple Silicon. The CLI is started
+    /// unconfined with the person's access to `~/.aws`, so the one behind it is the one that has
+    /// to run.
+    #[test]
+    fn an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run() {
+        let prefix = fresh_directory("credentials-held-prefix");
+        let planted = prefix.join("bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        executable_aws(&planted);
+        let system = fresh_directory("credentials-held-system");
+        let real = executable_aws(&system);
+        bravebot_sandbox::programs::keep_out_where_writable(&prefix);
+        let path = std::env::join_paths([&planted, &system]).unwrap();
+
+        let command = command_for(&installed_in(&path));
+
+        assert_eq!(command.get_program(), real.as_os_str());
     }
 
     /// The same file on a path nothing writes is the program, so the refusal above is the
@@ -812,7 +861,7 @@ mod tests {
         let real = executable_aws(&system);
         let path = std::env::join_paths([&system]).unwrap();
 
-        assert_eq!(installed_in(&path, &[]), real);
+        assert_eq!(installed_in(&path), real);
     }
 
     /// The machine's own AWS configuration is the credential the CLI is being asked to resolve, so

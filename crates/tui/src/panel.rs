@@ -87,12 +87,29 @@ fn ending(text: &str, width: usize) -> String {
 
 /// One row of the Links section: what the link is, dim, and the link cut from the left to the rest
 /// of the row, since the number at its end is what tells two apart.
-fn link_row(label: &str, url: &str, width: usize) -> Line<'static> {
-    let room = width.saturating_sub(crate::wrap::display_width(label) + 1);
-    Line::from(vec![
+///
+/// A GitHub pull request or issue address is written as its shorthand, and the row comes with the
+/// [`Link`] that makes the cells of the shorthand a link to the address, at row 0.
+fn link_row(label: &str, url: &str, width: usize) -> (Line<'static>, Option<Link>) {
+    let label_width = crate::wrap::display_width(label);
+    let room = width.saturating_sub(label_width + 1);
+    let (text, address) = match shorthand(url) {
+        Some(short) => (short, Some(url)),
+        None => (crate::render::printable(url), None),
+    };
+    let shown = ending(&text, room);
+    let link = address.map(|url| Link {
+        row: 0,
+        // The space before the label and the one after it.
+        column: label_width + 2,
+        width: crate::wrap::display_width(&shown),
+        url: url.to_string(),
+    });
+    let line = Line::from(vec![
         Span::styled(format!(" {label} "), dim()),
-        Span::raw(ending(&crate::render::printable(url), room)),
-    ])
+        Span::raw(shown),
+    ]);
+    (line, link)
 }
 
 /// `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}` as `{owner}/{repo}#{n}`.
@@ -342,15 +359,30 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         section(&mut body, t!(panel_goal).to_string(), rows);
     }
 
-    let link_rows: Vec<Line<'static>> = [
+    let mut link_rows = Vec::new();
+    let mut address_links = Vec::new();
+    for (label, url) in [
         (t!(panel_pull_request), &identity.pull_request),
         (t!(panel_issue), &identity.issue),
-    ]
-    .into_iter()
-    .filter_map(|(label, url)| Some(link_row(label, url.as_deref()?, text)))
-    .collect();
+    ] {
+        let Some(url) = url.as_deref() else {
+            continue;
+        };
+        let (line, link) = link_row(label, url, text);
+        address_links.extend(link.map(|link| Link {
+            row: link_rows.len(),
+            ..link
+        }));
+        link_rows.push(line);
+    }
     if !link_rows.is_empty() {
+        let count = link_rows.len();
         section(&mut body, t!(panel_links).to_string(), link_rows);
+        let first = body.len() - count;
+        links.extend(address_links.into_iter().map(|link| Link {
+            row: first + link.row,
+            ..link
+        }));
     }
 
     let mut context = vec![row(
@@ -1159,13 +1191,14 @@ mod tests {
     }
 
     /// Two pull requests in one repository differ only in the number at the end, so a link cut like
-    /// the name would draw them the same.
+    /// the name would draw them the same. The host is not GitHub's, so the address is not
+    /// written as a shorthand.
     #[test]
     fn a_long_link_keeps_its_end() {
         let mut session = Session::new("none");
         session.link(
             None,
-            Some("https://github.com/an-organisation/a-long-repository-name/pull/12345"),
+            Some("https://git.example.org/an-organisation/a-long-repository-name/pull/12345"),
         );
         let drawn = texts(&lines(&session, WIDTH, 30));
         let row = drawn
@@ -1310,6 +1343,150 @@ mod tests {
                 .collect::<Vec<_>>(),
             "the link is not exactly the shorthand's cells: {row:?}"
         );
+    }
+
+    /// The rows under the Links heading.
+    fn link_rows(session: &Session) -> Vec<String> {
+        let drawn = texts(&lines(session, WIDTH, 30));
+        let heading = t!(panel_links).to_string();
+        let first = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .unwrap_or_else(|| panic!("no Links heading: {drawn:#?}"));
+        drawn[first + 1..]
+            .iter()
+            .take_while(|row| !row.is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// Where `text` starts among the cells the terminal was sent for the panel drawn `columns`
+    /// wide, as the column and the row.
+    fn found_in_panel(buffer: &ratatui::buffer::Buffer, columns: u16, text: &str) -> (u16, u16) {
+        (0..buffer.area.height)
+            .find_map(|y| {
+                let row: String = (columns - WIDTH..columns)
+                    .map(|x| crate::hyperlink::shown(buffer[(x, y)].symbol()))
+                    .collect();
+                let at = row.find(text)?;
+                Some((columns - WIDTH + row[..at].chars().count() as u16, y))
+            })
+            .unwrap_or_else(|| panic!("{text:?} is not in the panel"))
+    }
+
+    /// Each linked cell of `buffer`, top to bottom and left to right: where it is, the character it
+    /// shows and the address it opens.
+    fn linked_cells(buffer: &ratatui::buffer::Buffer) -> Vec<(u16, u16, String, String)> {
+        let mut linked = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let symbol = buffer[(x, y)].symbol();
+                let shown = crate::hyperlink::shown(symbol);
+                if shown != symbol {
+                    let (address, _) = symbol
+                        .strip_prefix("\x1b]8;;")
+                        .and_then(|rest| rest.split_once("\x1b\\"))
+                        .expect("a linked cell opens with the address");
+                    linked.push((x, y, shown.to_string(), address.to_string()));
+                }
+            }
+        }
+        linked
+    }
+
+    /// A pull request and an issue are given as the addresses GitHub shows, which cut from the left
+    /// to the room beside the word leave the repository's name off.
+    #[test]
+    fn a_github_address_in_a_link_row_is_drawn_as_its_shorthand() {
+        let mut session = Session::new("none");
+        session.link(
+            Some("https://github.com/brave/bravebot/issues/1267"),
+            Some("https://github.com/brave/bravebot/pull/1975"),
+        );
+        assert_eq!(
+            link_rows(&session),
+            [
+                "Pull request brave/bravebot#1975",
+                "Issue brave/bravebot#1267"
+            ]
+        );
+    }
+
+    /// An address the shorthand cannot name is drawn as the person gave it, and is not a link, as
+    /// in the name.
+    #[test]
+    fn a_link_row_of_any_other_shape_is_drawn_as_written_and_not_linked() {
+        for address in [
+            "http://github.com/a/b/pull/1",
+            "https://x.test/a/b/pull/1",
+            "https://github.com/a/b/pull",
+        ] {
+            let mut session = opened_at(100);
+            session.link(Some(address), None);
+            assert_eq!(link_rows(&session), [format!("Issue {address}")]);
+            let buffer = frame(&mut session, 100, 30);
+            assert_eq!(linked_cells(&buffer), [], "{address:?} was linked");
+        }
+    }
+
+    /// The shorthand opens the address it stands for, so each row's cells have to open their own
+    /// row's address: the pull request's number is not the issue's, and neither the word beside the
+    /// shorthand nor the rest of the row may open anything.
+    #[test]
+    fn a_link_row_shorthand_links_to_its_own_address_and_nothing_else_does() {
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1975";
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        let mut session = opened_at(100);
+        session.link(Some(ISSUE), Some(PULL));
+        let buffer = frame(&mut session, 100, 30);
+
+        let mut expected = Vec::new();
+        for (word, shorthand, address) in [
+            ("Pull request", "brave/bravebot#1975", PULL),
+            ("Issue", "brave/bravebot#1267", ISSUE),
+        ] {
+            let (x, y) = found_in_panel(&buffer, 100, &format!("{word} {shorthand}"));
+            let start = x + word.len() as u16 + 1;
+            expected.extend(
+                shorthand
+                    .chars()
+                    .zip(start..)
+                    .map(|(c, x)| (x, y, c.to_string(), address.to_string())),
+            );
+        }
+        assert_eq!(linked_cells(&buffer), expected);
+    }
+
+    /// A shorthand longer than the room is cut from the left, as an address is, and the link
+    /// covers the cells drawn, the ellipsis included, so the number at the end still opens it.
+    #[test]
+    fn a_long_shorthand_keeps_its_end_and_is_linked_as_drawn() {
+        const PULL: &str = "https://github.com/an-organisation/a-long-repository-name/pull/12345";
+        let mut session = opened_at(100);
+        session.link(None, Some(PULL));
+        let buffer = frame(&mut session, 100, 30);
+
+        let drawn = "…epository-name#12345";
+        let (x, y) = found_in_panel(&buffer, 100, &format!("Pull request {drawn}"));
+        let start = x + "Pull request ".len() as u16;
+        assert_eq!(
+            linked_cells(&buffer),
+            drawn
+                .chars()
+                .zip(start..)
+                .map(|(c, x)| (x, y, c.to_string(), PULL.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A row the panel is too short to draw is not drawn, and a link to its place would open the
+    /// address from whatever the panel draws there instead.
+    #[test]
+    fn a_link_row_below_the_panels_height_is_not_linked() {
+        let mut session = opened_at(100);
+        session.link(None, Some("https://github.com/brave/bravebot/pull/1975"));
+        let buffer = frame(&mut session, 100, 2);
+        assert_eq!(linked_cells(&buffer), []);
     }
 
     const ID: &str = "0b3f6c1e-9a2d-4e57-8c41-5d7a2f90b3e8";

@@ -2100,7 +2100,8 @@ impl<'a> Tools<'a> {
                 .with_unasked_writes(
                     !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
                 )
-                .with_host_grants(&self.workspace.granted_hosts());
+                .with_host_grants(&self.workspace.granted_hosts())
+                .with_identities(bravebot_config::git_identities::settled());
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -3000,14 +3001,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
 /// value on a later line is as visible as one on the first. Several lines are drawn as the first
 /// and "...", because a transcript row is one row.
 fn command_as_drawn(line: &str) -> String {
-    let declared = bravebot_core::credentials::scan(
-        "the command line",
-        line,
-        bravebot_core::credentials::run_salt(),
-    )
-    .iter()
-    .any(|finding| finding.kind.is_declared());
-    if declared {
+    if declares_a_credential("the command line", line) {
         return String::new();
     }
     let mut lines = line.lines().map(str::trim).filter(|line| !line.is_empty());
@@ -3019,14 +3013,80 @@ fn command_as_drawn(line: &str) -> String {
     }
 }
 
+/// Whether `text` carries a value that declared itself a credential, on any of its lines.
+fn declares_a_credential(what: &str, text: &str) -> bool {
+    bravebot_core::credentials::scan(what, text, bravebot_core::credentials::run_salt())
+        .iter()
+        .any(|finding| finding.kind.is_declared())
+}
+
+/// How a call to a server's tool is drawn: `alias:tool`, then the arguments the server is sent,
+/// as compact JSON. Compact JSON escapes a line break inside a value, so the arguments are one
+/// line as they stand, and one longer than a previewed line is cut to that width and "...", for
+/// the reason a preview is: one argument holding a document would otherwise wrap across the
+/// whole screen.
+///
+/// They are left off where any string in them, a key or a value, carries a value that declared
+/// itself a credential, since a transcript is one of the places CRED-11 keeps one out of. Each
+/// string is scanned as it is rather than as JSON spells it: the escaping takes the line breaks
+/// out of a private key's armour, and the armour is how the scan recognises one. The scan reads
+/// all of them before anything is cut, so a value cannot be drawn in part.
+fn server_call_as_drawn(named: &str, compact: &str) -> String {
+    let parsed: Value = serde_json::from_str(compact).unwrap_or(Value::Null);
+    let mut strings = Vec::new();
+    strings_in(&parsed, &mut strings);
+    if declares_a_credential("the arguments", &strings.join("\n")) {
+        return named.to_string();
+    }
+    let width = crate::turn::PREVIEW_WIDTH;
+    if compact.chars().count() > width {
+        let cut: String = compact.chars().take(width).collect();
+        return format!("{named} {cut} ...");
+    }
+    format!("{named} {compact}")
+}
+
+/// Every key and string value in `value`, at any depth.
+fn strings_in<'a>(value: &'a Value, into: &mut Vec<&'a str>) {
+    match value {
+        Value::String(text) => into.push(text),
+        Value::Array(items) => items.iter().for_each(|item| strings_in(item, into)),
+        Value::Object(pairs) => pairs.iter().for_each(|(key, item)| {
+            into.push(key);
+            strings_in(item, into);
+        }),
+        _ => {}
+    }
+}
+
+/// `alias:tool` from the wire name a server's tool was offered under, less its `mcp__`.
+///
+/// An alias and a tool word may each hold `__`, so a name that can be divided in more than one
+/// place is drawn as it was offered rather than divided at a guess.
+fn server_named(wire: &str) -> String {
+    let dividers = wire
+        .as_bytes()
+        .windows(2)
+        .filter(|pair| *pair == b"__")
+        .count();
+    match wire.split_once("__") {
+        Some((alias, tool)) if dividers == 1 => format!("{alias}:{tool}"),
+        _ => wire.to_string(),
+    }
+}
+
 /// What a call is about, for the line shown while it runs.
 ///
 /// Which argument names the target depends on the tool, so the key is chosen from the tool's
 /// own name. The value is the model's word for it, released to a screen and nowhere else: it
 /// goes on a line a person reads and is never compared, matched, or routed anywhere.
+///
+/// `server` is `alias:tool` where the call is to a server's tool. A server is sent the whole of
+/// the arguments, so the whole of them is what such a call is about.
 fn target_of<S: Sink>(
     policy: &mut Policy<'_, S>,
     tool: &str,
+    server: Option<&str>,
     slots: &SlotStore,
     arguments: &Value,
 ) -> String {
@@ -3046,19 +3106,24 @@ fn target_of<S: Sink>(
     let named = if tool == "spawn_processor" {
         references_in(arguments)
     } else {
-        let Some(key) = target_key(tool) else {
-            return String::new();
-        };
-
-        // A call that named a reference instead of a path says so with the reference, which is
-        // then resolved below: it is the planner that cannot know the name, not the person.
-        let key = if !names(arguments, key) && names(arguments, "path_ref") {
-            "path_ref"
+        let text = if server.is_some() {
+            Some(arguments.to_string())
         } else {
-            key
+            let Some(key) = target_key(tool) else {
+                return String::new();
+            };
+
+            // A call that named a reference instead of a path says so with the reference, which
+            // is then resolved below: it is the planner that cannot know the name, not the person.
+            let key = if !names(arguments, key) && names(arguments, "path_ref") {
+                "path_ref"
+            } else {
+                key
+            };
+            target_text(arguments, key)
         };
 
-        match target_text(arguments, key) {
+        match text {
             Some(text) => Labelled::new(text, bravebot_core::label::Label::untrusted_public()),
             None => return String::new(),
         }
@@ -3072,8 +3137,17 @@ fn target_of<S: Sink>(
     // searched them afterwards would be inspecting content under a witness minted to put it on a
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
-    let display_names = policy.names_for_display(slots);
+    //
+    // A server is sent a reference as the planner wrote it, so it is drawn as written too, and no
+    // file is named for a server's call: naming them records a release the line never makes.
+    let display_names = match server {
+        Some(_) => Vec::new(),
+        None => policy.names_for_display(slots),
+    };
     let shaped = policy.render_in_place(tool, &named, |text| {
+        if let Some(server) = server {
+            return server_call_as_drawn(server, &text);
+        }
         let text = if tool == "run" {
             command_as_drawn(&text)
         } else {
@@ -3125,9 +3199,15 @@ pub fn stored_why(arguments: &str) -> String {
 /// words on a screen that the person watching saw the first time round. It reaches a transcript
 /// line and nothing else.
 pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
+    let tool = strip_namespace(tool);
     let parsed: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
 
-    let target = if tool == "spawn_processor" {
+    let target = if let Some(wire) = tool.strip_prefix("mcp__") {
+        // A call whose arguments are not JSON is announced as the verb alone, since it never runs.
+        serde_json::from_str::<Value>(arguments)
+            .map(|parsed| server_call_as_drawn(&server_named(wire), &parsed.to_string()))
+            .unwrap_or_default()
+    } else if tool == "spawn_processor" {
         let names: Vec<&str> = parsed
             .get("reads")
             .and_then(Value::as_array)
@@ -3324,10 +3404,13 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             .find(&name)
             .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
     });
-    let target = match &server_tool {
-        Some((_, alias, tool)) => format!("{alias}:{tool}"),
-        None => target_of(policy, &name, tools.slots, &arguments),
-    };
+    // A server's name that no offer holds is drawn from the name alone, as a resumed session
+    // draws every server's call, so the two describe it alike.
+    let server = server_tool
+        .as_ref()
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"))
+        .or_else(|| name.strip_prefix("mcp__").map(server_named));
+    let target = target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
     // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
     // selects no server, and with either holding the server's tools back the offer is not deferred.
@@ -7919,8 +8002,26 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
 
+    // A read as well as a write. The rules below are matched against the spelling, and a name
+    // Windows reads as another file would have them judge one file while the run opens the other.
+    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
+    // output is discarded on Windows, so a refused write names the one spelling a line may use for
+    // that; a read has none, since `/dev/null` discards only output.
+    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
+    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
+        for path in paths {
+            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
+                let target = path.display().to_string();
+                return Produced::problem(format!(
+                    "refused: {}{hint}",
+                    workspace_failure(policy, "run", "command", &misleading, &target)
+                ));
+            }
+        }
+    }
+
     // A redirection names a file the run opens itself, so the confinement every other write goes
-    // through is applied here to the path.
+    // through is applied here to the path, and again immediately before the run opens it.
     for path in &plan.writes {
         if let Err(escape) = tools.workspace.confines(path) {
             let target = path.display().to_string();
@@ -7949,6 +8050,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             let named = tools.workspace.relative_display(path);
             if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
                 return Produced::problem(refusal);
+            }
+            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
+            // from a `directory`), which no rule's segments match across and which the landing
+            // asked about above does not resolve, so the file's other names are asked about too.
+            for reached in tools.workspace.names_reached(path) {
+                if reached != named
+                    && let Err(refusal) =
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                {
+                    return Produced::problem(refusal);
+                }
             }
         }
     }
@@ -8381,6 +8493,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
             confinement.as_ref(),
             &mut |path| {
+                // Confined again where it lands now, since the parts of the line before this one
+                // have run since the check above and may have left a link at this name. At every
+                // open and not only the first, because a part run between two opens of one
+                // destination can have replaced it with a link (CMDLINE-5).
+                if let Err(escape) = tools.workspace.confines(path) {
+                    let target = path.display().to_string();
+                    let detail = workspace_failure(policy, "run", "command", &escape, &target);
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail,
+                    });
+                }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
                 if effects.contains_key(&key) {
                     return Ok(());
@@ -13587,6 +13711,7 @@ mod tests {
                 target_of(
                     &mut policy,
                     "read_file",
+                    None,
                     &slots,
                     &json!({"path_ref": "ref:1"}),
                 )
@@ -13641,6 +13766,120 @@ mod tests {
                     r#"{"command":"echo start\nprintf AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"}"#
                 ),
                 "Run"
+            );
+        }
+
+        /// A session read back off disk draws a call to a server's tool as the live one was
+        /// drawn: the server, the tool and the arguments the server was sent, on one row however
+        /// the record spaced them, and cut where they are wider than a previewed line. Arguments
+        /// carrying a credential are left off, including a private key whose armour only reads
+        /// as one with its line breaks in place.
+        #[test]
+        fn a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential() {
+            let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
+            let forecast = "mcp__weather__get_forecast";
+
+            assert_eq!(
+                drawn(forecast, r#"{"city":"Lyon"}"#),
+                r#"MCP(weather:get_forecast {"city":"Lyon"})"#
+            );
+            assert_eq!(
+                drawn("functions.mcp__weather__get_forecast", r#"{"city":"Lyon"}"#),
+                r#"MCP(weather:get_forecast {"city":"Lyon"})"#
+            );
+            let long = json!({"body": "word ".repeat(60)}).to_string();
+            assert_eq!(
+                drawn(forecast, &long),
+                format!(
+                    "MCP(weather:get_forecast {} ...)",
+                    &long[..crate::turn::PREVIEW_WIDTH]
+                )
+            );
+            assert_eq!(
+                drawn(forecast, "{\n  \"city\": \"Lyon\",\n  \"days\": [1, 2]\n}"),
+                r#"MCP(weather:get_forecast {"city":"Lyon","days":[1,2]})"#
+            );
+            assert_eq!(
+                drawn(forecast, r#"{"city":"Lyon","key":"AKIAIOSFODNN7EXAMPLE"}"#),
+                "MCP(weather:get_forecast)"
+            );
+            let armoured = format!(
+                "-----BEGIN {kind} KEY-----\nbm90IGEga2V5\n-----END {kind} KEY-----\n",
+                kind = "RSA PRIVATE"
+            );
+            assert_eq!(
+                drawn(
+                    forecast,
+                    &json!({"city": "Lyon", "key": armoured}).to_string()
+                ),
+                "MCP(weather:get_forecast)"
+            );
+            assert_eq!(
+                drawn("mcp__my__weather__get_forecast", r#"{"city":"Lyon"}"#),
+                r#"MCP(my__weather__get_forecast {"city":"Lyon"})"#
+            );
+            assert_eq!(drawn(forecast, "{\"city\":"), "MCP");
+        }
+
+        /// A live call to a server's tool is drawn with the arguments as the server is sent them.
+        /// A reference stays the reference the planner wrote, since the server receives that
+        /// and not the file it stands for, so the trail records no file named for the line. The
+        /// arguments are shaped inside the kernel before they are released to the screen.
+        #[test]
+        fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
+            use bravebot_core::capability::{Capability, CapabilitySet};
+            use bravebot_core::event::RecordingSink;
+            use bravebot_core::policy::{ReleasePlan, Routing};
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "send the notes");
+
+            let mut sink = RecordingSink::new();
+            let line = {
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut slots = SlotStore::new();
+                policy
+                    .defer(
+                        "read_file",
+                        SlotId::new("ref:1"),
+                        "notes.md",
+                        &Labelled::trusted("notes.md".to_string()),
+                        7,
+                        &mut slots,
+                    )
+                    .expect("the file is reserved");
+
+                target_of(
+                    &mut policy,
+                    "mcp__notes__send",
+                    Some("notes:send"),
+                    &slots,
+                    &json!({"body": "ref:1", "to": "ops"}),
+                )
+            };
+
+            assert_eq!(line, r#"notes:send {"body":"ref:1","to":"ops"}"#);
+            assert!(
+                !sink.events().iter().any(|event| matches!(
+                    event,
+                    bravebot_core::event::Event::Declassified { reason, .. }
+                        if reason.contains("references name")
+                )),
+                "the trail names a file the line never showed: {:?}",
+                sink.events()
+            );
+            let reshaped = super::gate_at(&sink, "render", "mcp__notes__send");
+            let released = super::gate_at(&sink, "display", "what a tool is working on");
+            assert!(
+                reshaped < released,
+                "the arguments were released before they were shaped: {:?}",
+                sink.events()
             );
         }
     }
@@ -17026,6 +17265,55 @@ mod tests {
                 !released_for_display(&sink, "a proposed run directory"),
                 "the directory was released for a screen and branched on from that: {:?}",
                 sink.events()
+            );
+        }
+
+        /// PERM-7: a redirection's target is opened by the run rather than resolved, so it is held
+        /// here to the refusal a file tool's path gets for a name Windows reads as another file, or
+        /// `Edit(.env)` is asked about `ENV~1` while the line overwrites `.env`. The workspace is
+        /// told to answer as Windows does, so the call in `run` is exercised on every host. The
+        /// regressions it rejects are the call left out, a read left out of it, and the way to
+        /// discard output offered for a read, where `/dev/null` discards nothing.
+        #[cfg(unix)]
+        #[test]
+        fn a_redirection_through_a_name_windows_reads_as_another_file_is_refused_before_it_runs() {
+            let scratch = Scratch::new("run-misleading-target");
+            std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+            let workspace = Workspace::new(&scratch.path)
+                .expect("workspace")
+                .with_windows_names();
+            let said = |command: &str| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &json!({ "command": command }),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+            let refusal = "names something other than the file it spells on Windows";
+
+            for target in ["'.env::$DATA'", "ENV~1", ".env.", "NUL"] {
+                let written = said(&format!("echo overwritten > {target}"));
+                assert!(
+                    written.contains(refusal) && written.contains("redirect it to /dev/null"),
+                    "the write to {target} was not refused with the way to discard output: \
+                     {written}"
+                );
+                let read = said(&format!("cat < {target}"));
+                assert!(
+                    read.contains(refusal) && !read.contains("/dev/null"),
+                    "the read from {target} was not refused, or was offered /dev/null: {read}"
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+                "SECRET_TOKEN=hunter2"
             );
         }
 

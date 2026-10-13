@@ -206,6 +206,63 @@ fn a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
+/// On a volume that folds case, `README.md` and `readme.md` are one file, so a fetched page
+/// written through `readme.md` over a trusted write to `README.md` is what both spellings read.
+/// The page has to be read back untrusted under either, rather than under the trust the first
+/// write recorded. A volume that holds the spellings apart is asked nothing more.
+#[test]
+fn an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling() {
+    let scratch = Scratch::new("case-spelled-rewrite");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    if !trust.folds_case() {
+        return;
+    }
+    trust.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(workspace.root());
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("README.md".to_string()),
+            &Labelled::trusted("ours".to_string()),
+        )
+        .expect("trusted bytes are written");
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("readme.md".to_string()),
+            &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+        )
+        .expect("the fetched page is written");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("README.md")).unwrap(),
+        "a fetched page"
+    );
+
+    for spelling in ["README.md", "readme.md"] {
+        let contents = workspace
+            .read(&mut policy, &Labelled::trusted(spelling.to_string()))
+            .expect("the file is read");
+        assert_eq!(
+            contents.label().integrity,
+            Integrity::Untrusted,
+            "{spelling} read the fetched page as trusted content"
+        );
+    }
+    assert!(policy.finish());
+}
+
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
 /// directory the project sits inside, so from then on a project file has an absolute name that
 /// resolves through a directory other than the project. Asked under that name as written, a file
@@ -1042,6 +1099,130 @@ fn grep_refuses_an_untrusted_pattern() {
         )
         .expect_err("an untrusted pattern must be refused");
     assert!(error.to_string().contains("injection blocked"));
+}
+
+/// A search compares its pattern against files nobody vouched for, so what such a file holds
+/// moves the counts it reports. It must move nothing else: the label comes from the paths the
+/// walk reached, so a file with no matching line, or one that cannot be read as text, taints the
+/// result as a file full of matches does. A label taken from the files that produced hits would
+/// let an attacker's bytes decide whether the planner is shown the result.
+#[test]
+fn what_an_unvouched_file_holds_changes_a_searchs_counts_and_not_its_label() {
+    let cases: [(&str, &[u8], usize, usize); 3] = [
+        ("a line the pattern matches", b"needle in theirs\n", 2, 2),
+        ("no line the pattern matches", b"nothing here\n", 1, 2),
+        ("bytes that are not text", &[0xff, 0xfe, 0x00, 0x9f], 1, 1),
+    ];
+    for (held, bytes, matched, searched) in cases {
+        let scratch = Scratch::new("grep-label-from-paths");
+        std::fs::write(scratch.path.join("mine.txt"), "needle in mine\n").unwrap();
+        std::fs::write(scratch.path.join("theirs.txt"), bytes).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust("theirs.txt");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let found = workspace
+            .grep(
+                &mut policy,
+                std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                &Labelled::trusted(".".to_string()),
+                None,
+                true,
+                1,
+            )
+            .expect("grep succeeds");
+
+        assert_eq!(
+            found.label().integrity,
+            Integrity::Untrusted,
+            "the result was labelled from what the unvouched file held ({held})"
+        );
+        let proof = policy.authorise_content_release("test", "matches");
+        let found = found.declassify(&proof);
+        assert_eq!(
+            found.considered, 2,
+            "which files the walk reached depended on what the unvouched file held ({held})"
+        );
+        assert_eq!(
+            found.matched, matched,
+            "the count did not follow what the unvouched file held ({held})"
+        );
+        assert_eq!(
+            found.searched, searched,
+            "the files read did not follow whether the unvouched file is text ({held})"
+        );
+        assert!(policy.finish());
+    }
+}
+
+/// The offset a cut-short search offers is the one asked for plus the cap, whatever an unvouched
+/// file holds. An offset taken from where the file's matching lines sit would hand the planner a
+/// number the file chose, and the two fixtures place the same number of matches on different
+/// lines so that only the count agrees.
+#[test]
+fn the_offset_a_cut_search_offers_does_not_depend_on_what_an_unvouched_file_holds() {
+    let dense = "needle\n".repeat(300);
+    let sparse: String = (0..300)
+        .map(|n| format!("filler {n}\nfiller\nfiller\nneedle {n}\n"))
+        .collect();
+    for (held, text) in [
+        ("matching lines one after another", dense),
+        ("matching lines far apart", sparse),
+    ] {
+        for offset in [1, 51] {
+            let scratch = Scratch::new("grep-offset-from-the-cap");
+            std::fs::write(scratch.path.join("theirs.txt"), &text).unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut trust = TrustStore::new(workspace.root());
+            trust.trust(".");
+            trust.distrust("theirs.txt");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                all_file_capabilities(),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let found = workspace
+                .grep(
+                    &mut policy,
+                    std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+                    &Labelled::trusted(".".to_string()),
+                    None,
+                    true,
+                    offset,
+                )
+                .expect("grep succeeds");
+
+            assert_eq!(found.label().integrity, Integrity::Untrusted);
+            let proof = policy.authorise_content_release("test", "matches");
+            let found = found.declassify(&proof);
+            assert!(found.truncated, "the cap was not reached ({held})");
+            assert_eq!(
+                found.paging(),
+                Some(Paging::Continue(offset + found.matches.len())),
+                "the offered offset was not the one asked for plus the cap ({held}, offset {offset})"
+            );
+            assert!(policy.finish());
+        }
+    }
 }
 
 #[test]

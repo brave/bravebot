@@ -688,6 +688,10 @@ expands it. `1` or `y` is answer 1. `2` is answer 2. `3`, `n` or Esc is answer 3
 nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing
 and tells the planner the person declined.
 
+A call that is not asked about, under an allow rule, answer 2 or bypassing, has no prompt to show
+its arguments, so the transcript row names the call by `alias:tool` and its arguments, asked or
+not ([VIEW-25](terminal-transcript.md#VIEW-25)).
+
 Answer 2 is written to `mcp-tools` as the alias, the tool and the workspace root with its links
 followed. Where the session has no state directory, or writes nothing as an incognito one does, it
 is drawn as not offered and its key does nothing. A record that will not take it still makes the

@@ -145,6 +145,7 @@ const READ_KEYS: &[&str] = &[
     "effort",
     "env",
     "fallbackModel",
+    crate::git_identities::BLOCK,
     "keybindings",
     "limit",
     "mcp",
@@ -157,6 +158,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "suggestions",
     "summaryModel",
     "terminalTitle",
     "tui",
@@ -286,6 +288,8 @@ pub struct Settings {
     defer_mcp_tools_above: Option<u64>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
+    /// What the top-level `suggestions` key said, if it said a boolean.
+    suggestions: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
     /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
@@ -472,6 +476,16 @@ pub struct Settings {
     sandbox_hosts_ignored: Vec<(PathBuf, &'static str)>,
     /// The layers that gave one of the three keys a value it cannot read.
     sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)>,
+    /// What `git.identities` came to across the layers that may choose a key.
+    ///
+    /// Settled by [`Settings::layered`]: an entry is read from the person's own file and the one
+    /// `--settings` names outside the workspace, as `sandbox.mode` is.
+    git_identities: crate::git_identities::Identities,
+    /// The layers that wrote `git.identities` and were not obeyed.
+    git_identities_ignored: Vec<PathBuf>,
+    /// The layers that gave `git.identities`, or one entry of it, a value it cannot read, with the
+    /// name of what was not read.
+    git_identities_misshapen: Vec<(PathBuf, String)>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -750,6 +764,11 @@ impl Settings {
         let mut sandbox_hosts = crate::sandbox_network::Hosts::default();
         let mut sandbox_hosts_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
+        // Settled per layer for the reason `sandbox.mode` is: which file chose a key decides
+        // whether it binds.
+        let mut git_identities = crate::git_identities::Identities::default();
+        let mut git_identities_ignored: Vec<PathBuf> = Vec::new();
+        let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -873,6 +892,13 @@ impl Settings {
                 &mut sandbox_hosts_ignored,
                 &mut sandbox_hosts_misshapen,
             );
+            git_identities.absorb(
+                &root,
+                Some(&path),
+                granting,
+                &mut git_identities_ignored,
+                &mut git_identities_misshapen,
+            );
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -961,6 +987,9 @@ impl Settings {
         settings.sandbox_hosts = sandbox_hosts;
         settings.sandbox_hosts_ignored = sandbox_hosts_ignored;
         settings.sandbox_hosts_misshapen = sandbox_hosts_misshapen;
+        settings.git_identities = git_identities;
+        settings.git_identities_ignored = git_identities_ignored;
+        settings.git_identities_misshapen = git_identities_misshapen;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -1069,6 +1098,10 @@ impl Settings {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            suggestions: match root.get("suggestions") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             update_check: match root.get("updateCheck") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
@@ -1132,6 +1165,14 @@ impl Settings {
             },
             sandbox_hosts_ignored: Vec::new(),
             sandbox_hosts_misshapen: Vec::new(),
+            // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
+            git_identities: {
+                let mut identities = crate::git_identities::Identities::default();
+                identities.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
+                identities
+            },
+            git_identities_ignored: Vec::new(),
+            git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1270,6 +1311,16 @@ impl Settings {
     /// somebody who wrote something else.
     pub fn terminal_title(&self) -> Option<bool> {
         self.terminal_title
+    }
+
+    /// Whether the settings in force turn follow-up suggestions on, if they said (INPUT-43).
+    ///
+    /// A boolean and nothing else, and the key exists to turn a request on, so only a real `true`
+    /// does it: a quoted `"true"` is absence and nothing is asked. The opposite of
+    /// [`Settings::terminal_title`], and for the opposite reason: a suggestion is a request that
+    /// spends, so a value read loosely could spend for somebody who wrote something else.
+    pub fn suggestions(&self) -> Option<bool> {
+        self.suggestions
     }
 
     /// Whether the settings in force let the startup screen check for a newer release, if they said.
@@ -1553,6 +1604,26 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), *key))
     }
 
+    /// The key each owner's repositories are pushed and fetched with over ssh, from the layers that
+    /// may choose one: the person's own file and the one `--settings` names outside the workspace.
+    pub fn git_identities(&self) -> &crate::git_identities::Identities {
+        &self.git_identities
+    }
+
+    /// The layers that wrote `git.identities` and were not obeyed, since a checkout cannot choose
+    /// which credential a program uses.
+    pub fn git_identities_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.git_identities_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The layers that gave `git.identities`, or one entry of it, a value it cannot read, with what
+    /// was not read.
+    pub fn git_identities_misshapen(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.git_identities_misshapen
+            .iter()
+            .map(|(path, name)| (path.as_path(), name.as_str()))
+    }
+
     /// The layers that gave one of the four keys something other than a list of strings.
     pub fn sandbox_filesystem_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
         self.sandbox_filesystem_misshapen
@@ -1582,6 +1653,7 @@ impl Settings {
             && self.limit.is_none()
             && self.defer_mcp_tools_above.is_none()
             && self.terminal_title.is_none()
+            && self.suggestions.is_none()
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
             && self.vetting.is_none()
@@ -1610,6 +1682,9 @@ impl Settings {
             && self.sandbox_hosts.is_empty()
             && self.sandbox_hosts_ignored.is_empty()
             && self.sandbox_hosts_misshapen.is_empty()
+            && self.git_identities.is_empty()
+            && self.git_identities_ignored.is_empty()
+            && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1749,6 +1824,7 @@ impl Settings {
                     .then_some("deferMcpToolsAbove"),
             )
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
+            .chain(self.suggestions.is_some().then_some("suggestions"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(
                 self.away_summary_enabled
@@ -2260,6 +2336,7 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
         .filter(|key| !READ_KEYS.contains(&key.as_str()))
         .cloned()
         .chain(beside_the_mode)
+        .chain(crate::git_identities::unread_inside(root))
         .collect()
 }
 
@@ -5746,6 +5823,29 @@ mod tests {
         assert_eq!(settings.unread_keys().count(), 0);
     }
 
+    /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
+    /// `"true"` read as true would spend for somebody who wrote something else.
+    #[test]
+    fn only_a_boolean_turns_suggestions_on() {
+        for (written, expected) in [
+            (r#"{"suggestions": true}"#, Some(true)),
+            (r#"{"suggestions": false}"#, Some(false)),
+            (r#"{"suggestions": "true"}"#, None),
+            (r#"{"suggestions": 1}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).suggestions(),
+                expected,
+                "{written}"
+            );
+        }
+
+        let settings = Settings::parse(r#"{"suggestions": true}"#);
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["suggestions"]);
+        assert!(!settings.is_empty());
+    }
+
     #[test]
     fn the_terminal_title_switch_is_among_the_names_reported() {
         let settings = Settings::parse(r#"{"terminalTitle": false}"#);
@@ -6439,6 +6539,80 @@ mod tests {
         assert_eq!(
             settings.sandbox().map(|(mode, _)| mode),
             Some(SandboxMode::Standard)
+        );
+    }
+
+    /// SANDBOX-16: `git.identities` is read from the person's own file and a named file outside
+    /// the workspace, the later one replacing an entry for the same owner, and a checkout's two
+    /// files and a named file inside the workspace are reported and not obeyed. The regression it
+    /// rejects is a cloned repository choosing which of the person's keys a push offers.
+    #[test]
+    fn only_the_persons_own_files_choose_a_key_for_an_owner() {
+        let keys = |settings: &Settings| -> Vec<(String, String)> {
+            settings
+                .git_identities()
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        format!("{}/{}", entry.address.host, entry.address.owner),
+                        entry.key.clone(),
+                    )
+                })
+                .collect()
+        };
+        let own = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/home.pub", "github.com/other": "~/.ssh/other.pub"}}}"#;
+        let layers = Layers::new("identities-home")
+            .global(own)
+            .named(r#"{"git": {"identities": {"github.com/Brave": "~/.ssh/named.pub"}}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            keys(&settings),
+            [
+                (
+                    "github.com/other".to_string(),
+                    "~/.ssh/other.pub".to_string()
+                ),
+                (
+                    "github.com/Brave".to_string(),
+                    "~/.ssh/named.pub".to_string()
+                ),
+            ]
+        );
+        assert_eq!(settings.git_identities_ignored().count(), 0);
+        assert_eq!(settings.unread_keys().count(), 0);
+
+        let checkout = r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#;
+        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+            let layers = Layers::new(&format!("identities-{name}")).global(own);
+            let layers = match text {
+                "p" => layers.project(checkout),
+                "l" => layers.local(checkout),
+                _ => layers.named_inside_the_workspace(checkout),
+            };
+            let settings = layers.read();
+            assert_eq!(
+                settings
+                    .git_identities()
+                    .for_address(
+                        &bravebot_sandbox::scope::Address::spelled("github.com", "brave").unwrap()
+                    )
+                    .map(|entry| entry.key.as_str()),
+                Some("~/.ssh/home.pub"),
+                "{name} chose a key"
+            );
+            assert_eq!(settings.git_identities_ignored().count(), 1, "{name}");
+        }
+
+        let layers = Layers::new("identities-unread")
+            .global(r#"{"git": {"identities": {}, "sshCommand": "ssh -i x"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings
+                .unread_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            ["git.sshCommand"]
         );
     }
 

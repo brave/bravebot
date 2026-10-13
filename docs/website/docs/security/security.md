@@ -6,6 +6,66 @@ description: What Brave Bot defends against, what it does not, and what leaves t
 
 # Security
 
+:::caution[The logins and caches a program the agent runs can reach by default]
+On Linux and macOS, under the default sandbox mode, a program the agent runs, and every program it
+starts, such as the install scripts an `npm install` runs, can:
+
+- read the files tools keep a login in outside the locations the sandbox refuses, such as
+  `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc`, `~/.npmrc`,
+  `~/.cargo/credentials.toml`, `~/.pypirc`, `~/.m2/settings.xml` and `~/.gradle/gradle.properties`;
+- read every environment variable Brave Bot was started with except its own signing key and the
+  variables a gateway you configured names as holding its key, so `GITHUB_TOKEN`, `NPM_TOKEN` and
+  `AWS_SECRET_ACCESS_KEY` among them;
+- on macOS, read the login keychain file `~/Library/Keychains/login.keychain-db`, which lets a
+  lookup through the keychain service reach the items in it, where macOS decides which items it
+  answers with and which it asks you about first;
+- write the toolchain caches, among them `~/.cargo/registry`, `~/.cargo/git`, `~/go/pkg/mod`,
+  `~/.m2/repository` and `~/.gradle/wrapper`, which the next `cargo build`, `go build`, `mvn` or
+  `./gradlew` you run yourself runs code from, outside the sandbox;
+- with the network open, which is the default, send what it read to any host.
+
+These are the default because `git`, `gh`, `npm` and `cargo` read their logins and write their
+caches there, including when `make` or another script starts them, and the program the sandbox sees
+then is the script. Each is withheld by a setting in `~/.bravebot/settings.json`, and the programs
+that use what it withholds then fail under the sandbox:
+
+- `{"sandbox": {"network": {"allowedHosts": ["registry.npmjs.org"]}}}` holds a program to the hosts
+  listed, with GitHub added for a `git` or `gh` command that talks to a remote and its own registry
+  added for `cargo`, `npm`, `pip` and `go`. Other hosts are refused, and so is a listed name that
+  resolves to this machine, a private network or the cloud metadata address, unless each such
+  address is an entry of its own. An entry cannot be an IPv6 address, so `localhost`, which most
+  machines also resolve to `::1`, is refused; list `127.0.0.1` and ask for that.
+  An allowed host can still
+  receive what a program read, such as a package it publishes to that registry, and on macOS a
+  certificate check can fetch from the address the certificate names.
+- `{"sandbox": {"filesystem": {"denyRead": ["~/.npmrc", "~/Library/Keychains/login.keychain-db"]}}}`
+  refuses a token file or the keychain file, to `gh` and git's `osxkeychain` helper as well.
+- `{"run": {"scrubEnv": ["GITHUB_TOKEN", "NPM_TOKEN", "AWS_*"]}}` withholds those variables.
+- `{"sandbox": {"mode": "strict"}}` reads a credential only for a command that is lent one (a `git`
+  or `gh` command that talks to a remote, `aws`, `kubectl` or `docker`, or a scope you approved for
+  the line), reads no keychain file, and lets a program reach only the cache of its own toolchain or
+  one you approved for the line, so a `cargo build` that `make` starts has no cache to read or
+  write. A `denyWrite` entry takes one cache from every program instead.
+
+`{"run": {"network": "closed"}}` takes the network from a program that has no reason for it. A
+package manager keeps it, and so do the install scripts it runs.
+
+`{"git": {"identities": {"github.com/your-account": "~/.ssh/your-account.pub"}}}` has a `git`
+command whose arguments name an ssh address of that owner, such as
+`git push git@github.com:your-account/repo.git main`, offer GitHub that key first, and after it only
+keys your `~/.ssh/config` names for the host. ssh otherwise offers the agent's keys in order and
+GitHub takes the first one it knows, so with keys of two accounts in one agent every push goes out
+as one of them. A remote given by name, such as `origin`, is not matched, because its address is in
+the repository's own configuration. On those commands it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or
+`core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
+workspace can set it.
+
+On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
+unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
+`docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the
+sandbox.
+:::
+
 ## What this defends against
 
 **Indirect prompt injection.** Text that arrives from somewhere nobody vouched for (a web page, a
@@ -57,10 +117,10 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Three deliberate exceptions
+## Four deliberate exceptions
 
-The policy layer looks at untrusted bytes in exactly three places, all written down rather than left
-to be found.
+Brave Bot looks at untrusted bytes to decide something in four places, three in the policy layer
+and one in the search, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -83,6 +143,17 @@ which banner the approval prompt carries: the bytes are drawn below it either wa
 answer the question are offered either way, and nothing is promoted until you say so. An attacker who
 owns the content can force the reassuring word, and what that buys them is a quieter sentence above
 content you are still reading for yourself.
+
+**Searching files nobody vouched for.** A search tests every line of every file it walks against the
+pattern, including files you did not vouch for, so which lines match, how many, and whether the search
+reports itself incomplete are decided by those files' bytes. The lines never reach the model: one
+unvouched file makes the whole result untrusted, and the model is given a reference to it. What
+reaches the model is the result's size, whether it was cut short and which limit cut it, the offset
+for the next page, and, when it asks for a page past the last match, how many there were. An attacker
+who owns one of the files can set those numbers, make the model spend searches paging through a large
+result, and make one search read a very large file.
+They cannot choose which files are searched, how the result is labelled, or any destination, and the
+model never sees a line of text from the file.
 
 ## What leaves the process
 
@@ -219,7 +290,10 @@ survives.
 **The environment is the caller's.** A confined process starts with the environment this process
 holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential
 or an agent socket does, so which of its own variables a program is trusted with stays the caller's
-decision rather than something that differs per platform.
+decision rather than something that differs per platform. On macOS a confined process cannot use
+`sysctl(KERN_PROCARGS2)` to read another process's exec-time environment, including bravebot's.
+Machine-information queries needed by ordinary tools remain available. This does not erase the
+kernel's saved environment or protect it from an unconfined process of the same user.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the

@@ -2029,6 +2029,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
         lines.extend(logo::lines(
             &session.confinement,
             session.sandbox_mode(),
+            session.sockets_with_a_path_reachable,
             &session.tier,
             width,
             height,
@@ -2772,12 +2773,12 @@ fn argument_hint(session: &Session) -> Option<String> {
         .iter()
         .find(|command| command.name == word)
     {
-        Some(command) => command.argument,
+        Some(command) => command.typed_hint(),
         None => crate::skills::named(session.held_skills(), word)?
             .argument_hint
-            .as_deref()?,
+            .clone()?,
     };
-    (!hint.is_empty()).then(|| printable(hint))
+    (!hint.is_empty()).then(|| printable(&hint))
 }
 
 /// What opens a row of the box: the prompt character, or the indent a continuation lines up under.
@@ -2804,9 +2805,9 @@ fn lead_for(index: usize, shell: bool, private: bool) -> &'static str {
 /// The caret keeps its place rather than being drawn past the words, because the box is empty and
 /// that is where the first character will land. Dimmed so it reads as an absence of text rather
 /// than as text somebody has to clear.
-fn placeholder_spans(colour: Color) -> Vec<Span<'static>> {
+fn placeholder_spans(colour: Color, words: &str) -> Vec<Span<'static>> {
     let block = Style::default().fg(colour).add_modifier(Modifier::REVERSED);
-    let mut characters = placeholder().chars();
+    let mut characters = words.chars();
     let first: String = characters.by_ref().take(1).collect();
     vec![
         Span::styled(first, block),
@@ -2999,7 +3000,12 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             lead_for(0, session.shell, session.shell_private()),
             Style::default().fg(colour),
         )];
-        spans.extend(placeholder_spans(colour));
+        // A suggestion takes the invitation's place, drawn the same way: dimmed, with the caret on
+        // its first character, since that is where the first character typed would land.
+        spans.extend(placeholder_spans(
+            colour,
+            session.suggestion().unwrap_or(placeholder()),
+        ));
         vec![Line::from(spans)]
     } else {
         lines
@@ -9172,6 +9178,17 @@ mod tests {
         assert!(!input_row(&typed("/compact"), 90).contains("[focus]"));
     }
 
+    /// `/effort` spells out the levels it takes once the word is typed, while the completion list
+    /// keeps `[level]` so its description column does not move.
+    #[test]
+    fn the_effort_command_offers_its_levels_after_its_word() {
+        let row = input_row(&typed("/effort "), 90);
+        assert!(
+            row.ends_with("/effort  [low | medium | high | xhigh | max]"),
+            "{row}"
+        );
+    }
+
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
     /// ellipsis, and a file's own escape in it is drawn as a glyph.
     #[test]
@@ -9813,6 +9830,37 @@ mod tests {
         assert!(
             reason.is_some() && call.is_some() && reason < call,
             "the reason should head the call: {drawn}"
+        );
+    }
+
+    /// A resumed session draws a call to a server's tool with the server, the tool and what it
+    /// sent, as the live call was drawn. A call no prompt was put for showed its arguments
+    /// nowhere else, and the record is all a resumed transcript has to draw it from.
+    #[test]
+    fn a_resumed_call_to_a_servers_tool_shows_what_it_sent() {
+        use bravebot_aichat::protocol::{Message, ToolCallRequest, ToolCallRequestFunction};
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("the forecast for Lyon"));
+        conversation.push(Message::assistant_calling(
+            "",
+            vec![ToolCallRequest {
+                id: "call-1".to_string(),
+                kind: "function".to_string(),
+                function: ToolCallRequestFunction {
+                    name: "mcp__weather__get_forecast".to_string(),
+                    arguments: r#"{"city":"Lyon"}"#.to_string(),
+                },
+                extra_content: None,
+            }],
+        ));
+        let mut session = Session::new("none");
+        session.replay(&conversation, "a title", &Default::default());
+
+        let drawn = rendered(&session);
+        assert!(
+            drawn.contains(r#"MCP(weather:get_forecast {"city":"Lyon"})"#),
+            "the resumed call does not show what it sent: {drawn}"
         );
     }
 
@@ -11106,5 +11154,65 @@ mod tests {
             drawn[1].trim(),
             "session:abc-123  2 days ago · up to 8000 characters · fix the build"
         );
+    }
+
+    fn drawn(session: &Session) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// INPUT-43: a suggestion takes the invitation's place in the empty box, and the invitation
+    /// comes back when it goes.
+    #[test]
+    fn a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation() {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        assert!(drawn(&session).contains(placeholder()));
+
+        session.offer_suggestion("run the tests again".to_string());
+        let with = drawn(&session);
+        assert!(with.contains("run the tests again"), "{with}");
+        assert!(!with.contains(placeholder()), "{with}");
+
+        session.dismiss_suggestion();
+        assert!(drawn(&session).contains(placeholder()));
+    }
+
+    /// The suggestion is dimmed as the invitation is: the cell after the first character wears the
+    /// style the invitation's does, and the first one is the caret's block.
+    #[test]
+    fn a_suggestion_is_dimmed_as_the_invitation_is() {
+        let mut session = Session::new("none");
+        session.adopt_suggestions(true);
+        let styles = |session: &Session| {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+            let row = (0..buffer.area.height)
+                .find(|&y| buffer[(0, y)].symbol() == "│")
+                .expect("the box has a row");
+            (buffer[(3, row)].style(), buffer[(4, row)].style())
+        };
+        let (invited_first, invited_rest) = styles(&session);
+        session.offer_suggestion("run the tests again".to_string());
+        let (offered_first, offered_rest) = styles(&session);
+        assert_eq!(offered_first, invited_first);
+        assert_eq!(offered_rest, invited_rest);
+        assert_ne!(offered_first, offered_rest);
     }
 }

@@ -79,7 +79,14 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 Otherwise it is quarantined whole. Unlike a listing, a search returns one reference for the whole
 result rather than one per hit, so its hits are not addresses.
 
+The label comes from the paths the walk reached, before any file is opened. What a file holds does
+not change it: an unvouched file with no matching line, or one that is not valid text, taints the
+result as one full of matches does. The search still compares the pattern against such a file, so
+the file decides the counts the result reports, and [labels.md](../labels.md) records that among its
+known costs, with what an attacker who owns the file gains.
+
 `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is`
+`verified-by: bravebot_agent::workspace::what_an_unvouched_file_holds_changes_a_searchs_counts_and_not_its_label`
 `verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
 `verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
 
@@ -271,6 +278,7 @@ file again is the cost of not keeping one.
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_offers_no_page_and_no_count`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_last_match_says_how_many_there_were`
 `verified-by: bravebot_agent::workspace::an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end`
+`verified-by: bravebot_agent::workspace::the_offset_a_cut_search_offers_does_not_depend_on_what_an_unvouched_file_holds`
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page_of_matches`
 `verified-by: bravebot_agent::turn::a_quarantined_capped_search_says_where_to_continue`
 `verified-by: bravebot_agent::turn::a_search_past_the_last_match_says_how_many_there_were`

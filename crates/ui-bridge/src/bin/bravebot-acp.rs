@@ -25,8 +25,15 @@ enum Input {
 }
 
 fn main() {
-    // First of all, as the other entry points do: a credential is in this process's memory from
-    // the first turn, and a crash after this writes no image of it. See CRED-23.
+    // First of all, before anything else runs: the descriptors this process speaks over exist
+    // from the moment it starts, and they are the channel to the editor. Another process of the
+    // same user must not be able to copy them out of it. See RPCVIEW-8. The protection starts
+    // here, so a process already positioned to act before this runs is outside what it claims.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot-acp: {notice}");
+    }
+    // And for the reason the terminal entry point does it early: a credential is in this process's
+    // memory from the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
 
     // Not a security decision. The only argument is `--settings <path>`, which names a settings
@@ -65,17 +72,12 @@ fn main() {
         }
     }
 
-    // Before a session is assembled, so every turn this process runs reads one answer for the
-    // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
-    // held to. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
-    let here = std::env::current_dir().ok();
-    let layers = bravebot_ui_bridge::settings::layers(here.as_deref(), settings.as_deref());
-    bravebot_config::settle_run_network_in(None, &layers);
-    bravebot_config::settle_sandbox_filesystem_in(
-        &bravebot_sandbox::rules::Lists::default(),
-        &layers,
+    // Before a session is assembled, so every turn this process runs reads one answer. See
+    // SANDBOX-20, SANDBOX-25 and SANDBOX-24.
+    bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
     );
-    bravebot_config::sandbox_network::settle(&layers);
 
     let (input, lines) = mpsc::channel();
     let out = Arc::new(Mutex::new(std::io::stdout()));

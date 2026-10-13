@@ -4284,13 +4284,27 @@ fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
 fn run_against_a_denied_env(name: &str, command: &str, deny: &str) -> (String, String) {
     let scratch = Scratch::new(name);
     std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let told = run_under_a_deny_rule(&scratch, json!({ "command": command }), deny);
+    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
+    (left, told)
+}
+
+/// A workspace whose `config/app.env` holds a value, beside an empty `config/sub`, so a name can
+/// reach the file through `sub/..`.
+fn holding_config_app_env(name: &str) -> Scratch {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir_all(scratch.path.join("config/sub")).unwrap();
+    std::fs::write(scratch.path.join("config/app.env"), "SECRET_TOKEN=hunter2").unwrap();
+    scratch
+}
+
+/// Runs one `run` call with `arguments` in `scratch` under `deny`, approving any prompt a run
+/// raises. Returns what the planner was told.
+fn run_under_a_deny_rule(scratch: &Scratch, arguments: serde_json::Value, deny: &str) -> String {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request(
-            "run",
-            &serde_json::json!({ "command": command }).to_string(),
-        ),
+        tool_request("run", &arguments.to_string()),
         reply_with("understood"),
     ]);
     let config = config_for(&endpoint);
@@ -4316,9 +4330,7 @@ fn run_against_a_denied_env(name: &str, command: &str, deny: &str) -> (String, S
     .expect("the turn finishes");
 
     let _first = received.recv().expect("first request");
-    let second = received.recv().expect("second request");
-    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
-    (left, second)
+    received.recv().expect("second request")
 }
 
 /// PERM-7: a rule written for a project file covers a redirection to it. The plan holds the
@@ -4355,6 +4367,194 @@ fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
     assert!(
         !told.contains("hunter2"),
         "the denied file's contents reached the planner: {told}"
+    );
+}
+
+/// PERM-7: the rule is about the file, not the spelling. `config/sub/../app.env`, and `../app.env`
+/// run from `config/sub`, open `config/app.env`, but a rule's segments never meet across a `..`,
+/// so a rule naming the file did not cover the redirection and the file was overwritten once the
+/// run was approved.
+#[test]
+fn a_deny_rule_on_a_file_refuses_a_redirection_that_reaches_it_through_a_parent_directory() {
+    let cases = [
+        (
+            "Edit(config/app.env)",
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+        ),
+        (
+            "Edit(config/app.env)",
+            json!({ "command": "echo overwritten > ../app.env", "directory": "config/sub" }),
+        ),
+        (
+            "Read(config/app.env)",
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+        ),
+    ];
+    for (case, (deny, arguments)) in cases.into_iter().enumerate() {
+        let scratch =
+            holding_config_app_env(&format!("permissions-run-redirect-climb-write-{case}"));
+        let told = run_under_a_deny_rule(&scratch, arguments.clone(), deny);
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("config/app.env")).unwrap(),
+            "SECRET_TOKEN=hunter2",
+            "{deny} did not stop {arguments}"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused {arguments}: {told}"
+        );
+    }
+}
+
+/// The read half: `< config/sub/../app.env` feeds a program the file a `Read` rule names.
+#[test]
+fn a_deny_rule_on_a_file_refuses_a_redirection_that_reads_it_through_a_parent_directory() {
+    let cases = [
+        json!({ "command": "cat < config/sub/../app.env" }),
+        json!({ "command": "cat < ../app.env", "directory": "config/sub" }),
+    ];
+    for (case, arguments) in cases.into_iter().enumerate() {
+        let scratch =
+            holding_config_app_env(&format!("permissions-run-redirect-climb-read-{case}"));
+        let told = run_under_a_deny_rule(&scratch, arguments.clone(), "Read(config/app.env)");
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "the planner was not told a rule refused {arguments}: {told}"
+        );
+        assert!(
+            !told.contains("hunter2"),
+            "the denied file's contents reached the planner: {told}"
+        );
+    }
+}
+
+/// Where a redirection lands is the file system's answer, not the text's. With `up` a link to
+/// `config/sub`, `up/../app.env` opens `config/app.env`; taking the `..` out of the spelling gives
+/// `app.env` at the top of the workspace, which the rule does not name.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens() {
+    let scratch = holding_config_app_env("permissions-run-redirect-climb-link");
+    std::os::unix::fs::symlink("config/sub", scratch.path.join("up")).unwrap();
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo overwritten > up/../app.env" }),
+        "Edit(config/app.env)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/app.env")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "the rule did not stop a write through the link"
+    );
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused: {told}"
+    );
+}
+
+/// The other half of the same answer. Where the rule's own name runs through a link, the file the
+/// redirection opens is known by a name the rule does not spell, so the name with the `..` taken
+/// out of the text is the one that meets the rule: with `config` a link to `settings`, or
+/// `config/app.env` one to `config/real.env`, the file is opened as `settings/app.env` or
+/// `config/real.env`.
+#[cfg(unix)]
+#[test]
+fn a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory()
+ {
+    for (case, (real, link, target)) in [
+        ("settings/app.env", "config", "settings"),
+        ("config/real.env", "config/app.env", "real.env"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scratch = Scratch::new(&format!("permissions-run-redirect-climb-rule-link-{case}"));
+        let real = scratch.path.join(real);
+        std::fs::create_dir_all(real.parent().unwrap().join("sub")).unwrap();
+        std::fs::write(&real, "SECRET_TOKEN=hunter2").unwrap();
+        std::os::unix::fs::symlink(target, scratch.path.join(link)).unwrap();
+        let told = run_under_a_deny_rule(
+            &scratch,
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+            "Edit(config/app.env)",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&real).unwrap(),
+            "SECRET_TOKEN=hunter2",
+            "the rule did not stop the write with {link} a link"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "with {link} a link, the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
+/// A `..` is not itself refused. A redirection through `sub/..` to a file no rule names runs as the
+/// same line spelled plainly would, so the refusal above is the rule's and not the spelling's.
+#[test]
+fn a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs() {
+    let scratch = holding_config_app_env("permissions-run-redirect-climb-unnamed");
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo written > config/sub/../other.env" }),
+        "Edit(config/app.env)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/other.env")).ok(),
+        Some("written\n".to_string()),
+        "a write to a file no rule names was not made: {told}"
+    );
+    assert!(
+        !told.contains("a deny rule"),
+        "a rule was said to refuse a file it does not name: {told}"
+    );
+}
+
+/// PERM-7 on Windows: `.env::$DATA`, `ENV~1` and `.env.` open `.env`, and a rule is matched against
+/// the spelling, so a redirection through one of them overwrote or read the file `Edit(.env)` or
+/// `Read(.env)` protects. The spelling is refused before any rule is asked.
+#[cfg(windows)]
+#[test]
+fn a_redirection_through_a_name_windows_reads_as_another_file_is_refused() {
+    let refusal = "names something other than the file it spells on Windows";
+    for (index, target) in ["'.env::$DATA'", "ENV~1", ".env."].into_iter().enumerate() {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-alias-write-{index}"),
+            &format!("cmd /c echo overwritten > {target}"),
+            "Edit(.env)",
+        );
+        assert_eq!(left, "SECRET_TOKEN=hunter2", "{target} overwrote .env");
+        assert!(
+            told.contains(refusal),
+            "{target}: the planner was not told the name was refused: {told}"
+        );
+
+        let (_, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-alias-read-{index}"),
+            &format!("cmd /c more < {target}"),
+            "Read(.env)",
+        );
+        assert!(
+            told.contains(refusal) && !told.contains("/dev/null"),
+            "{target}: the planner was not told the name was refused, or was told to read from \
+             a device that discards only output: {told}"
+        );
+        assert!(
+            !told.contains("hunter2"),
+            "{target}: the denied file's contents reached the planner: {told}"
+        );
+    }
+
+    // `NUL` is the device, refused like any other, and the planner is told what discards output.
+    let (_, told) = run_against_a_denied_env(
+        "permissions-run-redirect-alias-device",
+        "cmd /c echo discarded > NUL",
+        "Edit(.env)",
+    );
+    assert!(
+        told.contains(refusal) && told.contains("redirect it to /dev/null"),
+        "the planner was not told how to discard output: {told}"
     );
 }
 
@@ -16001,6 +16201,45 @@ fn a_redirection_carrying_untrusted_output_distrusts_the_file_it_wrote() {
     );
 }
 
+/// Where the trust store folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
+/// reservation the line holds for the first spelling covers the second, so the line is refused as
+/// a second writer to that file, and the file stays untrusted under either spelling. Taking the
+/// two as one effect instead would leave a second file whose name only folds the same, as
+/// `cla\u{df}.md` does to `class.md` on NTFS, with no effect and no scan of its own. The reservation
+/// takes its folding from the store, so the store is set to fold and the test runs on a volume that
+/// holds the spellings apart as well.
+#[test]
+fn a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer() {
+    let scratch = Scratch::new("run-redirect-two-cases");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root()).folding_case(true);
+    trust.trust(".");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn_with_trust(
+        &scratch,
+        r#"{"command":"cat notes.html > summary.txt 2> SUMMARY.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+        trust,
+    )
+    .expect("the turn runs");
+
+    assert!(
+        !std::fs::read_to_string(scratch.path.join("summary.txt"))
+            .unwrap_or_default()
+            .contains("from the web"),
+        "a line naming one file under two spellings ran as two writers to it"
+    );
+    for spelling in ["summary.txt", "SUMMARY.txt"] {
+        assert!(
+            !outcome.trust.is_trusted(spelling),
+            "{spelling} holds what an unvouched program printed and reads back trusted"
+        );
+    }
+}
+
 /// A line a person vouched for prints trusted output, and writing it somewhere does not make
 /// that file trusted: an append keeps whatever was already in it, and the label answers for the
 /// programs rather than for the file. Trusting the path on the strength of it would hand back the
@@ -17065,6 +17304,14 @@ fn cannot_confine_here() -> bool {
         || !bravebot_sandbox::confinement_works_here()
 }
 
+/// A `strict` stage is refused on a Linux kernel below Landlock ABI 9 (SANDBOX-3), so a test that
+/// needs one to start has nothing to test there.
+fn strict_cannot_run_here() -> bool {
+    cannot_confine_here()
+        || !bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
+}
+
 /// A planner that meets `Operation not permitted` with nothing said about confinement looks for a
 /// fault in the machine, which one session spent 780k tokens doing. A turn that confines says in the
 /// `run` description that its programs are, and a failed step carries the profile it ran under,
@@ -17114,6 +17361,9 @@ fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and
         ("strict", bravebot_sandbox::SandboxMode::Strict),
         ("standard", bravebot_sandbox::SandboxMode::Standard),
     ] {
+        if mode == bravebot_sandbox::SandboxMode::Strict && strict_cannot_run_here() {
+            continue;
+        }
         let line = |code: u8| {
             let (_, second) = requests_for_one_run_in(
                 &format!("run-credential-locations-{label}-{code}"),
@@ -17482,7 +17732,7 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 /// same read under `standard`. The regression it rejects is `strict` reading the machine.
 #[test]
 fn a_run_under_strict_cannot_read_what_standard_reads() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let readable = outside_the_session("strict-readable");
@@ -17624,7 +17874,7 @@ const WRITES_A_MARKER: &str = "sh -c 'echo x > ran.txt'";
 /// approval given to the line without it.
 #[test]
 fn scopes_are_asked_about_on_a_vouched_line() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let vouch = |tree: &std::path::Path| {
@@ -17698,7 +17948,7 @@ fn scopes_are_asked_about_on_a_vouched_line() {
 /// cover the same line asking for no scope, and the same line asking for any other.
 #[test]
 fn a_standing_answer_to_a_request_remembers_nothing() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-standing-state");
@@ -17780,7 +18030,7 @@ fn keeping_a_request(
 /// vouches for the program (which would show the next output unquarantined).
 #[test]
 fn keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-keep-session-state");
@@ -17897,7 +18147,7 @@ fn keeping_a_request_leaves_a_toolchain_out() {
 /// record, where `/reach` could not read it back.
 #[test]
 fn a_request_for_signing_is_asked_about_and_never_remembered() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-keep-signing-state");
@@ -18042,7 +18292,7 @@ fn scopes_are_asked_about_and_run_under_standard() {
 /// workspace, which is asked about and runs.
 #[test]
 fn scopes_are_refused_in_a_workspace_the_person_declined_to_trust() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let call = serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] });
@@ -18084,7 +18334,7 @@ fn scopes_are_refused_in_a_workspace_the_person_declined_to_trust() {
 /// confirmer that refuses everything.
 #[test]
 fn scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     // Vouched, so the bare line runs with nobody asked and the refusal below can only be the request.
@@ -18554,7 +18804,7 @@ fn a_scope_outside_the_menu_is_an_error() {
 /// the steps and not from what the program did.
 #[test]
 fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let sentence = |code: u8| {
@@ -42992,17 +43242,26 @@ fn a_run_turn_scanning(
     command: &str,
     programs: bravebot_core::programs::TrustedPrograms,
 ) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    a_run_turn_scanning_in(&workspace, command, programs)
+}
+
+/// The same, in a workspace the caller has already opened directories beside.
+fn a_run_turn_scanning_in(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
         "{}-home",
-        scratch
-            .path
+        workspace
+            .root()
             .file_name()
             .expect("the scratch tree is a named directory")
             .to_string_lossy()
     ));
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2("run", &format!(r#"{{"command":"{command}"}}"#)),
         reply_with("done"),
@@ -43012,7 +43271,7 @@ fn a_run_turn_scanning(
     turn::resume(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
-        &workspace,
+        workspace,
         &Task::new("back the file up before changing it").with_home(Some(home.path.clone())),
         &mut bravebot_agent::Conversation::new(),
         &mut bravebot_agent::confirm::ApproveRuns,
@@ -43148,6 +43407,158 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
     assert!(
         answered.contains("d/credentials could not be put back"),
         "the planner was not told the destination did not go back: {answered}"
+    );
+}
+
+/// A redirection is confined where it lands when it is opened, and not only when its line is
+/// compiled. The parts of the line before it have run by then, and a program in one of them, a build
+/// script or a test, can leave a link out of the workspace at the name the person approved. The
+/// driver opens that name itself, outside any sandbox, so without the second check it truncates or
+/// appends to a file such as a shell startup file the person keeps outside the tree.
+///
+/// Every operator that opens a file for writing reaches the open by its own route, so each is
+/// asked about. `2>` writes nothing here, and its open alone empties the file.
+#[cfg(unix)]
+#[test]
+fn a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened() {
+    for (case, operator) in [
+        ("out", ">"),
+        ("append", ">>"),
+        ("err", "2>"),
+        ("both", "&>"),
+    ] {
+        let scratch = Scratch::new(&format!("redirect-relinked-{case}"));
+        let elsewhere = Scratch::new(&format!("redirect-relinked-{case}-elsewhere"));
+        let victim = elsewhere.path.join("victim");
+        std::fs::write(&victim, "kept\n").unwrap();
+        let away = victim.to_str().expect("a UTF-8 scratch path");
+
+        let (_home, _reporter, answered) = a_run_turn_scanning(
+            &scratch,
+            &format!("ln -s {away} out && echo hi {operator} out"),
+            bravebot_core::programs::TrustedPrograms::new(),
+        );
+
+        assert!(
+            scratch.path.join("out").is_symlink(),
+            "{operator}: the first part did not leave a link, so nothing here asks where the open \
+             goes: {answered}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "kept\n",
+            "{operator}: the driver opened a file outside the workspace through a link"
+        );
+        assert!(
+            answered.contains("resolves outside the workspace"),
+            "{operator}: the planner was not told why the destination was not opened: {answered}"
+        );
+    }
+}
+
+/// A destination the line has opened once is confined again when a later part opens it. The first
+/// open made it one of the line's effects, and a part run in between can have replaced the file
+/// with a link out of the tree, so a check skipped for a path already entered is a check skipped
+/// exactly where the tree has changed.
+#[cfg(unix)]
+#[test]
+fn a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused() {
+    let scratch = Scratch::new("redirect-relinked-reopened");
+    let elsewhere = Scratch::new("redirect-relinked-reopened-elsewhere");
+    let victim = elsewhere.path.join("victim");
+    std::fs::write(&victim, "kept\n").unwrap();
+    let away = victim.to_str().expect("a UTF-8 scratch path");
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("echo a > out && rm out && ln -s {away} out && echo b > out"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        scratch.path.join("out").is_symlink(),
+        "the line did not replace its destination with a link: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "kept\n",
+        "reopening a destination wrote through a link to a file outside the workspace"
+    );
+    assert!(
+        answered.contains("resolves outside the workspace"),
+        "the planner was not told why the destination was not opened: {answered}"
+    );
+}
+
+/// A directory opened beside the workspace is confined at the open as the root is: a destination
+/// in it is written, and one a stage has turned into a link out of it is not. A check at the open
+/// that admitted only the root would refuse every redirection into an added directory, and one
+/// that admitted the added directory by name would follow the link.
+#[cfg(unix)]
+#[test]
+fn a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened() {
+    let scratch = Scratch::new("redirect-relinked-added");
+    let beside = Scratch::new("redirect-relinked-added-beside");
+    let elsewhere = Scratch::new("redirect-relinked-added-elsewhere");
+    let victim = elsewhere.path.join("victim");
+    std::fs::write(&victim, "kept\n").unwrap();
+    let away = victim.to_str().expect("a UTF-8 scratch path");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(beside.path.to_str().expect("a UTF-8 scratch path"))
+        .expect("directory added");
+    let opened = added.to_str().expect("a UTF-8 scratch path");
+
+    let (_home, _reporter, answered) = a_run_turn_scanning_in(
+        &workspace,
+        &format!("echo hi > {opened}/ok && ln -s {away} {opened}/out && echo hi > {opened}/out"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(added.join("ok")).ok().as_deref(),
+        Some("hi\n"),
+        "a destination in an added directory was not written: {answered}"
+    );
+    assert!(
+        added.join("out").is_symlink(),
+        "the line did not leave a link in the added directory: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "kept\n",
+        "the driver opened a file outside every opened directory through a link"
+    );
+    assert!(
+        answered.contains("resolves outside the workspace"),
+        "the planner was not told why the destination was not opened: {answered}"
+    );
+}
+
+/// A link a stage leaves inside the workspace is followed at the open, as every write through the
+/// workspace follows one (TRUST-10). Refusing any link at the final component would close the
+/// window between the check and the open for a link out of the tree, and would also refuse a line
+/// that writes through a link the tree itself keeps.
+#[cfg(unix)]
+#[test]
+fn a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target() {
+    let scratch = Scratch::new("redirect-relinked-inside");
+    std::fs::write(scratch.path.join("real"), "before\n").unwrap();
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        "ln -s real out && echo hi > out",
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        scratch.path.join("out").is_symlink(),
+        "the first part did not leave a link: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("real")).unwrap(),
+        "hi\n",
+        "a redirection through a link inside the workspace did not land at its target: {answered}"
     );
 }
 
@@ -46632,6 +47043,82 @@ fn a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt() {
             "{label}: {request}"
         );
     }
+}
+
+/// INSTR-12, TRACE-7. The trail names the style whose words opened the turn, by name and source and
+/// never by its words, and says nothing where the style did not reach the prompt: none picked, or
+/// `--system-prompt` standing in its place.
+#[test]
+fn a_turn_records_the_output_style_that_opened_it() {
+    let scratch = Scratch::new("style-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("styles")).unwrap();
+    std::fs::write(home.join("styles/terse.md"), "SECRET-FILE-WORDS").unwrap();
+    let config_cases = [
+        (
+            "concise",
+            None,
+            vec!["the turn began in the concise style (built in)"],
+        ),
+        (
+            "terse",
+            None,
+            vec!["the turn began in the terse style (a file of the person's own)"],
+        ),
+        ("concise", Some("You are REPLACEMENT-PERSONA."), vec![]),
+    ];
+    for (name, replacing, expected) in config_cases {
+        let (endpoint, _received) = serve(&reply_with("done"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("go")
+            .with_style(bravebot_agent::styles::find(Some(&home), name))
+            .with_system_prompts(prompts(replacing, None));
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "output_style",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, expected, "{name} {replacing:?}");
+        assert!(!format!("{:?}", sink.events()).contains("SECRET-FILE-WORDS"));
+    }
+    // No style picked: nothing is recorded.
+    let (endpoint, _received) = serve(&reply_with("done"));
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("go"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+    assert!(!sink.events().iter().any(|e| matches!(
+        e,
+        Event::GatePassed {
+            gate: "output_style",
+            ..
+        }
+    )));
 }
 
 /// INSTR-10 and INSTR-4. The appended words are the last standing source, after the project's

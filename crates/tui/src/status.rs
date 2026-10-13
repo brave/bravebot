@@ -139,6 +139,9 @@ pub struct Facts<'a> {
     /// What the platform can confine, without the sandbox mode: the mode is [`Facts::sandbox_mode`]
     /// and is put beside it here, so the line follows `/sandbox`.
     pub confinement: &'a str,
+    /// Whether this kernel leaves every unix socket that has a path reachable from a confined
+    /// stage, as [`crate::state::Session::sockets_with_a_path_reachable`] holds it.
+    pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to now, which `/sandbox` can change.
     pub sandbox_mode: bravebot_sandbox::SandboxMode,
     /// The MCP servers the session started.
@@ -296,6 +299,22 @@ fn network_line(
         Line::new(t!(status_network), t!(status_network_closed))
             .with_note(run_network_source(&settled.decided)),
     )
+}
+
+/// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
+/// does not govern them and the mode is `standard`. `strict` refuses such a stage, and under `off`
+/// the confinement line already says nothing is confined (SANDBOX-3).
+pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
+    reachable && mode == bravebot_sandbox::SandboxMode::Standard
+}
+
+/// The line for the unix sockets the programs `run` starts can reach, where every one that has a
+/// path is open to them.
+fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<Line> {
+    sockets_with_a_path_open(reachable, mode).then(|| {
+        Line::new(t!(status_path_sockets), t!(status_path_sockets_reachable))
+            .with_note(t!(status_path_sockets_why))
+    })
 }
 
 /// Whether the stages this session's `run` starts write every path a request for writing would be
@@ -594,6 +613,12 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // closed it, because the way to open it again depends on that.
     lines.extend(network_line(
         bravebot_config::settled_run_network(),
+        facts.sandbox_mode,
+    ));
+    // Only where the kernel leaves them open, which is most Linux machines today: a person who
+    // trusts the profile to keep a program from the SSH agent should be told where it does not.
+    lines.extend(sockets_line(
+        facts.sockets_with_a_path_reachable,
         facts.sandbox_mode,
     ));
     // Beside it and on the same terms: nothing for a session that wrote no list, which is the
@@ -1169,6 +1194,37 @@ mod tests {
         }
     }
 
+    /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
+    /// the kernel leaves them open, under `standard` alone, with why beside it. The regressions it
+    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
+    /// under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    #[test]
+    fn reachable_sockets_with_a_path_are_reported_under_standard_alone() {
+        use bravebot_sandbox::SandboxMode;
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = TrustStore::new("/work");
+        let shown = |mode, reachable| {
+            let mut facts = facts(&config, &trust);
+            facts.sandbox_mode = mode;
+            facts.sockets_with_a_path_reachable = reachable;
+            report(&facts)
+                .lines
+                .into_iter()
+                .find(|line| line.label.trim() == t!(status_path_sockets))
+        };
+
+        let line = shown(SandboxMode::Standard, true).expect("the sockets are on the report");
+        assert_eq!(line.value, t!(status_path_sockets_reachable));
+        assert_eq!(line.note, t!(status_path_sockets_why));
+        for (mode, reachable) in [
+            (SandboxMode::Standard, false),
+            (SandboxMode::Strict, true),
+            (SandboxMode::Off, true),
+        ] {
+            assert_eq!(shown(mode, reachable), None, "{mode} {reachable}");
+        }
+    }
+
     /// Facts with nothing vouched for, which is what a session that has not been asked looks like.
     /// Tests about the programs line build their own list and set it.
     fn facts<'a>(config: &'a Config, trust: &'a TrustStore) -> Facts<'a> {
@@ -1195,6 +1251,9 @@ mod tests {
             theme: "brave",
             config,
             confinement: "kernel-enforced",
+            // Governed, which is what every platform but a Linux kernel below Landlock ABI 9
+            // reports. The test about the line sets it itself.
+            sockets_with_a_path_reachable: false,
             sandbox_mode: bravebot_sandbox::SandboxMode::Standard,
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
@@ -2438,6 +2497,7 @@ mod tests {
             let opening = crate::logo::lines(
                 &session.confinement,
                 session.sandbox_mode(),
+                session.sockets_with_a_path_reachable,
                 &session.tier,
                 90,
                 24,

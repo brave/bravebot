@@ -833,26 +833,30 @@ impl Server {
             command.env(name, value);
         }
 
-        let mut child = command
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // A server's diagnostics are noisy and are not this process's business.
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    LspError::NoBinary {
-                        language: served.clone(),
-                        program: program.clone(),
-                    }
-                } else {
-                    LspError::Start {
-                        language: served.clone(),
-                        detail: e.to_string(),
-                    }
+        // Under the gate every start of a program in this process shares with the creation of a
+        // control channel, so a server started on another thread holds neither end of one.
+        let mut child = bravebot_sandbox::process::starting_a_program(|| {
+            command
+                .current_dir(root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                // A server's diagnostics are noisy and are not this process's business.
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                LspError::NoBinary {
+                    language: served.clone(),
+                    program: program.clone(),
                 }
-            })?;
+            } else {
+                LspError::Start {
+                    language: served.clone(),
+                    detail: e.to_string(),
+                }
+            }
+        })?;
 
         let stdin = child.stdin.take().ok_or_else(|| LspError::Start {
             language: served.clone(),
@@ -2381,6 +2385,31 @@ done
         assert_ne!(said, unconfigured);
         assert_ne!(said, missing);
         assert_ne!(unconfigured, missing);
+    }
+
+    /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_start_waits_for_a_channel_being_created() {
+        bravebot_sandbox::process::start_waits_at_the_gate(|| {
+            let (_launching, scratch, _log, declared) =
+                a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+            let mut servers = Servers::new(
+                scratch.to_path_buf(),
+                None,
+                the_approved_declared_server,
+                false,
+                Vec::new,
+            );
+            servers.declare(vec![declared]);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = a_policy_that_holds_the_capability(&mut sink);
+            let file = scratch.join("a.zz");
+            let file = file.to_str().expect("a utf-8 path");
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_| true)
+                .expect("the declared server answers");
+        });
     }
 
     /// LSP-8: nothing starts until something asks.

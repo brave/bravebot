@@ -577,6 +577,12 @@ doctor-settings-sandbox-hosts-ignored =
     sandbox.network.{ $key } in { $path } is not obeyed: a checkout can refuse a host and never allow one, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-hosts-misshapen =
     sandbox.network.{ $key } in { $path } is not a list of strings (onUnlisted: ask or refuse), so it is read as absent
+doctor-settings-git-identities-ignored =
+    git.identities in { $path } is not obeyed: a checkout cannot choose which key a push offers, so it is read from ~/.bravebot/settings.json and the file --settings names outside the workspace only
+doctor-settings-git-identities-misshapen =
+    { $key } in { $path } is not read: git.identities maps a name <host>/<owner> to the path of a public key file
+doctor-settings-git-identities-key-refused =
+    { $key } in { $path } names { $value }, which is not a key a push can be given: it has to be a regular *.pub file outside every credential location but ~/.ssh, such as ~/.aws, with no ', % or $ in its path, so ssh offers its default key for that owner
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =
@@ -682,6 +688,10 @@ doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
 doctor-not-enforced = NOT enforced
 doctor-confinement-unavailable = confinement unavailable
+doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
+# Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
+# grants, which is Landlock below ABI 9.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode standard, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -1628,6 +1638,7 @@ run-carries-kubernetes = { $program } also reads your kubernetes credentials in 
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
 run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
+run-carries-identity = { $program } has ssh offer the key { $path } first, which your git.identities names for the owner of this address, and after it only keys your ssh configuration names
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
@@ -2043,6 +2054,11 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
+# Said only under sandbox mode standard, where the kernel leaves every unix socket that has a path
+# open to the programs a command starts. The note says why, and what strict does there.
+status-path-sockets = Programs' unix sockets
+status-path-sockets-reachable = every one with a path is reachable: D-Bus, SSH_AUTH_SOCK, docker.sock
+status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict refuses programs
 # Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
 status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
@@ -2608,6 +2624,7 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
 session-bg-bypass = /bg is refused in bypass, because a session nobody is watching does not run in a mode that answers every question. Switch to another mode first, or use a one-shot run.
 session-bg-option-lost = /bg is refused because this session was started with { $flag }, which a background session does not receive. Start a session without that option to use /bg.
+session-bg-sandbox-moved = /bg is refused because /sandbox moved this session to { $mode }, and a background session starts in { $settled }. Run /sandbox { $settled } first to use /bg.
 session-bg-keeps-nothing-running = /bg is refused while a loop, a goal or a watch is running, because the background session would not run it. Stop it first.
 session-bg-nothing-recorded = /bg hands over the session's record, and this session has none yet. Send a prompt first.
 session-bg-incognito = /bg is refused in an incognito session, which writes no record to hand over.
@@ -3031,6 +3048,8 @@ paste-invisible-removed = { $count ->
     [one] removed { $count } invisible character from that paste
    *[other] removed { $count } invisible characters from that paste
     }
+drop-name-not-written =
+    a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB
@@ -3133,6 +3152,7 @@ agent-checkout-not-applied =
 opening-confinement = confinement available: { $level }
 opening-network-closed = network closed
 opening-filesystem-rules = filesystem rules in force
+opening-path-sockets-reachable = programs reach sockets with a path: D-Bus, SSH agent, docker.sock
 opening-invitation = Ask a question about this workspace.
 
 

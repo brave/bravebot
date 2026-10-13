@@ -506,6 +506,12 @@ doctor-settings-sandbox-hosts-ignored =
     sandbox.network.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un hôte, jamais en autoriser un, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-hosts-misshapen =
     sandbox.network.{ $key } dans { $path } n'est pas une liste de chaînes (onUnlisted : ask ou refuse), donc il est lu comme absent
+doctor-settings-git-identities-ignored =
+    git.identities dans { $path } n'est pas suivi : une copie de travail ne peut pas choisir la clé qu'un push propose, donc il est lu seulement dans ~/.bravebot/settings.json et le fichier nommé par --settings hors de l'espace de travail
+doctor-settings-git-identities-misshapen =
+    { $key } dans { $path } n'est pas lu : git.identities associe un nom <hôte>/<propriétaire> au chemin d'un fichier de clé publique
+doctor-settings-git-identities-key-refused =
+    { $key } dans { $path } désigne { $value }, qui n'est pas une clé qu'un push peut recevoir : ce doit être un fichier *.pub ordinaire hors de tout emplacement d'identifiants autre que ~/.ssh, comme ~/.aws, sans ', % ni $ dans son chemin, donc ssh propose sa clé par défaut pour ce propriétaire
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il n'impose rien
 doctor-managed-sandbox-unread =
@@ -576,6 +582,8 @@ doctor-network-denial = refus réseau
 doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
+doctor-no-network-namespace = espaces de noms réseau : indisponibles ({ $reason }). Une étape sans réseau, ou limitée par sandbox.network.allowedHosts, est refusée ici. Autorisez les espaces de noms utilisateur non privilégiés pour utiliser l'un ou l'autre.
+doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable standard, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
 doctor-network = réseau
 doctor-trust-roots = racines de confiance
 doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
@@ -1426,6 +1434,7 @@ run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans
 run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.docker
 run-carries-signing = { $program } lit aussi la clé publique avec laquelle votre configuration git signe, et signe par votre agent ssh, sans jamais lire de clé privée
 run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
+run-carries-identity = { $program } fait proposer d'abord par ssh la clé { $path }, que votre git.identities désigne pour le propriétaire de cette adresse, puis seulement les clés que nomme votre configuration ssh
 run-network-closed = le réseau est fermé aux programmes que cette session lance, sauf à ceux ci-dessous
 run-keeps-network = { $program } atteint aussi le réseau
 run-carries-requested = { $sentence } (demandé par le planificateur pour cette ligne)
@@ -1806,6 +1815,9 @@ status-network-by-settings = fermé par run.network dans { $path }
 status-network-by-a-setting = fermé par run.network dans un fichier de réglages
 status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichier de réglages ne peut le changer
 status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
+status-path-sockets = Sockets unix des programmes
+status-path-sockets-reachable = chacun avec un chemin est accessible : D-Bus, SSH_AUTH_SOCK, docker.sock
+status-path-sockets-why = Landlock ici est antérieur à l'ABI 9 (Linux 7.1), et strict refuse les programmes
 status-sandbox-filesystem = Règles de fichiers
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = de { $files }
@@ -2217,6 +2229,7 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
 session-bg-bypass = /bg est refusé en contournement, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Changez de mode d'abord, ou utilisez une exécution ponctuelle.
 session-bg-option-lost = /bg est refusé, car cette session a été démarrée avec { $flag }, que la session en arrière-plan ne reçoit pas. Démarrez une session sans cette option pour utiliser /bg.
+session-bg-sandbox-moved = /bg est refusé, car /sandbox a placé cette session en mode { $mode }, et une session en arrière-plan démarre en mode { $settled }. Lancez /sandbox { $settled } d'abord pour utiliser /bg.
 session-bg-keeps-nothing-running = /bg est refusé tant qu'une boucle, un objectif ou une surveillance est en cours, car la session en arrière-plan ne l'exécuterait pas. Arrêtez-le d'abord.
 session-bg-nothing-recorded = /bg confie l'enregistrement de la session, et celle-ci n'en a pas encore. Envoyez d'abord une invite.
 session-bg-incognito = /bg est refusé dans une session incognito, qui n'écrit aucun enregistrement à confier.
@@ -2591,6 +2604,8 @@ paste-invisible-removed = { $count ->
     [one] { $count } caractère invisible a été retiré de ce texte collé
    *[other] { $count } caractères invisibles ont été retirés de ce texte collé
     }
+drop-name-not-written =
+    le nom d'un fichier déposé contient un caractère de contrôle ou un caractère qu'un terminal n'affiche pas, donc aucun chemin n'a été écrit dans la commande
 kilobytes = { $size } Ko
 megabytes = { $size } Mo
 gigabytes = { $size } Go
@@ -2669,6 +2684,7 @@ agent-checkout-not-applied =
 opening-confinement = confinement disponible : { $level }
 opening-network-closed = réseau fermé
 opening-filesystem-rules = règles de fichiers en vigueur
+opening-path-sockets-reachable = les programmes atteignent les sockets avec un chemin : D-Bus, agent SSH, docker.sock
 opening-invitation = Posez une question sur cet espace de travail.
 
 

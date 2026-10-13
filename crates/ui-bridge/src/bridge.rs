@@ -12,10 +12,11 @@
 //! store one: `session.list` returns the durable `(directory, id)`, and opening converts
 //! that into a handle again.
 
+use crate::answerers::Answerers;
 use crate::emit::{Emitter, Listener};
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
-use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
+use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::trusted;
@@ -83,6 +84,14 @@ pub struct Bridge {
     next_handle: u64,
     settings: Option<PathBuf>,
     emitter: Emitter,
+    /// The worker threads each open session has started, so a close can say when they have ended.
+    workers: HashMap<String, Arc<crate::workers::Workers>>,
+    /// Who can answer each session's questions. A session with no entry is answered by anyone,
+    /// as every client of the stdio transports does.
+    answerers: HashMap<String, Answerers>,
+    /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
+    /// make answerable is not.
+    refuse_until_set: bool,
 }
 
 impl Bridge {
@@ -92,7 +101,17 @@ impl Bridge {
             next_handle: 0,
             settings: None,
             emitter: Emitter::new(emit),
+            workers: HashMap::new(),
+            answerers: HashMap::new(),
+            refuse_until_set: false,
         }
+    }
+
+    /// Refuse every question of a session until [`Bridge::set_answerable`] or
+    /// [`Bridge::attach_view`] says who can answer it.
+    pub fn refusing_questions_until_set(mut self) -> Self {
+        self.refuse_until_set = true;
+        self
     }
 
     /// Preserve the selected path even if it disappeared: future requests must fail rather
@@ -810,13 +829,119 @@ impl Bridge {
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
-        let handle = request.string("session")?;
+        self.close(&request.string("session")?)?;
+        Ok(json!({}))
+    }
+
+    /// Close every open session and return the workers each one still has running.
+    pub fn stop_all(&mut self) -> Vec<Arc<crate::workers::Workers>> {
+        let handles: Vec<String> = self.open.keys().cloned().collect();
+        handles
+            .iter()
+            .filter_map(|handle| self.close(handle).ok())
+            .collect()
+    }
+
+    /// Say which kinds of question the session's controller can answer from now on. A question of
+    /// another kind is refused when it is asked, without being shown; one already waiting is not
+    /// touched. An empty list is nobody.
+    pub fn set_answerable(&mut self, handle: &str, kinds: &[Kind]) -> Result<(), Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        self.answerers_of(handle).only(kinds)
+    }
+
+    /// The session's controller is gone. Nobody can answer from now on, and the question waiting
+    /// is refused and shown as resolved. The turn or run goes on without it: what it asks next is
+    /// refused when asked. Nothing happens to a session with no question waiting.
+    pub fn lose_control(&mut self, handle: &str) {
+        if !self.open.contains_key(handle) {
+            return;
+        }
+        // First, so that a question asked from here on is refused and one asked just before this
+        // is registered where the refusal below finds it.
+        // Where the set cannot be written no question is answerable either, so a failure is the
+        // same refusal.
+        let _ = self.answerers_of(handle).nobody();
+        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
+            running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
+        }
+    }
+
+    /// Give a session's view to a client that is taking it over.
+    ///
+    /// `hand_over` switches where the session's events go, and runs between the end of what the
+    /// previous client was sent and the start of what the new one is. The client is sent the
+    /// session's current state as `session.view.snapshot`, with the startup question again if it
+    /// is still unanswered, and is then able to answer the `kinds` named. The session must have
+    /// started a view.
+    pub fn attach_view(
+        &mut self,
+        handle: &str,
+        kinds: &[Kind],
+        hand_over: impl FnOnce() -> Result<(), Failure>,
+    ) -> Result<Value, Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        let answerers = self.answerers_of(handle);
+        let sequence = self.emitter.resume_view(handle, || {
+            // Who can answer is set first, so a failure to set it leaves the previous controller
+            // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
+            // set here, since no client has the session.
+            answerers.only(kinds)?;
+            if let Err(failed) = hand_over() {
+                let _ = answerers.nobody();
+                return Err(failed);
+            }
+            Ok(())
+        })?;
+        self.ask_about_trust(handle);
+        Ok(json!({"version": 1, "sequence": sequence, "history": "omitted"}))
+    }
+
+    /// Whether a thread is still working for the session: a turn or a run that has not yet
+    /// returned, saving included.
+    pub fn is_working(&self, handle: &str) -> bool {
+        self.workers
+            .get(handle)
+            .is_some_and(|workers| !workers.is_idle())
+    }
+
+    fn answerers_of(&mut self, handle: &str) -> Answerers {
+        let refuse = self.refuse_until_set;
+        self.answerers
+            .entry(handle.to_string())
+            .or_insert_with(|| {
+                if refuse {
+                    Answerers::none()
+                } else {
+                    Answerers::default()
+                }
+            })
+            .clone()
+    }
+
+    /// The workers a session has started, which a close waits on.
+    fn workers_of(&mut self, handle: &str) -> Arc<crate::workers::Workers> {
+        Arc::clone(self.workers.entry(handle.to_string()).or_default())
+    }
+
+    /// Close a session: stop its work and refuse what that work waits on.
+    ///
+    /// Returns once the work has been told, not once it has stopped. The returned workers say when
+    /// the session's threads have ended, which is when it is closed: until then a turn can still
+    /// save its record.
+    pub fn close(&mut self, handle: &str) -> Result<Arc<crate::workers::Workers>, Failure> {
+        let handle = handle.to_string();
         let open = self
             .open
             .remove(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
         self.emitter.detach_view(&handle);
+        self.answerers.remove(&handle);
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -825,7 +950,7 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
-        Ok(json!({}))
+        Ok(self.workers.remove(&handle).unwrap_or_default())
     }
 
     /// Choose what the session's next turn asks before it acts.
@@ -1041,6 +1166,7 @@ impl Bridge {
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
+        let answerers = self.answerers_of(&handle);
 
         let worker_model = model.clone();
 
@@ -1065,7 +1191,7 @@ impl Bridge {
             open.model = model;
             open.definition = addressing.clone();
         }
-        thread::spawn(move || {
+        self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
                 addressing,
@@ -1094,6 +1220,7 @@ impl Bridge {
                 turn: turn_number,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -1219,7 +1346,8 @@ impl Bridge {
         }
         let emitter = self.emitter.clone();
         let session = handle.clone();
-        thread::spawn(move || {
+        let answerers = self.answerers_of(&handle);
+        self.workers_of(&handle).spawn(move || {
             crate::manifest::walk(crate::manifest::Walk {
                 emitter,
                 session,
@@ -1237,6 +1365,7 @@ impl Bridge {
                 run,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -2031,6 +2160,7 @@ struct Work {
     turn: usize,
     cancel: Cancel,
     pending: crate::turn::Pending,
+    answerers: Answerers,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -2136,6 +2266,7 @@ fn work(work: Work) {
         turn,
         cancel,
         pending,
+        answerers,
         answers,
         finished,
     } = work;
@@ -2156,7 +2287,8 @@ fn work(work: Work) {
         answers,
         Arc::clone(&state.question_ids),
         cancel.clone(),
-    );
+    )
+    .answerable_by(answerers);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -3428,9 +3560,17 @@ mod watch_tests {
 mod completion_tests;
 
 #[cfg(test)]
+#[path = "closing_tests.rs"]
+mod closing_tests;
+
+#[cfg(test)]
 #[path = "targets_tests.rs"]
 mod targets_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]
 mod retention_tests;
+
+#[cfg(test)]
+#[path = "control_tests.rs"]
+mod control_tests;

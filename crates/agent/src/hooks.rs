@@ -210,7 +210,7 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
         .stderr(Stdio::null());
     crate::scrub::apply(&mut command);
 
-    let mut child = match command.spawn() {
+    let mut child = match bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         Ok(child) => child,
         Err(problem) => return Some(Trouble::NotStarted(problem.to_string())),
     };

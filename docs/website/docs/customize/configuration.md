@@ -411,6 +411,7 @@ one thing leaves everything else in force:
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
+| `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -459,6 +460,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
 | `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
+| `git.identities` | the ssh key a `git` command offers first for one owner's repositories ([below](#gitidentities)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `download.maxBytes` | the most one `download_url` call may save to a file ([below](#downloadmaxbytes)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
@@ -467,6 +469,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -770,6 +773,20 @@ It needs a terminal that reports when it is left. `false` turns the automatic re
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
 
+### `suggestions`
+
+```json
+{ "suggestions": true }
+```
+
+Off by default. With `true`, once a turn has ended with a reply, the model `summaryModel` names (the
+session's own where it names none) is asked for the next prompt you are likely to type, and the
+box shows it dimmed where the invitation was. Tab or Right moves it into the box as text you can
+edit; nothing sends it, and a suggestion that begins with `/` is only text until you press Enter.
+Any other key removes it. Each one is a request that costs tokens, charged to the session and shown
+by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
+was stopped. Only the boolean `true` turns it on.
+
 ### `terminalTitle`
 
 ```json
@@ -925,6 +942,34 @@ grant.
 The desktop app shows the lists in the conversation's permissions view, each entry with the file
 that wrote it, and says in the notice above the conversation when an entry is not in force. It does
 not edit them: change the settings file, and the next conversation reads it.
+
+### `git.identities`
+
+```json
+{ "git": { "identities": { "github.com/your-account": "~/.ssh/your-account.pub" } } }
+```
+
+Which of your ssh keys a `git` command the agent runs offers a host first, for the repositories of
+one owner. Each name is `<host>/<owner>`, where the owner is the account or organisation the
+repository's path starts with, and each value is a public key file, absolute or starting `~/`; a
+name without `.pub` reads the file beside it. Use it when your ssh agent holds keys of more than one
+GitHub account: ssh offers the agent's keys in order and GitHub accepts the first one any account
+holds, so without it every push goes out as one account.
+
+It applies where the command's own arguments name an ssh address of that owner, such as
+`git push git@github.com:your-account/repo.git main` or `ssh://git@github.com/your-account/repo`.
+The command then runs ssh as `ssh -i '<key>' -o IdentitiesOnly=yes`, which offers that key first and
+after it only keys your `~/.ssh/config` names, and is lent that one public file. The run prompt names
+the key. A remote given by name, such as `origin`, is not matched, because its address is in the
+repository's own configuration; nor is an https address. Your ssh agent still signs, so no private key
+is read.
+
+On the commands it applies to it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` of
+yours. Your own file and a `--settings` file outside the project may write it; a project or local
+file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and a key it would not
+lend: a path that is not a regular `*.pub` file, one inside another credential location such as
+`~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
+either.
 
 ### `download.maxBytes`
 

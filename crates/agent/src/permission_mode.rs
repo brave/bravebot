@@ -381,20 +381,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
-    /// Asked in every mode but bypass, including plan mode and accepting edits.
+    /// Asked in every mode, bypass, plan mode and accepting edits included.
     ///
     /// Accepting edits does not start servers: what that mode grants is writes to this tree, and a
     /// language server runs the ecosystem's build tooling with the user's own access, which is
     /// nearer to a run than to an edit. Plan mode asks rather than refusing, for the reason a fetch
     /// does: reading the code is how a plan gets written, and a server writes nothing here. What it
     /// does do is execute code out of the dependency tree, which stays the person's to agree to.
+    ///
+    /// Bypassing does not answer it, for the reason it does not answer a line that asks to start
+    /// with no sandbox: the server runs with no profile, and it runs the `build.rs`, the project's
+    /// `tsserver.js` or the `.pth` file a confined stage could have written.
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
-        match self.mode.get() {
-            PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_server(request)
-            }
-        }
+        self.inner.confirm_server(request)
     }
 
     /// Approves a whole plan only where every check is being bypassed, and asks in every other mode
@@ -995,6 +994,104 @@ mod tests {
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
         }
+    }
+
+    /// Says yes to starting a language server and counts the times it was asked; refuses
+    /// everything else.
+    #[derive(Default)]
+    struct YesToServers(usize);
+
+    impl Confirmer for YesToServers {
+        fn confirm_server(&mut self, _request: &crate::confirm::ServerRequest) -> Decision {
+            self.0 += 1;
+            Decision::Approve
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    fn a_server() -> crate::confirm::ServerRequest {
+        crate::confirm::ServerRequest {
+            language: "Rust".to_string(),
+            program: "/usr/bin/rust-analyzer".to_string(),
+            args: Vec::new(),
+            workspace: "/work/project".to_string(),
+            runs_build_tooling: true,
+            declared: false,
+        }
+    }
+
+    /// LSP-5, MODE-4: starting a language server is put to the person in every mode, bypass
+    /// included, since the server runs with no profile and executes the `build.rs` or `.pth` file a
+    /// confined stage could have written. A run with nobody to ask refuses it. The regression it
+    /// rejects is bypassing approving the server unasked, as it approves a confined line.
+    #[test]
+    fn a_language_server_is_put_to_the_person_in_every_mode_bypass_included() {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let mut asked = YesToServers::default();
+            let decided = Confining::new(&mut asked, mode, false).confirm_server(&a_server());
+            assert_eq!((decided, asked.0), (Decision::Approve, 1), "{mode:?}");
+        }
+        let mut refusing = Unattended;
+        assert_eq!(
+            Confining::new(&mut refusing, PermissionMode::Bypass, false)
+                .confirm_server(&a_server()),
+            Decision::Reject
+        );
     }
 
     fn a_move() -> crate::confirm::MoveRequest {

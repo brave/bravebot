@@ -238,6 +238,35 @@ pub fn paths(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// A path as one word of a shell line, so no character of the name is read as syntax.
+///
+/// A path of ordinary characters is written as it is. Any other is single-quoted, and each quote
+/// and backslash in it is written outside the quotes, escaped: fish reads `\'` and `\\` as escapes
+/// inside single quotes where a POSIX shell does not, so a backslash left inside would let a name
+/// end the quoting early in one of them.
+///
+/// `=` and `%` are not ordinary here, though a POSIX shell reads them as letters inside a word: a
+/// word holding `=` can be an assignment, zsh expands one starting with `=` to a program's path, and
+/// fish expands `%self`.
+pub fn shell_word(path: &str) -> String {
+    let ordinary = |c: char| c.is_ascii_alphanumeric() || "_@+:,./-".contains(c);
+    if !path.is_empty() && path.chars().all(ordinary) {
+        return path.to_string();
+    }
+
+    let mut word = String::with_capacity(path.len() + 2);
+    word.push('\'');
+    for c in path.chars() {
+        match c {
+            '\'' => word.push_str(r"'\''"),
+            '\\' => word.push_str(r"'\\'"),
+            c => word.push(c),
+        }
+    }
+    word.push('\'');
+    word
+}
+
 /// Whether a paste is a drop at all, whether or not each file is a type we take.
 ///
 /// Separate from [`dropped_with`] because the caller needs to know a drop happened even when
@@ -418,6 +447,24 @@ mod tests {
     fn a_literal_percent_in_a_name_survives() {
         assert_eq!(percent_decoded("/tmp/100%.png"), "/tmp/100%.png");
         assert_eq!(percent_decoded("/tmp/a%zz.png"), "/tmp/a%zz.png");
+    }
+
+    /// An ordinary path reads on a shell line as it would have been typed, and every other one is a
+    /// single quoted word with no quote or backslash left inside the quotes.
+    #[test]
+    fn a_path_is_quoted_for_the_shell_only_when_it_needs_to_be() {
+        assert_eq!(
+            shell_word("/tmp/a-b_c.d/e@f+g:h,i.png"),
+            "/tmp/a-b_c.d/e@f+g:h,i.png"
+        );
+        assert_eq!(shell_word("=ls"), "'=ls'");
+        assert_eq!(shell_word("a=b.png"), "'a=b.png'");
+        assert_eq!(shell_word("%self"), "'%self'");
+        assert_eq!(shell_word("/tmp/my shot.png"), "'/tmp/my shot.png'");
+        assert_eq!(shell_word("/tmp/$(id);`id`.png"), "'/tmp/$(id);`id`.png'");
+        assert_eq!(shell_word("/tmp/it's.png"), r"'/tmp/it'\''s.png'");
+        assert_eq!(shell_word(r"/tmp/a\'b.png"), r"'/tmp/a'\\''\''b.png'");
+        assert_eq!(shell_word("/tmp/é.png"), "'/tmp/é.png'");
     }
 
     #[test]

@@ -4654,6 +4654,7 @@ mod tests {
                     toolchain: None,
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
                     reaches: Vec::new(),
+                    identity: Some("/home/someone/.ssh/work.pub".into()),
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4665,6 +4666,7 @@ mod tests {
                         variable: "DOCKER_CONFIG",
                         path: "/home/someone/.local/share/docker-work".into(),
                     }],
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4673,6 +4675,7 @@ mod tests {
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Cargo),
                     scope: None,
                     reaches: Vec::new(),
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
@@ -4689,6 +4692,12 @@ mod tests {
             "{drawn}"
         );
         assert!(drawn.contains("never a private key"), "{drawn}");
+        assert!(
+            drawn.contains(
+                "git has ssh offer the key /home/someone/.ssh/work.pub first, which your git.identities names"
+            ),
+            "{drawn}"
+        );
         assert!(
             drawn.contains(
                 "docker also reads /home/someone/.local/share/docker-work, where your DOCKER_CONFIG points"
@@ -4719,6 +4728,7 @@ mod tests {
                 toolchain: None,
                 scope: Some(bravebot_sandbox::scope::Scope::Remote),
                 reaches: Vec::new(),
+                identity: None,
                 network: kept,
                 remembered: Vec::new(),
             }],

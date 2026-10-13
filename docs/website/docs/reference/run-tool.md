@@ -459,6 +459,8 @@ background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 A line the turn is waiting on can be moved to the background by the person at the terminal, with the
 key the hint line names (`ctrl-b` unless you [moved it](../using/interactive-mode.md#moving-a-key)).
 Only the interactive terminal client has the key: one-shot mode and the desktop app wait as before.
+In the terminal client, a message sent while the line runs also moves it once the line has run for
+10 seconds, so the turn reads the message without waiting for the line to end.
 The command is not stopped or started again. It becomes a job exactly as if it had been started with
 `background: true`, and the agent's result for the call says the user moved it, after how many
 seconds, and under which job name. Nothing it printed is in that result, including what it printed

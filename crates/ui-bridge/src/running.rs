@@ -392,13 +392,25 @@ impl Running {
     /// the same effect, since the confirmer treats a closed channel as a refusal, but
     /// saying it outright does not depend on when a drop happens to run.
     pub fn refuse_pending(&self) {
-        if let Ok(mut pending) = self.pending.lock()
-            && let Some(question) = pending.take()
-        {
-            // Refused in the shape of the question that was asked, so the worker's own
-            // match arm accepts it. A `Write` sent at a waiting run would be discarded as
-            // a mismatch and the turn would block until the channel dropped instead.
-            let _ = self.answers.send(question.kind.refusal());
-        }
+        self.refuse_pending_with(|_| {});
+    }
+
+    /// As [`Self::refuse_pending`], and publish the refused question's number before waking the
+    /// worker, as an answer does ([`Self::answer_with`]).
+    pub fn refuse_pending_with(&self, refused: impl FnOnce(u64)) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        let Some(question) = pending.take() else {
+            return;
+        };
+        // The lock is held through the refusal, so the worker cannot leave its wait and register
+        // another question that this refusal would then answer. Publishing under it takes the
+        // update lock in the order `ask` does.
+        refused(question.id);
+        // Refused in the shape of the question that was asked, so the worker's own
+        // match arm accepts it. A `Write` sent at a waiting run would be discarded as
+        // a mismatch and the turn would block until the channel dropped instead.
+        let _ = self.answers.send(question.kind.refusal());
     }
 }

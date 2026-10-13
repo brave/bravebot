@@ -674,7 +674,7 @@ A `/review` is a command, so a prompt file or skill of that name is shadowed by 
 **Why.** A review exists to read changes the planner may not be allowed to see, and the answer to
 that elsewhere is a processor whose output goes to the person. A typed record of findings that the
 planner could act on would be the driver branching on processor output, which the design reserves for
-the three exceptions in [labels.md](labels.md) and which needs the maintainers' agreement
+the exceptions in [labels.md](labels.md) that read a processor's or a check's answer and which needs the maintainers' agreement
 before it is built. This command is the part that needs none of that.
 
 `verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
@@ -874,6 +874,35 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
+
+<a id="CMD-21"></a>
+### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+
+Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
+and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
+because every row's description starts after the longest word in the list and a spelled-out hint
+would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
+set of levels the program accepts, so a level added there appears in both.
+
+Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
+start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
+levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
+as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
+only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+
+Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+
+**Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
+Completing a start from the same set the command accepts keeps the hint, the completion and the
+refusal for an unknown word in step.
+
+`verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
+`verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
+`verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
+`verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 ## Known costs
 

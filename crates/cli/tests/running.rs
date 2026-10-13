@@ -302,6 +302,115 @@ fn a_configured_gateway_is_not_refused() {
     );
 }
 
+/// The connections an Ollama has taken, read once the run that made them has ended.
+///
+/// The listener counts on a thread of its own, so a request the run made just before it exited may
+/// not be counted yet. The wait is for that thread, and a run that opened a connection had it
+/// open before it ended.
+fn connections_to(ollama: &Arc<AtomicUsize>) -> usize {
+    std::thread::sleep(Duration::from_millis(500));
+    ollama.load(Ordering::SeqCst)
+}
+
+/// The configuration a released binary arrives with: Brave's own hosts and nothing imported.
+const BRAVE_HOSTS: [(&str, &str); 4] = [
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+];
+
+/// IMPORT-10, the ordinary half: a start with no service configured asks the Ollama on this
+/// machine once.
+///
+/// This is what gives the two silences below their meaning: the same run, the same address, and
+/// here the request arrives.
+#[test]
+fn a_start_with_no_service_asks_the_ollama_on_this_machine_once() {
+    let scratch = Scratch::new("cli-running-ollama-asked");
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[BRAVE_HOSTS.as_slice(), &[("OLLAMA_HOST", &address)]].concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(connections_to(&ollama), 1, "{stderr}");
+}
+
+/// IMPORT-10: an incognito start opens no connection to Ollama.
+///
+/// The session has no settings file it could write, so an answer found would have nowhere to go.
+/// The run is the one above with the flag added, and it still ends on the refusal for no service,
+/// so the silence is the mode and not a run that stopped earlier.
+#[test]
+fn an_incognito_start_opens_no_connection_to_ollama() {
+    let scratch = Scratch::new("cli-running-ollama-incognito");
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[BRAVE_HOSTS.as_slice(), &[("OLLAMA_HOST", &address)]].concat(),
+        &["--incognito", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(
+        connections_to(&ollama),
+        0,
+        "an incognito start asked Ollama: {stderr}"
+    );
+}
+
+/// IMPORT-10: a start with a service configured asks Ollama nothing, though nothing configured
+/// serves the model in force and the start is refused.
+///
+/// The block is the one a person copies from another tool, which names a model and no default.
+/// It is the case that reaches the import with a service configured, since a start that is served
+/// returns before it. The run ends on the refusal naming the `model` key, so the silence is the
+/// gate and not a run that stopped earlier.
+#[test]
+fn a_start_with_a_service_configured_asks_ollama_nothing() {
+    let scratch = Scratch::new("cli-running-ollama-configured").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            BRAVE_HOSTS.as_slice(),
+            &[("OPENROUTER_API_KEY", "a-token"), ("OLLAMA_HOST", &address)],
+        ]
+        .concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    assert_eq!(
+        connections_to(&ollama),
+        0,
+        "a configured start asked Ollama: {stderr}"
+    );
+}
+
 /// CLI-21. An advisor nothing is configured to serve stops the run before the first round, as the
 /// same name given to `--model` would, rather than starting a run whose first question could not be
 /// sent. The control is the run without the flag, which reaches the gateway, so the stop is known to
@@ -660,6 +769,61 @@ fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
     assert!(
         denied.contains("not a list of strings") && denied.contains("settings.json"),
         "a misshapen host list went unreported: {stdout}"
+    );
+}
+
+/// SANDBOX-16: `doctor` says a checkout's `git.identities` is not obeyed, and names an entry of the
+/// person's own that it cannot read and one whose key a push would not be given, each with its
+/// file.
+///
+/// The settings tests check the accessors. `doctor` is the only place that turns them into lines
+/// for a person, so a missing call would leave a checkout's attempt to choose a push key, and a
+/// person's mistyped entry or key path, without a word.
+#[test]
+fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
+    let scratch = Scratch::new("cli-running-doctor-git-identities").with_settings(
+        r#"{"git": {"identities": {"github.com": "~/.ssh/no-owner.pub", "github.com/acme": "~/.ssh/missing.pub"}}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"git": {"identities": {"github.com/brave": "~/.ssh/planted.pub"}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let ignored = line("git.identities in");
+    assert!(
+        ignored.contains("not obeyed")
+            && ignored.contains(&checkout.join(".bravebot").display().to_string()),
+        "a checkout's key choice went unreported: {stdout}"
+    );
+    let misshapen = line("git.identities.github.com in");
+    assert!(
+        misshapen.contains("is not read") && misshapen.contains("settings.json"),
+        "an entry the person's file holds went unreported: {stdout}"
+    );
+    let refused = line("git.identities.github.com/acme");
+    assert!(
+        refused.contains("~/.ssh/missing.pub")
+            && refused.contains("not a key a push can be given")
+            && refused.contains("settings.json"),
+        "a key a push would not be given went unreported: {stdout}"
     );
 }
 
@@ -2727,6 +2891,83 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
             body.len()
         )
     })
+}
+
+/// SANDBOX-16: the person's key choice reaches the git process started by `run`, and an entry for
+/// another owner or no entry leaves its ssh command unset. Starting a CLI process exercises both
+/// startup settlement and `Tools::confinement`; tests that supply identities directly miss either
+/// link being dropped. A fake git records its environment without contacting a remote.
+#[cfg(unix)]
+#[test]
+fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping git identity run-stage test: confinement is unavailable");
+        return;
+    }
+    for (name, owner) in [
+        ("cli-running-identity-matching", Some("acme")),
+        ("cli-running-identity-other", Some("other")),
+        ("cli-running-identity-absent", None),
+    ] {
+        let gateway =
+            a_gateway_asking_to_run("git push git@example.invalid:acme/widgets.git > identity.txt");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings for a gateway");
+        if let Some(owner) = owner {
+            settings["git"] = serde_json::json!({
+                "identities": {format!("example.invalid/{owner}"): "~/.ssh/work"}
+            });
+        }
+        // The key is outside the project and the system temporary directory, so the plan cannot
+        // write it. Only the public half exists, though the entry names the private half.
+        let scratch = Scratch::new(name)
+            .with_settings(&settings.to_string())
+            .with_file(".ssh/work.pub", "ssh-ed25519 AAAA\n")
+            .with_file(
+                "bin/git",
+                "#!/bin/sh\n[ \"$1\" = push ] || exit 1\nprintf '%s\\n' \"${GIT_SSH_COMMAND-unset}\"\n",
+            );
+        std::fs::set_permissions(
+            scratch.path.join("bin/git"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("make fake git executable");
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", &path));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[
+                "--dangerously-skip-permissions",
+                "-p",
+                "record the push identity",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{name}: {stdout}{stderr}");
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        let actual =
+            std::fs::read_to_string(project.join("identity.txt")).unwrap_or_else(|error| {
+                panic!("{name}: git did not record its identity: {error}; {stdout}{stderr}")
+            });
+        let expected = match owner {
+            Some("acme") => format!(
+                "ssh -i '{}' -o IdentitiesOnly=yes\n",
+                scratch.path.join(".ssh/work.pub").display()
+            ),
+            _ => "unset\n".to_string(),
+        };
+        assert_eq!(actual, expected, "{name}: {stdout}{stderr}");
+    }
 }
 
 /// SANDBOX-24: a person's `sandbox.network.allowedHosts` reaches the programs `run` starts as a
@@ -11484,4 +11725,64 @@ fn a_session_in_lines_is_not_cut_off_at_the_bound_an_unwatched_run_carries() {
         "a request of the turn was sent without its tools"
     );
     assert!(said_to_the_person.contains("done"), "{said_to_the_person}");
+}
+
+/// SANDBOX-8: a process of the same user, which is what a program a stage starts is, cannot read
+/// the environment bravebot was started with.
+///
+/// The run is held on a gateway that has been asked a question and not answered, so the process is
+/// alive and holds a variable a person exported. What is read is `/proc/<pid>/environ` of that
+/// process, which the kernel serves to any process of the same user unless the target has marked
+/// itself non-dumpable. A process with `CAP_SYS_PTRACE` is served regardless of the mark, so the
+/// test has nothing to say there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_with() {
+    const EXPORTED: &str = "placeholder-environment-secret";
+    let held = Arc::new(std::sync::Mutex::new(()));
+    let release = held.lock().expect("hold the gateway's answer");
+    let (asked, hear) = mpsc::channel();
+    let gate = Arc::clone(&held);
+    let gateway = a_gateway(r#"["tools"]"#, move |_| {
+        let _ = asked.send(());
+        drop(gate.lock());
+        http(500, r#"{"error": {"message": "nothing here answers"}}"#)
+    });
+    let scratch =
+        Scratch::new("cli-running-environment-unreadable").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("BRAVEBOT_TEST_EXPORTED", EXPORTED));
+    let mut child = prepared(&scratch.path, None, &environment, &["-p", "say hello"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the built binary runs");
+    let reached = hear.recv_timeout(Duration::from_secs(60));
+    let environ = format!("/proc/{}/environ", child.id());
+    let read = std::fs::read(&environ);
+    drop(release);
+    let _ = child.kill();
+    let _ = child.wait();
+    reached.expect("the run reached the gateway");
+
+    let status = std::fs::read_to_string("/proc/self/status").expect("this process's status");
+    let capable = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapEff:"))
+        .and_then(|mask| u64::from_str_radix(mask.trim(), 16).ok())
+        .is_some_and(|mask| mask & (1 << 19) != 0);
+    if capable {
+        return;
+    }
+    match read {
+        Ok(bytes) => assert!(
+            !String::from_utf8_lossy(&bytes).contains(EXPORTED),
+            "a same-user process read the secret out of {environ}"
+        ),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "{environ}: {error}"
+        ),
+    }
 }

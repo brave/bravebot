@@ -18,6 +18,7 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod git_identities;
 pub mod hooks;
 pub mod install;
 pub mod keys;

@@ -858,6 +858,7 @@ version; `home` and `defaultModel` may be null. Sent as the
 | `no_such_request` | unknown or already-answered confirmation id, or a repeated `trust.reply` |
 | `turn_in_flight` | a turn is already running on that session |
 | `not_a_directory` | the path given to `session.new` is not a directory |
+| `not_allowed` | the local host does not offer this method, parameter or session to this client ([local host](#local-host)) |
 | `no_home` | `~/.bravebot` could not be located or created |
 | `config` | `Config::from_env` failed; `message` carries the detail |
 | `internal` | a bug; `message` is for a report, not for a user |
@@ -1492,3 +1493,23 @@ within its session, across turns. Keep drafts and optimistic UI separate until a
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
 approval transitions, label preservation and limits. This is the Rust part of the first mobile
 block. The stdio TypeScript client for it is `packages/agent-client`, which answers the four supported question kinds; no native renderer is supplied yet.
+
+## Local host
+
+`bravebot-host` serves the methods below to one client at a time over an anonymous channel that it makes when it starts the client (see [HOST-1](../../docs/specs/local-host.md#HOST-1)). Its behaviour is specified in [local-host.md](../../docs/specs/local-host.md). The host answers a subset of the methods above, each with the parameters in `crates/ui-bridge/src/allowlist.rs` and no others, and refuses everything else with `not_allowed`.
+
+| Method | Parameters | Result |
+|---|---|---|
+| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }] }` |
+| `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
+| `session.close` | `session` | `{ "state": "closing" }` |
+| `session.attach` | `session` | `{ "version": 1, "sequence": number, "history": "omitted" }` |
+
+`instance` names the run of the host and changes when the host restarts. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
+
+A session has one controller, the connection that opened it or took it over, and `controlled` says whether that connection is the one being served. Another connection is refused with `not_allowed`, except that once the controller's connection has ended any later connection may close the session or take it over with `session.attach`. A connection that controls a session is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
+
+A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
+
+`session.attach` sends the connection `session.view.snapshot`, then the answer. The event carries the `session.view.initial` shape with the session's current sequence, turn, target, status and pending question, no rows, and `"history": "omitted"`: the host keeps no transcript for a client that was not there. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+

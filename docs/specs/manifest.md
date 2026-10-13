@@ -84,6 +84,7 @@ Never drop an artefact on the error path, and never make inspecting one conditio
 `verified-by: bravebot_agent::manifest::a_plan_that_fails_the_schema_keeps_the_goal_and_the_proposal`
 `verified-by: bravebot_agent::manifest::a_step_that_fails_leaves_the_plan_and_everything_that_ran`
 `verified-by: bravebot_cli::main::a_failed_plan_is_printed_beside_the_reply`
+`verified-by: bravebot_cli::main::a_stopped_manifest_prints_what_it_produced_without_the_trace_flag`
 
 <a id="MANIFEST-4"></a>
 ### MANIFEST-4: validation is pure and total

@@ -38,7 +38,9 @@ DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("docs/specs/layering.md",)
+READ_BY_RUST = (
+    "docs/specs/layering.md", "docs/specs/credential-protection.md", "docs/specs/sandboxing.md",
+)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
@@ -76,7 +78,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example",
+    "README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -307,6 +309,8 @@ CASES = (
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
     ("crates/config/build.rs", {"rust", "build"}),
     ("docs/specs/layering.md", {"rust"}),
+    ("docs/specs/credential-protection.md", {"rust"}),
+    ("docs/specs/sandboxing.md", {"rust"}),
     ("docs/specs/routing.md", NOTHING),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
@@ -337,6 +341,7 @@ CASES = (
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
+    ("SECURITY.md", NOTHING),
 )
 
 # One crate reached each way a manifest can name another, one reached only through another, and

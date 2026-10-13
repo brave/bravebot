@@ -57,8 +57,55 @@ struct Places {
     home: PathBuf,
 }
 
+/// On Windows, keeps only the directories of this process's `PATH` that lie under the system and
+/// Program Files directories, where `cmd.exe` and Git's programs are.
+///
+/// Every `PATH` directory, and the parent of each `bin` among them, is a read row of every stage
+/// (SANDBOX-18). Every container already reads the system and Program Files directories, so a row
+/// there writes nothing. Anywhere else a row is an entry the platform writes onto every file
+/// beneath the directory as the stage starts and removes as it ends, so with a CI runner's `PATH`,
+/// which names toolchain installations, and the build directories `cargo test` adds to it, a stage
+/// takes minutes to start and can pass the run deadline before its program runs. None of these
+/// tests is about those rows. The job cannot do this for them, because cargo adds its own
+/// directories to whatever `PATH` the job gives it.
+#[cfg(windows)]
+fn hold_path_to_what_every_container_reads() {
+    static HELD: std::sync::Once = std::sync::Once::new();
+    HELD.call_once(|| {
+        let roots: Vec<PathBuf> = [
+            "SystemRoot",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+        ]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+        let under = |directory: &Path, root: &Path| {
+            let mut parts = directory.components();
+            root.components().all(|part| {
+                parts
+                    .next()
+                    .is_some_and(|own| own.as_os_str().eq_ignore_ascii_case(part.as_os_str()))
+            })
+        };
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let kept = std::env::join_paths(
+            std::env::split_paths(&path)
+                .filter(|directory| roots.iter().any(|root| under(directory, root))),
+        )
+        .expect("directories that were on PATH can be joined again");
+        // SAFETY: `set_var` is sound on Windows whatever other threads are doing, as its
+        // documentation states.
+        unsafe { std::env::set_var("PATH", kept) };
+    });
+}
+
 impl Places {
     fn new(name: &str) -> Self {
+        #[cfg(windows)]
+        hold_path_to_what_every_container_reads();
         let top = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!("confine-{name}"));
@@ -101,11 +148,21 @@ impl Places {
     }
 
     fn run(&self, line: &str, confinement: Option<&Confinement>) -> exec::Ran {
+        self.run_given(line, confinement, None)
+    }
+
+    /// [`Places::run`] for a session that was given `scratch` as its own directory.
+    fn run_given(
+        &self,
+        line: &str,
+        confinement: Option<&Confinement>,
+        scratch: Option<&Path>,
+    ) -> exec::Ran {
         exec::run_plan_observed(
             &self.plan(line),
             &Cancel::new(),
             exec::LIMIT,
-            None,
+            scratch,
             None,
             confinement,
             &mut |_| Ok(()),
@@ -118,6 +175,15 @@ impl Places {
 fn can_confine() -> bool {
     bravebot_sandbox::base::Prelude::current().is_some()
         && bravebot_sandbox::confinement_works_here()
+}
+
+/// A `strict` stage is refused on a Linux kernel below Landlock ABI 9 (SANDBOX-3), so a test that
+/// needs one to start has nothing to test there.
+#[cfg(unix)]
+fn strict_runs_here() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
 }
 
 /// `confinement_works_here` starts `/bin/true`, which is not a Windows program, so it cannot say
@@ -210,7 +276,7 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
 fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     use bravebot_sandbox::SandboxMode;
     use bravebot_sandbox::scope::{Requested, Scope};
-    if !can_confine() {
+    if !strict_runs_here() {
         return;
     }
     let places = Places::new("requested-scope");
@@ -237,6 +303,60 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     assert!(
         !read(".ssh/id_ed25519", &asked(Scope::Aws)).ended_well,
         "a request for aws read a private key"
+    );
+}
+
+/// INSTR-9 tells the planner to stand in for a missing Python module with one written in a
+/// directory inside the session's own and named, quoted, on the line's `PYTHONPATH`. The
+/// regressions it rejects are a confinement that refuses reading the session's directory or drops
+/// the assignment, so the road the planner is told to take fails under the sandbox, and a stage
+/// given the session's directory on its `PYTHONPATH` whatever the line says, which puts whatever
+/// the work left there ahead of every program's own modules. A module of the same name at the top
+/// of the session's directory stands for that: the named line imports the stand-in and not it, and
+/// the line with no assignment imports neither. The unconfined line is the control that Python
+/// finds the stand-in at all.
+#[cfg(unix)]
+#[test]
+fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("stand-in-module");
+    if bravebot_agent::programs::resolve("python3", &places.session).is_none() {
+        return;
+    }
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    let stand_in = own.join("stand-in");
+    std::fs::create_dir(&stand_in).expect("a directory for the stand-in");
+    std::fs::write(
+        stand_in.join("bravebot_stand_in.py"),
+        "from json import *\n",
+    )
+    .expect("a module");
+    std::fs::write(
+        own.join("bravebot_stand_in.py"),
+        "def dumps(_):\n    return 'left in the session directory'\n",
+    )
+    .expect("a module left beside it");
+    let program = "python3 -c 'import bravebot_stand_in; print(bravebot_stand_in.dumps([1]))'";
+    let named = format!("PYTHONPATH='{}' {program}", stand_in.display());
+    let confinement =
+        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
+            .expect("a platform with a base");
+
+    let control = places.run_given(&named, None, Some(&own));
+    let confined = places.run_given(&named, Some(&confinement), Some(&own));
+    let unnamed = places.run_given(program, Some(&confinement), Some(&own));
+
+    assert_eq!(control.stdout, "[1]\n", "unconfined: {control:?}");
+    assert!(
+        confined.ended_well && confined.stdout == "[1]\n",
+        "the module was not imported with the assignment: {confined:?}"
+    );
+    assert!(
+        !unnamed.ended_well && unnamed.stdout.is_empty(),
+        "a module was imported with no assignment on the line: {unnamed:?}"
     );
 }
 
@@ -353,45 +473,64 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
-/// regression it rejects is a row wide enough to cover a credential location, the home directory's
-/// own entries, or the directory above it. The first write is the control that the stage can write
-/// at all.
+/// regression it rejects is a row wide enough to cover a credential location, a file a shell or
+/// git runs later, a per-user job, the home directory's own entries, or the directory above it.
+/// The first write is the control that the stage can write at all.
 #[cfg(unix)]
 #[test]
-fn a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory() {
+fn a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home() {
     if !can_confine() {
         return;
     }
     let places = Places::new("unasked-refused");
     std::fs::create_dir_all(places.home.join(".config/gcloud")).expect("a credential directory");
+    for directory in ["Library/LaunchAgents", ".config/systemd/user"] {
+        std::fs::create_dir_all(places.home.join(directory)).expect("a job directory");
+    }
+    std::fs::write(places.home.join(".editorconfig"), "root = true\n").expect("a home file");
+    std::fs::write(places.home.join(".zshrc"), "export A=1\n").expect("a startup file");
     let confinement = places.confinement().with_unasked_writes(true);
     let top = places.home.parent().expect("a parent").to_path_buf();
     let attempt = |path: PathBuf| {
         let ran = places.run(&format!("touch '{}'", path.display()), Some(&confinement));
         (ran.ended_well, path.exists())
     };
+    let appended = |name: &str| {
+        places
+            .run(
+                &format!("tee -a '{}'", places.home.join(name).display()),
+                Some(&confinement),
+            )
+            .ended_well
+    };
 
     let beside = attempt(places.beside.join("control.txt"));
-    let existing = places.run(
-        &format!("tee -a '{}'", places.home.join(".gitconfig").display()),
-        Some(&confinement),
-    );
+    let existing = appended(".editorconfig");
     let new_in_existing_dir = attempt(places.home.join(".config/other.txt"));
     let refused = [
         ("ssh", places.home.join(".ssh/planted")),
         ("state directory", places.home.join(".bravebot/planted")),
         ("aws", places.home.join(".aws/planted")),
         ("gcloud", places.home.join(".config/gcloud/planted")),
+        (
+            "launch agent",
+            places.home.join("Library/LaunchAgents/planted.plist"),
+        ),
+        (
+            "systemd unit",
+            places.home.join(".config/systemd/user/planted.service"),
+        ),
         ("new entry in home", places.home.join("planted")),
         ("new entry above home", top.join("planted")),
     ]
     .map(|(what, path)| (what, attempt(path)));
+    let rewritten = [".zshrc", ".gitconfig"].map(|name| (name, appended(name)));
 
     assert_eq!(beside, (true, true), "the stage could not write at all");
-    assert!(
-        existing.ended_well,
-        "an existing file in home is writable: {existing:?}"
-    );
+    assert!(existing, "an existing file in home is not writable");
+    for (name, ended_well) in rewritten {
+        assert!(!ended_well, "{name} was written");
+    }
     assert!(
         !new_in_existing_dir.0,
         "a directory holding a credential is treated as home: its new entries are refused"
@@ -425,25 +564,29 @@ fn a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request() {
         &format!("touch '{}'", locked.join("planted.txt").display()),
         Some(&listed),
     );
-    let strict = places.run(
-        &format!("touch '{}'", places.beside.join("strict.txt").display()),
-        Some(
-            &places
-                .confinement()
-                .with_mode(bravebot_sandbox::SandboxMode::Strict)
-                .with_unasked_writes(true),
-        ),
-    );
+    let strict = strict_runs_here().then(|| {
+        places.run(
+            &format!("touch '{}'", places.beside.join("strict.txt").display()),
+            Some(
+                &places
+                    .confinement()
+                    .with_mode(bravebot_sandbox::SandboxMode::Strict)
+                    .with_unasked_writes(true),
+            ),
+        )
+    });
 
     assert!(free.ended_well, "{free:?}");
     assert!(
         !refused.ended_well && !locked.join("planted.txt").exists(),
         "{refused:?}"
     );
-    assert!(
-        !strict.ended_well && !places.beside.join("strict.txt").exists(),
-        "{strict:?}"
-    );
+    if let Some(strict) = strict {
+        assert!(
+            !strict.ended_well && !places.beside.join("strict.txt").exists(),
+            "{strict:?}"
+        );
+    }
 }
 
 /// The regression it rejects: the background path spawning the plain command. A job left running
@@ -606,6 +749,46 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
         matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("run.network")),
         "{refused:?}"
     );
+}
+
+/// SANDBOX-4 through the agent: a `cmd` line holding an argument `cmd.exe` reads as its own syntax
+/// is refused before its redirection's file is opened, and nothing is made. The same line with a
+/// plain name is the control that it starts and the redirection's file is made. The regression it
+/// rejects is the agent's early check given the program without its arguments, so the file is
+/// created before the backend refuses the stage.
+#[cfg(windows)]
+#[test]
+fn a_cmd_line_cmd_would_read_otherwise_is_refused_before_its_redirection_is_opened() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("cmd-refused");
+    let confinement = places.confinement();
+
+    let control = places.run("cmd /c mkdir plain > control.txt", Some(&confinement));
+    let refused = exec::run_plan_observed(
+        &places.plan("cmd /c mkdir 'R&D' > refused.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&confinement),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        control.ended_well
+            && places.session.join("plain").is_dir()
+            && places.session.join("control.txt").exists(),
+        "{control:?}"
+    );
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("'&'")),
+        "{refused:?}"
+    );
+    for unmade in ["refused.txt", "R&D", "R"] {
+        assert!(!places.session.join(unmade).exists(), "{unmade} was made");
+    }
 }
 
 /// The lists a person writes, as the command line and the settings file hand them over: each entry a

@@ -10,7 +10,7 @@
 //! (curl fails to resolve or connect) and cannot create files, while still being able
 //! to exec and read permitted paths.
 
-use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy, with_their_resolved_spelling};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
@@ -23,11 +23,11 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// The socket every host name lookup on macOS goes through.
 const RESOLVER: &str = "/private/var/run/mDNSResponder";
 
-/// The Mach services a confined process may look up. Each answers a question about the machine
-/// (accounts, groups, network configuration, certificate trust, log and notification delivery) or
-/// is the keychain service the base reads a keychain file for. None starts a program, reads or
-/// writes the pasteboard, or opens a file or URL on the caller's behalf, which is what
-/// LaunchServices, the pasteboard and launchd do, so a lookup of any of those is refused.
+/// The Mach services every confined process may look up. Each answers a question about the machine
+/// (accounts, groups, network configuration, log and notification delivery) or is the keychain
+/// service the base reads a keychain file for. None starts a program, reads or writes the
+/// pasteboard, or opens a file or URL on the caller's behalf, which is what LaunchServices, the
+/// pasteboard and launchd do, so a lookup of any of those is refused.
 const MACH_SERVICES: &[&str] = &[
     "com.apple.SecurityServer",
     "com.apple.SystemConfiguration.DNSConfiguration",
@@ -37,9 +37,24 @@ const MACH_SERVICES: &[&str] = &[
     "com.apple.system.notification_center",
     "com.apple.system.opendirectoryd.libinfo",
     "com.apple.system.opendirectoryd.membership",
-    "com.apple.trustd",
-    "com.apple.trustd.agent",
 ];
+
+/// The certificate trust services, looked up only by a process that may reach the network. Trust
+/// evaluation makes these fetch an issuer from the certificate's Authority Information Access URL
+/// from their own unconfined process, so a profile with no egress that allowed them would let the
+/// process make a request to any URL it names.
+const TRUST_SERVICES: &[&str] = &["com.apple.trustd", "com.apple.trustd.agent"];
+
+/// The services a policy's profile allows a lookup of: the trust services only where the policy
+/// allows network egress.
+fn mach_services(policy: &SandboxPolicy) -> impl Iterator<Item = &'static &'static str> {
+    let trust: &[&str] = if policy.allow_network {
+        TRUST_SERVICES
+    } else {
+        &[]
+    };
+    MACH_SERVICES.iter().chain(trust)
+}
 
 /// Refuses a write to any path with a `.git` component, in either case, since the default
 /// volume opens `.GIT` when git asks for `.git`.
@@ -101,12 +116,37 @@ impl SeatbeltSandbox {
         let mut out = String::from("(version 1)\n(deny default)\n");
 
         // Without these the process cannot start at all: the loader must exec the binary and
-        // the system libraries look up the services in `MACH_SERVICES`. Those grant no filesystem
-        // or network reach of their own, and no other service is reachable.
+        // the system libraries look up the services in `MACH_SERVICES`, and `TRUST_SERVICES` where
+        // the network is allowed. Those grant no filesystem or network reach of their own, and no
+        // other service is reachable.
         out.push_str("(allow process-exec)\n");
-        out.push_str("(allow sysctl-read)\n");
+        // KERN_PROCARGS2 can be authorised through either sysctl-read or process-info*.
+        // Refuse both routes: emptying a child's environment does not erase the parent's
+        // exec-time environment. Only named machine-information queries are allowed.
+        out.push_str("(deny process-info*)\n");
+        // System tools query their own pidinfo during startup. This exception cannot name
+        // the parent or any other process, including another process in the same sandbox.
+        out.push_str("(allow process-info-pidinfo (target self))\n");
+        // CPU count and page size serve language runtimes (the numeric page-size query
+        // resolves to pagesize_compat). The remaining names are uname's fields, used by
+        // Python's package platform detection. No process arguments or environment query
+        // is in this list.
+        out.push_str("(allow sysctl-read");
+        for name in [
+            "hw.machine",
+            "hw.ncpu",
+            "hw.pagesize",
+            "hw.pagesize_compat",
+            "kern.hostname",
+            "kern.osrelease",
+            "kern.ostype",
+            "kern.version",
+        ] {
+            out.push_str(&format!(" (sysctl-name {})", quote(name)));
+        }
+        out.push_str(")\n");
         out.push_str("(allow mach-lookup");
-        for service in MACH_SERVICES {
+        for service in mach_services(policy) {
             out.push_str(&format!(" (global-name {})", quote(service)));
         }
         out.push_str(")\n");
@@ -127,11 +167,16 @@ impl SeatbeltSandbox {
         // narrowest: a refusal follows the grants it narrows, a row beneath a refusal lifts it, and
         // a refusal beneath that row holds again. At one path a read row follows the refusal, which
         // is how a credential scope lifts a location the base refuses.
+        //
+        // Seatbelt matches the path a process ends up opening, so a refusal written as a link
+        // matches nothing. Each refusal is therefore written where it stands and where it leads
+        // (SANDBOX-12), the way the Linux backend holds one.
+        let refused_reads = with_their_resolved_spelling(&policy.unreadable);
         let mut reads: Vec<(&Path, bool)> = policy
             .readable
             .iter()
             .map(|path| (path.as_path(), true))
-            .chain(policy.unreadable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
             .collect();
         reads.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in reads {
@@ -144,12 +189,13 @@ impl SeatbeltSandbox {
 
         // Written the same way, except that a row at a refused path is withdrawn and not lifted:
         // the refusal of a write is a person's, and it wins at the path it names.
+        let refused_writes = with_their_resolved_spelling(&policy.unwritable);
         let mut writes: Vec<(&Path, bool)> = policy
             .writable
             .iter()
             .filter(|row| !policy.unwritable.contains(&row.path))
             .map(|row| (row.path.as_path(), true))
-            .chain(policy.unwritable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_writes.iter().map(|path| (path.as_path(), false)))
             .collect();
         writes.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in writes {
@@ -220,6 +266,11 @@ impl SeatbeltSandbox {
         if policy.allow_subprocesses {
             out.push_str("(allow process-fork)\n");
         }
+
+        // Without a signal row a process cannot stop a child it started, and a test runner or a
+        // `timeout` waits on it for good. `same-sandbox` reaches what this profile started and no
+        // process outside it: `pgrp` would reach the session, which shares the process group.
+        out.push_str("(allow signal (target same-sandbox))\n");
 
         out
     }
@@ -336,6 +387,8 @@ impl Sandbox for SeatbeltSandbox {
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            // A connect to a socket is checked against the profile's write rows.
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -653,6 +706,40 @@ mod argument_tests {
         );
     }
 
+    /// Neither a broad sysctl grant nor default process-info access may expose a parent's
+    /// exec-time environment. The only process-info exception names the caller itself.
+    #[test]
+    fn process_inspection_is_refused_and_sysctls_are_named_machine_queries() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write("/tmp")
+            .allow_network_egress()
+            .allow_subprocesses();
+        let profile = SeatbeltSandbox::profile(&policy);
+        let inspection: Vec<_> = profile
+            .lines()
+            .filter(|line| line.contains("process-info") || line.contains("sysctl"))
+            .collect();
+        assert_eq!(
+            inspection,
+            [
+                "(deny process-info*)",
+                "(allow process-info-pidinfo (target self))",
+                concat!(
+                    "(allow sysctl-read",
+                    " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.ncpu\")",
+                    " (sysctl-name \"hw.pagesize\")",
+                    " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.hostname\")",
+                    " (sysctl-name \"kern.osrelease\")",
+                    " (sysctl-name \"kern.ostype\")",
+                    " (sysctl-name \"kern.version\"))",
+                ),
+            ]
+        );
+    }
+
     /// A backslash in a path is escaped as well as a quote. Left alone, the backslash would
     /// combine with the escape written for a quote after it, the pair would read as an escaped
     /// backslash, and the quote would end the literal and let the rest of the path be read as
@@ -715,6 +802,39 @@ mod argument_tests {
             "a write row at a refused path was kept: {profile}"
         );
         assert!(profile.contains(r#"(deny file-write* (subpath "/h/gone"))"#));
+    }
+
+    /// Seatbelt matches the path a process ends up opening, so a refusal written as the link a
+    /// person spelled holds nothing when the credential directory is a link into a dotfiles
+    /// repository. The profile carries each refusal where it stands and where it leads.
+    #[test]
+    fn a_refusal_of_a_link_is_written_where_the_link_leads_as_well() {
+        let home = crate::testutil::scratch_dir("bravebot-sandbox-refused-link-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let real = home.join("dotfiles/aws");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".aws")).unwrap();
+        let real = std::fs::canonicalize(&real).unwrap();
+        let link = home.join(".aws");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write(&home)
+            .deny_read(&link)
+            .deny_write(&link);
+        let profile = SeatbeltSandbox::profile(&policy);
+        for (operation, path) in [
+            ("file-read*", &link),
+            ("file-read*", &real),
+            ("file-write*", &link),
+            ("file-write*", &real),
+        ] {
+            let row = format!(
+                "(deny {operation} (subpath {}))",
+                quote(&path.to_string_lossy())
+            );
+            assert!(profile.contains(&row), "{row} is not in:\n{profile}");
+        }
     }
 }
 
@@ -1301,6 +1421,44 @@ int main(int argc, char **argv) {
         );
     }
 
+    /// SANDBOX-31: the certificate trust services are in a profile only where the policy allows
+    /// network egress, whether to every host or to one proxy port. The regression it rejects is the
+    /// constant list of both, which lets a stage with no egress ask trustd to fetch a URL for it.
+    #[test]
+    fn the_trust_services_are_looked_up_only_where_the_network_is_allowed() {
+        let lookups = |policy: &SandboxPolicy| -> Vec<String> {
+            SeatbeltSandbox::profile(policy)
+                .lines()
+                .filter(|line| line.contains("mach-lookup"))
+                .flat_map(|line| line.split("(global-name ").skip(1))
+                .map(|name| {
+                    let name = name.trim_end().trim_end_matches(')');
+                    name.trim_matches('"').to_owned()
+                })
+                .collect()
+        };
+        let closed = lookups(&reads_the_system_only());
+        for service in TRUST_SERVICES {
+            assert!(
+                !closed.contains(&(*service).to_owned()),
+                "{service} in {closed:?}"
+            );
+        }
+        assert_eq!(closed.len(), MACH_SERVICES.len());
+        for policy in [
+            reads_the_system_only().allow_network_egress(),
+            reads_the_system_only().allow_network_egress_only_to(8080),
+        ] {
+            let open = lookups(&policy);
+            for service in TRUST_SERVICES.iter().chain(MACH_SERVICES) {
+                assert!(
+                    open.contains(&(*service).to_owned()),
+                    "{service} not in {open:?}"
+                );
+            }
+        }
+    }
+
     /// SANDBOX-31: a confined process finds each service the list names and is refused the ones
     /// that act on the person's behalf. Run against the bootstrap server, so a name the profile
     /// spells wrongly is not found, and a list left empty fails the first half as readily as a
@@ -1317,6 +1475,22 @@ int main(int argc, char **argv) {
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
         let probe = mach_lookup_probe(&dir);
         let policy = reads_the_system_only().allow_read(&dir);
+        let networked = policy.clone().allow_network_egress();
+        let lookup_under = |name: &str, policy: &SandboxPolicy| -> i32 {
+            sandbox
+                .spawn(
+                    probe.as_os_str(),
+                    &[name.into()],
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+                .expect("the probe exits")
+        };
         let lookup = |name: &str, confined: bool| -> i32 {
             if !confined {
                 return Command::new(&probe)
@@ -1364,12 +1538,31 @@ int main(int argc, char **argv) {
             "com.apple.system.notification_center",
             "com.apple.logd",
             "com.apple.SecurityServer",
-            "com.apple.trustd.agent",
         ] {
             assert_eq!(
                 lookup(service, true),
                 LOOKUP_FOUND,
                 "{service} is what a program needs to run and could not be looked up"
+            );
+        }
+
+        // Certificate trust is found by a process that may reach the network, and refused to one
+        // that may not, which would otherwise have trustd fetch a URL on its behalf.
+        for service in TRUST_SERVICES {
+            assert_eq!(
+                lookup(service, false),
+                LOOKUP_FOUND,
+                "{service} is registered"
+            );
+            assert_eq!(
+                lookup_under(service, &networked),
+                LOOKUP_FOUND,
+                "{service} is what a program verifying a certificate needs"
+            );
+            assert_eq!(
+                lookup_under(service, &policy),
+                LOOKUP_REFUSED,
+                "{service} fetches for a process that has no network"
             );
         }
 
@@ -1403,6 +1596,7 @@ int main(int argc, char **argv) {
         assert_eq!(caps.level, ConfinementLevel::Kernel);
         assert!(caps.network_denial_enforced);
         assert!(caps.egress_limited_to_a_port);
+        assert!(caps.governs_sockets_with_a_path);
         assert!(caps.mechanisms.contains(&"seatbelt"));
     }
 
@@ -1505,6 +1699,83 @@ int main(int argc, char **argv) {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A confined process stops a child it started, so a test runner or a `timeout` that gives up
+    /// on a child does not wait on it until it ends by itself.
+    #[test]
+    fn a_confined_process_can_signal_a_process_it_started() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_subprocesses();
+        // 143 is the status a shell reports for a child that SIGTERM ended.
+        let status = sandbox
+            .spawn(
+                OsStr::new("/bin/sh"),
+                &[
+                    "-c".into(),
+                    "sleep 5 & kill $!; wait $!; test $? -eq 143".into(),
+                ],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert!(status.success(), "the child was not stopped: {status:?}");
+    }
+
+    /// A confined process signals nothing outside its own sandbox: not a process of the account
+    /// running unconfined in the same process group, as the session does, and not a process
+    /// another stage started.
+    #[test]
+    fn a_confined_process_cannot_signal_a_process_outside_its_sandbox() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin");
+        let mut unconfined = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let mut other_stage = sandbox
+            .spawn(
+                OsStr::new("/bin/sleep"),
+                &["30".into()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+
+        for (target, whose) in [
+            (unconfined.id(), "an unconfined process"),
+            (other_stage.id(), "another stage's process"),
+        ] {
+            let status = sandbox
+                .spawn(
+                    OsStr::new("/bin/kill"),
+                    &[target.to_string().into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait");
+            assert!(!status.success(), "{whose} was signalled");
+        }
+        let unconfined_ran_on = unconfined.try_wait().expect("should poll").is_none();
+        let other_stage_ran_on = other_stage.try_wait().expect("should poll").is_none();
+        let _ = unconfined.kill();
+        let _ = unconfined.wait();
+        let _ = other_stage.kill();
+        let _ = other_stage.wait();
+        assert!(unconfined_ran_on, "the unconfined process was stopped");
+        assert!(other_stage_ran_on, "the other stage's process was stopped");
     }
 
     /// Confirms the sandbox actually runs a process, not just that a profile string
@@ -2539,6 +2810,58 @@ int main(int argc, char **argv) {
             "Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
             "Library/Cookies/Cookies.binarycookies",
             "Library/Safari/History.db",
+            ".config/sops/age/keys.txt",
+            ".password-store/site.gpg",
+            ".bash_history",
+            ".zsh_history",
+            ".zsh_sessions/A1B2.history",
+            ".bash_sessions/A1B2.history",
+            ".local/share/fish/fish_history",
+            ".psql_history",
+            ".mysql_history",
+            ".node_repl_history",
+            ".python_history",
+            ".rediscli_history",
+            ".sqlite_history",
+            ".dbshell",
+            ".mongodb/mongosh/mongosh_repl_history",
+            ".claude/.credentials.json",
+            ".claude.json",
+            ".codex/auth.json",
+            ".gemini/oauth_creds.json",
+            ".local/share/opencode/auth.json",
+            ".config/github-copilot/hosts.json",
+            ".config/openconnect/vpn.conf",
+            ".gitlab-runner/config.toml",
+            ".pgadmin/pgadmin4.db",
+            "Postman/files/environment.json",
+            "Library/Application Support/Google/Chrome Beta/Default/Cookies",
+            "Library/Application Support/Google/Chrome Canary/Default/Cookies",
+            "Library/Application Support/Google/Chrome Dev/Default/Cookies",
+            "Library/Application Support/Chromium/Default/Cookies",
+            "Library/Application Support/Microsoft Edge/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Beta/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Dev/Default/Cookies",
+            "Library/Application Support/Microsoft Edge Canary/Default/Cookies",
+            "Library/Application Support/Arc/User Data/Default/Cookies",
+            "Library/Application Support/Vivaldi/Default/Cookies",
+            "Library/Messages/chat.db",
+            "Library/Mail/V10/message.emlx",
+            "Library/Thunderbird/Profiles/x/logins.json",
+            "Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/1password.sqlite",
+            "Library/Application Support/Slack/Cookies",
+            "Library/Application Support/discord/Local Storage/leveldb/000003.log",
+            "Library/Application Support/Signal/config.json",
+            "Library/Application Support/Code/User/globalStorage/state.vscdb",
+            "Library/Application Support/Code - Insiders/User/globalStorage/state.vscdb",
+            "Library/Application Support/VSCodium/User/globalStorage/state.vscdb",
+            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+            "Library/Application Support/Claude/claude_desktop_config.json",
+            "Library/Application Support/Insomnia/insomnia.Environment.db",
+            "Library/Application Support/Bruno/preferences.json",
+            "Library/Application Support/Postman/Partitions/x/Cookies",
+            "Library/DBeaverData/workspace6/General/.dbeaver/credentials-config.json",
+            "Library/Application Support/sops/age/keys.txt",
         ];
         let read = [
             ".gitconfig",
@@ -2555,6 +2878,13 @@ int main(int argc, char **argv) {
             "Library/Keychains/login.keychain-db",
             "Documents/notes.txt",
             "Library/Application Support/Other/state",
+            ".vault-token",
+            ".yarnrc.yml",
+            ".zsh_history_other",
+            ".local/share/fish/fish_variables",
+            ".mongodb/mongosh/snippets/state",
+            "Library/Application Support/JetBrains/Toolbox/scripts/idea",
+            "Library/Group Containers/group.other/state",
         ];
         for row in held_back.iter().chain(&read) {
             let file = home.join(row);

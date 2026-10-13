@@ -25,6 +25,12 @@ const FOLD_AT_NEWLINES: usize = 3;
 /// copies of a prompt, where a prompt is sentences rather than a file.
 const UNDO_DEPTH: usize = 1000;
 
+/// How long the turn's command runs before a prompt waiting for the turn moves it to the background.
+///
+/// Long enough that a command about to finish returns its output to the turn instead of a job to
+/// ask about.
+const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
+
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
 /// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
@@ -1496,6 +1502,10 @@ pub struct Session {
     /// The platform's level alone: the sandbox mode is [`Session::sandbox_mode`], and the two are put
     /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
+    /// Whether this kernel leaves every unix socket that has a path reachable from a confined
+    /// stage, which the opening screen and `/status` say under `standard` (SANDBOX-3). Read at
+    /// start-up with the confinement above, since the kernel does not change while the session runs.
+    pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).
     ///
     /// Held here and not read from `bravebot_config::sandbox::in_force`, which is what start-up
@@ -1513,6 +1523,10 @@ pub struct Session {
     /// session never does: there a job still ends with the turn that started it. Dropping the
     /// value kills whatever is running, so the session ending or being cleared ends them.
     kept_jobs: Option<bravebot_agent::tools::SessionJobs>,
+    /// Whether the `suggestions` setting is on for this session (INPUT-43).
+    suggesting: bool,
+    /// The next prompt the model proposed, drawn in the empty box until a key takes or drops it.
+    suggestion: Option<String>,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -1713,7 +1727,9 @@ pub struct Session {
     /// Held only between the driver offering it and that call finishing, and only for the turn's
     /// own call. Delegates run alongside the turn, so a delegate's call finishing while the turn's
     /// command is running must not take the turn's token with it.
-    movable: Option<bravebot_core::cancel::Handoff>,
+    ///
+    /// With the moment it was offered, which is the moment the command started.
+    movable: Option<(bravebot_core::cancel::Handoff, Instant)>,
     /// Prompts typed and sent while a turn was running, in the order they were typed.
     ///
     /// Not in the transcript: they have not happened. They are drawn under the box as waiting,
@@ -2025,10 +2041,13 @@ impl Session {
             history_search: None,
             laid: Laid::default(),
             confinement: confinement.into(),
+            sockets_with_a_path_reachable: false,
             sandbox: crate::sandbox_command::Sandboxed::at_start(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
+            suggesting: false,
+            suggestion: None,
             // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
             // key reaches bypass from there unless a layer made it unreachable (MODE-5).
             permission_mode: bravebot_agent::LiveMode::default(),
@@ -2144,6 +2163,13 @@ impl Session {
     /// Start under the mode a `/resume` carried over, which is the one the person last chose.
     pub fn with_sandbox(mut self, sandbox: crate::sandbox_command::Sandboxed) -> Self {
         self.sandbox = sandbox;
+        self
+    }
+
+    /// The value is the inverse of the backend's `governs_sockets_with_a_path`, and false with no
+    /// backend.
+    pub fn with_sockets_with_a_path_reachable(mut self, reachable: bool) -> Self {
+        self.sockets_with_a_path_reachable = reachable;
         self
     }
 
@@ -3512,7 +3538,7 @@ impl Session {
     /// offers it none, so a token attributed to one is not a token anybody here could mean.
     pub fn movable(&mut self, handoff: bravebot_core::cancel::Handoff) {
         if self.attributed_to.is_none() {
-            self.movable = Some(handoff);
+            self.movable = Some((handoff, Instant::now()));
         }
     }
 
@@ -3529,11 +3555,34 @@ impl Session {
     ///
     /// Whether a command was moved.
     pub fn move_to_background(&mut self) -> bool {
-        let Some(handoff) = self.movable.take() else {
+        let Some((handoff, _)) = self.movable.take() else {
             return false;
         };
         handoff.request();
         true
+    }
+
+    /// Move the turn's command in flight to the background for a prompt waiting to go into the
+    /// turn, once the command has run for [`GIVE_WAY_AFTER`].
+    ///
+    /// The turn takes a waiting prompt only between rounds, and a round lasts as long as its
+    /// slowest command, which can be minutes. Nothing happens for a command or a command line
+    /// waiting, since those wait for the turn to end, nor for a turn being stopped, which takes
+    /// nothing more.
+    ///
+    /// Whether a command was moved.
+    pub fn give_way_to_the_queue(&mut self, now: Instant) -> bool {
+        let waiting = self.a_turn_is_running()
+            && !self.stopping
+            && self.queued.iter().any(|line| line.waiting.is_sent());
+        match self.movable {
+            Some((_, since))
+                if waiting && now.saturating_duration_since(since) >= GIVE_WAY_AFTER =>
+            {
+                self.move_to_background()
+            }
+            _ => false,
+        }
     }
 
     /// Accept a typed character.
@@ -6521,6 +6570,21 @@ impl Session {
         self.completion = 0;
     }
 
+    /// What Tab would make of a level started after `/effort `, with the caret at the end of it.
+    pub fn argument_completion(&self) -> Option<String> {
+        if self.shell || self.caret() != self.input.len() {
+            return None;
+        }
+        crate::app::complete_argument(&self.input)
+    }
+
+    /// Finish the level started after `/effort ` as far as the levels that fit it agree.
+    pub fn accept_argument_completion(&mut self) {
+        if let Some(line) = self.argument_completion() {
+            self.put_in_the_box(line);
+        }
+    }
+
     /// Where the line's last word begins, which is where a completion of it is written.
     fn last_word_starts_at(&self) -> usize {
         self.input
@@ -6871,8 +6935,10 @@ impl Session {
     /// an unsupported type or a path naming no file at all, has its path written out, which is
     /// what dropping a file did before any of this existed.
     ///
-    /// In shell mode every file has its path written out and nothing is staged, so the command the
-    /// shell is given names the file and no record is left behind the line (`dropping.md` DROP-6).
+    /// In shell mode every file has its path written out, quoted as one word, and nothing is
+    /// staged, so the command the shell is given names the file and no record is left behind the
+    /// line. A drop whose names hold a control character, or one a terminal draws as nothing,
+    /// writes nothing and says why (`dropping.md` DROP-6).
     ///
     /// Returns whether the text was a drop at all. A paste that was not one is left to
     /// [`Session::paste`], untouched.
@@ -6884,9 +6950,24 @@ impl Session {
 
         // The line in shell mode is a command and nothing else, and the shell is handed it as it
         // stands. A marker there would reach it as text, so nothing is staged and the path is
-        // written, which is what a terminal does when a file is dropped into a shell.
+        // written as one word, which is what a terminal does when a file is dropped into a shell.
         if self.shell {
-            self.paste(&format!("{} ", crate::dropped::paths(text).join(" ")));
+            let paths = crate::dropped::paths(text);
+            // Taking the characters out would name another file, and leaving them in would let
+            // the line run something the box does not show. A control character is in the same
+            // case: the box rewrites a carriage return as a newline.
+            if paths.iter().any(|path| {
+                path.chars().any(char::is_control)
+                    || crate::invisible::without_invisible(path).1 > 0
+            }) {
+                self.note(t!(drop_name_not_written));
+                return true;
+            }
+            let words: Vec<String> = paths
+                .iter()
+                .map(|path| crate::dropped::shell_word(path))
+                .collect();
+            self.paste(&format!("{} ", words.join(" ")));
             return true;
         }
 
@@ -9840,6 +9921,73 @@ impl Session {
         changed && self.panel
     }
 
+    /// Turn follow-up suggestions on or off for the session, from the `suggestions` setting
+    /// (INPUT-43). Read once at startup, so what is paid for does not change under a turn.
+    pub fn adopt_suggestions(&mut self, on: bool) {
+        self.suggesting = on;
+        if !on {
+            self.suggestion = None;
+        }
+    }
+
+    /// Whether the session asks for a suggestion when a turn ends.
+    pub fn suggests(&self) -> bool {
+        self.suggesting
+    }
+
+    /// The suggestion on offer in the empty box, if there is one.
+    pub fn suggestion(&self) -> Option<&str> {
+        self.suggestion.as_deref()
+    }
+
+    /// Put `text` in the empty box as a suggestion, where the box is still empty and idle.
+    ///
+    /// A suggestion that arrives after the person has begun typing, or sent something, is not
+    /// offered: it was a guess about a state that has passed.
+    pub fn offer_suggestion(&mut self, text: String) {
+        if self.suggesting
+            && self.status == Status::Idle
+            && self.input.is_empty()
+            && !self.shell
+            && !self.searching_history()
+        {
+            self.suggestion = Some(text);
+        }
+    }
+
+    /// Take the suggestion away, for a key that is not the one that accepts it.
+    pub fn dismiss_suggestion(&mut self) {
+        self.suggestion = None;
+    }
+
+    /// Drop a suggestion the box has stopped being empty for, or the session stopped being idle for.
+    pub fn settle_suggestion(&mut self) {
+        if self.suggestion.is_some() && (!self.input.is_empty() || self.status != Status::Idle) {
+            self.suggestion = None;
+        }
+    }
+
+    /// Move the suggestion into the box as text to edit. Nothing sends it, and one that begins
+    /// with `/` is words in the box like any other until Enter is pressed on it (CMD-1).
+    ///
+    /// Whether there was one to take.
+    pub fn accept_suggestion(&mut self) -> bool {
+        match self.suggestion.take() {
+            Some(text) if self.input.is_empty() => {
+                self.set_input(text);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
+    /// figures and still in the session's total, as an aside is.
+    pub fn charge_suggestion(&mut self, tokens: u64) {
+        self.tokens += tokens;
+        *self.spend.entry(self.turns).or_insert(0) += tokens;
+    }
+
     /// Keep the session's background jobs between turns (RUN-15).
     pub fn keep_jobs_between_turns(&mut self) {
         self.kept_jobs = Some(bravebot_agent::tools::SessionJobs::new());
@@ -12462,6 +12610,89 @@ mod tests {
         assert!(
             !session.can_move_to_background(),
             "a stopped turn left its command movable"
+        );
+    }
+
+    /// A turn running a movable command, with its token handed over.
+    fn running_a_movable_command() -> (Session, bravebot_core::cancel::Handoff) {
+        let mut session = session();
+        session.type_char('a');
+        session.submit().expect("submitted");
+        let handoff = bravebot_core::cancel::Handoff::new();
+        session.movable(handoff.clone());
+        (session, handoff)
+    }
+
+    /// A prompt waiting behind a long command reaches the turn without the person stopping the
+    /// turn or knowing the key that moves the command.
+    #[test]
+    fn a_waiting_prompt_moves_a_command_that_has_run_long_enough() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+
+        assert!(session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER));
+        assert!(
+            handoff.is_requested(),
+            "the waiting prompt did not move the command"
+        );
+        assert!(
+            !session.can_move_to_background(),
+            "the hint still offers a move already asked for"
+        );
+        assert!(
+            !session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER),
+            "the command was moved twice"
+        );
+    }
+
+    /// A command a few seconds in is likely about to finish, and moving it would hand the turn a
+    /// job to ask about in place of output that was on its way.
+    #[test]
+    fn a_waiting_prompt_leaves_a_command_that_only_just_started() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+
+        let soon = Instant::now() + GIVE_WAY_AFTER - Duration::from_secs(1);
+        assert!(!session.give_way_to_the_queue(soon));
+        assert!(!handoff.is_requested(), "a command that just started moved");
+        assert!(session.can_move_to_background());
+    }
+
+    /// A command or a command line waits for the turn to end whatever the command does, so moving
+    /// the command for one gets it there no sooner and costs the turn the command's output.
+    #[test]
+    fn only_a_waiting_prompt_moves_the_command() {
+        let (mut session, handoff) = running_a_movable_command();
+        let later = Instant::now() + GIVE_WAY_AFTER;
+        assert!(
+            !session.give_way_to_the_queue(later),
+            "moved with nothing waiting"
+        );
+
+        queue_lines(&mut session, &["/clear"]);
+        session.shell = true;
+        session.input = "ls".to_string();
+        assert!(session.queue_shell());
+
+        assert!(!session.give_way_to_the_queue(later));
+        assert!(
+            !handoff.is_requested(),
+            "a command or a command line waiting moved the command"
+        );
+    }
+
+    /// A turn being stopped takes nothing more. What is waiting becomes a turn of its own once the
+    /// stop lands, and moving the command would get it there no sooner.
+    #[test]
+    fn a_turn_being_stopped_moves_nothing() {
+        let (mut session, handoff) = running_a_movable_command();
+        queue_lines(&mut session, &["and update the docs"]);
+        session.stop_asked();
+
+        assert!(!session.give_way_to_the_queue(Instant::now() + GIVE_WAY_AFTER));
+        assert!(
+            !handoff.is_requested(),
+            "a turn being stopped moved its command"
         );
     }
 
