@@ -84,6 +84,15 @@ fn the_suite_covers_each_everyday_program_and_the_rows_that_stay_refused() {
         refused >= 3,
         "only {refused} rows are expected to be refused"
     );
+    if cfg!(target_os = "macos") {
+        assert!(
+            workflows
+                .iter()
+                .any(|workflow| workflow.expect == Expect::Refused
+                    && workflow.name == "a script writes a git hook"),
+            "no row holds a script to the `.git` refusal"
+        );
+    }
 }
 
 /// The regression it rejects: a failing workflow that leaves the suite green, which is every

@@ -255,7 +255,10 @@ is the same silent degradation, reached one grant at a time.
 **On macOS a write grant does not reach a `.git`.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, so a confined process
 that could write one could run code outside its confinement. A grant to write a directory refuses a
-write to any `.git` beneath it, in any case. On every platform an MCP server is also refused a
+write to any `.git` beneath it, in any case. A program `run` starts is held to that unless the
+program is `git` itself, so an install script, a build or a test cannot plant a hook or a setting
+for git to run later. On Linux and Windows nothing holds a `.git` back from a program `run` starts.
+On every platform an MCP server is also refused a
 directory inside a repository. Linux's Landlock cannot hold one directory back from a grant, so there
 a `.git` beneath a server's directory, its home or the temporary directory is one it may write.
 

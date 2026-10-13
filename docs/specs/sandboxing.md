@@ -758,13 +758,16 @@ Desktop's `~/.docker/bin`.
 
 On macOS a policy that grants any write refuses a write to every path with a `.git` component, in
 any case: creating, changing, renaming into or removing a file or directory named `.git` or inside
-one, under a row the policy writes as under any other. Every other write a row grants is granted.
-A policy can lift the refusal, as the profile of a program a person asked for does so that `git`
-works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row reaches a
-`.git` as it does on Linux. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
+one, under a row the policy writes as under any other. That covers a repository's hooks and
+configuration, a submodule's under `.git/modules`, a linked work tree's under `.git/worktrees`, and a
+`.git` that is a file naming a gitdir. Every other write a row grants is granted.
+A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
+`git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
+reaches a `.git` as it does on Linux. Every other stage keeps the refusal. On Linux Landlock grants a directory with everything beneath it and has no way to hold one
 subdirectory back, so this clause does not hold there, which is
-[mcp-servers.md](mcp-servers.md)'s known cost. The Windows backend withholds nothing of the kind,
-and no server is started there ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+[mcp-servers.md](mcp-servers.md)'s known cost and a known cost of `run` ([SANDBOX-18](#SANDBOX-18)).
+The Windows backend withholds nothing of the kind, and no server is started there
+([SERVERS-10](mcp-servers.md#SERVERS-10)).
 
 **Why.** git runs the commands a repository's configuration and hooks name, with nothing confining
 them, the next time anybody runs git in it. A confined process that may write a `.git` may
@@ -772,9 +775,15 @@ therefore run code outside its confinement. Seatbelt lets the last rule matching
 the refusal follows the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
 the case of the name does not matter.
 
+**What it costs.** A gitdir that is not named `.git`, such as one `--separate-git-dir` made, is
+written as any other directory, and so is a directory a process lays out as a repository itself, a
+`HEAD` file beside `objects` and `refs` directories, which git started inside it opens.
+
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
+`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 
 <a id="SANDBOX-15"></a>
 ### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it
@@ -1229,8 +1238,9 @@ or runs out of time, and the console's code page is the system's rather than one
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
 stage start lists every directory above a refused location, and the time that takes grows with the
-number of entries in those directories, the home directory among them. On macOS the refusal of a `.git` write is lifted for these stages
-([SANDBOX-14](#SANDBOX-14)), which gives them the reach Linux gives.
+number of entries in those directories, the home directory among them. On macOS the refusal of a `.git` write is lifted only for a stage
+whose program is git ([SANDBOX-14](#SANDBOX-14), [SANDBOX-18](#SANDBOX-18)), which gives that
+stage the reach Linux gives every stage.
 
 `verified-by: bravebot_agent::confine::a_confined_program_cannot_read_a_file_outside_the_session`
 `verified-by: bravebot_agent::confine::a_confined_program_reads_the_machine_and_not_a_credential_location`
@@ -1256,7 +1266,8 @@ number of entries in those directories, the home directory among them. On macOS 
 ### SANDBOX-18: the profile a stage runs under is composed from the plan and the session's directories
 
 On Linux and macOS a stage of a session that names a home directory has as its policy the run base
-([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed, plus: the cache rows of every toolchain, written, since the machine is already read and a
+([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed where the stage's program is git (below),
+plus: the cache rows of every toolchain, written, since the machine is already read and a
 cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential scope its argv names
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
@@ -1269,7 +1280,7 @@ the remote scope.
 On Windows, and on Linux and macOS in a session that names no home directory, since the credential
 rows are rows under it and a read of the whole machine with none to subtract is the one grant that
 must not be made, a stage's policy is the keyed base ([SANDBOX-12](#SANDBOX-12)), with `.git`
-writes allowed, plus:
+writes allowed where the stage's program is git, plus:
 the toolchain list its resolved binary brings ([SANDBOX-15](#SANDBOX-15)); the credential scope its
 argv names ([SANDBOX-16](#SANDBOX-16)); the directories its program is read from, which are the
 directories on the `PATH` it starts with and the directory it resolved into, each with its links
@@ -1324,15 +1335,30 @@ none of them has nothing to refuse. `/add-dir`,
 `--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
 person is not shown a session directory the stage would be refused for.
 
+A stage's program is git where the file it resolved to, with its links followed, is named `git` and
+is not inside a directory the session was opened on, the scratch directory or the temporary
+directory. A script, `make`, `npm`, `gh` or any other program is not git, and git started by one
+runs under that stage's profile. The lift changes a profile only on macOS, the one platform that
+holds a `.git` back ([SANDBOX-14](#SANDBOX-14)).
+
 Every input is the compiled step a person read, the session's own directories or the process's own
 environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
 row. Rows that name an absent path are created or left out as [SANDBOX-9](#SANDBOX-9) and
 [SANDBOX-11](#SANDBOX-11) say, by what the backend can grant.
 
 **Why.** The grant is the plan, so a line nobody is asked about gets the same profile as one
-somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted because a stage
-started in a directory it may write is where a person runs `git commit`, and a profile that refused
-it would be one somebody turns off; it is the same reach Linux gives. A program installed inside the
+somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted for a stage whose
+program is git because a stage started in a directory it may write is where a person runs `git
+commit`, and a profile that refused it would be one somebody turns off. It is kept for every other
+stage because an install script, a `make` target or a test runs code the person did not read, and
+a hook it writes, or a `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, `!` alias or
+`credential.helper` it sets in `.git/config`, runs with the person's whole access the next time
+they run git there, in a terminal, an editor, or a later stage that carries the remote scope and
+the agent socket ([SANDBOX-16](#SANDBOX-16)). The program is judged by the file it resolved to,
+as a scope is, so a `git` a stage could have written earns nothing by its name. A git stage keeps
+the hooks and the configuration too: `git init` and `git clone` write both from the templates, and
+`git remote add`, `git push -u` and a checkout that tracks a remote branch write the configuration,
+so a refusal there is a git that does not work. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
 open the home. The persistence locations are refused for writing on macOS because a program started
 later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
@@ -1348,7 +1374,24 @@ build it drives. The cost is that the separation between ecosystems that
 stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
 to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
 
+**What the `.git` rule costs.** What git starts runs under the git stage's profile: a hook, a
+filter, the command `git bisect run` is given, an editor, a pager and a credential helper may each
+write the repository's hooks and configuration, so a pre-commit hook that runs the project's own
+linters reaches them. A program that runs git itself is refused the write on macOS: `gh pr
+checkout`, `gh repo clone`, `npm version`, a `make` target or a script that commits, and `cargo
+new` outside a repository fail there, and the planner is told to run git as a step of its own
+([SANDBOX-19](#SANDBOX-19)). A `core.hooksPath` that points into the work tree makes files every
+stage writes into hooks. On Linux and Windows nothing holds a `.git` back, so every stage there may
+write a repository's hooks and configuration, and the confirmation does not say so. Landlock holds
+a path back from a write row only by listing the directory above it entry by entry, which leaves
+that directory without the right to make an entry directly in it: held back from a session
+directory, that is every new file at the top of the project, the lockfile `npm install` renames
+into place among them, and held back from git's own files it is the `index.lock` every commit
+makes. A Windows container refuses a policy that carries a refusal at all.
+
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
+`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
 `verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
@@ -1398,7 +1441,10 @@ directory and the temporary directory, the system and program directories and gi
 files for reading, the caches of the toolchain a program belongs to and the credential scope its
 command names. It says that a path outside those is refused by the operating system as `Operation
 not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
-`--add-dir`). On a platform with no base the description says programs are not confined. Under the mode `strict`
+`--add-dir`). On macOS, in both modes that confine, the description and the sentence after a failed
+step also say that a `.git` in those directories is written only by a step whose program is git, so
+a program that runs git to commit, check out or clone is refused that write and git is run as a step
+of its own ([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
@@ -1472,6 +1518,7 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
+`verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
 `verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
 `verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
@@ -1565,8 +1612,9 @@ moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARG
 an agent socket removed.
 
 Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
-`~/.aws/credentials`, writing to a directory the session was not opened on, and writing to the
-home directory. Such a row passes when its last stage is refused and the same workflow, run again
+`~/.aws/credentials`, writing to a directory the session was not opened on, writing to the
+home directory, and on macOS a script writing a hook into a repository's `.git`
+([SANDBOX-14](#SANDBOX-14)). Such a row passes when its last stage is refused and the same workflow, run again
 without the sandbox, works, so a path that was never there is not counted as a refusal. A row that
 is let through fails, and so does one whose earlier stage is refused.
 
