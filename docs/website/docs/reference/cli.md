@@ -11,6 +11,7 @@ bravebot 0.9.0: a general-purpose agent resistant to prompt injection
 
 Usage:
   bravebot                               Start an interactive session
+  bravebot -i "<prompt>"                 Start an interactive session and send the prompt as its first turn
   bravebot --plain                       Start a session in lines, taking nothing from the terminal
   bravebot "<task>" [--file <path>]...   Run a single task
   cat file | bravebot -p "<task>"        ...with piped input, never trusted
@@ -41,6 +42,7 @@ Usage:
 | Command | What it does |
 |---|---|
 | `bravebot` | start an interactive session in the current directory |
+| `bravebot -i "<prompt>"`, `--interactive` | start the same session and send the prompt as its first turn ([below](#-i-prompt)) |
 | `bravebot --plain` | start a session in lines, drawing nothing ([below](#--plain)) |
 | `bravebot "<task>"` | run one task and print the reply |
 | `bravebot --resume`, `-r` | choose a session in this directory to pick up |
@@ -81,6 +83,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--add-dir <path>` | make a directory outside the working one reachable for this run; repeatable ([below](#--add-dir-path)) |
 | `--trust-workspace` | trust the working directory for this run, writing no record ([below](#--trust-workspace)) |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
+| `-i`, `--interactive <prompt>` | open the interactive session and send the prompt as its first turn ([below](#-i-prompt)) |
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
@@ -470,6 +473,31 @@ Given with no task, `--resume` and `--continue` open the session as they always 
 Both are refused with the argument status before anything is sent when the id names no session in
 this directory, when `--continue` finds none, when the session is a `--mode manifest` run or is
 running in the background, and with `--agent` or `--mode manifest`.
+
+## `-i <prompt>`
+
+```sh
+bravebot -i "fix the failing test in crates/parser"
+bravebot --dangerously-skip-permissions --interactive "fix the failing test, then run the suite"
+```
+
+Opens the session a bare `bravebot` opens and sends the prompt as its first turn, as though you had
+typed it and pressed Enter, so you can watch the work, stop it with Esc and carry on from the reply.
+It is sent once every question the session opens with is answered, the one about trusting the
+working directory included, and leaving at one of them sends nothing. A prompt opening with `/` or
+`!` is sent as words, as `-p` sends it, not run as a command. `bravebot "<task>"` is still the
+one-shot run.
+
+The prompt is one argument, so quote it; its line breaks are kept. Characters a terminal draws as
+nothing are removed from it, as from a paste, and the session says how many. `-i` goes first, and
+the flags that combine with every way of starting go anywhere around it, as they do with a bare
+`bravebot`. Nothing may follow the prompt: `--model`, `--effort`, `--file` and the other options for
+a task belong to a one-shot run and are refused here rather than ignored. Use `/model` and `/effort`
+once the session is open.
+
+It is refused with the argument status when no prompt follows it, after `--resume`, `--continue`,
+`--fork`, `--from-pr` or `--bg`, and where stdin or stdout is not a terminal, since there is nothing
+to draw the session on. Use `-p` for a run nobody watches.
 
 ## `--plain`
 
