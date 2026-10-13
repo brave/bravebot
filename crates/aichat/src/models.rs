@@ -243,10 +243,16 @@ struct Architecture {
 ///
 /// A service that cannot be asked is answered from the list compiled in for it, with no request,
 /// and its rows are built as a listing's are, so a pick off them is recorded and routed the same.
+///
+/// `headers` is what the block's `options.headers` asked for, resolved by the caller from the same
+/// environment the token came from. The roster request carries them because a gateway that needs a
+/// header to route a request needs it to answer a listing too, and a roster asked without one is a
+/// person seeing no models with nothing local to explain it.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
@@ -270,13 +276,21 @@ pub fn list_from_gateway<S: Sink>(
             provider,
             provider.account_models_url(),
             token,
+            headers,
             egress,
         ) {
             return Ok(offered_by_gateway(provider, listed));
         }
     }
 
-    let listed = fetch_listing(policy, provider, provider.models_url(), token, egress)?;
+    let listed = fetch_listing(
+        policy,
+        provider,
+        provider.models_url(),
+        token,
+        headers,
+        egress,
+    )?;
     Ok(offered_by_gateway(provider, listed))
 }
 
@@ -286,12 +300,18 @@ fn fetch_listing<S: Sink>(
     provider: &bravebot_config::provider::Provider,
     url: String,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
     let mut request = Request::get(&url).header("accept", "application/json");
     if let Some(token) = token {
         let (name, value) = provider.credential_header(token);
         request = request.header(name, value);
+    }
+    // Carried, never read: `Request::header` appends, and a name this request already set is
+    // refused where the block is read rather than compared against here.
+    for (name, value) in headers {
+        request = request.header(name.clone(), value.expose());
     }
 
     let response = egress.fetch(policy, request, Label::untrusted_public())?;

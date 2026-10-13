@@ -855,9 +855,11 @@ is restating an entire configuration to change a host. Going deeper than a name 
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
 
-`provider`, `model`, `advisorModel`, `fallbackModel` and `summaryModel` are the exception on the other side: which host every request goes to and
-which credential signs it is exactly what a file nobody opened must not decide, and the credential
-value comes from the person's own environment under names the layer would choose. A project or
+`provider`, `model`, `advisorModel`, `fallbackModel` and `summaryModel` are the exception on the other side: which host every request goes to,
+which credential signs it and which headers it carries is exactly what a file nobody opened must not
+decide, and the credential value comes from the person's own environment under names the layer would
+choose. A `headers` block is inside `provider`, so dropping the block drops it
+([BACKEND-54](#BACKEND-54)). A project or
 local layer naming one is dropped whole and reported, so the destination of every request stays
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
@@ -2351,6 +2353,71 @@ as the `model` key is, and the switch is decided by a category the driver derive
 `verified-by: bravebot_agent::backend::two_models_share_a_service_only_where_one_account_answers_for_both`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_fallback_model_is_not_obeyed`
 
+<a id="BACKEND-54"></a>
+### BACKEND-54: a gateway block may name headers to send, from the person's own layers only
+
+`options.headers` in a gateway block is a map of header name to value, and each one is attached to
+every request that block's service answers, including the request that asks for its roster. Names
+are case-insensitive, so one name written twice is one header. A value may be a whole-value
+`{env:NAME}` reference, read from the environment at the point a request needs it, on
+[BACKEND-16](#BACKEND-16)'s footing for a credential; a variable holding nothing sends no header.
+The value is carried and attached, never interpreted ([BACKEND-15](#BACKEND-15)).
+
+Headers are read from the person's own settings file, the file `--settings` names, and the managed
+layer, and from no project or local layer. They are inside the `provider` block, so
+[BACKEND-24](#BACKEND-24) already drops a project or local layer that names one and reports the
+file.
+
+A name the request's own framing or authentication depends on is refused when the block is read,
+and the block's other headers are still sent: `host`, `content-length`, `content-type`,
+`transfer-encoding`, `connection`, and the header this provider's credential goes in where the
+block names a credential, which is `x-goog-api-key` for `google-vertex`
+([BACKEND-51](#BACKEND-51)) and `authorization` for every other gateway. A block naming no
+credential may write `authorization` itself, because then nothing else is setting it. An entry
+naming AWS sends no configured header at all, Bedrock signing over the headers it sends. A name
+that is not a field name, a value holding a line ending or another character a header cannot carry,
+and a value holding `{env:` or `{file:` as part of something longer, are refused the same way. A
+name with nothing under it, and a `headers` that is not a map, configure no header and are not
+refusals.
+
+A header value is a `Secret`: it is in no trace, no error text, and nothing a diagnostic prints
+([CRED-23](credential-protection.md#CRED-23)).
+
+`doctor` reports every refused header under the gateway block it was written on, with the name as
+written and which of the four reasons refused it, and never with the value. The name goes through
+the same printing as any other configured text, so a control character in a name does not reach the
+terminal.
+
+**Why.** A gateway in front of several services routes on a header of its own: a tenant id, a
+routing key, a second credential. Without this the block cannot reach one, and the only header a
+person could influence was Vertex's key. The values are person-written configuration, so nothing
+untrusted is read here, and that is also the bound: a project layer that could add a header could
+send the session's credential and context to a service nobody in the checkout agreed to, which is
+what BACKEND-24 keeps out of a file nobody opened. Refusing the framing names is what keeps the
+request the one this program built, since a header is appended rather than replaced and two values
+under one name leave the service to choose. Refusing the credential's own name keeps one request
+from carrying two things that authenticate it. A reference inside a longer value is refused rather
+than sent because nothing here substitutes, so what would go is the literal braces. A refusal that
+named no header leaves whoever wrote the block with no line to edit, and one that quoted the value
+would print a routing key or a second credential into wherever the output goes.
+
+`verified-by: bravebot_config::provider::a_header_a_block_asked_for_is_read`
+`verified-by: bravebot_config::provider::a_header_that_would_change_framing_is_refused`
+`verified-by: bravebot_config::provider::one_name_written_twice_sends_one_header`
+`verified-by: bravebot_config::provider::the_header_a_credential_goes_in_is_refused_only_where_one_is_named`
+`verified-by: bravebot_config::provider::a_vertex_block_refuses_the_header_its_key_goes_in`
+`verified-by: bravebot_config::provider::a_header_value_naming_a_variable_is_resolved_at_the_point_of_use`
+`verified-by: bravebot_config::provider::a_reference_inside_a_longer_header_value_is_refused`
+`verified-by: bravebot_config::provider::a_header_that_is_not_sendable_is_refused`
+`verified-by: bravebot_config::provider::a_malformed_headers_block_configures_no_headers`
+`verified-by: bravebot_config::provider::an_aws_block_sends_no_configured_header`
+`verified-by: bravebot_config::provider::printing_a_block_does_not_print_a_header_value`
+`verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_the_request`
+`verified-by: bravebot_agent::backend::a_header_naming_a_variable_is_read_where_the_token_is`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_add_a_request_header`
+`verified-by: bravebot_cli::doctor::a_refused_header_is_reported_with_its_name_and_reason_and_never_its_value`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_header_without_its_value`
+
 ## Known costs
 
 - **A fallback no service offers is tried anyway.** Where the name belongs to no gateway and no AWS
@@ -2644,6 +2711,20 @@ as the `model` key is, and the switch is decided by a category the driver derive
   and sends `extra_content` back, even where its `baseURL` names a proxy. A proxy that wants a
   bearer token is reached by keying the entry with another name, which gets the behaviour of any
   other gateway.
+
+- **An opencode import does not carry a `headers` block across.** The importer copies `baseURL`,
+  and `project` and `location` on a Vertex entry, and writes nothing else under `options`
+  ([IMPORT-6](import.md#IMPORT-6)), so a block imported from `opencode.json` gets its host and its
+  credential and whoever imported it writes the headers again. Copying them would mean importing a
+  value from a file as a header on every request, which is the decision BACKEND-54 keeps in the
+  person's own layers; a block pasted by hand is the person's own act and is read whole.
+
+- **A header in the managed layer is a value every account on the machine can read.** The layer
+  drops `options.apiKey` for that reason and keeps `headers`, because a header is how that layer
+  names a tenant or a route and dropping it would leave the gateway it approves unreachable. So a
+  header value written into `managed.json` directly, rather than as `{env:NAME}`, is readable by
+  anybody on the machine, and one holding a second credential is that credential handed to every
+  account. Naming a variable is the form that avoids it.
 
 - **An `aws` that lives only in a directory a stage can write is not found.** The same holds for
   a bare hook program, a language server and the Ctrl-G editor, which read as not found, not
