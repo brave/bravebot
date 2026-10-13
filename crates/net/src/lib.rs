@@ -1411,8 +1411,8 @@ mod tests {
         });
 
         let tmp = tempfile::tempdir().expect("a scratch directory");
-        let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
+        let dir = tmp.path().join(bravebot_diag::DIRECTORY);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
 
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "fetch a page");
