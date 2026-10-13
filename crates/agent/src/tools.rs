@@ -2692,41 +2692,8 @@ impl Produced {
     fn problem(text: impl Into<String>) -> Produced {
         let text = text.into();
         Produced {
-            text: Labelled::trusted(text.clone()),
-            origin: String::new(),
-            note: text,
             failed: true,
-            cancelled: None,
-            deferred: None,
-            entries: None,
-            incomplete: false,
-            paging: None,
-            whole: None,
-            changes: Vec::new(),
-            untrusted: false,
-            changed_a_file: false,
-            ran_a_program: false,
-            started_a_program: false,
-            ran_git: false,
-            answers_for: None,
-            said: None,
-            glimpsed: None,
-            window: None,
-            task_list: false,
-            wakeup: None,
-            watch: None,
-            content: false,
-            usage: Usage::default(),
-            inference_interval: None,
-            printed_by: None,
-            covered_by_record: false,
-            read_asked: false,
-            picture: None,
-            attached: None,
-            delegate: Vec::new(),
-            loaded: None,
-            skill: None,
-            tool_loaded: None,
+            ..Produced::new(Labelled::trusted(text.clone()), String::new(), text)
         }
     }
 
