@@ -14,6 +14,7 @@ governs:
   - crates/sandbox/src/toolchain.rs
   - crates/sandbox/src/hosts.rs
   - crates/sandbox/src/proxy.rs
+  - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
@@ -1776,10 +1777,25 @@ toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.
 `registry.npmjs.org` for node, `pypi.org` and `files.pythonhosted.org` for python,
 `proxy.golang.org` for go).
 
-The proxy decides from the destination in the `CONNECT` request line and from nothing else: not a
-header, not a reply, not a byte the tunnel carries. TLS is not terminated, so an allowed tunnel is
-two byte streams copied into each other unread, and a request that is not a `CONNECT` is refused.
-A tunnel is opened only to port 443 or 80. A refused request is answered with the same bytes for
+The proxy decides from the destination in the `CONNECT` request line and the addresses that name
+resolves to, and from nothing else: not a header, not a reply, not a byte the tunnel carries. TLS
+is not terminated, so an allowed tunnel is two byte streams copied into each other unread, and a
+request that is not a `CONNECT` is refused. A tunnel is opened only to port 443 or 80.
+
+A name the list allows is resolved once, and the tunnel is opened to an address that lookup gave
+and to no other, so an answer that differs the next time is never connected to. If any address in
+the answer is not public, in the classes [FETCH-8](tools/fetch-url.md#FETCH-8) names, with an IPv4
+address inside an IPv6 one classified as the IPv4 address, the request is refused unless an exact
+entry of the allowed list is that address, an IPv4-mapped one compared as its IPv4 address, and no
+denied entry covers it. A wildcard names no address, so a server under `*.github.io` cannot answer
+with loopback, a private network or the metadata address and be tunnelled to, and `*.0.0.1` does
+not list `127.0.0.1`. A request that names an address that is not public, read as the list reads a
+name so a trailing dot changes nothing, and that no entry covers, is refused as not public rather
+than as not listed. An address written another way, such as `2130706433`, is a name to that check;
+a yes to it reaches nothing that is not public, since what it resolves to is checked like any
+answer.
+
+A refused request is answered with the same bytes for
 every host and every reason, which name neither the host the program asked for nor the rule, so the
 program learns nothing from it and nothing a program chose reaches the planner. Every decision is
 recorded with the host and the rule that decided it, for the trace, and never the traffic. The
@@ -1794,8 +1810,11 @@ that is dropped.
 **Why.** With the network open, a stage that can read a credential can send it anywhere, and
 closing the network wholesale ([SANDBOX-20](#SANDBOX-20)) takes the registries from a build.
 Letting a person name the hosts a program may reach keeps the build and removes the exfiltration
-path to the rest. Deciding from the request line alone keeps the proxy from being a second reader
-of content, and a fixed refusal keeps a name the program chose out of a sentence the planner reads.
+path to the rest. A name resolves to whatever its server answers, so without the address check a
+listed name, or one under a wildcard whose server another person runs, reaches the services on
+this machine's loopback, the network it sits inside and the metadata address. Deciding from the
+request line alone keeps the proxy from being a second reader of content, and a fixed refusal
+keeps a name the program chose out of a sentence the planner reads.
 
 The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
 `refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
@@ -1853,7 +1872,8 @@ planner reads under SANDBOX-19 says the network is limited by that setting and n
 
 After a foreground `run` has stopped, the trail records what the list decided for the hosts its
 programs asked each proxy for, under `hosts`: the host, `allowed` or `refused`, the entry that
-decided it or `not listed` or `port not carried`, and the stages that proxy serves in that line.
+decided it or `not listed`, `port not carried` or `not public`, and the stages that proxy serves
+in that line.
 Repeats are counted. A program chooses the name it asks for, so the record carries a name only
 where it is a host name or an IP address, and a request for anything else is recorded as a name
 that is not a host name, with none of its bytes. A proxy keeps at most 256 decisions until they are
@@ -1870,9 +1890,10 @@ a yes lets the lines that follow reach the hosts, so the person runs it again. T
 each host on a row of its own, up to eight at a time, and says that a yes holds until the session
 ends and writes nothing to disk. A yes adds the hosts to the allowed set of every stage from the
 next line on, which starts another proxy because the list is another list. A host the denied list
-names stays refused. A no is kept for the session, so the same host is not asked about again. The
-hosts asked about are those the proxy refused as not listed and that are host names or addresses;
-a host refused for its port, or by a denied entry, or a name that is not a host name, is not put to
+names stays refused, and a granted name is held to the addresses it resolves to as a listed one
+is. A no is kept for the session, so the same host is not asked about again. The hosts asked about
+are those the proxy refused as not listed and that are host names or addresses; a host refused for
+its port, by a denied entry or as not public, or a name that is not a host name, is not put to
 anyone. A delegate's lines are not asked about, and the mode that asks nothing refuses, so
 `ask` behaves as `refuse` under bypass and for a session nobody is at. Bypass does not keep the
 refusal, so a session that leaves it asks about the same host. The answer is recorded under
@@ -1886,7 +1907,10 @@ network, since the socket's directory is under the temporary directory every sta
 write row reaches a socket beneath it; and on macOS a stage lent loopback and held to no proxy,
 which connects to every loopback port. A proxy starts a thread for each connection with no limit on
 how many it holds, and keeps a tunnel open until one side closes it, so a stage can open connections
-until the session process has no thread or descriptor left to give.
+until the session process has no thread or descriptor left to give. No entry can spell an IPv6
+address, so a name whose answer holds one that is not public is refused whatever the list holds:
+`localhost` resolves to `::1` as well as `127.0.0.1` on most machines, so a program reaches a
+loopback service through the proxy as `127.0.0.1`, with that address listed.
 
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
@@ -1929,6 +1953,15 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::a_decision_is_handed_over_once`
 `verified-by: bravebot_sandbox::proxy::decisions_beyond_the_cap_are_counted_and_not_kept`
 `verified-by: bravebot_sandbox::proxy::a_request_for_something_that_is_not_a_host_name_is_recorded_without_it`
+`verified-by: bravebot_sandbox::proxy::a_listed_name_that_resolves_to_loopback_is_refused`
+`verified-by: bravebot_sandbox::proxy::a_name_the_list_allows_is_refused_when_it_resolves_to_an_address_that_is_not_public`
+`verified-by: bravebot_sandbox::proxy::one_address_that_is_not_public_among_public_ones_refuses_the_name`
+`verified-by: bravebot_sandbox::proxy::an_address_an_exact_entry_names_is_reached_although_it_is_not_public`
+`verified-by: bravebot_sandbox::proxy::a_request_naming_an_address_that_is_not_public_is_refused_as_not_public`
+`verified-by: bravebot_sandbox::proxy::the_tunnel_is_opened_to_the_address_that_was_checked`
+`verified-by: bravebot_sandbox::hosts::an_address_is_named_only_by_an_exact_entry_no_denied_one_covers`
+`verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
+`verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
 `verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`
 `verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
 `verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`

@@ -428,6 +428,7 @@ impl Confinement {
                                 format!("refused, denied by {}", rule.spelling()),
                             Verdict::Refused(Refusal::NotListed) => "refused, not listed".into(),
                             Verdict::Refused(Refusal::Port) => "refused, port not carried".into(),
+                            Verdict::Refused(Refusal::NotPublic) => "refused, not public".into(),
                         }
                     );
                     match counted.iter_mut().find(|(known, _)| *known == said) {
@@ -4614,6 +4615,7 @@ mod tests {
         ask_the_proxy(&proxy, "other.example:443");
         ask_the_proxy(&proxy, "other.example:443");
         ask_the_proxy(&proxy, "trail-listed.example:8080");
+        ask_the_proxy(&proxy, "169.254.169.254:80");
 
         let said = listed
             .hosts_seen(&[&cat, &fetch])
@@ -4623,7 +4625,8 @@ mod tests {
             said,
             "the host list decided for the proxy of stage 2: \
              other.example refused, not listed x2; \
-             trail-listed.example refused, port not carried"
+             trail-listed.example refused, port not carried; \
+             169.254.169.254 refused, not public"
         );
         assert_eq!(listed.hosts_seen(&[&cat, &fetch]), None);
     }
@@ -4682,8 +4685,8 @@ mod tests {
 
     /// The hosts to put to the person are the ones the list refused for want of an entry, once
     /// each, in the order they were asked for. The regressions it rejects: a host the person
-    /// denied, one refused for its port, or a name that is not a host name being offered as a
-    /// question, and a host repeated.
+    /// denied, one refused for its port, a name that is not a host name, or an address that is not
+    /// public being offered as a question, and a host repeated.
     #[test]
     fn only_a_host_refused_for_want_of_an_entry_is_put_to_the_person() {
         let hosts = Hosts {
@@ -4704,11 +4707,18 @@ mod tests {
         ask_the_proxy(&proxy, "fine.ask.example:8080");
         ask_the_proxy(&proxy, "evil\u{1b}[2J.example:443");
         ask_the_proxy(&proxy, "[2001:db8::1]:443");
+        ask_the_proxy(&proxy, "169.254.169.254:80");
+        ask_the_proxy(&proxy, "169.254.169.254.:80");
+        ask_the_proxy(&proxy, "10.0.0.1:443");
+        ask_the_proxy(&proxy, "8.8.8.8:443");
         ask_the_proxy(&proxy, "abe.ask.example:443");
         ask_the_proxy(&proxy, "zed.ask.example:443");
 
         let seen = listed.hosts_seen(&[&fetch]).expect("refusals were seen");
-        assert_eq!(seen.unlisted, ["zed.ask.example", "abe.ask.example"]);
+        assert_eq!(
+            seen.unlisted,
+            ["zed.ask.example", "8.8.8.8", "abe.ask.example"]
+        );
         assert!(listed.hosts_seen(&[&fetch]).is_none());
     }
 
