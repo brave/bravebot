@@ -3360,6 +3360,188 @@ fn an_ask_rule_still_prompts_for_a_write_through_a_link_to_the_file() {
     );
 }
 
+/// The canary each `private/canary.txt` in [`rules_a_project_writes`] holds, by the directory it
+/// is under.
+const CANARIES: [(&str, &str); 2] = [("", "CANARY-top"), ("tooling/", "CANARY-in-tooling")];
+
+/// A project holding a canary at each of the places [`CANARIES`] names, `block` written to `file`
+/// inside it and named on the command line where `named` says so, and the rules a session in it
+/// reads from its layers. The person's home is beside the project rather than in it, so the only
+/// rules about the project are the ones `file` holds.
+fn rules_a_project_writes(
+    scratch: &Scratch,
+    file: &str,
+    block: &str,
+    named: bool,
+) -> (Workspace, bravebot_core::permissions::Permissions) {
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+    for (under, canary) in CANARIES {
+        std::fs::create_dir_all(project.join(under).join("private")).unwrap();
+        std::fs::write(project.join(under).join("private/canary.txt"), canary).unwrap();
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let root = workspace.root().to_path_buf();
+    std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+    std::fs::write(root.join(file), block).unwrap();
+    let named = named.then(|| root.join(file));
+    let settings = bravebot_config::Settings::layered(
+        Some(home.join(".bravebot")),
+        Some(&root),
+        named.as_deref(),
+    );
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, Some(&home), &root);
+    assert!(
+        rejected.is_empty(),
+        "a rule in this test did not parse: {rejected:?}"
+    );
+    (workspace, permissions)
+}
+
+/// PERM-3, PERM-7: `Read(/private/**)` in a checkout's settings file is about `private` at the top
+/// of the project, and the read tool asks the rules about that file by its relative name. A rule
+/// held as a full path, or one starting beside the settings file, lets the file into the planner's
+/// context.
+#[test]
+fn a_single_slash_deny_in_the_project_file_refuses_a_read_of_the_file_it_names() {
+    let scratch = Scratch::new("permissions-slash-deny-project-read");
+    let (workspace, permissions) = rules_a_project_writes(
+        &scratch,
+        ".bravebot/settings.json",
+        r#"{"permissions": {"deny": ["Read(/private/**)"]}}"#,
+        false,
+    );
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trusting_the_workspace(),
+        &[("read_file", r#"{"path":"private/canary.txt"}"#)],
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("CANARY-top")),
+        "a single-slash deny let the file reach the planner"
+    );
+    assert!(
+        bodies.iter().any(|body| body.contains("deny rule")),
+        "the planner was not told a rule refused: {bodies:?}"
+    );
+}
+
+/// PERM-3, PERM-7: the local file is a checkout's file too, and `Edit(/private/**)` there stops
+/// both tools that change a file, each asked for by its relative name. One turn per tool, so a
+/// refusal of one cannot stand in for the other.
+#[test]
+fn a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit() {
+    let scratch = Scratch::new("permissions-slash-deny-local-write");
+    let mut changed = Vec::new();
+    for (tool, arguments) in [
+        (
+            "edit_file",
+            r#"{"path":"private/canary.txt","old_text":"CANARY-top","new_text":"edited"}"#,
+        ),
+        (
+            "write_file",
+            r#"{"path":"private/canary.txt","contents":"replaced"}"#,
+        ),
+    ] {
+        let (workspace, permissions) = rules_a_project_writes(
+            &scratch,
+            ".bravebot/settings.local.json",
+            r#"{"permissions": {"deny": ["Edit(/private/**)"]}}"#,
+            false,
+        );
+        let _ = run_calls_under(
+            &workspace,
+            permissions,
+            trusting_the_workspace(),
+            &[(tool, arguments)],
+        );
+        let left = std::fs::read_to_string(workspace.root().join("private/canary.txt")).unwrap();
+        if left != "CANARY-top" {
+            changed.push((tool, left));
+        }
+    }
+    assert!(
+        changed.is_empty(),
+        "a single-slash Edit deny did not stop {changed:?}"
+    );
+}
+
+/// PERM-3: `ask` is respelled with `deny`, so `Edit(/private/**)` there still puts a write by the
+/// relative name to the person, in a workspace they vouched for, where nothing else would ask.
+#[test]
+fn a_single_slash_ask_rule_in_the_project_file_asks_before_a_write() {
+    let scratch = Scratch::new("permissions-slash-ask-project-write");
+    let (workspace, permissions) = rules_a_project_writes(
+        &scratch,
+        ".bravebot/settings.json",
+        r#"{"permissions": {"ask": ["Edit(/private/**)"]}}"#,
+        false,
+    );
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"private/canary.txt","contents":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut recording = RecordingConfirmer::rejecting();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("replace the canary").with_permissions(permissions),
+        &mut recording,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        recording.seen.len(),
+        1,
+        "a write a single-slash ask rule covers went ahead without asking"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.root().join("private/canary.txt")).unwrap(),
+        "CANARY-top",
+        "the write went ahead after the person said no"
+    );
+}
+
+/// PERM-3: a file the command line named starts a `/x` rule at its own directory, and one inside
+/// the workspace is matched by the relative name there, so `Read(/private/**)` in
+/// `tooling/bravebot.json` refuses `tooling/private/canary.txt`.
+#[test]
+fn a_single_slash_deny_in_a_named_file_inside_the_project_starts_beside_that_file() {
+    let scratch = Scratch::new("permissions-slash-deny-named-read");
+    let (workspace, permissions) = rules_a_project_writes(
+        &scratch,
+        "tooling/bravebot.json",
+        r#"{"permissions": {"deny": ["Read(/private/**)"]}}"#,
+        true,
+    );
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trusting_the_workspace(),
+        &[("read_file", r#"{"path":"tooling/private/canary.txt"}"#)],
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("CANARY-in-tooling")),
+        "a single-slash deny in a named file let the file reach the planner"
+    );
+    assert!(
+        bodies.iter().any(|body| body.contains("deny rule")),
+        "the planner was not told a rule refused: {bodies:?}"
+    );
+}
+
 /// The rules a settings file carrying `block` gives a session in `workspace`, read the way a
 /// session reads them, which is where a link in a rule's own spelling is followed.
 #[cfg(unix)]
@@ -4914,7 +5096,6 @@ fn run_calls_under_deny_rules(
 }
 
 /// The same for rules and a trust map of the caller's own.
-#[cfg(unix)]
 fn run_calls_under(
     workspace: &Workspace,
     permissions: bravebot_core::permissions::Permissions,

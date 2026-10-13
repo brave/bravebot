@@ -1007,34 +1007,34 @@ mod tests {
         );
     }
 
-    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers the directory beside
-    /// that file, and not the one beside the global file.
+    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers `x` at the top of
+    /// the workspace, by the relative name a gate holds it by, and not the directory beside that
+    /// file or beside the global one.
     #[test]
-    fn a_checkouts_slash_rule_is_anchored_beside_the_checkouts_file() {
+    fn a_checkouts_slash_rule_starts_at_the_workspace() {
         let name = "slash-rule-in-a-checkout";
         let block = r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#;
         let settings = layered_settings(name, Some(block), None);
         let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
-        let beside_the_file = root
-            .join("cwd")
-            .join(".bravebot")
-            .join("secrets")
-            .join("key");
         let (permissions, _) =
             from_settings(&settings, Some(&root.join("profile")), &root.join("cwd"));
         assert_eq!(
-            permissions.for_path(Subject::Read, &beside_the_file.display().to_string()),
+            permissions.for_path(Subject::Read, "secrets/key"),
             Decision::Ruled(Ruling::Deny)
         );
-        let beside_the_global = root
-            .join("profile")
-            .join(".bravebot")
-            .join("secrets")
-            .join("key");
         assert_eq!(
-            permissions.for_path(Subject::Read, &beside_the_global.display().to_string()),
+            permissions.for_path(Subject::Read, ".bravebot/secrets/key"),
             Decision::Unmatched
         );
+        for beside in [root.join("cwd"), root.join("profile")] {
+            let beside = beside.join(".bravebot").join("secrets").join("key");
+            assert_eq!(
+                permissions.for_path(Subject::Read, &beside.display().to_string()),
+                Decision::Unmatched,
+                "{}",
+                beside.display()
+            );
+        }
     }
 
     /// A scratch directory holding a project with `real/secret.txt` and `real/notes.md` in it and a
