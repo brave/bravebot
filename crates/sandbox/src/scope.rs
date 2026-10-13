@@ -443,6 +443,26 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
     keys
 }
 
+/// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
+/// ssh's default names and the ones its configuration names, each judged as the remote scope
+/// judges one, so a key listed here is a key a stage with that scope reads.
+pub fn candidate_public_keys(home: &Path) -> Vec<PathBuf> {
+    let mut keys: Vec<PathBuf> = Vec::new();
+    for row in REMOTE.iter().filter(|row| row.ends_with(".pub")) {
+        if let Some(path) = judged_public_key(&under(home, row), home)
+            && !keys.contains(&path)
+        {
+            keys.push(path);
+        }
+    }
+    for path in named_public_keys(home) {
+        if !keys.contains(&path) {
+            keys.push(path);
+        }
+    }
+    keys
+}
+
 /// The path an `IdentityFile` line names, as a public key file's name, or `None` for any other
 /// line or one that does not spell an absolute path.
 fn identity_file(line: &str) -> Option<PathBuf> {
@@ -1438,6 +1458,26 @@ mod tests {
                 .writable
                 .iter()
                 .all(|row| row.path == home.join(".ssh/known_hosts"))
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The keys a person can be asked about are the ones at ssh's default names and the ones the
+    /// configuration names, each once. Rejects a list that holds only the configuration's, which
+    /// leaves out `id_ed25519.pub`, the key ssh offers first, or one that lists a default twice
+    /// when the configuration also names it.
+    #[test]
+    #[cfg(unix)]
+    fn candidate_keys_are_the_default_names_and_the_named_ones_once_each() {
+        let home = a_home_with(
+            "candidate-keys",
+            "IdentityFile ~/.ssh/work\nIdentityFile ~/.ssh/id_ed25519\nIdentityFile ~/.ssh/missing\n",
+            &[".ssh/id_ed25519.pub", ".ssh/work.pub", ".ssh/unnamed.pub"],
+        );
+
+        assert_eq!(
+            candidate_public_keys(&home),
+            [home.join(".ssh/id_ed25519.pub"), home.join(".ssh/work.pub")]
         );
         std::fs::remove_dir_all(&home).unwrap();
     }

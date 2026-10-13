@@ -228,6 +228,10 @@ reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no ot
 when a workflow failed, and on success when each worked or was skipped for a program that is not
 installed. It also checks that `gh` can read the login it holds in the real home, when it holds one.
 
+`bravebot doctor --push-identity [<host>/<owner>]` reports which GitHub account each of the person's
+ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
+that is not `<host>/<owner>` is refused with the status an argument error has.
+
 `verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
 `verified-by: bravebot_cli::main::doctor_accepts_current_windows_copies_and_reports_stale_ones`

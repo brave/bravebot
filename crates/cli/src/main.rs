@@ -15,6 +15,7 @@ mod mcp;
 mod permissions_check;
 mod plain;
 mod progress;
+mod push_identity;
 mod sandbox_check;
 mod session_import;
 mod session_search;
@@ -393,6 +394,12 @@ fn main() -> ExitCode {
             match args.len() {
                 2 => sandbox_check::run(),
                 _ => refused_with_the_usage(as_json, t!(cli_doctor_sandbox_takes_nothing_else)),
+            }
+        }
+        Some("doctor") if args.get(1).map(String::as_str) == Some("--push-identity") => {
+            match args.len() {
+                2 | 3 => push_identity::run_command(args.get(2).map(String::as_str)),
+                _ => refused_with_the_usage(as_json, t!(cli_doctor_push_identity_argument)),
             }
         }
         Some("doctor") => doctor(),
@@ -961,6 +968,10 @@ fn print_help() {
         (
             "bravebot doctor --sandbox-check",
             t!(cli_usage_doctor_sandbox),
+        ),
+        (
+            "bravebot doctor --push-identity [<host>/<owner>]",
+            t!(cli_usage_doctor_push_identity),
         ),
         ("bravebot bug-report", t!(cli_usage_bug_report)),
         ("bravebot update", t!(cli_usage_update)),
