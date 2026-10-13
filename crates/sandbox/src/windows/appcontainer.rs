@@ -45,13 +45,17 @@ use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
 };
+use windows_sys::Win32::System::JobObjects::{
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
     InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// The numbers the parent module writes its grants in are the platform's own rights.
@@ -303,15 +307,19 @@ fn readable_by_every_container() -> Vec<PathBuf> {
     .collect()
 }
 
-/// A process started under a container.
+/// A process started under a container, with the job it and every process it starts are in.
 ///
 /// The standard library's [`Child`](std::process::Child) cannot be built from a handle,
 /// and a process started through `CreateProcessW` with an attribute list is one this crate
 /// created itself, so this is what a caller waits on and kills instead.
+///
+/// The job ends every process in it when its last handle is closed, and this holds the only one,
+/// so dropping this ends them, as this process ending does.
 #[derive(Debug)]
 pub(crate) struct CreatedProcess {
     handle: OwnedHandle,
     id: u32,
+    job: OwnedHandle,
 }
 
 impl CreatedProcess {
@@ -367,20 +375,56 @@ impl CreatedProcess {
         Ok(Some(std::process::ExitStatus::from_raw(code)))
     }
 
+    /// End the process and every process it started.
+    ///
+    /// The job rather than the process, since a child of a confined process outlives its parent
+    /// and keeps its token, its network and the pipes it was handed.
     #[allow(unsafe_code)]
     pub(crate) fn kill(&mut self) -> Result<()> {
         // The code a killed process reports. One rather than zero, so a caller reading the
         // status cannot mistake a process this ended for one that succeeded.
         const KILLED: u32 = 1;
 
-        let process = self.raw();
+        let job = self.job.as_raw_handle() as HANDLE;
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let ended = unsafe { TerminateProcess(process, KILLED) };
+        let ended = unsafe { TerminateJobObject(job, KILLED) };
         if ended == 0 {
             return Err(Error::last_os_error());
         }
         Ok(())
     }
+}
+
+/// A job that ends every process in it when its last handle is closed.
+///
+/// Not inheritable, and handed to no process, so the handle this returns is the last one.
+#[allow(unsafe_code)]
+fn job_ending_on_close() -> Result<OwnedHandle> {
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let job = unsafe { CreateJobObjectW(null(), null()) };
+    if job.is_null() {
+        return Err(Error::last_os_error());
+    }
+    // Sound because the call reported success, which means it returned a handle nothing else
+    // owns.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
+
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let limited = unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle() as HANDLE,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast::<c_void>(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if limited == 0 {
+        return Err(Error::last_os_error());
+    }
+    Ok(job)
 }
 
 /// A security identifier held as its own bytes.
@@ -777,6 +821,9 @@ impl Wiring {
 }
 
 /// Start the process, or refuse.
+///
+/// The job is made first, so a job the platform will not make is a refusal to confine that costs
+/// no process, as against a process that could not be created.
 fn start(
     sid: &Sid,
     capabilities: &[Sid],
@@ -786,6 +833,13 @@ fn start(
     environment: &Environment,
     directory: Option<&Path>,
 ) -> std::result::Result<ConfinedChild, SandboxError> {
+    let job = job_ending_on_close().map_err(|e| SandboxError::SetupFailed {
+        mechanism: "appcontainer",
+        detail: format!(
+            "the job that ends a process with everything it starts could not be made ({e}); \
+             refusing rather than starting a program whose children would outlive it"
+        ),
+    })?;
     started(
         sid,
         capabilities,
@@ -794,11 +848,12 @@ fn start(
         wiring,
         environment,
         directory,
+        job,
     )
     .map_err(SandboxError::SpawnFailed)
 }
 
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::too_many_arguments)]
 fn started(
     sid: &Sid,
     capabilities: &[Sid],
@@ -807,6 +862,7 @@ fn started(
     wiring: Wiring,
     environment: &Environment,
     directory: Option<&Path>,
+    job: OwnedHandle,
 ) -> Result<ConfinedChild> {
     let mut line = wide(OsStr::new(&command_line(program, args)))?;
 
@@ -835,7 +891,11 @@ fn started(
         stderr.child.as_raw_handle() as HANDLE,
     ];
 
-    let mut attributes = AttributeList::holding(2)?;
+    // The process is in the job from the moment it exists, so nothing it starts is ever outside
+    // the job, and a job the platform will not put it in is a process that is not created.
+    let jobs: [HANDLE; 1] = [job.as_raw_handle() as HANDLE];
+
+    let mut attributes = AttributeList::holding(3)?;
     attributes.set(
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
         std::ptr::from_ref(&security).cast::<c_void>(),
@@ -845,6 +905,11 @@ fn started(
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
         inherited.as_ptr().cast::<c_void>(),
         size_of_val(&inherited),
+    )?;
+    attributes.set(
+        PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+        jobs.as_ptr().cast::<c_void>(),
+        size_of_val(&jobs),
     )?;
 
     let mut startup = STARTUPINFOEXW {
@@ -868,6 +933,10 @@ fn started(
     let start_in = directory.as_ref().map_or(null(), |path| path.as_ptr());
 
     let mut created = PROCESS_INFORMATION::default();
+    // On a console of its own with no window, rather than on this process's: any process attached
+    // to a console can write input into it, which on the terminal's console is typing an answer
+    // to a prompt. Detaching it instead would give each console program it starts a console, and
+    // a window, of its own; with this they share the one it was given.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let started = unsafe {
         CreateProcessW(
@@ -876,7 +945,7 @@ fn started(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | unicode,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | unicode,
             block,
             start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),
@@ -901,6 +970,7 @@ fn started(
         CreatedProcess {
             handle,
             id: created.dwProcessId,
+            job,
         },
         stdin.ours,
         stdout.ours,

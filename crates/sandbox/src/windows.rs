@@ -20,6 +20,10 @@
 //! container rather than outside it. A policy asking for that denial is refused
 //! ([`refusal_for`]) rather than applied without it.
 //!
+//! What a process starts is in its job as well. The process is created in a job of its own, which
+//! the creation call names, so it is in the job before it runs, and killing it ends every process it
+//! started. So does closing the job, which dropping the process and this process ending both do.
+//!
 //! Compiled under test on every platform as well as on the one it confines, so what this
 //! backend decides before a process starts is pinned by every job that runs the suite:
 //! which capability the policy asks for, what each grant permits, and which policies are

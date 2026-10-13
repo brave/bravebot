@@ -1166,9 +1166,10 @@ mod tests {
     }
 
     /// A Windows container cannot be refused a location inside a directory it is granted, so a row
-    /// over the home directory, a directory above it or `~/.config` (which holds `~/.config/gcloud`)
-    /// would reach `~/.ssh`, `~/.aws` and `~/.bravebot`. Elsewhere the refusals hold beneath such a
-    /// row and the entry stands.
+    /// over the home directory, a directory above it, `~/.config` (which holds `~/.config/gcloud`),
+    /// `~/AppData/Local` (which holds the browser profiles and the vault) or
+    /// `~/AppData/Roaming/Microsoft` (which holds the data protection keys) would reach what the
+    /// table holds back. Elsewhere the refusals hold beneath such a row and the entry stands.
     #[test]
     fn a_row_over_a_directory_holding_a_credential_location_is_refused_on_windows_only() {
         let home = fresh("rules-holds-home");
@@ -1180,6 +1181,9 @@ mod tests {
             (List::AllowRead, above.as_str()),
             (List::AllowRead, "~/.config"),
             (List::AllowWrite, "~/.config"),
+            (List::AllowRead, "~/AppData/Local"),
+            (List::AllowWrite, "~/AppData/Local/Google"),
+            (List::AllowRead, "~/AppData/Roaming/Microsoft"),
         ] {
             let rules = resolve_for(
                 Some(Prelude::Windows),
@@ -1200,7 +1204,13 @@ mod tests {
         // A directory that holds none, a neighbour sharing a prefix with one that does, and a
         // location or a place inside one that the person named stay in force: SANDBOX-25 lets a
         // list lift a table row other than `~/.ssh` and the state directory.
-        for spelled in ["~/projects", "~/.configx", "~/.aws", "~/.aws/config"] {
+        for spelled in [
+            "~/projects",
+            "~/.configx",
+            "~/.aws",
+            "~/.aws/config",
+            "~/AppData/Local/pip",
+        ] {
             for list in [List::AllowRead, List::AllowWrite] {
                 let rules = resolve_for(
                     Some(Prelude::Windows),

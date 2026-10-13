@@ -1828,6 +1828,32 @@ mod tests {
         );
     }
 
+    /// The browsers keep their profiles, and the platform its vault, under `%LOCALAPPDATA%`, so a
+    /// session opened on that directory or on a profile is refused. The regression it rejects: a
+    /// table naming only `gcloud` and `gpg` on Windows, which grants every saved password and
+    /// cookie to a container that cannot be refused a path inside a grant.
+    #[test]
+    fn a_windows_session_on_local_application_data_or_a_browser_profile_is_refused() {
+        refused_naming(
+            &confinement(&["/home/person/AppData/Local"]),
+            "BraveSoftware",
+        );
+        // The location as the refusal quotes it, which the session directory inside it is not.
+        refused_naming(
+            &confinement(&["/home/person/AppData/Local/Google/Chrome/User Data"]),
+            "/Google/Chrome`",
+        );
+        refused_naming(
+            &confinement(&["/home/person/AppData/Roaming/Microsoft"]),
+            "Credentials",
+        );
+        assert!(
+            confinement(&["/home/person/AppData/Local/pip"])
+                .root_reaching_credentials()
+                .is_none()
+        );
+    }
+
     /// The browser relay's directory holds the secret a peer presents to drive the browser, so a
     /// session opened on it is refused on every platform. The regression it rejects: leaving it
     /// out of the table, which grants a stage the secret.

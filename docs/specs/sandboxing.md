@@ -304,6 +304,9 @@ directory, and refuses one that is there and cannot be opened. The same path nam
 refused as before, in a policy that lists as in one that does not, and when a listed row names it
 too.
 
+On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
+not what a junction beneath the directory leads to.
+
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
 forbids, reached one grant at a time: the process runs, the record says the policy was applied,
@@ -328,6 +331,7 @@ depend on whatever else was changing that directory.
 `verified-by: bravebot_sandbox::windows::a_grant_reaches_what_is_under_the_directory_it_is_written_on`
 `verified-by: bravebot_sandbox::windows::a_program_is_refused_a_file_outside_its_grants_and_reads_one_inside`
 `verified-by: bravebot_sandbox::windows::a_program_writes_inside_its_grants_and_not_outside`
+`verified-by: bravebot_sandbox::windows::a_grant_does_not_reach_through_a_junction_to_where_it_leads`
 
 <a id="SANDBOX-7"></a>
 ### SANDBOX-7: a write grant covers moving a file within it
@@ -536,7 +540,7 @@ everything beneath it:
 | Where | Refused |
 | --- | --- |
 | every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are; the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
-| Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold (an application data directory moved out of the home is not covered) |
+| Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
 | macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
 | Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
 
@@ -675,6 +679,7 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::macos::a_refusal_of_a_link_is_written_where_the_link_leads_as_well`
 `verified-by: bravebot_sandbox::rules::a_request_reaching_a_linked_credential_directory_is_refused_where_it_leads`
 `verified-by: bravebot_sandbox::base::the_run_base_on_windows_is_the_keyed_base`
+`verified-by: bravebot_sandbox::base::the_windows_credential_locations_name_the_browser_profiles_and_the_platforms_stores`
 `verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_only_the_machine_wide_keychains`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
@@ -1117,7 +1122,17 @@ backend the three standard streams it has made and keeps the sandbox alive for a
 process, because the entries the backend wrote are removed as it is dropped. A batch file (`.bat`
 or `.cmd`) is refused there, because the command interpreter reads its argument line by its own
 rules and a quoting that is safe for every other program is not safe for it. Any other program the
-platform cannot confine is refused as it is elsewhere.
+platform cannot confine is refused as it is elsewhere. The stage is created in a job of its own,
+which the creation call names, so it is in the job before it runs and every program it starts is in
+that job too. Killing the stage
+ends the job, and the job also ends when its one handle is closed, which the backend does when the
+process is let go of and the platform does when this process ends, a crash included. The executor
+kills each stage of a line when the line is done, so a program a stage started and left running
+ends then too, which is when the grants it ran under are taken off. A stage the platform will not
+put in a job is not started. The stage is given a console of its own with no
+window rather than the one this process runs in, since any process attached to a console can write
+input into it, which on the terminal's console is typing an answer to a prompt. The programs it
+starts share that console, so none of them opens a window.
 
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
@@ -1131,7 +1146,10 @@ are unchanged.
 **What it costs.** On Windows a program argument that names a path outside the directories the
 session was opened on is refused by the kernel, since only redirections are opened by this process
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
-([trust-map.md](trust-map.md)). On Linux and macOS a stage reads the machine except the credential
+([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
+that asks its question on the console rather than on its input waits until the line is cancelled
+or runs out of time, and the console's code page is the system's rather than one a person set with
+`chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
 stage start lists every directory above a refused location, and the time that takes grows with the
@@ -1153,6 +1171,9 @@ number of entries in those directories, the home directory among them. On macOS 
 `verified-by: bravebot_sandbox::linux::a_confined_process_leads_a_session_of_its_own`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
+`verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
+`verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
+`verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
 <a id="SANDBOX-18"></a>
@@ -1194,7 +1215,9 @@ remote scope.
 On Windows a stage is also refused when a directory the session was opened on is, holds or lies
 inside one of the credential locations under the home directory ([SANDBOX-12](#SANDBOX-12)): the
 state directory `~/.bravebot`, which holds `settings.json`, `~/.ssh`, `~/.aws` and the rest of the
-table, which on Windows also holds `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`. The row would be a read and write grant, and a Windows container cannot be refused a
+table, which on Windows also holds `gcloud`, `gpg`, the browser profiles and the platform's own
+stores under `~/AppData`, so a session opened on `~/AppData/Local` is refused. The row would be a
+read and write grant, and a Windows container cannot be refused a
 path inside a grant, so the refusal is made before the policy is built and no grant is written. The
 paths are compared by component without regard to case, and a credential location is compared in
 the form it is named and in its resolved form. A session opened on a project directory is not
@@ -1268,6 +1291,7 @@ to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 `verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_on_local_application_data_or_a_browser_profile_is_refused`
 `verified-by: bravebot_agent::confine::a_session_inside_the_browser_relays_directory_is_refused_on_every_platform`
 `verified-by: bravebot_agent::confine::a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case`
 `verified-by: bravebot_agent::confine::a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
