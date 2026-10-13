@@ -706,11 +706,6 @@ impl RunRequest {
         RememberedLine::family_of(&self.plan).map(|line| line.display())
     }
 
-    /// Whether the prompt says a pattern in a settings file is what answers this line.
-    pub fn advises_a_pattern(&self) -> bool {
-        self.pattern.is_some()
-    }
-
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!(

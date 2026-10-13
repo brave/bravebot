@@ -288,11 +288,6 @@ export function menuLabel(item: Command, state: WindowState): string {
   return item.label
 }
 
-/** Whether an unknown string is a command this build declares. Used at the IPC boundary. */
-export function isCommandId(value: unknown): value is CommandId {
-  return typeof value === 'string' && BY_ID.has(value as CommandId)
-}
-
 // ------------------------------------------------------------------ context menus
 
 /**
@@ -381,15 +376,4 @@ export function parseContextRef(value: unknown): ContextRef | null {
 
 function isContextTarget(value: string): value is ContextTarget {
   return Object.hasOwn(CONTEXT, value)
-}
-
-/**
- * Every target's items, rather than a list of the targets that had any when this was written.
- * A new kind of thing to right-click should not need remembering here in order to work.
- */
-export function isContextCommandId(value: unknown): value is ContextCommandId {
-  return (
-    typeof value === 'string' &&
-    Object.values(CONTEXT).some((items) => items.some((item) => item.id === value))
-  )
 }

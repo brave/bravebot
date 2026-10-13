@@ -905,17 +905,6 @@ export interface BridgeFailure {
 
 // ---------------------------------------------------------------- reading tags
 
-/**
- * Whether content at this landing reached the planner.
- *
- * Anything unrecognised reads as *not* reaching it, which is the safe direction: calling
- * quarantined content "read by the model" understates the confinement, and calling
- * context "quarantined" merely overstates it.
- */
-export function reachedThePlanner(landing: Landing | string): boolean {
-  return landing === 'context'
-}
-
 /** Whether a tag names something the planner was kept away from. */
 export function isConfined(landing: Landing | string): boolean {
   return landing !== 'context'
