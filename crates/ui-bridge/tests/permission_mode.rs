@@ -414,12 +414,12 @@ fn a_window_cannot_choose_to_bypass_every_check() {
 }
 
 /// SANDBOX-22: a window has no way to show that a program is unconfined, so a settings file naming
-/// `off` is read as `standard` there and the program a person approved is still held to its profile.
+/// `off` is read as `workspace-write` there and the program a person approved is still held to its profile.
 /// The failure this rejects is the setting honoured: the approved `touch` lands outside the session
 /// from a window that said nothing about it. The planner being told how the step failed is what
 /// shows the program ran and was refused, rather than never having run.
 #[test]
-fn a_window_reads_off_as_standard() {
+fn a_window_reads_off_as_workspace_write() {
     if bravebot_sandbox::base::Prelude::current().is_none()
         || !bravebot_sandbox::confinement_works_here()
     {

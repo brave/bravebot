@@ -1412,7 +1412,7 @@ pub struct Session {
     /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
     /// Whether this kernel leaves every unix socket that has a path reachable from a confined
-    /// stage, which the opening screen and `/status` say under `standard` (SANDBOX-3). Read at
+    /// stage, which the opening screen and `/status` say under `read-only` and `workspace-write` (SANDBOX-3). Read at
     /// start-up with the confinement above, since the kernel does not change while the session runs.
     pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).

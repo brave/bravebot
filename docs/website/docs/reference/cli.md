@@ -89,6 +89,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only`, `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)) |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |

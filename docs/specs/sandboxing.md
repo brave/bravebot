@@ -148,7 +148,7 @@ is most Linux machines in use, every socket that has a path is reachable whateve
 which includes the user's D-Bus (where `systemd-run --user` starts a program outside the sandbox),
 the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linux backend reports
 whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
-([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `standard`
+([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `read-only` or `workspace-write`
 runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
 `/status` and the opening screen say nothing of them, since the confinement line already says
 nothing is confined. The mode does not apply to a local MCP server, which below version 9 reaches
@@ -216,8 +216,8 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
 `verified-by: bravebot_cli::main::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
-`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_standard_alone`
-`verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_standard_alone`
+`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write`
+`verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
@@ -465,8 +465,8 @@ decided on and the grant a program got is visible where it can be acted on.
 The opening screen and `/status` name the level this platform can enforce over a process running
 code we did not write. Neither reports the session as running inside it, and `/status` says beside
 the level what the session confines: the MCP servers it started, where it started a local one, and
-nothing otherwise. Under a sandbox mode other than `standard` ([SANDBOX-22](#SANDBOX-22)) both
-lines say so beside the level: `strict` names itself, and `off` says that programs run unconfined.
+nothing otherwise. Under a sandbox mode other than `workspace-write` ([SANDBOX-22](#SANDBOX-22)) both
+lines say so beside the level: `strict` and `read-only` name themselves, and `off` says that programs run unconfined.
 
 **Why.** The level is a fact about the machine, read before the session opens. What it bounds is a
 process started to run somebody else's code, and a session that starts none of those is inside no
@@ -487,7 +487,7 @@ whatever next gives a session such a process has to revisit.
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
-`verified-by: bravebot_tui::status::the_confinement_line_names_the_mode_unless_it_is_standard`
+`verified-by: bravebot_tui::status::the_confinement_line_names_the_mode_unless_it_is_workspace_write`
 
 <a id="SANDBOX-11"></a>
 ### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created
@@ -586,7 +586,7 @@ row they still do. The files a program reads by name to do what it was started f
 table, and neither are the files a shell reads as it starts or the person's own files: the network
 is where they could leave, and the plan decides that ([SANDBOX-3](#SANDBOX-3)). Of the stores
 [credential-protection.md](credential-protection.md) lists as already on the machine, a stage in
-the mode `standard` reads these on purpose:
+the mode `workspace-write` reads these on purpose:
 
 | What reads it | Read |
 | --- | --- |
@@ -1025,7 +1025,7 @@ person named, and `~/.ssh` is where a key would be. ssh reads the `.pub` file of
 the key the agent offers, so a key the person's configuration pins by name needs the same read as one
 at a default name; with `IdentitiesOnly yes` and no such read, ssh offers nothing and the host answers
 `Permission denied (publickey)`. The configuration is the person's own file, which a stage in
-standard mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
+workspace-write mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
 private key. A repository's `core.sshCommand` is not read because it decides what runs. Signing is a scope of its
 own so that the agent and the network are not lent to a `git commit` of an account that does not sign
 with ssh, and so that a commit does not read `~/.git-credentials`; the key it needs is one file in
@@ -1402,13 +1402,14 @@ later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsm
 write there reaches past the stage that made it. The cost is that a stage of a session opened on the
 home directory cannot run `git config --global`.
 
-Every cache is written by every stage on Linux and macOS in the mode `standard` because a stage is as often a script or a
+Every cache is written by every stage on Linux and macOS in the mode `workspace-write` because a stage is as often a script or a
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
 build it drives. The cost is that the separation between ecosystems that
 [SANDBOX-15](#SANDBOX-15) describes does not hold there: a stage that runs `npm ci` can write
 `~/.cargo/registry`, and a later `cargo build` reads what it left. The token files and the installs
 stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
-to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
+to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)). Under `read-only` no cache is
+written.
 
 **What the `.git` rule costs.** What git starts runs under the git stage's profile: a hook, a
 filter, the command `git bisect run` is given, an editor, a pager and a credential helper may each
@@ -1489,7 +1490,9 @@ step also say that a step whose program is not git cannot write any `.git`, so a
 git to commit, check out or clone is refused that write and git is run as a step of its own
 ([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
-machine is not read there either. On a turn
+machine is not read there either. Under the mode `read-only` it says that programs cannot write the
+project, names the temporary directory as the one place they write, and says that only the person
+widens it, by choosing another sandbox mode. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
 programs do not have stops reaching for paths they can reach.
 
@@ -1499,7 +1502,7 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). Under the modes `strict` and `standard`, where the session has a profile directory, the description
+([SANDBOX-20](#SANDBOX-20)). Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory, the description
 and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
 `off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
 A result whose steps all
@@ -1560,10 +1563,11 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
-`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_every_mode_but_off`
+`verified-by: bravebot_agent::confine::the_planner_is_told_a_read_only_stage_cannot_write_the_project`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
-`verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
+`verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_workspace_write`
 `verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
 
 <a id="SANDBOX-20"></a>
@@ -1717,42 +1721,59 @@ program printed goes to a log file under the suite's directory, and neither the 
 <a id="SANDBOX-22"></a>
 ### SANDBOX-22: a person chooses how much a program `run` starts is held to, and a checkout can only ask for more
 
-There are three sandbox modes. `strict` starts every stage under the deny-by-default profile
+There are four sandbox modes. `strict` starts every stage under the deny-by-default profile
 [SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
 binary brings, the credential scope its argv names and the session's directories, so a program reads
 nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a stage reaches every
-unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `standard` is
-what [SANDBOX-17](#SANDBOX-17) and
+unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
+starts a stage with the reads of `workspace-write` and without its writes to the session: the
+directories the session was opened on, the scratch directory and the toolchain caches can be read and
+cannot be written, and the temporary directory and the null device stay writable, since compilers,
+test runners and shells write scratch files there. A toolchain a stage carries or asks for brings
+its list and writes no cache, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
+refused before anyone is asked, so the mode that answers every question cannot hand the session's
+directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and the write
+grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` holds back writes on
+this machine and nothing else: the network follows [SANDBOX-20](#SANDBOX-20) as in every mode, and a
+stage whose argv carries the remote scope ([SANDBOX-16](#SANDBOX-16)), such as `git push` or
+`gh pr create`, still reaches the remote with the person's credentials. `workspace-write` is what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
-stage with no profile. The network is not part of a mode: whether a stage keeps egress is the setting
-[SANDBOX-20](#SANDBOX-20) describes, and `strict` and `standard` honour it the same way. `off` starts
-no profile, so under it nothing holds a network shut; the floor below is what stops a managed pin
-from meeting that.
+stage with no profile. The network is not part
+of a mode: whether a stage keeps egress is the setting [SANDBOX-20](#SANDBOX-20) describes, and
+`strict`, `read-only` and `workspace-write` honour it the same way. `off` starts no profile, so under
+it nothing holds a network shut; the floor below is what stops a managed pin from meeting that.
+
+A mode is looser than another when a program under it can read or write more. `off` is looser than
+every other mode, and `workspace-write` is looser than `read-only`, which reads the same machine and
+writes less. `strict` reads less than `read-only` and writes the session's directories, which
+`read-only` does not, so each of the two is looser than the other.
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
-key of the settings, and from the managed file's pin; the default is `standard`. In the settings, the home file and a `--settings` file outside
-the workspace may name any of the three, the later of the two winning. The checkout's project and
-local files, and a `--settings` file inside the workspace, may name only `strict`; a `standard` or
-`off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
-holds over what the home file chose. A value that is not exactly one of the three words chooses
-nothing and is reported with its file. Only `mode` is read from the `sandbox` block, and a key
+key of the settings, and from the managed file's pin; the default is `workspace-write`. In the settings, the home file and a `--settings` file outside
+the workspace may name any of the four, the later of the two winning. The checkout's project and
+local files, and a `--settings` file inside the workspace, may name only `strict`; a `read-only`,
+`workspace-write` or `off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
+holds over what the home file chose. A value that is not exactly one of the four words chooses
+nothing and is reported with its file, except `standard`, the earlier name of `workspace-write`: it
+names `workspace-write` in `--sandbox`, `/sandbox`, a settings file and the managed file, and every
+report spells it `workspace-write`. Only `mode` is read from the `sandbox` block, and a key
 beside it is reported as unread, so a block written for another tool does not look configured.
 
 The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
 a mode looser than it refuses the session before it starts, naming both files; the same mode or a
 stricter one is kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
-to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `standard` as well, because `off` starts a
+to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `workspace-write` as well, because `off` starts a
 program with no profile and nothing would hold its network shut; the refusal says so. `doctor`,
 `--help`, `--version` and the commands that start no program (`auth`, `sessions`, `attach`,
 `completion` and the two `import-` commands) run past a refusal, so that the person can read what it
 says and sign in.
 
 The desktop and the bridge have no flag, and read the mode from the settings and the pin. `off` is
-read there as `standard`, because a window has no line that shows its programs are unconfined. A
+read there as `workspace-write`, because a window has no line that shows its programs are unconfined. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
-uses. `/sandbox strict`, `/sandbox standard` and `/sandbox off` set the mode for the rest of the
+uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
 The word waits while a turn runs ([CMD-8](commands.md#CMD-8)), so a turn's `run` description, its
@@ -1762,7 +1783,7 @@ under the new mode. A move to `off` asks first, saying that programs then start 
 a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
 pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
 file, before anything is asked. Otherwise the command ranks as `--sandbox` does, so
-`/sandbox standard` replaces a checkout's `strict`. The mode is not in the session record, so a
+`/sandbox workspace-write` replaces a checkout's `strict`. The mode is not in the session record, so a
 resumed session takes the mode its start-up chose, and the command's choice lasts until the process
 ends, across `/clear` and `/resume`. `/bg` is refused while the command's choice differs from the mode
 start-up chose, since the background process chooses again ([BG-2](background-sessions.md#BG-2)).
@@ -1770,20 +1791,20 @@ The opening screen, `/status` and the trace's `sandbox` gate
 name the mode in force after the command.
 
 The desktop window has a control of its own in the composer, beside the permission mode. It shows
-the mode in force and offers `strict` and `standard`. It offers no `off`, and the bridge refuses a
-request for `off`, or for any word that is not one of the two, whatever the window sends. A choice is
+the mode in force and offers `strict`, `read-only` and `workspace-write`. It offers no `off`, and the bridge refuses a
+request for `off`, or for any word that is not one of the three, whatever the window sends. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
 started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
 file, and a choice is met with the floor again when a turn starts. A session that is opened, resumed
 or forked starts from the settings and the pin, not from the choice of the session it came from, and
-the settings' `off` is still read there as `standard`.
+the settings' `off` is still read there as `workspace-write`.
 
 The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
 and from `--dangerously-skip-permissions`. Neither changes which mode is in force, and neither
 widens a mode, with one exception. Under bypass ([MODE-4](permission-modes.md#MODE-4)) and
-`standard`, on macOS and Linux, the stages of the lead session's `run` may write every path a
+`workspace-write`, on macOS and Linux, the stages of the lead session's `run` may write every path a
 `request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) without the planner asking.
-This widens `standard`'s writes and nothing else: no read, no network access, nothing under
+This widens `workspace-write`'s writes and nothing else: no read, no network access, nothing under
 `strict`, nothing for a delegate, and nothing on Windows. One line may start with no profile where a
 person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
@@ -1805,26 +1826,41 @@ stricter mode, which takes nothing from them, on the footing the `permissions` k
 refuse already have ([PERM-18](permissions.md#PERM-18)). The pin is a floor because it is the
 administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
 the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
-stricter than the machine requires. Bypass may widen `standard`'s writes because under bypass every
+stricter than the machine requires. Bypass may widen `workspace-write`'s writes because under bypass every
 `request_path` is already granted without asking, so a stage starts with what the planner could
 get with one request instead of failing first. `strict` is not widened, since a person who chose it
-asked for less than the default.
+asked for less than the default. `read-only` is not widened either: bypass answers a question and
+does not change which mode is in force.
 
 **What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
-not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `standard` or
+not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
-the command line prints it on its opening line. Under bypass, a `standard` stage of the lead
+the command line prints it on its opening line. Under bypass, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
-shell start-up files and other repositories on the machine.
+shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
+a session directory is refused with `Operation not permitted`. Builds, formatters and `git commit`
+fail there, and the `run` description says so. A workspace inside the temporary directory stays
+writable, since that directory is writable in every mode. A person who wants them to run chooses
+`workspace-write`.
 
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
-`verified-by: bravebot_sandbox::mode::strict_is_the_tightest_and_off_the_loosest`
+`verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`
+`verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
+`verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
+`verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
+`verified-by: bravebot_sandbox::mode::the_default_mode_is_workspace_write`
 `verified-by: bravebot_config::sandbox::a_mode_is_read_from_the_block_and_nothing_near_it_is`
+`verified-by: bravebot_sandbox::mode::the_word_workspace_write_replaced_still_names_it`
+`verified-by: bravebot_config::settings::a_file_written_before_the_rename_still_names_workspace_write`
+`verified-by: bravebot_tui::sandbox_command::the_earlier_word_for_workspace_write_still_moves_the_mode`
 `verified-by: bravebot_config::settings::the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode`
 `verified-by: bravebot_config::settings::a_checkout_may_only_tighten_the_sandbox`
 `verified-by: bravebot_config::settings::a_word_that_is_not_a_mode_chooses_nothing_and_is_reported`
-`verified-by: bravebot_config::settings::the_flag_beats_the_files_and_the_default_is_standard`
+`verified-by: bravebot_config::settings::the_flag_beats_the_files_and_the_default_is_workspace_write`
 `verified-by: bravebot_config::settings::a_managed_pin_refuses_a_looser_request_and_keeps_a_stricter_one`
+`verified-by: bravebot_config::settings::a_pin_of_strict_and_a_pin_of_read_only_each_refuse_the_other`
+`verified-by: bravebot_agent::confine::a_read_only_stage_reads_the_session_and_writes_neither_it_nor_the_scratch_directory_nor_a_cache`
+`verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_config::settings::a_pin_that_is_not_a_mode_pins_nothing`
 `verified-by: bravebot_config::settings::a_closed_network_pin_refuses_off_and_leaves_the_rest`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
@@ -1832,22 +1868,22 @@ shell start-up files and other repositories on the machine.
 `verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
-`verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_three_words_and_the_last_wins`
+`verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_four_words_and_the_last_wins`
 `verified-by: bravebot_cli::main::the_sandbox_flag_refuses_a_word_that_is_not_a_mode`
 `verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
 `verified-by: bravebot_cli::main::doctor_reports_a_mode_the_managed_file_refuses`
 `verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
 `verified-by: bravebot_cli::running::the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`
 `verified-by: bravebot_agent::turn::a_run_under_off_starts_with_no_profile_and_says_nothing_of_one`
-`verified-by: bravebot_agent::turn::a_run_under_strict_cannot_read_what_standard_reads`
+`verified-by: bravebot_agent::turn::a_run_under_strict_cannot_read_what_workspace_write_reads`
 `verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
-`verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_workspace_write_one_reads`
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
-`verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
+`verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_workspace_write`
 `verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
 `verified-by: bravebot_config::settings::a_windows_choice_outranks_the_settings_and_meets_the_pin`
-`verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_or_standard_and_no_other_sandbox_mode`
+`verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode`
 `verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
@@ -2236,7 +2272,7 @@ a `denyRead` beneath an `allowRead` is a refusal that holds. At one path a refus
 person's own allowance. A refusal also wins over the rows a stage brings for itself at or beneath it,
 a credential scope's and a toolchain cache's among them: the person said no program reads `~/.config/gh`,
 and a program that is given its scope is still a program. It wins over the rows of the run base and
-the mode `standard` as well, so a `denyRead` of `~/Library/Keychains/login.keychain-db` refuses the
+the mode `workspace-write` as well, so a `denyRead` of `~/Library/Keychains/login.keychain-db` refuses the
 file the base reads on macOS ([SANDBOX-12](#SANDBOX-12)), and a `denyWrite` of a cache refuses a row
 every stage is given ([SANDBOX-18](#SANDBOX-18)). A refusal with no grant above it holds back
 nothing and is not added.
@@ -2402,7 +2438,7 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
-- Accepted in `strict` and `standard` ([SANDBOX-22](#SANDBOX-22)). `standard` reads the machine
+- Accepted in `strict`, `read-only` and `workspace-write` ([SANDBOX-22](#SANDBOX-22)). `workspace-write` reads the machine
   except the credential table ([SANDBOX-12](#SANDBOX-12)), so a scope there lifts the part of that table
   it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
@@ -2446,7 +2482,7 @@ for a different line.
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
 `verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
-`verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_standard`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_workspace_write`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
@@ -2527,7 +2563,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   answered beside a write held leaves the write. The person may end a grant with
   `/reach paths remove <number>`.
 - **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
-  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). The result says so and nothing is asked. No
+  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). A request to write is not accepted under
+  `read-only` ([SANDBOX-22](#SANDBOX-22)), whatever the permission mode, and a request to read is.
+  The result says so and nothing is asked. No
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
@@ -2536,7 +2574,7 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   a sub-task is reach the person never set up.
 - The desktop shows no card for it and refuses, which grants nothing.
 - **Under bypass, nothing needs asking for.** Where the permission mode answers every question
-  ([MODE-4](permission-modes.md#MODE-4)), the mode is `standard`, and the platform is macOS or
+  ([MODE-4](permission-modes.md#MODE-4)), the mode is `workspace-write`, and the platform is macOS or
   Linux, the stages of the lead session's `run` are given at the start what a request for writing
   would be granted: every path the account can write, except `/`, a drive root, the home
   directory and any directory above it as a whole (the entries already in them stay writable, and
@@ -2595,11 +2633,12 @@ the whole of what is held back.
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
 `verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
-`verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
 `verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
 `verified-by: bravebot_agent::tools::only_the_lead_session_in_bypass_is_given_what_a_request_would_be`
@@ -2642,8 +2681,8 @@ none to add to.
   mode never widens the sandbox mode ([SANDBOX-22](#SANDBOX-22)) and an approved request is `off`
   for its line. It goes to the confirmer in that mode as in every other, and a run with nobody to
   ask refuses it.
-- **Refused, with one sentence that does not say which setting withheld it,** in `strict`, under
-  `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
+- **Refused, with one sentence that does not say which setting withheld it,** in `strict`, in
+  `read-only`, under `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
   managed `run.network` of `closed`, for the reason the managed file floors `off` there
   ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
@@ -2651,7 +2690,7 @@ none to add to.
 - **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
-- The desktop draws no card for it and refuses, since a window reads `off` as `standard` and has
+- The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
   no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
 
 **Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
@@ -2797,7 +2836,7 @@ and any other a tool keeps outside the table, such as `~/.m2/settings.xml` and
 `~/.gradle/gradle.properties`; the environment, less this agent's own credentials
 ([RUN-12](tools/run.md#RUN-12)), so `GITHUB_TOKEN`, `NPM_TOKEN` and `AWS_*` reach a stage; on macOS
 the login keychain file, through which a lookup of the keychain service reaches the items in it
-([SANDBOX-12](#SANDBOX-12), [SANDBOX-31](#SANDBOX-31)); and in the mode `standard` the write rows
+([SANDBOX-12](#SANDBOX-12), [SANDBOX-31](#SANDBOX-31)); and in the mode `workspace-write` the write rows
 of every toolchain's cache, which a build started later outside the sandbox runs code from
 ([SANDBOX-18](#SANDBOX-18)). With the network `open`, the default ([SANDBOX-20](#SANDBOX-20)), a
 stage can send what it read to any host. Each stays because `git`, `gh`, `npm` and `cargo` need it
@@ -2885,7 +2924,7 @@ so a postinstall script cannot leave something in `~/.cargo/registry` for a late
 read. The key is the binary the plan already resolved and a person already read, never a name the
 model supplied and never a value a configuration file holds.
 
-On Linux and macOS in the mode `standard` no list is keyed. The machine is read, so the installs and
+On Linux and macOS in the mode `workspace-write` no list is keyed. The machine is read, so the installs and
 the cargo configuration need no row, and every stage writes the caches in the table below, since a
 stage is often a script that starts a build and not the build's own binary. A postinstall script can
 therefore leave something in `~/.cargo/registry` for a later `cargo build` to read, and the keying
@@ -2935,7 +2974,7 @@ row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, i
 this costs is what those files say: npm passes over a configuration file it cannot read, so a
 registry or a proxy set in `~/.npmrc` is not in force for a confined stage, and naming the file is a
 person's to do. The same holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which
-hold a credential of their own. On Linux and macOS in the mode `standard` a stage reads all four,
+hold a credential of their own. On Linux and macOS in the mode `workspace-write` a stage reads all four,
 since they are not in the table ([SANDBOX-12](#SANDBOX-12)).
 Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
 already running, and a build handed to one the person's own shell started runs unconfined. Cargo's
@@ -2951,7 +2990,7 @@ confined or not. A graphical one such as `code --wait` needs no terminal, and it
 plan never showed, so no list is keyed on it.
 
 **A command no list knows is asked about, and the answer lasts the session.** Partly built. This
-applies where the lists are keyed; on Linux and macOS in the mode `standard` a wrapper already
+applies where the lists are keyed; on Linux and macOS in the mode `workspace-write` a wrapper already
 writes every cache, though under a closed network it still has no egress, since that is decided by
 its own binary ([SANDBOX-20](#SANDBOX-20)). A stage no list knows runs under the base and its plan, and a person who knows
 what it needs types `/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or

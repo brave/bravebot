@@ -1386,7 +1386,7 @@ fn confirm_run_with_an_approving_window(request: RunRequest) -> (RunDecision, bo
 /// SANDBOX-29: the window draws no card for a request to run a line with no sandbox and refuses it,
 /// where an approving window would have said yes. The control is the same line without the request,
 /// which the window is asked about and approves. The regression it rejects is a bridge that
-/// forwards the request, since the window reads `off` as `standard` and has no line showing a
+/// forwards the request, since the window reads `off` as `workspace-write` and has no line showing a
 /// program is unconfined.
 #[test]
 fn the_window_refuses_an_unconfined_run_without_asking() {

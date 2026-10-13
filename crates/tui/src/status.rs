@@ -264,17 +264,16 @@ pub fn named_mode(
     }
 }
 
-/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
-/// runs under unless somebody chose otherwise.
+/// The confinement line with the sandbox mode beside it, where the mode is not `workspace-write`.
 ///
-/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
-/// one a person has to be able to see without asking, since nothing else on the screen shows that a
-/// program `run` starts is not confined at all (SANDBOX-22).
+/// Said for `strict` and `read-only`, which change what a program can read or write, and for `off`,
+/// the one a person has to be able to see without asking, since nothing else on the screen shows
+/// that a program `run` starts is not confined at all (SANDBOX-22).
 pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxMode) -> String {
     use bravebot_sandbox::SandboxMode;
     match mode {
-        SandboxMode::Standard => confinement.to_string(),
-        SandboxMode::Strict => t!(
+        SandboxMode::WorkspaceWrite => confinement.to_string(),
+        SandboxMode::Strict | SandboxMode::ReadOnly => t!(
             confinement_with_mode,
             level = confinement,
             mode = mode.name()
@@ -302,10 +301,11 @@ fn network_line(
 }
 
 /// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
-/// does not govern them and the mode is `standard`. `strict` refuses such a stage, and under `off`
-/// the confinement line already says nothing is confined (SANDBOX-3).
+/// does not govern them and the mode is `read-only` or `workspace-write`. `strict` refuses such a
+/// stage, and under `off` the confinement line already says nothing is confined (SANDBOX-3).
 pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
-    reachable && mode == bravebot_sandbox::SandboxMode::Standard
+    use bravebot_sandbox::SandboxMode;
+    reachable && matches!(mode, SandboxMode::ReadOnly | SandboxMode::WorkspaceWrite)
 }
 
 /// The line for the unix sockets the programs `run` starts can reach, where every one that has a
@@ -1161,27 +1161,37 @@ mod tests {
         trust
     }
 
-    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`, and the
-    /// report draws the mode its facts carry. The regressions it rejects are `off` shown as the
-    /// platform's level alone, which reads as a session whose programs are confined, and a report
-    /// that reads the mode start-up settled and so ignores `/sandbox`.
+    /// SANDBOX-22: the line names `strict`, `read-only` and `off` and says nothing for
+    /// `workspace-write`, and the report draws the mode its facts carry. The regressions it rejects
+    /// are `off` shown as the platform's level alone, which reads as a session whose programs are
+    /// confined, `read-only` shown as `workspace-write`, which hides that a program cannot write the
+    /// project, and a report that reads the mode start-up settled and so ignores `/sandbox`.
     #[test]
-    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
+    fn the_confinement_line_names_the_mode_unless_it_is_workspace_write() {
         use bravebot_sandbox::SandboxMode;
         let level = "kernel-enforced";
-        assert_eq!(with_the_sandbox_mode(level, SandboxMode::Standard), level);
+        assert_eq!(
+            with_the_sandbox_mode(level, SandboxMode::WorkspaceWrite),
+            level
+        );
         let strict = with_the_sandbox_mode(level, SandboxMode::Strict);
         assert!(
             strict.starts_with(level) && strict.contains("strict"),
             "{strict}"
         );
+        let read_only = with_the_sandbox_mode(level, SandboxMode::ReadOnly);
+        assert!(
+            read_only.starts_with(level) && read_only.contains("read-only"),
+            "{read_only}"
+        );
         let off = with_the_sandbox_mode(level, SandboxMode::Off);
         assert!(off.starts_with(level) && off.contains("off"), "{off}");
         assert_ne!(off, strict);
+        assert_ne!(read_only, strict);
 
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
-        for mode in [SandboxMode::Strict, SandboxMode::Off] {
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly, SandboxMode::Off] {
             let mut facts = facts(&config, &trust);
             facts.sandbox_mode = mode;
             let shown = report(&facts)
@@ -1195,11 +1205,12 @@ mod tests {
     }
 
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
-    /// the kernel leaves them open, under `standard` alone, with why beside it. The regressions it
-    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
-    /// under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    /// the kernel leaves them open, under `read-only` and `workspace-write`, with why beside it. The
+    /// regressions it rejects: no line on such a kernel, a line under `read-only` that is missing
+    /// because only `workspace-write` was listed, a line where the kernel governs the sockets, and a
+    /// line under `strict`, which refuses the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_reported_under_standard_alone() {
+    fn reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write() {
         use bravebot_sandbox::SandboxMode;
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
@@ -1213,11 +1224,15 @@ mod tests {
                 .find(|line| line.label.trim() == t!(status_path_sockets))
         };
 
-        let line = shown(SandboxMode::Standard, true).expect("the sockets are on the report");
-        assert_eq!(line.value, t!(status_path_sockets_reachable));
-        assert_eq!(line.note, t!(status_path_sockets_why));
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+            let line = shown(mode, true)
+                .unwrap_or_else(|| panic!("{mode}: the sockets are on the report"));
+            assert_eq!(line.value, t!(status_path_sockets_reachable), "{mode}");
+            assert_eq!(line.note, t!(status_path_sockets_why), "{mode}");
+        }
         for (mode, reachable) in [
-            (SandboxMode::Standard, false),
+            (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
         ] {
@@ -1254,7 +1269,7 @@ mod tests {
             // Governed, which is what every platform but a Linux kernel below Landlock ABI 9
             // reports. The test about the line sets it itself.
             sockets_with_a_path_reachable: false,
-            sandbox_mode: bravebot_sandbox::SandboxMode::Standard,
+            sandbox_mode: bravebot_sandbox::SandboxMode::WorkspaceWrite,
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
@@ -2336,18 +2351,18 @@ mod tests {
     #[test]
     fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
         use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
-        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        use bravebot_sandbox::SandboxMode::{Off, Strict, WorkspaceWrite};
         let home = std::env::temp_dir();
         let home = Some(home.as_path());
 
         assert_eq!(
-            programs_write_unasked(Standard, Bypass, home),
+            programs_write_unasked(WorkspaceWrite, Bypass, home),
             cfg!(any(target_os = "linux", target_os = "macos"))
         );
         for (mode, permission, home) in [
-            (Standard, Bypass, None),
-            (Standard, Ask, home),
-            (Standard, AcceptEdits, home),
+            (WorkspaceWrite, Bypass, None),
+            (WorkspaceWrite, Ask, home),
+            (WorkspaceWrite, AcceptEdits, home),
             (Strict, Bypass, home),
             (Off, Bypass, home),
         ] {
@@ -2518,14 +2533,19 @@ mod tests {
     #[test]
     fn a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not() {
         use bravebot_config::{Decided, RunNetwork};
-        use bravebot_sandbox::SandboxMode::{self, Standard};
+        use bravebot_sandbox::SandboxMode::{self, WorkspaceWrite};
         use bravebot_sandbox::network::Network;
         let settled = |network, decided| RunNetwork { network, decided };
 
-        assert!(network_line(None, Standard).is_none());
-        assert!(network_line(Some(&settled(Network::Open, Decided::Flag)), Standard).is_none());
-        let flag =
-            network_line(Some(&settled(Network::Closed, Decided::Flag)), Standard).expect("a line");
+        assert!(network_line(None, WorkspaceWrite).is_none());
+        assert!(
+            network_line(Some(&settled(Network::Open, Decided::Flag)), WorkspaceWrite).is_none()
+        );
+        let flag = network_line(
+            Some(&settled(Network::Closed, Decided::Flag)),
+            WorkspaceWrite,
+        )
+        .expect("a line");
         assert!(
             network_line(
                 Some(&settled(Network::Closed, Decided::Flag)),
@@ -2541,7 +2561,7 @@ mod tests {
                 Network::Closed,
                 Decided::Managed(Some("/etc/bravebot/managed.json".into())),
             )),
-            Standard,
+            WorkspaceWrite,
         )
         .expect("a line");
         let note = pinned.note.as_str();
@@ -2595,7 +2615,7 @@ mod tests {
     #[test]
     fn host_lists_are_reported_by_count_and_file_and_never_by_host() {
         use bravebot_config::sandbox_network::{HostEntry, Hosts, Resolved};
-        use bravebot_sandbox::SandboxMode::{Off, Standard};
+        use bravebot_sandbox::SandboxMode::{Off, WorkspaceWrite};
         let entry = |host: &str, by: Option<&str>| HostEntry {
             entry: host.to_string(),
             by: by.map(Into::into),
@@ -2609,11 +2629,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(hosts_line(None, Standard).is_none());
+        assert!(hosts_line(None, WorkspaceWrite).is_none());
         assert!(
             hosts_line(
                 Some(&settled(None, vec![entry("a.example", None)])),
-                Standard
+                WorkspaceWrite
             )
             .is_none()
         );
@@ -2628,7 +2648,7 @@ mod tests {
             vec![entry("bad.example", None)],
         );
         assert!(hosts_line(Some(&listed), Off).is_none());
-        let line = hosts_line(Some(&listed), Standard).expect("a line");
+        let line = hosts_line(Some(&listed), WorkspaceWrite).expect("a line");
 
         assert_eq!(line.label.trim(), t!(status_hosts));
         assert!(
@@ -2643,7 +2663,8 @@ mod tests {
         );
         assert!(line.note.contains("/home/a/.bravebot/settings.json"));
         assert!(line.note.contains(t!(status_hosts_managed)));
-        let empty = hosts_line(Some(&settled(Some(vec![]), vec![])), Standard).expect("a line");
+        let empty =
+            hosts_line(Some(&settled(Some(vec![]), vec![])), WorkspaceWrite).expect("a line");
         assert!(empty.value.contains("0 allowed"), "{}", empty.value);
         assert_eq!(empty.note, t!(status_hosts_refused));
 
@@ -2654,7 +2675,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let asked = hosts_line(Some(&asking), Standard).expect("a line");
+        let asked = hosts_line(Some(&asking), WorkspaceWrite).expect("a line");
         assert_eq!(asked.note, t!(status_hosts_asked));
 
         let asking_with_files = Resolved {
@@ -2664,7 +2685,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let asked_files = hosts_line(Some(&asking_with_files), Standard).expect("a line");
+        let asked_files = hosts_line(Some(&asking_with_files), WorkspaceWrite).expect("a line");
         assert!(
             asked_files.note.contains("/home/a/.bravebot/settings.json")
                 && asked_files.note != line.note,

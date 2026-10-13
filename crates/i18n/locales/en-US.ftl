@@ -170,7 +170,7 @@ cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
 cli-option-sandbox =
-    How far the programs `run` starts may reach: strict, standard or off. A managed file may set a
+    How far the programs `run` starts may reach: strict, read-only, workspace-write or off. A managed file may set a
     floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
@@ -259,7 +259,7 @@ cli-sandbox-refused-file =
     and a run may be stricter than that but not looser. Change it there, or remove it.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
-    with no sandbox is not held to that. Run with --sandbox standard or stricter, or without the flag.
+    with no sandbox is not held to that. Run with --sandbox workspace-write or stricter, or without the flag.
 cli-sandbox-refused-network-file =
     sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } pins run.network to closed, and
     a program started with no sandbox is not held to that. Change it there, or remove it.
@@ -626,7 +626,7 @@ doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
     other modes are read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-sandbox-unreadable =
-    sandbox.mode in { $path } is not strict, standard or off, so it is read as absent and the default applies
+    sandbox.mode in { $path } is not strict, read-only, workspace-write or off, so it is read as absent and the default applies
 doctor-sandbox-mode = sandbox mode
 doctor-sandbox-default = { $mode } (the default)
 doctor-sandbox-from = { $mode } from { $path }
@@ -691,7 +691,7 @@ doctor-confinement-unavailable = confinement unavailable
 doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
 # Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
 # grants, which is Landlock below ABI 9.
-doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode standard, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode read-only or workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -2043,7 +2043,7 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
-# Said only under sandbox mode standard, where the kernel leaves every unix socket that has a path
+# Said only under sandbox mode read-only or workspace-write, where the kernel leaves every unix socket that has a path
 # open to the programs a command starts. The note says why, and what strict does there.
 status-path-sockets = Programs' unix sockets
 status-path-sockets-reachable = every one with a path is reachable: D-Bus, SSH_AUTH_SOCK, docker.sock
@@ -3450,13 +3450,13 @@ session-sandbox-refused-mode =
     stricter than that but not looser.
 session-sandbox-refused-network =
     /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
-    no sandbox is not held to that. Use /sandbox standard or strict.
+    no sandbox is not held to that. Use /sandbox workspace-write, read-only or strict.
 ask-sandbox-off-title = sandbox
 ask-sandbox-off-header = Sandbox off
 ask-sandbox-off-question = Programs `run` starts will have no profile, so nothing confines what they read, write or reach. Turn the sandbox off for the rest of this session?
 ask-sandbox-off-no = No, keep { $mode }
 ask-sandbox-off-yes = Yes, start programs with no profile
-ask-sandbox-off-yes-detail = Applies from the next turn. /sandbox standard or /sandbox strict turns it back on.
+ask-sandbox-off-yes-detail = Applies from the next turn. /sandbox workspace-write or /sandbox strict turns it back on.
 cli-usage-doctor-push-identity = Ask GitHub which account each of your ssh keys pushes as
 cli-doctor-push-identity-argument = doctor --push-identity takes at most one argument, written <host>/<owner>.
 doctor-push-no-home = There is no home directory to look for ssh keys in.

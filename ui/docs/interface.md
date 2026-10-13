@@ -146,10 +146,10 @@ opens in Ask, including a resumed one and a fork. A change while a turn runs app
 of that turn. Bypassing every check is not offered here, because it is reached
 only through the terminal's `--dangerously-skip-permissions` flag.
 
-The sandbox control beside it says how much a program the agent runs is held to: **Standard**
-(the machine can be read except credential locations, and writes stay in the session) or
-**Strict** (a program reads only what its command names). Standard is drawn plainly and Strict is
-tinted for as long as it holds. The menu has no way to turn the sandbox off: that is reached only
+The sandbox control beside it says how much a program the agent runs is held to: **Workspace write**
+(the machine can be read except credential locations, and writes stay in the session), **Read only**
+(the same reads and no writes in the session) or **Strict** (a program reads only what its command
+names). Workspace write is drawn plainly and Strict is tinted for as long as it holds. The menu has no way to turn the sandbox off: that is reached only
 through the terminal's `--sandbox off` flag or `/sandbox off`. A change applies from the next turn,
 and a turn already running keeps the mode it began with. Every session opens in the mode the
 settings and the managed file give, never in another session's choice.

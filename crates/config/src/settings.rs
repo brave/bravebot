@@ -337,7 +337,7 @@ pub struct Settings {
     /// The layers not entitled to choose that asked for `strict`, weakest first. They may only
     /// tighten, so nothing a stronger layer chose lifts one.
     sandbox_asked_strict: Vec<PathBuf>,
-    /// The layers not entitled to choose that named `standard` or `off`, with the mode, for
+    /// The layers not entitled to choose that named `workspace-write` or `off`, with the mode, for
     /// `doctor`: dropped rather than obeyed, and said so.
     sandbox_ignored: Vec<(PathBuf, SandboxMode)>,
     /// The layers that named `sandbox.mode` as something that is not a mode.
@@ -1409,7 +1409,7 @@ impl Settings {
         }
     }
 
-    /// The layers that named `standard` or `off` without being entitled to, with the mode, weakest
+    /// The layers that named `workspace-write` or `off` without being entitled to, with the mode, weakest
     /// first. Reported rather than obeyed, for the reason `vetting_ignored` is.
     pub fn sandbox_ignored(&self) -> impl Iterator<Item = (&Path, SandboxMode)> {
         self.sandbox_ignored
@@ -6521,7 +6521,11 @@ mod tests {
     /// regression it rejects is a mode read only from one of them, or the earlier winning.
     #[test]
     fn the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode() {
-        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::Off,
+        ] {
             let layers = Layers::new(&format!("sandbox-home-{mode}"))
                 .global(&format!(r#"{{"sandbox": {{"mode": "{mode}"}}}}"#));
             let settings = layers.read();
@@ -6534,11 +6538,11 @@ mod tests {
         }
         let layers = Layers::new("sandbox-named")
             .global(r#"{"sandbox": {"mode": "off"}}"#)
-            .named(r#"{"sandbox": {"mode": "standard"}}"#);
+            .named(r#"{"sandbox": {"mode": "workspace-write"}}"#);
         let settings = layers.read();
         assert_eq!(
             settings.sandbox().map(|(mode, _)| mode),
-            Some(SandboxMode::Standard)
+            Some(SandboxMode::WorkspaceWrite)
         );
     }
 
@@ -6617,13 +6621,14 @@ mod tests {
     }
 
     /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
-    /// may ask for `strict` and are not obeyed when they name `standard` or `off`, whichever the
-    /// person's own file says. The regression it rejects is a repository loosening the sandbox of
-    /// whoever cloned it.
+    /// may ask for `strict` and are not obeyed when they name `read-only`, `workspace-write` or
+    /// `off`, whichever the person's own file says. The regression it rejects is a repository
+    /// loosening the sandbox of whoever cloned it, including to `read-only`, which writes less than
+    /// `workspace-write` and reads more than `strict`.
     #[test]
     fn a_checkout_may_only_tighten_the_sandbox() {
         for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
-            for loose in ["standard", "off"] {
+            for loose in ["read-only", "workspace-write", "off"] {
                 let body = format!(r#"{{"sandbox": {{"mode": "{loose}"}}}}"#);
                 let layers = Layers::new(&format!("sandbox-loose-{name}-{loose}"));
                 let layers = match text {
@@ -6663,12 +6668,55 @@ mod tests {
             "the person's own `off` lifted a checkout's `strict`"
         );
         let layers = Layers::new("sandbox-home-over-checkout")
-            .global(r#"{"sandbox": {"mode": "standard"}}"#)
+            .global(r#"{"sandbox": {"mode": "workspace-write"}}"#)
             .project(r#"{"sandbox": {"mode": "off"}}"#);
         assert_eq!(
             layers.read().sandbox().map(|(mode, _)| mode),
-            Some(SandboxMode::Standard)
+            Some(SandboxMode::WorkspaceWrite)
         );
+    }
+
+    /// SANDBOX-22, COMPAT-001: a settings file or a managed pin written before `standard` was
+    /// renamed `workspace-write` keeps its meaning, and a checkout's file that still says
+    /// `standard` is not obeyed and is reported as the mode it names. The regression it rejects is
+    /// an old file read as a word that is not a mode, which leaves the session on the default
+    /// instead of the mode its writer chose.
+    #[test]
+    fn a_file_written_before_the_rename_still_names_workspace_write() {
+        let layers =
+            Layers::new("sandbox-renamed-home").global(r#"{"sandbox": {"mode": "standard"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings.sandbox(),
+            Some((
+                SandboxMode::WorkspaceWrite,
+                layers.home.join(SETTINGS_FILE).as_path()
+            ))
+        );
+        assert_eq!(settings.sandbox_unreadable().count(), 0);
+
+        let pin = pinned("renamed", r#"{"sandbox": {"mode": "standard"}}"#);
+        assert_eq!(pin.sandbox(), Some(SandboxMode::WorkspaceWrite));
+        assert!(!pin.sandbox_unreadable());
+
+        for (name, text) in [("project", "p"), ("local", "l")] {
+            let body = r#"{"sandbox": {"mode": "standard"}}"#;
+            let layers = Layers::new(&format!("sandbox-renamed-{name}"));
+            let layers = match text {
+                "p" => layers.project(body),
+                _ => layers.local(body),
+            };
+            let settings = layers.read();
+            assert_eq!(settings.sandbox(), None, "{name} was obeyed");
+            assert_eq!(
+                settings
+                    .sandbox_ignored()
+                    .map(|(_, mode)| mode)
+                    .collect::<Vec<_>>(),
+                [SandboxMode::WorkspaceWrite],
+                "{name}"
+            );
+        }
     }
 
     /// SANDBOX-22: a value that is not one of the three words is absence and is reported with its
@@ -6685,7 +6733,7 @@ mod tests {
 
     /// SANDBOX-22: the flag, then the settings, then the pin, then the default.
     #[test]
-    fn the_flag_beats_the_files_and_the_default_is_standard() {
+    fn the_flag_beats_the_files_and_the_default_is_workspace_write() {
         use crate::sandbox::{Source, resolve};
         let none = crate::Managed::default();
         let layers = Layers::new("sandbox-resolve").global(r#"{"sandbox": {"mode": "strict"}}"#);
@@ -6700,7 +6748,7 @@ mod tests {
         assert_eq!(filed.source, Source::File(layers.home.join(SETTINGS_FILE)));
         let default = resolve(None, &Settings::default(), &none).expect("no pin");
         assert_eq!(default, crate::sandbox::Choice::default());
-        assert_eq!(default.mode, SandboxMode::Standard);
+        assert_eq!(default.mode, SandboxMode::WorkspaceWrite);
     }
 
     /// SANDBOX-22: a pin is a floor. A flag or the person's file looser than it is refused naming
@@ -6725,9 +6773,13 @@ mod tests {
             })
         );
         assert_eq!(
-            resolve(Some(SandboxMode::Standard), &Settings::default(), &pin)
-                .expect_err("looser than the pin")
-                .pinned,
+            resolve(
+                Some(SandboxMode::WorkspaceWrite),
+                &Settings::default(),
+                &pin
+            )
+            .expect_err("looser than the pin")
+            .pinned,
             SandboxMode::Strict
         );
         assert_eq!(
@@ -6748,13 +6800,60 @@ mod tests {
             (SandboxMode::Strict, Source::Managed(pin_file))
         );
 
-        let standard = pinned("standard", r#"{"sandbox": {"mode": "standard"}}"#);
-        let stricter = resolve(Some(SandboxMode::Strict), &Settings::default(), &standard)
-            .expect("stricter than the pin");
+        let workspace_write = pinned(
+            "workspace-write",
+            r#"{"sandbox": {"mode": "workspace-write"}}"#,
+        );
+        let stricter = resolve(
+            Some(SandboxMode::Strict),
+            &Settings::default(),
+            &workspace_write,
+        )
+        .expect("stricter than the pin");
         assert_eq!(stricter.mode, SandboxMode::Strict);
     }
 
-    /// SANDBOX-22: a managed file that pins the network closed is a floor of `standard`, because
+    /// SANDBOX-22: `strict` reads less than `read-only` and writes the session's directories, which
+    /// `read-only` does not, so a pin of either refuses the other and keeps `workspace-write` out.
+    /// The regression it rejects is a pin of `read-only` that a flag of `strict` goes under, which
+    /// lets a program write the session, or a pin of `strict` that `read-only` goes under, which lets
+    /// a program read the machine.
+    #[test]
+    fn a_pin_of_strict_and_a_pin_of_read_only_each_refuse_the_other() {
+        use crate::sandbox::resolve;
+        let strict = pinned("pin-strict", r#"{"sandbox": {"mode": "strict"}}"#);
+        let read_only = pinned("pin-read-only", r#"{"sandbox": {"mode": "read-only"}}"#);
+        assert_eq!(
+            resolve(Some(SandboxMode::ReadOnly), &Settings::default(), &strict)
+                .expect_err("reads the machine")
+                .pinned,
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Strict), &Settings::default(), &read_only)
+                .expect_err("writes the session")
+                .pinned,
+            SandboxMode::ReadOnly
+        );
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Off] {
+            assert!(resolve(Some(mode), &Settings::default(), &read_only).is_err());
+        }
+        assert_eq!(
+            resolve(
+                Some(SandboxMode::ReadOnly),
+                &Settings::default(),
+                &read_only
+            )
+            .map(|choice| choice.mode),
+            Ok(SandboxMode::ReadOnly)
+        );
+        let workspace_write = pinned("pin-ww", r#"{"sandbox": {"mode": "workspace-write"}}"#);
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly] {
+            assert!(resolve(Some(mode), &Settings::default(), &workspace_write).is_ok());
+        }
+    }
+
+    /// SANDBOX-22: a managed file that pins the network closed is a floor of `workspace-write`, because
     /// `off` starts a program with no profile and nothing would hold the network shut. The
     /// regression it rejects is `--sandbox off` quietly opening a network an administrator closed.
     #[test]
@@ -6765,9 +6864,13 @@ mod tests {
             .expect_err("off would open the network");
         assert_eq!(
             (refused.pinned, refused.because),
-            (SandboxMode::Standard, Floor::Network)
+            (SandboxMode::WorkspaceWrite, Floor::Network)
         );
-        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+        for mode in [
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::ReadOnly,
+            SandboxMode::Strict,
+        ] {
             assert_eq!(
                 resolve(Some(mode), &Settings::default(), &pin).map(|choice| choice.mode),
                 Ok(mode)
@@ -6785,9 +6888,13 @@ mod tests {
             r#"{"run": {"network": "closed"}, "sandbox": {"mode": "strict"}}"#,
         );
         assert_eq!(
-            resolve(Some(SandboxMode::Standard), &Settings::default(), &both)
-                .expect_err("the mode pin is the stricter floor")
-                .because,
+            resolve(
+                Some(SandboxMode::WorkspaceWrite),
+                &Settings::default(),
+                &both
+            )
+            .expect_err("the mode pin is the stricter floor")
+            .because,
             Floor::Mode
         );
     }
@@ -6799,7 +6906,7 @@ mod tests {
     fn a_session_moving_its_mode_meets_the_floor_start_up_applies() {
         use crate::sandbox::{Floor, allowed_in_session};
         let strict = pinned("session-strict", r#"{"sandbox": {"mode": "strict"}}"#);
-        for asked in [SandboxMode::Standard, SandboxMode::Off] {
+        for asked in [SandboxMode::WorkspaceWrite, SandboxMode::Off] {
             let refused = allowed_in_session(asked, &strict).expect_err("looser than the pin");
             assert_eq!(
                 (
@@ -6818,12 +6925,16 @@ mod tests {
         let refused = allowed_in_session(SandboxMode::Off, &closed).expect_err("opens the network");
         assert_eq!(
             (refused.pinned, refused.because),
-            (SandboxMode::Standard, Floor::Network)
+            (SandboxMode::WorkspaceWrite, Floor::Network)
         );
-        for allowed in [SandboxMode::Standard, SandboxMode::Strict] {
+        for allowed in [
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::ReadOnly,
+            SandboxMode::Strict,
+        ] {
             assert!(allowed_in_session(allowed, &closed).is_ok());
         }
-        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+        for mode in SandboxMode::ALL {
             assert!(allowed_in_session(mode, &crate::Managed::default()).is_ok());
         }
     }
@@ -6840,7 +6951,7 @@ mod tests {
         assert!(ok.is_ok());
     }
 
-    /// SANDBOX-22: a window reads `off` as `standard`, keeps `strict`, and takes the pin where the
+    /// SANDBOX-22: a window reads `off` as `workspace-write`, keeps `strict`, and takes the pin where the
     /// settings went under it. The regression it rejects is a window running programs unconfined
     /// on a setting it has no way to show, or a pin ignored there.
     #[test]
@@ -6848,8 +6959,9 @@ mod tests {
         use crate::sandbox::for_a_window;
         let none = crate::Managed::default();
         for (mode, expected) in [
-            ("off", SandboxMode::Standard),
-            ("standard", SandboxMode::Standard),
+            ("off", SandboxMode::WorkspaceWrite),
+            ("workspace-write", SandboxMode::WorkspaceWrite),
+            ("read-only", SandboxMode::ReadOnly),
             ("strict", SandboxMode::Strict),
         ] {
             let settings = Layers::new(&format!("sandbox-window-{mode}"))
@@ -6859,7 +6971,7 @@ mod tests {
         }
         assert_eq!(
             for_a_window(&Settings::default(), &none),
-            SandboxMode::Standard
+            SandboxMode::WorkspaceWrite
         );
         let pin = pinned("window", r#"{"sandbox": {"mode": "strict"}}"#);
         let off = Layers::new("sandbox-window-pinned")
@@ -6887,8 +6999,8 @@ mod tests {
             SandboxMode::Strict
         );
         assert_eq!(
-            for_a_window_choosing(Some(SandboxMode::Standard), &strict_file, &none),
-            SandboxMode::Standard
+            for_a_window_choosing(Some(SandboxMode::WorkspaceWrite), &strict_file, &none),
+            SandboxMode::WorkspaceWrite
         );
         assert_eq!(
             for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &none),
@@ -6896,12 +7008,16 @@ mod tests {
         );
         assert_eq!(
             for_a_window_choosing(Some(SandboxMode::Off), &Settings::default(), &none),
-            SandboxMode::Standard
+            SandboxMode::WorkspaceWrite
         );
 
         let pin = pinned("chosen", r#"{"sandbox": {"mode": "strict"}}"#);
         assert_eq!(
-            for_a_window_choosing(Some(SandboxMode::Standard), &Settings::default(), &pin),
+            for_a_window_choosing(
+                Some(SandboxMode::WorkspaceWrite),
+                &Settings::default(),
+                &pin
+            ),
             SandboxMode::Strict
         );
         assert_eq!(

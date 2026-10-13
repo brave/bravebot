@@ -12390,7 +12390,7 @@ five
     /// started with no profile, which is the record a reader has no other way to reconstruct.
     #[test]
     fn the_trail_says_which_sandbox_mode_the_programs_ran_in() {
-        for mode in ["strict", "standard", "off"] {
+        for mode in ["strict", "workspace-write", "off"] {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
             policy.record_sandbox_mode(mode);

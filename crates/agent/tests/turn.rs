@@ -17354,7 +17354,7 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
 const CREDENTIAL_LOCATIONS: &str = "cannot be added with `/add-dir` or `--add-dir`";
 
 /// SANDBOX-19: the line that follows a failed step says a credential location cannot be added, in
-/// `strict` and in `standard`, in the same words for exit 1 and exit 2, since it is built from the
+/// `strict` and in `workspace-write`, in the same words for exit 1 and exit 2, since it is built from the
 /// session and the steps and not from what the program did.
 #[test]
 fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit() {
@@ -17363,7 +17363,10 @@ fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and
     }
     for (label, mode) in [
         ("strict", bravebot_sandbox::SandboxMode::Strict),
-        ("standard", bravebot_sandbox::SandboxMode::Standard),
+        (
+            "workspace-write",
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        ),
     ] {
         if mode == bravebot_sandbox::SandboxMode::Strict && strict_cannot_run_here() {
             continue;
@@ -17411,7 +17414,7 @@ fn a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cann
     let (_, second) = requests_for_one_run_in(
         "run-credential-locations-ok",
         "mkdir made",
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
     );
     let result = message_from(&second, "Result of run");
     assert!(result.contains("It exited 0."), "{result}");
@@ -17642,7 +17645,17 @@ fn requests_for_one_run_in(
     mode: bravebot_sandbox::SandboxMode,
 ) -> (String, String) {
     let scratch = Scratch::new(name);
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    requests_for_one_run_at(&scratch.path, command, mode)
+}
+
+/// As [`requests_for_one_run_in`], for a session opened on `root`. A root under the temporary
+/// directory is writable in every mode, since a program does not start without that directory.
+fn requests_for_one_run_at(
+    root: &std::path::Path,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+) -> (String, String) {
+    let workspace = Workspace::new(root).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
             "run",
@@ -17664,7 +17677,7 @@ fn requests_for_one_run_in(
         // checkout through and the strict read below succeeds on a machine whose `PATH` has one.
         &Task::new("run it")
             .with_profile(Some(
-                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+                bravebot_agent::home::profile().unwrap_or_else(|| root.join("profile")),
             ))
             .with_confined_runs(true)
             .with_sandbox_mode(mode),
@@ -17692,7 +17705,7 @@ fn outside_the_session(name: &str) -> std::path::PathBuf {
 }
 
 /// SANDBOX-22: `off` starts a program with no profile, so a write the profile refuses lands, and the
-/// planner is not told its programs are confined. The control is the same line under `standard`,
+/// planner is not told its programs are confined. The control is the same line under `workspace-write`,
 /// where the write is refused; a test of `off` alone passes on a build that never confined anything.
 /// The regression it rejects is a mode that is recorded and not applied.
 #[test]
@@ -17705,14 +17718,14 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 
     let _ = std::fs::remove_file(&marker);
     let (first, second) = requests_for_one_run_in(
-        "run-mode-standard-write",
+        "run-mode-workspace-write-write",
         &command,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
     );
     assert!(first.contains(TOLD_CONFINED), "{first}");
     assert!(
         !marker.exists(),
-        "standard let a program write outside the session"
+        "workspace-write let a program write outside the session"
     );
     assert!(message_from(&second, "Result of run").contains("Confinement:"));
 
@@ -17731,11 +17744,65 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
     assert!(!result.contains("Confinement:"), "{result}");
 }
 
-/// SANDBOX-22: `strict` is the deny-by-default profile, so a program cannot read a file outside the
-/// session that `standard` lets it read, and a failure says what it ran under. The control is the
-/// same read under `standard`. The regression it rejects is `strict` reading the machine.
+/// SANDBOX-22: `read-only` reads the machine as `workspace-write` does and writes nothing in the
+/// session's directory, and a failure says what it ran under. The controls are the same write under
+/// `workspace-write`, which lands, and a read of a file outside the session under `read-only`, which
+/// succeeds. The session is opened outside the temporary directory, which every mode leaves writable.
+/// The regressions it rejects are a `read-only` that writes the session and one that stops reading
+/// the machine. A refused redirect exits 1 under bash and 2 under dash, so the refused write is
+/// asserted as a failed step and not as one status.
 #[test]
-fn a_run_under_strict_cannot_read_what_standard_reads() {
+fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+    let readable = outside_the_session("read-only-readable");
+    std::fs::write(&readable, "x").expect("a file to read");
+    let read = format!("sh -c 'cat {} > /dev/null'", readable.display());
+    let write = "sh -c 'echo x > written-by-the-run.txt'";
+    let session = |name: &str| {
+        let root = outside_the_session(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a session directory");
+        root
+    };
+    let told = |root: &std::path::Path, command: &str, mode| {
+        let (first, second) = requests_for_one_run_at(root, command, mode);
+        (first, message_from(&second, "Result of run").to_string())
+    };
+
+    let writing = session("read-only-control-session");
+    let (_, control) = told(&writing, write, WorkspaceWrite);
+    let wrote = writing.join("written-by-the-run.txt").exists();
+    let held = session("read-only-held-session");
+    let (first, refused) = told(&held, write, ReadOnly);
+    let written_under_read_only = held.join("written-by-the-run.txt").exists();
+    let (_, read_result) = told(&held, &read, ReadOnly);
+    for directory in [&writing, &held] {
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    let _ = std::fs::remove_file(&readable);
+
+    assert!(
+        control.contains("It exited 0.") && wrote,
+        "the control did not write the session: {control}"
+    );
+    assert!(
+        refused.contains("It failed: step 1 exited") && !written_under_read_only,
+        "read-only let a program write the session: {refused}"
+    );
+    assert!(refused.contains("Confinement:"), "{refused}");
+    assert!(first.contains(TOLD_CONFINED), "{first}");
+    assert!(first.contains("cannot write the project"), "{first}");
+    assert!(read_result.contains("It exited 0."), "{read_result}");
+}
+
+/// SANDBOX-22: `strict` is the deny-by-default profile, so a program cannot read a file outside the
+/// session that `workspace-write` lets it read, and a failure says what it ran under. The control is the
+/// same read under `workspace-write`. The regression it rejects is `strict` reading the machine.
+#[test]
+fn a_run_under_strict_cannot_read_what_workspace_write_reads() {
     if strict_cannot_run_here() {
         return;
     }
@@ -17744,11 +17811,11 @@ fn a_run_under_strict_cannot_read_what_standard_reads() {
     let command = format!("sh -c 'cat {} > /dev/null'", readable.display());
 
     let (_, second) = requests_for_one_run_in(
-        "run-mode-standard-read",
+        "run-mode-workspace-write-read",
         &command,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
     );
-    let standard = message_from(&second, "Result of run").to_string();
+    let workspace_write = message_from(&second, "Result of run").to_string();
     let (first, second) = requests_for_one_run_in(
         "run-mode-strict-read",
         &command,
@@ -17757,7 +17824,10 @@ fn a_run_under_strict_cannot_read_what_standard_reads() {
     let strict = message_from(&second, "Result of run").to_string();
     let _ = std::fs::remove_file(&readable);
 
-    assert!(standard.contains("It exited 0."), "{standard}");
+    assert!(
+        workspace_write.contains("It exited 0."),
+        "{workspace_write}"
+    );
     assert!(
         strict.contains("exited 1"),
         "strict read the machine: {strict}"
@@ -18255,20 +18325,20 @@ fn scopes_are_refused_under_off() {
     );
 }
 
-/// SANDBOX-26: `standard` accepts the request as `strict` does. The person is asked about the line
+/// SANDBOX-26: `workspace-write` accepts the request as `strict` does. The person is asked about the line
 /// with the names shown, and the line runs once they approve. The control is the same call under
 /// `off`, which is refused, so the run below is the mode's doing and not the harness's.
 #[test]
-fn scopes_are_asked_about_and_run_under_standard() {
+fn scopes_are_asked_about_and_run_under_workspace_write() {
     if cannot_confine_here() {
         return;
     }
     let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let seen = asked.seen.clone();
     let result = scoped_run(
-        "scopes-standard",
+        "scopes-workspace-write",
         serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["remote", "aws"] }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         no_programs,
@@ -18493,7 +18563,7 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
         name,
         serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
         serde_json::json!({ "command": writing_the_marker(name, "second") }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         no_programs,
@@ -18513,7 +18583,9 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
         result.trail
     );
     assert!(
-        result.trail.contains("the programs ran in standard mode"),
+        result
+            .trail
+            .contains("the programs ran in workspace-write mode"),
         "{}",
         result.trail
     );
@@ -18537,7 +18609,7 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
     let bare = scoped_run(
         "unconfined-vouched-control",
         serde_json::json!({ "command": "uname" }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         vouch,
@@ -18560,7 +18632,7 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
     let result = scoped_run_remembering(
         "unconfined-vouched",
         serde_json::json!({ "command": "uname", "unconfined": true }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         vouch,
@@ -18606,7 +18678,7 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
                 "unconfined": true,
             }),
             serde_json::json!({ "command": "true" }),
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::Bypass,
             trusting_the_workspace(),
             no_programs,
@@ -18636,7 +18708,7 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
 /// `off`, in a workspace the person has not trusted, and when it is combined with `scopes`. The
 /// refusal is the same sentence for the first three, so it does not say which setting withheld it,
 /// and it does not name the argument, which the planner learns from the `run` description. The
-/// control is the same call in `standard` of a trusted workspace, which runs.
+/// control is the same call in `workspace-write` of a trusted workspace, which runs.
 #[test]
 fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     if cannot_confine_here() {
@@ -18654,13 +18726,13 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
         ("off", bravebot_sandbox::SandboxMode::Off, true, None),
         (
             "untrusted",
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             false,
             None,
         ),
         (
             "with scopes",
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             true,
             Some(serde_json::json!(["aws"])),
         ),
@@ -18720,7 +18792,7 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
         name,
         serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
         serde_json::json!({ "command": "true" }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         no_programs,
@@ -18753,7 +18825,7 @@ fn an_unconfined_value_that_is_not_a_boolean_is_an_error() {
                 "unconfined": value,
             }),
             serde_json::json!({ "command": "true" }),
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::default(),
             trusting_the_workspace(),
             no_programs,
@@ -18833,17 +18905,17 @@ fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
     }
 }
 
-/// SANDBOX-19: the same sentence follows a failure under `standard`, which names the menu too.
+/// SANDBOX-19: the same sentence follows a failure under `workspace-write`, which names the menu too.
 #[test]
-fn the_failure_sentence_names_the_menu_under_standard() {
+fn the_failure_sentence_names_the_menu_under_workspace_write() {
     if cannot_confine_here() {
         return;
     }
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let result = scoped_run(
-        "scopes-failure-sentence-standard",
+        "scopes-failure-sentence-workspace-write",
         serde_json::json!({ "command": "sh -c 'exit 1'" }),
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         no_programs,
@@ -26205,7 +26277,7 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
 
 /// SANDBOX-22: a delegate runs its programs under the mode of the turn that spawned it. The
 /// regression it rejects is a delegate that takes the default: under `off` its program would be
-/// confined when the person chose no profile. The `standard` turn is the control that the file
+/// confined when the person chose no profile. The `workspace-write` turn is the control that the file
 /// cannot be planted from inside the profile; `strict` is the next test's, since both profiles
 /// refuse this write.
 #[test]
@@ -26216,7 +26288,7 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
         return;
     }
     for (mode, written) in [
-        (bravebot_sandbox::SandboxMode::Standard, false),
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, false),
         (bravebot_sandbox::SandboxMode::Off, true),
     ] {
         let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -26283,20 +26355,20 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
     }
 }
 
-/// SANDBOX-22: a delegate of a `strict` turn cannot read what a delegate of a `standard` one reads.
+/// SANDBOX-22: a delegate of a `strict` turn cannot read what a delegate of a `workspace-write` one reads.
 /// The regression it rejects is a delegate that carries only whether its programs are confined and
 /// takes the default for which profile, which the write test above cannot see because both profiles
 /// refuse the same write, and it names a profile directory, since a session with none is held to the listed rows whatever the mode. The program (`cp`) copies a file from beside the session into the session, so
-/// what arrives is the witness; the `standard` turn is the control that the file is readable.
+/// what arrives is the witness; the `workspace-write` turn is the control that the file is readable.
 #[test]
-fn a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads() {
+fn a_delegate_of_a_strict_turn_cannot_read_what_a_workspace_write_one_reads() {
     if bravebot_sandbox::base::Prelude::current().is_none()
         || !bravebot_sandbox::confinement_works_here()
     {
         return;
     }
     for (mode, copied) in [
-        (bravebot_sandbox::SandboxMode::Standard, true),
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, true),
         (bravebot_sandbox::SandboxMode::Strict, false),
     ] {
         let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -49337,7 +49409,7 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
             name,
             &places,
             calls,
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::default(),
             trusting_the_workspace(),
             None,
@@ -49385,7 +49457,7 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
     assert!(held[0].write);
 }
 
-/// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `standard` stage writes beside the session with no
+/// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `workspace-write` stage writes beside the session with no
 /// request, and the trail says it was given what a request would be granted. The regression it
 /// rejects is a run that fails before the planner asks. The same line under `strict`, and under the
 /// default permission mode, are the controls that the write is refused without it.
@@ -49420,7 +49492,7 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
 
     let (turn, landed) = turn_in(
         "path-unasked-bypass",
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
     );
     assert!(landed, "the line did not write beside the session");
@@ -49429,7 +49501,7 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
     for (name, mode, permission) in [
         (
             "path-unasked-default",
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::default(),
         ),
         (
@@ -49458,7 +49530,7 @@ fn a_yes_to_a_path_marks_nothing_trusted_and_is_recorded() {
         "path-trail",
         &places,
         &[asking_for(&places.beside, true)],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,
@@ -49503,7 +49575,7 @@ fn a_yes_to_a_path_does_not_let_the_file_tools_touch_it() {
                 serde_json::json!({ "path": target.display().to_string() }),
             ),
         ],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,
@@ -49526,6 +49598,65 @@ fn a_yes_to_a_path_does_not_let_the_file_tools_touch_it() {
 /// `asked` would refuse, so a path that opens is opened by the mode and by no yes.
 fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedAboutRuns> {
     bravebot_agent::Confining::new(asked, bravebot_agent::PermissionMode::Bypass, false)
+}
+
+/// SANDBOX-22, SANDBOX-28, MODE-4: under `read-only` a request to write a path is refused before
+/// anyone is asked, even in the mode that answers every question, so a program still cannot write
+/// it; a request to read is granted. The control is the same turn under `workspace-write`, where
+/// the request is granted and the write lands. The regression it rejects is a `read-only` session
+/// whose programs get the project back by asking.
+#[test]
+fn under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+    let turn_under = |name: &str, mode| {
+        let places = PathPlaces::new(name);
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            name,
+            &places,
+            &[
+                asking_for(&places.beside, true),
+                running(&places.writing_line()),
+                asking_for(&places.beside, false),
+            ],
+            mode,
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            None,
+            &mut bypassing(&mut asked),
+        );
+        let landed = places.lands().exists();
+        let asked_anyone = !paths.lock().unwrap().is_empty();
+        (turn, landed, asked_anyone)
+    };
+
+    let (control, control_landed, _) = turn_under("read-only-write-control", WorkspaceWrite);
+    assert!(path_result(&control.results[0]).starts_with("approved"));
+    assert!(control_landed, "the control did not write the path");
+
+    let (held, landed, asked_anyone) = turn_under("read-only-write-held", ReadOnly);
+    let said = path_result(&held.results[0]);
+    assert!(
+        said.starts_with("refused") && said.contains("nothing was asked"),
+        "{said}"
+    );
+    assert!(!asked_anyone, "the person was asked");
+    assert!(!landed, "a read-only program wrote the path after asking");
+    // The third request carries all three results; the last `request_path` one is the read's.
+    let read = held.results[2]
+        .rsplit("Result of request_path")
+        .next()
+        .and_then(|tail| tail.split("\"role\"").next())
+        .unwrap_or_default();
+    assert!(
+        read.contains("approved") && !read.contains("refused"),
+        "a request to read was refused: {read}"
+    );
 }
 
 /// PATHREQ-7, TRUST-10, MODE-4: in bypass mode a granted path is also open to the file tools, as
@@ -49572,7 +49703,7 @@ fn under_bypass_a_granted_path_is_open_to_the_file_tools() {
                 }),
             ),
         ],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
         trusting_the_workspace(),
         None,
@@ -49641,7 +49772,7 @@ fn outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools() {
                     serde_json::json!({ "path": target.display().to_string() }),
                 ),
             ],
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             permission,
             trusting_the_workspace(),
             None,
@@ -49682,7 +49813,7 @@ fn under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing() {
             &format!("path-bypass-refused-{at}"),
             &places,
             &[asking_for(std::path::Path::new(named), true)],
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::Bypass,
             trusting_the_workspace(),
             None,
@@ -49711,7 +49842,7 @@ fn under_bypass_a_directory_inside_the_project_is_not_opened() {
         "path-bypass-inside",
         &places,
         &[asking_for(&inside, true)],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
         trusting_the_workspace(),
         None,
@@ -49755,7 +49886,7 @@ fn under_bypass_a_file_or_a_kept_in_workspace_is_not_opened() {
             "path-bypass-not-opened",
             &places,
             &[asking_for(named, false)],
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_agent::PermissionMode::Bypass,
             trusting_the_workspace(),
             None,
@@ -49806,7 +49937,7 @@ fn under_bypass_a_directory_whose_name_is_not_text_is_not_opened() {
         "path-bypass-not-text",
         &places,
         &[asking_for(&link, false)],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
         trusting_the_workspace(),
         None,
@@ -49843,7 +49974,7 @@ fn under_bypass_a_directory_holding_the_project_says_it_ends_checkouts() {
         "path-bypass-holds/project",
         &places,
         &[asking_for(&holder, false)],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
         trusting_the_workspace(),
         None,
@@ -49914,7 +50045,7 @@ fn a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked() {
                 &format!("path-refused-{at}-{write}"),
                 &places,
                 &[asking_for(std::path::Path::new(named), write)],
-                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
                 bravebot_agent::PermissionMode::default(),
                 trusting_the_workspace(),
                 None,
@@ -49942,7 +50073,7 @@ fn a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked() {
         "path-refused-control",
         &places,
         &[asking_for(&places.beside, false)],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,
@@ -49969,7 +50100,7 @@ fn a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace() {
         ),
         (
             "untrusted",
-            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
             bravebot_core::trust::TrustStore::new("/work"),
         ),
     ] {
@@ -50018,7 +50149,7 @@ fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
         "path-declined",
         &places,
         &call,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,
@@ -50036,7 +50167,7 @@ fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
         "path-unattended",
         &places,
         &call,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,
@@ -50057,7 +50188,7 @@ fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
         "path-bypass",
         &places,
         &call,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
         trusting_the_workspace(),
         None,
@@ -50075,7 +50206,7 @@ fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
         "path-allow-rule",
         &places,
         &call,
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         Some(rules(&[], &[], &["Edit(**)", "Bash(*)", "Read(**)"])),
@@ -50101,7 +50232,7 @@ fn the_tool_is_offered_where_runs_are_confined() {
         "path-offered",
         &places,
         &[running("uname")],
-        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
         trusting_the_workspace(),
         None,

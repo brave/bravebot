@@ -176,7 +176,7 @@ cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
 cli-option-sandbox =
-    Jusqu'où peuvent aller les programmes que `run` lance : strict, standard ou off. Un fichier géré peut fixer un plancher que cette option ne peut pas franchir
+    Jusqu'où peuvent aller les programmes que `run` lance : strict, read-only, workspace-write ou off. Un fichier géré peut fixer un plancher que cette option ne peut pas franchir
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
@@ -249,7 +249,7 @@ cli-sandbox-refused-file =
     et une exécution peut être plus stricte que cela mais pas plus souple. Modifiez-le là, ou retirez-le.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé
-    sans bac à sable n'est pas tenu à cela. Lancez avec --sandbox standard ou plus strict, ou sans l'option.
+    sans bac à sable n'est pas tenu à cela. Lancez avec --sandbox workspace-write ou plus strict, ou sans l'option.
 cli-sandbox-refused-network-file =
     sandbox.mode { $asked } dans { $asked_in } est refusé : { $pinned_in } fixe run.network à closed, et
     un programme lancé sans bac à sable n'est pas tenu à cela. Modifiez-le là, ou retirez-le.
@@ -541,7 +541,7 @@ doctor-settings-mcp-declared =
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } dans { $path } n'est pas appliqué : le fichier d'un projet ne peut demander que strict, et les autres modes sont lus uniquement dans ~/.bravebot/settings.json et dans le fichier que --settings nomme
 doctor-settings-sandbox-unreadable =
-    sandbox.mode dans { $path } n'est ni strict, ni standard, ni off : il est lu comme absent et la valeur par défaut s'applique
+    sandbox.mode dans { $path } n'est ni strict, ni read-only, ni workspace-write, ni off : il est lu comme absent et la valeur par défaut s'applique
 doctor-sandbox-mode = mode du bac à sable
 doctor-sandbox-default = { $mode } (par défaut)
 doctor-sandbox-from = { $mode } depuis { $path }
@@ -583,7 +583,7 @@ doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
 doctor-no-network-namespace = espaces de noms réseau : indisponibles ({ $reason }). Une étape sans réseau, ou limitée par sandbox.network.allowedHosts, est refusée ici. Autorisez les espaces de noms utilisateur non privilégiés pour utiliser l'un ou l'autre.
-doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable standard, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
+doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable read-only ou workspace-write, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
 doctor-network = réseau
 doctor-trust-roots = racines de confiance
 doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
@@ -3008,13 +3008,13 @@ session-sandbox-refused-mode =
     être plus stricte que cela mais pas moins.
 session-sandbox-refused-network =
     /sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé sans
-    bac à sable n'y est pas tenu. Utilisez /sandbox standard ou strict.
+    bac à sable n'y est pas tenu. Utilisez /sandbox workspace-write, read-only ou strict.
 ask-sandbox-off-title = bac à sable
 ask-sandbox-off-header = Bac à sable désactivé
 ask-sandbox-off-question = Les programmes que `run` lance n'auront aucun profil : rien ne limitera ce qu'ils lisent, écrivent ou atteignent. Désactiver le bac à sable pour le reste de cette session ?
 ask-sandbox-off-no = Non, garder { $mode }
 ask-sandbox-off-yes = Oui, lancer les programmes sans profil
-ask-sandbox-off-yes-detail = S'applique dès le prochain tour. /sandbox standard ou /sandbox strict le réactive.
+ask-sandbox-off-yes-detail = S'applique dès le prochain tour. /sandbox workspace-write ou /sandbox strict le réactive.
 cli-usage-doctor-push-identity = Demander à GitHub sous quel compte chacune de vos clés ssh pousse
 cli-doctor-push-identity-argument = doctor --push-identity accepte au plus un argument, écrit <hôte>/<propriétaire>.
 doctor-push-no-home = Il n'y a pas de répertoire personnel où chercher des clés ssh.

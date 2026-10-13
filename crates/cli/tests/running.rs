@@ -7304,7 +7304,7 @@ fn the_sandbox_flag_is_read_before_the_run_starts() {
         let (stdout, stderr) = said(&output);
         assert_eq!(output.status.code(), Some(2), "{word:?}: {stdout}{stderr}");
         assert!(
-            stderr.contains("strict, standard, off"),
+            stderr.contains("strict, read-only, workspace-write, off"),
             "{word:?} was refused without naming the modes: {stderr}"
         );
     }
@@ -7324,7 +7324,7 @@ fn the_sandbox_flag_is_read_before_the_run_starts() {
 
 /// SANDBOX-22: the mode `--sandbox` names reaches the description of the programs `run` starts. The
 /// three runs differ only in the flag, so a flag that is read and dropped, leaving every run under
-/// the default, gives `strict` and `off` the sentence `standard` gets and fails here.
+/// the default, gives `strict` and `off` the sentence `workspace-write` gets and fails here.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
@@ -7357,8 +7357,11 @@ fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
         strict.contains("may reach only the directories"),
         "{strict}"
     );
-    let standard = asked_under("standard");
-    assert!(standard.contains("may read this machine"), "{standard}");
+    let workspace_write = asked_under("workspace-write");
+    assert!(
+        workspace_write.contains("may read this machine"),
+        "{workspace_write}"
+    );
     let off = asked_under("off");
     assert!(!off.contains("Programs this tool starts"), "{off}");
     assert!(

@@ -136,7 +136,7 @@
 .sandbox-option { width: min(320px, calc(100vw - 24px)); }
 .permission-option-text,
 .sandbox-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
-/* Standard is the resting state and is drawn like the model beside it. Strict is tinted for as
+/* Workspace write is the resting state and is drawn like the model beside it. Strict is tinted for as
    long as it holds, and its name says the same where colour is not drawn. */
 .composer-toolbar .sandbox-menu { flex: none; }
 .composer .sandbox-trigger {

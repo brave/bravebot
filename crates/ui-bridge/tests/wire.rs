@@ -1398,22 +1398,32 @@ fn accepted_composed_prompts_cross_without_their_text() {
     );
 }
 
-/// SANDBOX-22: a window may name `strict` or `standard` and nothing else. The failure this rejects
-/// is `off`, or a word that is almost a mode, read as one.
+/// SANDBOX-22, COMPAT-001: a window may name `strict`, `read-only` or `workspace-write` and nothing else, and
+/// `standard`, the word an earlier window sent for `workspace-write`, still names it. The failure
+/// this rejects is `off`, or a word that is almost a mode, read as one.
 #[test]
-fn a_window_may_name_strict_or_standard_and_no_other_sandbox_mode() {
+fn a_window_may_name_strict_read_only_or_workspace_write_and_no_other_sandbox_mode() {
     use bravebot_sandbox::SandboxMode;
     assert_eq!(
         wire::sandbox_mode(&json!("strict")).unwrap(),
         SandboxMode::Strict
     );
     assert_eq!(
-        wire::sandbox_mode(&json!("standard")).unwrap(),
-        SandboxMode::Standard
+        wire::sandbox_mode(&json!("read-only")).unwrap(),
+        SandboxMode::ReadOnly
     );
+    for word in ["workspace-write", "standard"] {
+        assert_eq!(
+            wire::sandbox_mode(&json!(word)).unwrap(),
+            SandboxMode::WorkspaceWrite,
+            "{word}"
+        );
+    }
     for refused in [
         json!("off"),
         json!("Strict"),
+        json!("Workspace-write"),
+        json!("Read-only"),
         json!(""),
         json!(null),
         json!(true),
@@ -1421,7 +1431,11 @@ fn a_window_may_name_strict_or_standard_and_no_other_sandbox_mode() {
         assert!(wire::sandbox_mode(&refused).is_err(), "{refused}");
     }
     assert_eq!(wire::sandbox_mode_name(SandboxMode::Strict), "strict");
-    assert_eq!(wire::sandbox_mode_name(SandboxMode::Standard), "standard");
+    assert_eq!(wire::sandbox_mode_name(SandboxMode::ReadOnly), "read-only");
+    assert_eq!(
+        wire::sandbox_mode_name(SandboxMode::WorkspaceWrite),
+        "workspace-write"
+    );
 }
 
 /// SANDBOX-22: the refusal names the managed file and the mode it holds the session to, for each
@@ -1438,7 +1452,7 @@ fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
         because,
     };
     let by_mode = wire::sandbox_refusal(&refused(
-        SandboxMode::Standard,
+        SandboxMode::WorkspaceWrite,
         SandboxMode::Strict,
         Floor::Mode,
     ));
@@ -1447,7 +1461,7 @@ fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
     assert!(by_mode.contains("strict"), "{by_mode}");
     let by_network = wire::sandbox_refusal(&refused(
         SandboxMode::Off,
-        SandboxMode::Standard,
+        SandboxMode::WorkspaceWrite,
         Floor::Network,
     ));
     assert!(

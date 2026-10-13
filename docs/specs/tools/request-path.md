@@ -72,13 +72,17 @@ would be a person's word nobody said.
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 
 <a id="PATHREQ-5"></a>
-### PATHREQ-5: nothing is accepted under `off` or in an untrusted workspace
+### PATHREQ-5: nothing is accepted under `off` or in an untrusted workspace, and no write under `read-only`
 
 Under the sandbox mode `off` there is no profile to add to, and a workspace that is not trusted
-([TRUST-7](../trust-map.md#TRUST-7)) is not one a planner's request reaches the person about. The
-result says the request is not accepted, and nobody is asked.
+([TRUST-7](../trust-map.md#TRUST-7)) is not one a planner's request reaches the person about. Under
+`read-only` a request to write is refused and a request to read is accepted
+([SANDBOX-22](../sandboxing.md#SANDBOX-22)), so the mode that answers every question does not hand
+back the writes the mode withholds. The result says the request is not accepted, and nobody is
+asked.
 
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
+`verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool
@@ -111,7 +115,7 @@ that holds the project is opened, and the result says that no delegate is given 
 is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
 reach the path, so it does not ask the person to run `/add-dir`.
 
-The same mode needs no request for programs either, under the sandbox mode `standard` on macOS and
+The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
 Linux: the lead session's stages are given at the start what a request for writing would be
 granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused before the planner
 asks. The file tools are not given that reach, and the request is still how they are.

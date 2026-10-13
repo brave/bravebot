@@ -1,6 +1,6 @@
 //! The sandbox mode in the desktop front end, as SANDBOX-22 in docs/specs/sandboxing.md has it. A
-//! window chooses `strict` or `standard` for a session with `session.sandbox`, never `off`, and the
-//! choice holds from the session's next turn.
+//! window chooses `strict`, `read-only` or `workspace-write` for a session with `session.sandbox`,
+//! never `off`, and the choice holds from the session's next turn.
 //!
 //! Driven through the binary against a model service of the test's own. Whether a program was held
 //! to its profile is read off what the tool handed back to the model.
@@ -347,17 +347,24 @@ fn settings(scratch: &Scratch, text: &str) {
     std::fs::write(scratch.home().join(".bravebot/settings.json"), text).expect("a home layer");
 }
 
-/// SANDBOX-22: a window chooses `strict` or `standard`, a turn reports the mode it runs under, and
-/// a choice holds for the turns after it. The failures this rejects are a choice acknowledged and
-/// then not applied, and a window drawing a mode the turn is not under.
+/// SANDBOX-22: a window chooses `strict`, `read-only` or `workspace-write`, a turn reports the mode
+/// it runs under, and a choice holds for the turns after it. The failures this rejects are a choice
+/// acknowledged and then not applied, and a window drawing a mode the turn is not under.
 #[test]
 fn a_window_chooses_the_mode_the_next_turn_runs_under() {
     let scratch = Scratch::new("bridge-sandbox-chooses");
     let (endpoint, _rounds) = a_planner(|_, _| None);
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let (session, made) = front.session(&scratch, true);
-    assert_eq!(made["sandboxMode"], "standard", "{made}");
-    assert_eq!(front.ask(&session), "standard");
+    assert_eq!(made["sandboxMode"], "workspace-write", "{made}");
+    assert_eq!(front.ask(&session), "workspace-write");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    assert_eq!(
+        front.sandbox(&session, json!("read-only"))["ok"],
+        json!({"sandboxMode": "read-only"})
+    );
+    assert_eq!(front.ask(&session), "read-only");
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
     assert_eq!(
@@ -370,10 +377,10 @@ fn a_window_chooses_the_mode_the_next_turn_runs_under() {
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
     assert_eq!(
-        front.sandbox(&session, json!("standard"))["ok"],
-        json!({"sandboxMode": "standard"})
+        front.sandbox(&session, json!("workspace-write"))["ok"],
+        json!({"sandboxMode": "workspace-write"})
     );
-    assert_eq!(front.ask(&session), "standard");
+    assert_eq!(front.ask(&session), "workspace-write");
 }
 
 /// SANDBOX-22: a manifest run started from a session runs under the mode the window chose for it,
@@ -385,7 +392,7 @@ fn a_manifest_run_runs_under_the_mode_the_window_chose() {
     let (endpoint, _rounds) = a_planner(|_, _| None);
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let (session, _) = front.session(&scratch, true);
-    assert_eq!(front.plan(&session), "standard");
+    assert_eq!(front.plan(&session), "workspace-write");
 
     front.sandbox(&session, json!("strict"));
     assert_eq!(
@@ -409,6 +416,7 @@ fn a_window_cannot_choose_to_turn_the_sandbox_off() {
     for word in [
         json!("off"),
         json!("Strict"),
+        json!("Read-only"),
         json!("bypass"),
         json!(null),
         json!(1),
@@ -422,6 +430,11 @@ fn a_window_cannot_choose_to_turn_the_sandbox_off() {
     let unknown = front.sandbox("no-such-session", json!("strict"));
     assert_eq!(unknown["error"]["code"], "no_such_session", "{unknown}");
     assert_eq!(front.ask(&session), "strict");
+    assert_eq!(
+        front.sandbox(&session, json!("read-only"))["ok"],
+        json!({"sandboxMode": "read-only"}),
+        "read-only is a mode a window may name"
+    );
 }
 
 /// SANDBOX-22: a choice is the session's own. The failure this rejects is a choice kept for the
@@ -435,7 +448,11 @@ fn a_choice_made_in_one_session_does_not_reach_another_open_beside_it() {
     let (second, _) = front.session(&scratch, true);
 
     front.sandbox(&first, json!("strict"));
-    assert_eq!(front.ask(&second), "standard", "the other session took it");
+    assert_eq!(
+        front.ask(&second),
+        "workspace-write",
+        "the other session took it"
+    );
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
     assert_eq!(front.ask(&first), "strict");
 }
@@ -452,8 +469,8 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
     let (session, made) = front.session(&scratch, true);
     assert_eq!(made["sandboxMode"], "strict", "{made}");
 
-    front.sandbox(&session, json!("standard"));
-    assert_eq!(front.ask(&session), "standard");
+    front.sandbox(&session, json!("workspace-write"));
+    assert_eq!(front.ask(&session), "workspace-write");
     let ended = front.question_or_the_end();
     assert_eq!(ended["event"], "turn.done", "{ended}");
 
@@ -485,7 +502,7 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
 }
 
 /// SANDBOX-22: a program a person approved is held to the mode chosen for that turn. `cat` reads a
-/// file outside the project: `standard` reads the machine and `strict` does not. The failure this
+/// file outside the project: `workspace-write` reads the machine and `strict` does not. The failure this
 /// rejects is the mode reported and not enforced, or enforced for the first turn only.
 #[test]
 fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
@@ -505,7 +522,7 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
     let (session, _) = front.session(&scratch, true);
 
     let mut read = Vec::new();
-    for mode in [None, Some("strict"), Some("standard")] {
+    for mode in [None, Some("strict"), Some("workspace-write")] {
         if let Some(mode) = mode {
             front.sandbox(&session, json!(mode));
         }
@@ -524,6 +541,6 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
     assert_eq!(
         read,
         [true, false, true],
-        "standard reads the file, strict does not, and standard reads it again"
+        "workspace-write reads the file, strict does not, and workspace-write reads it again"
     );
 }

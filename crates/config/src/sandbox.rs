@@ -2,7 +2,7 @@
 //!
 //! Three places can name one: the command line, the person's own settings file and the managed
 //! file. The checkout's two files may only ask for `strict`. A mode is a bundle of what a program
-//! `run` starts may reach, so a line in a checkout that could pick `standard` or `off` would let
+//! `run` starts may reach, so a line in a checkout that could pick `workspace-write` or `off` would let
 //! whoever wrote the checkout loosen what the person who cloned it is held to. Asking for `strict`
 //! takes nothing from that person, on the footing of the `permissions` keys that only refuse
 //! ([`crate::Narrowing`]).
@@ -72,7 +72,7 @@ pub struct Choice {
 impl Default for Choice {
     fn default() -> Self {
         Self {
-            mode: SandboxMode::Standard,
+            mode: SandboxMode::WorkspaceWrite,
             source: Source::Default,
         }
     }
@@ -103,11 +103,11 @@ pub struct Refused {
     pub because: Floor,
 }
 
-/// The mode in force: the flag, else the settings files, else the managed pin, else standard.
+/// The mode in force: the flag, else the settings files, else the managed pin, else workspace-write.
 ///
 /// A mode looser than the managed pin is refused whoever asked for it. One at least as strict is
 /// kept, so a person may be stricter than the machine requires. A managed file that pins the
-/// network closed is a floor of `standard` as well, since `off` would otherwise open it.
+/// network closed is a floor of `workspace-write` as well, since `off` would otherwise open it.
 pub fn resolve(
     flag: Option<SandboxMode>,
     settings: &crate::Settings,
@@ -158,8 +158,8 @@ fn floor(managed: &crate::Managed) -> Option<Held> {
     let file = managed.path().map(Path::to_path_buf)?;
     let closed = managed.network() == Some(bravebot_sandbox::network::Network::Closed);
     let (mode, because) = match managed.sandbox() {
-        Some(pinned) if pinned <= SandboxMode::Standard || !closed => (pinned, Floor::Mode),
-        _ if closed => (SandboxMode::Standard, Floor::Network),
+        Some(pinned) if pinned != SandboxMode::Off || !closed => (pinned, Floor::Mode),
+        _ if closed => (SandboxMode::WorkspaceWrite, Floor::Network),
         _ => return None,
     };
     Some(Held {
@@ -191,7 +191,7 @@ pub fn allowed_in_session(mode: SandboxMode, managed: &crate::Managed) -> Result
 /// The mode a window's turn runs under, which has no flag to carry and no way to say it was refused.
 ///
 /// What the settings say, the managed pin being the floor where they went under it. `off` is
-/// read as `standard`: the window has no way to show that nothing confines a program, and a
+/// read as `workspace-write`: the window has no way to show that nothing confines a program, and a
 /// setting that silently removed the only thing between a model and the machine is not one a
 /// person looking at a window has agreed to. The command line says so on its opening line.
 pub fn for_a_window(settings: &crate::Settings, managed: &crate::Managed) -> SandboxMode {
@@ -199,14 +199,22 @@ pub fn for_a_window(settings: &crate::Settings, managed: &crate::Managed) -> San
         Ok(choice) => choice.mode,
         Err(refused) => refused.pinned,
     };
-    mode.min(SandboxMode::Standard)
+    confined(mode)
+}
+
+/// `mode`, or `workspace-write` where it is `off`, which a window has no way to show.
+fn confined(mode: SandboxMode) -> SandboxMode {
+    match mode {
+        SandboxMode::Off => SandboxMode::WorkspaceWrite,
+        mode => mode,
+    }
 }
 
 /// The mode a window's turn runs under where the person has chosen one for the session.
 ///
 /// A choice is a person's word, so it outranks the settings as `/sandbox` does, and it is held to
 /// the managed floor at the turn and not only when it was made: a pin written after the choice
-/// still binds the next turn, and the turn then runs at the pin. `off` is read as `standard`, as in
+/// still binds the next turn, and the turn then runs at the pin. `off` is read as `workspace-write`, as in
 /// [`for_a_window`].
 pub fn for_a_window_choosing(
     chosen: Option<SandboxMode>,
@@ -214,7 +222,7 @@ pub fn for_a_window_choosing(
     managed: &crate::Managed,
 ) -> SandboxMode {
     match chosen {
-        Some(mode) if allowed_in_session(mode, managed).is_ok() => mode.min(SandboxMode::Standard),
+        Some(mode) if allowed_in_session(mode, managed).is_ok() => confined(mode),
         _ => for_a_window(settings, managed),
     }
 }

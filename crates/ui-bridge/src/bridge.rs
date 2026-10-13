@@ -977,7 +977,7 @@ impl Bridge {
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
-    /// `strict` or `standard`: a window has no way to show that nothing confines a program, so
+    /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
     /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
     /// is read again when the turn starts. A turn already running keeps the mode it began with.
     fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -3214,10 +3214,10 @@ mod sandbox_tests {
     use super::*;
 
     /// SANDBOX-22: a managed `strict` pin is a floor a window cannot choose under. `strict` is
-    /// accepted, `standard` is a bad request, and the session keeps `strict`. The failure this
+    /// accepted, `workspace-write` is a bad request, and the session keeps `strict`. The failure this
     /// rejects is a window's choice that the managed file does not bind.
     #[test]
-    fn a_managed_strict_pin_refuses_a_window_choosing_standard() {
+    fn a_managed_strict_pin_refuses_a_window_choosing_workspace_write() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("managed.json");
         std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).unwrap();
@@ -3247,7 +3247,7 @@ mod sandbox_tests {
             json!({"sandboxMode": "strict"})
         );
         let refused = bridge
-            .set_sandbox_mode_under(&choose("standard"), &managed)
+            .set_sandbox_mode_under(&choose("workspace-write"), &managed)
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
         assert_eq!(
