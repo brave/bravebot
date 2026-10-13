@@ -35,7 +35,11 @@ the `run` tool takes a `scopes` argument, pass `scopes: ["remote", "signing"]` o
    instead; do not widen it to `check-all-local`, which CI repeats.
 5. `python3 agents/skills/rebase/rebase.py push <pr>`. When GitHub refuses the push because ssh
    offered a key without access, it retries once with each other key `ssh-add -L` lists and reports
-   the one that worked. With no usable key it prints GitHub's refusal.
+   the one that worked. With no usable key it prints GitHub's refusal. It refuses when the pull
+   request has signed commits and the push would leave more of its commits unsigned than it has
+   now. Then stop and report the signing error to the person, as
+   [When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-sign) in the pr-fix
+   skill says.
 
 Report the old and new head, one line per resolved conflict on how both sides were kept, and which
 checks ran.

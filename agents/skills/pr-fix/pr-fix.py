@@ -77,6 +77,7 @@ remember_resolved = pr_worktree.remember_resolved
 package_of = pr_worktree.package_of
 plan = pr_worktree.plan
 describe = pr_worktree.describe
+signed = pr_worktree.signed
 
 
 # What `gh pr view` is asked for differs by script.
@@ -148,18 +149,6 @@ def base_marker(tree):
 def mark_base(tree):
     """Record where the branch stands once it is on its base, so later work can be told apart."""
     base_marker(tree).write_text(git("rev-parse", "HEAD", cwd=tree), encoding="utf-8")
-
-
-def signed(sha, cwd):
-    """Whether the commit carries a signature, which needs no key to tell."""
-    headers = git("cat-file", "commit", sha, cwd=cwd).split("\n\n", 1)[0]
-    return any(line.startswith("gpgsig") for line in headers.splitlines())
-
-
-def signatures(onto, head, cwd):
-    """(signed, unsigned) counts for the commits on `head` that `onto` lacks."""
-    flags = [signed(sha, cwd) for sha in git("rev-list", f"{onto}..{head}", cwd=cwd).splitlines()]
-    return flags.count(True), flags.count(False)
 
 
 def changed(tree):
@@ -318,23 +307,8 @@ def push(pr):
     if now == tip:
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
-    had_signed, had_unsigned = signatures(pr.onto, tip, tree)
-    unsigned = signatures(pr.onto, now, tree)[1]
-    if had_signed and unsigned > had_unsigned:
-        die(
-            f"{pr.tip} has signed commits and the push would leave {unsigned} commit(s) unsigned, so it "
-            "would replace the author's signed commits with unsigned ones or add unsigned commits to them. "
-            "Report the signing error to the person. Do not rebase the pull request on GitHub with "
-            "`update-branch`, which also leaves its commits unsigned."
-        )
-    # The lease is the head `start` fetched, so a push made since is refused rather than lost.
-    git(
-        "push",
-        f"--force-with-lease=refs/heads/{pr.head}:{tip}",
-        pr.head_remote,
-        f"HEAD:refs/heads/{pr.head}",
-        cwd=tree,
-    )
+    pr_worktree.refuse_unsigning(pr, tip, now, tree)
+    pr_worktree.push_head(pr, tree, tip)
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0
 

@@ -3,7 +3,6 @@
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -23,25 +22,11 @@ def _load(name, path):
     return module
 
 
-# The git and quietly helpers are shared with the other selftests of this pair.
+# The git, quietly, signing and ssh helpers are shared with the other selftests of this pair.
 helpers = _load("pr_worktree_selftest", HERE.parents[1] / "pr_worktree_selftest.py")
 git = helpers.git
 quietly = helpers.quietly
-
-
-def sign_head(cwd):
-    """Replace HEAD with the same commit carrying a signature header; verifying one needs a key, telling one is there does not."""
-    raw = subprocess.run(
-        ["git", "cat-file", "commit", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout
-    headers, message = raw.split("\n\n", 1)
-    signature = "gpgsig -----BEGIN SSH SIGNATURE-----\n selftest\n -----END SSH SIGNATURE-----"
-    forged = f"{headers}\n{signature}\n\n{message}"
-    sha = subprocess.run(
-        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
-        cwd=cwd, check=True, capture_output=True, text=True, input=forged,
-    ).stdout.strip()
-    git("reset", "-q", "--hard", sha, cwd=cwd)
+sign_head = helpers.sign_head
 
 
 def world(root, signed=False):
@@ -126,6 +111,17 @@ def test_a_push_made_since_start_is_refused_rather_than_overwritten():
         code, out = quietly(pr_fix.push, pr())
         assert code == 1, out
         assert git("log", "-1", "--format=%s", "feature", cwd=fork) == "pushed meanwhile"
+
+
+def test_a_push_github_refuses_is_retried_with_each_other_key_the_agent_holds():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, remote = helpers.an_ssh_remote(Path(tmp).resolve())
+        keys = ["ssh-ed25519 AAAAbad bot@example.invalid", "ssh-ed25519 AAAAgood person@example.invalid"]
+        with helpers.an_agent_holding(keys):
+            code, out = quietly(pr_fix.push, pr)
+        assert code == 0 and "person@example.invalid" in out, out
+        assert "bot@example.invalid" not in out, out
+        assert git("rev-parse", "feature", cwd=remote) == git("rev-parse", "HEAD", cwd=pr.tree)
 
 
 def test_a_branch_already_rebased_here_is_rebased_again_rather_than_refused():
