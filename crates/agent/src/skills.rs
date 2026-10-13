@@ -797,29 +797,47 @@ fn discover_workspace<S: Sink>(
     // are read least specific first and a more specific one later in the list may offer the same
     // skill. Reporting in place would tell a person a skill was not loaded while they can see that
     // it was: the layout `make init` creates in this repository symlinks the same skills into all
-    // three, so that notice would be wrong on every turn.
-    let mut skipped: Vec<(String, usize)> = Vec::new();
-    for root in WORKSPACE_SKILL_ROOTS {
-        discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
+    // three, so with `.bravebot/skills` vouched for that notice would be wrong on every turn.
+    let roots: Vec<String> = WORKSPACE_SKILL_ROOTS
+        .iter()
+        .map(|root| root.to_string())
+        // After the root's, so a skill under a directory the session has worked in shadows the
+        // project's of the same name, the deeper directory last (INSTR-14).
+        .chain(
+            workspace
+                .touched_directories()
+                .into_iter()
+                .map(|directory| format!("{directory}/{WORKSPACE_SKILLS}")),
+        )
+        .collect();
+    let mut skipped = Vec::new();
+    for (position, root) in roots.iter().enumerate() {
+        if let Some(held) = discover_workspace_root(policy, workspace, root, catalogue, notices) {
+            skipped.push((position, held));
+        }
     }
-    // After the root's, so a skill under a directory the session has worked in shadows the
-    // project's of the same name, the deeper directory last (INSTR-14).
-    for directory in workspace.touched_directories() {
-        let root = format!("{directory}/{WORKSPACE_SKILLS}");
-        discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
-    }
-    // The directory names of the project's skills on the list, every one of which a vouched root
-    // offered. A built-in or a skill of the user's own is under no vouched root and covers nothing.
-    let offered: BTreeSet<&str> = catalogue
+    // Each project skill on the list, by the position of the root it came from and its directory
+    // name. A built-in or a skill of the user's own is under no project root and covers nothing.
+    let listed: Vec<(usize, &str)> = catalogue
         .iter()
         .filter(|skill| skill.source == Source::Workspace)
-        .filter_map(|skill| skill.directory.as_deref()?.rsplit_once('/'))
-        .map(|(_, name)| name)
+        .filter_map(|skill| {
+            let (from, name) = skill.directory.as_deref()?.rsplit_once('/')?;
+            Some((roots.iter().position(|root| root == from)?, name))
+        })
         .collect();
-    for (root, held) in skipped {
+    for (position, held) in skipped {
+        let root = &roots[position];
+        // Only a skill from a root read after this one could have replaced its skill, so one from a
+        // less specific root covers nothing (INSTR-13).
+        let offered: BTreeSet<&str> = listed
+            .iter()
+            .filter(|(from, _)| *from > position)
+            .map(|(_, name)| *name)
+            .collect();
         // Only names from the list are looked up in the untrusted root, so no name of its own is
         // held or compared (SKILL-4).
-        let path = workspace.root().join(&root);
+        let path = workspace.root().join(root);
         let covered = offered
             .iter()
             .filter(|name| is_skill_directory(&path.join(name)))
@@ -836,15 +854,15 @@ fn discover_workspace<S: Sink>(
     }
 }
 
-/// Skills from one of a project's skill directories, labelled by the trust map.
+/// Skills from one of a project's skill directories, labelled by the trust map, or how many skill
+/// directories it holds where the trust map does not vouch for it and it holds any.
 fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     skills_root: &str,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-    skipped: &mut Vec<(String, usize)>,
-) {
+) -> Option<usize> {
     let root = workspace.root().join(skills_root);
 
     // Checked before anything is enumerated, and checked on the label rather than on any
@@ -854,11 +872,7 @@ fn discover_workspace_root<S: Sink>(
     if !policy.trusts_path(skills_root) {
         // Counted with no entry's name held, so the caller has nothing of this directory's to
         // compare, and only the count reaches a screen (SKILL-6).
-        let held = skill_entries(&root).count();
-        if held > 0 {
-            skipped.push((skills_root.to_string(), held));
-        }
-        return;
+        return Some(skill_entries(&root).count()).filter(|held| *held > 0);
     }
 
     let names = skill_directories(&root);
@@ -937,6 +951,7 @@ fn discover_workspace_root<S: Sink>(
             )));
         }
     }
+    None
 }
 
 /// The most files a skill's listing names, and the deepest a directory under it is searched.
