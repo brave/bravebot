@@ -3879,6 +3879,41 @@ fn list_rewind_points(session: &mut Session) {
     }
 }
 
+/// Build what the session amounts to, as a record is written, and hand it to `then`.
+///
+/// Every write of the session's record takes the same fifteen fields from the same places, so
+/// they are named once. `Standing` is `Copy` and borrows temporaries, so it cannot be returned;
+/// a closure is how a caller gets to use it.
+fn with_standing<R>(
+    session: &Session,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+    then: impl FnOnce(bravebot_session::sessions::Standing<'_>) -> R,
+) -> R {
+    then(bravebot_session::sessions::Standing {
+        history: Some(session.turn_history()),
+        conversation: &conversation.snapshot(),
+        turns: session.turns,
+        tokens: session.tokens,
+        spend: session.spend_by_turn(),
+        timing: session.timing_by_turn(),
+        model: session.served_model(),
+        todos: &session.todos_by_turn(),
+        asides: session.asides(),
+        trust,
+        programs,
+        directories: &workspace.added_directories(),
+        // None, and it stays none however many runs this session starts. Its presence is what
+        // makes a record a manifest run, and this record is a conversation that can be resumed;
+        // the run has a record of its own where that field is filled.
+        manifest: None,
+        rewind: session.rewind.points(),
+        checkouts: &workspace.session_checkouts(),
+    })
+}
+
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
 ///
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
@@ -3953,25 +3988,13 @@ fn rewind(
     {
         stored.discard_unwritten(&snapshot.title);
     } else {
-        stored.save(
-            &snapshot.title,
-            bravebot_session::sessions::Standing {
-                history: Some(session.turn_history()),
-                conversation: &conversation.snapshot(),
-                turns: session.turns,
-                tokens: session.tokens,
-                spend: session.spend_by_turn(),
-                timing: session.timing_by_turn(),
-                model: session.served_model(),
-                todos: &session.todos_by_turn(),
-                asides: session.asides(),
-                trust,
-                programs,
-                directories: &workspace.added_directories(),
-                manifest: None,
-                rewind: session.rewind.points(),
-                checkouts: &workspace.session_checkouts(),
-            },
+        with_standing(
+            session,
+            conversation,
+            trust,
+            programs,
+            workspace,
+            |standing| stored.save(&snapshot.title, standing),
         );
     }
     // Where it landed rather than how far it came, because that is the fact a person checks the
@@ -4586,25 +4609,13 @@ fn event_loop(
                     // leave, and not only once a turn has been had.
                     if session.turns > 0 || stored.resumable().is_some() {
                         let title = stored.title().to_string();
-                        stored.save(
-                            &title,
-                            bravebot_session::sessions::Standing {
-                                history: Some(session.turn_history()),
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &answers.trust,
-                                programs: &answers.programs,
-                                directories: &workspace.added_directories(),
-                                manifest: None,
-                                rewind: session.rewind.points(),
-                                checkouts: &workspace.session_checkouts(),
-                            },
+                        with_standing(
+                            &session,
+                            &conversation,
+                            &answers.trust,
+                            &answers.programs,
+                            &workspace,
+                            |standing| stored.save(&title, standing),
                         );
                     }
                 }
@@ -4622,25 +4633,13 @@ fn event_loop(
                     |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
                 );
                 if changed != Changed::Stayed {
-                    stored.move_to(
-                        workspace.root(),
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
-                        },
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| stored.move_to(workspace.root(), standing),
                     );
                 }
                 // After the move, so the session picked up again is picked up where it went.
@@ -4857,25 +4856,13 @@ fn event_loop(
                 // Written now rather than at the end of the next turn: the shortening is the
                 // change, and a session that compacted and then slept should resume compacted.
                 let title = stored.title().to_string();
-                stored.save(
-                    &title,
-                    bravebot_session::sessions::Standing {
-                        history: Some(session.turn_history()),
-                        conversation: &conversation.snapshot(),
-                        turns: session.turns,
-                        tokens: session.tokens,
-                        spend: session.spend_by_turn(),
-                        timing: session.timing_by_turn(),
-                        model: session.served_model(),
-                        todos: &session.todos_by_turn(),
-                        asides: session.asides(),
-                        trust: &answers.trust,
-                        programs: &answers.programs,
-                        directories: &workspace.added_directories(),
-                        manifest: None,
-                        rewind: session.rewind.points(),
-                        checkouts: &workspace.session_checkouts(),
-                    },
+                with_standing(
+                    &session,
+                    &conversation,
+                    &answers.trust,
+                    &answers.programs,
+                    &workspace,
+                    |standing| stored.save(&title, standing),
                 );
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
@@ -4918,25 +4905,13 @@ fn event_loop(
                     // a question asked before the first prompt was asked over an empty exchange.
                     if session.turns > 0 {
                         let title = stored.title().to_string();
-                        stored.save(
-                            &title,
-                            bravebot_session::sessions::Standing {
-                                history: Some(session.turn_history()),
-                                conversation: &conversation.snapshot(),
-                                turns: session.turns,
-                                tokens: session.tokens,
-                                spend: session.spend_by_turn(),
-                                timing: session.timing_by_turn(),
-                                model: session.served_model(),
-                                todos: &session.todos_by_turn(),
-                                asides: session.asides(),
-                                trust: &answers.trust,
-                                programs: &answers.programs,
-                                directories: &workspace.added_directories(),
-                                manifest: None,
-                                rewind: session.rewind.points(),
-                                checkouts: &workspace.session_checkouts(),
-                            },
+                        with_standing(
+                            &session,
+                            &conversation,
+                            &answers.trust,
+                            &answers.programs,
+                            &workspace,
+                            |standing| stored.save(&title, standing),
                         );
                         stored.append_audit(session.turns, &events);
                     }
@@ -4980,30 +4955,15 @@ fn event_loop(
                     // the change, and a session that started one and then slept should resume
                     // with the note saying where it went still in the transcript. The run's own
                     // record is a separate file that `manifest_animated` already wrote.
-                    crate::manifest_run::save_session(
-                        &mut stored,
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            // None, and it stays none however many runs this session starts.
-                            // Its presence is what makes a record a manifest run, and this
-                            // record is a conversation that can be resumed; the run has a
-                            // record of its own where that field is filled.
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| {
+                            crate::manifest_run::save_session(&mut stored, standing, &events)
                         },
-                        &events,
                     );
                 }
                 needs_draw = true;
@@ -5198,25 +5158,13 @@ fn event_loop(
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never
                     // woke. Best-effort, like everything else under ~/.bravebot.
-                    stored.save(
-                        &prompt,
-                        bravebot_session::sessions::Standing {
-                            history: Some(session.turn_history()),
-                            conversation: &conversation.snapshot(),
-                            turns: session.turns,
-                            tokens: session.tokens,
-                            spend: session.spend_by_turn(),
-                            timing: session.timing_by_turn(),
-                            model: session.served_model(),
-                            todos: &session.todos_by_turn(),
-                            asides: session.asides(),
-                            trust: &answers.trust,
-                            programs: &answers.programs,
-                            directories: &workspace.added_directories(),
-                            manifest: None,
-                            rewind: session.rewind.points(),
-                            checkouts: &workspace.session_checkouts(),
-                        },
+                    with_standing(
+                        &session,
+                        &conversation,
+                        &answers.trust,
+                        &answers.programs,
+                        &workspace,
+                        |standing| stored.save(&prompt, standing),
                     );
                     stored.append_audit(session.turns, &events);
 
@@ -5253,25 +5201,13 @@ fn event_loop(
                 // Saved like a turn, and for the same reason: the command is in the conversation
                 // now, so a session resumed without it would have the planner referring to output
                 // it can no longer see.
-                stored.save(
-                    &line,
-                    bravebot_session::sessions::Standing {
-                        history: Some(session.turn_history()),
-                        conversation: &conversation.snapshot(),
-                        turns: session.turns,
-                        tokens: session.tokens,
-                        spend: session.spend_by_turn(),
-                        timing: session.timing_by_turn(),
-                        model: session.served_model(),
-                        todos: &session.todos_by_turn(),
-                        asides: session.asides(),
-                        trust: &answers.trust,
-                        programs: &answers.programs,
-                        directories: &workspace.added_directories(),
-                        manifest: None,
-                        rewind: session.rewind.points(),
-                        checkouts: &workspace.session_checkouts(),
-                    },
+                with_standing(
+                    &session,
+                    &conversation,
+                    &answers.trust,
+                    &answers.programs,
+                    &workspace,
+                    |standing| stored.save(&line, standing),
                 );
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
@@ -6521,25 +6457,13 @@ fn branch_session(
             session.clear_goal();
             session.stop_watches();
             let title = stored.title().to_string();
-            stored.save(
-                &title,
-                bravebot_session::sessions::Standing {
-                    history: Some(session.turn_history()),
-                    conversation: &conversation.snapshot(),
-                    turns: session.turns,
-                    tokens: session.tokens,
-                    spend: session.spend_by_turn(),
-                    timing: session.timing_by_turn(),
-                    model: session.served_model(),
-                    todos: &session.todos_by_turn(),
-                    asides: session.asides(),
-                    trust: &answers.trust,
-                    programs: &answers.programs,
-                    directories: &workspace.added_directories(),
-                    manifest: None,
-                    rewind: session.rewind.points(),
-                    checkouts: &workspace.session_checkouts(),
-                },
+            with_standing(
+                session,
+                conversation,
+                &answers.trust,
+                &answers.programs,
+                workspace,
+                |standing| stored.save(&title, standing),
             );
             session.note(t!(
                 session_branched,
