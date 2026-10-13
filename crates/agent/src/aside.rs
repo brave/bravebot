@@ -386,13 +386,7 @@ pub fn ask<S: Sink>(
     let limit = question.limit;
     let request = ChatRequest::new(model, question.into_request()).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Minted before the request goes out, because the gate needs the policy and the policy is
     // lent to the client for the duration of the call. One witness for the whole answer rather
