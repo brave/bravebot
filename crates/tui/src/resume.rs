@@ -403,16 +403,9 @@ fn pick<B: Backend>(
     current: Option<&str>,
     from_pr: Option<&str>,
 ) -> Choice {
-    let mut listed = sessions::list(project);
-    listed.retain(|session| Some(session.id.as_str()) != current);
-    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
-    picker.within_a_session = current.is_some();
-    if let Some(wanted) = from_pr {
-        picker = picker.from_pull_request(wanted);
-    }
-    if picker.is_empty() {
+    let Some(mut picker) = opened(project, current, from_pr) else {
         return Choice::Fresh;
-    }
+    };
 
     loop {
         if terminal.draw(|frame| draw(frame, &picker)).is_err() {
@@ -455,6 +448,21 @@ fn pick<B: Backend>(
             }
         }
     }
+}
+
+/// The list `pick` shows, or `None` where there is nothing to show.
+///
+/// A named pull request is shown even with no session listed at all: that none is linked to it is
+/// the answer, and it has to be seen.
+fn opened(project: &Path, current: Option<&str>, from_pr: Option<&str>) -> Option<Picker> {
+    let mut listed = sessions::list(project);
+    listed.retain(|session| Some(session.id.as_str()) != current);
+    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
+    picker.within_a_session = current.is_some();
+    if let Some(wanted) = from_pr {
+        picker = picker.from_pull_request(wanted);
+    }
+    (!picker.is_empty() || picker.from_pr.is_some()).then_some(picker)
 }
 
 /// Draw the list.
@@ -1054,5 +1062,35 @@ mod tests {
         let screen = drawn(&by_title);
         assert!(screen.contains("Tidy the docs"), "{screen}");
         assert!(!screen.contains("ledger"), "{screen}");
+    }
+
+    /// A directory with no sessions is where a plain `--resume` has nothing to offer and starts an
+    /// ordinary session, but `--from-pr` there asked whether any session is linked to one pull
+    /// request, and a new session that never mentions it does not answer that.
+    #[test]
+    fn with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let project = crate::test_profile::project("never-used");
+        std::fs::create_dir_all(&project).expect("a project directory");
+
+        assert!(
+            opened(&project, None, None).is_none(),
+            "--resume drew an empty list"
+        );
+        let picker = opened(&project, None, Some("42")).expect("--from-pr drew no list");
+        // Wide enough that the scratch profile's long path leaves the pull request on its row.
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(400, 12)).expect("a terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker))
+            .expect("a frame");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains(t!(resume_nothing_matches)), "{screen}");
+        assert!(
+            screen.contains(&t!(resume_from_pr, pull_request = "42")),
+            "{screen}"
+        );
     }
 }
