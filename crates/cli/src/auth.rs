@@ -16,6 +16,7 @@ use bravebot_config::keys::{self, Keys};
 use bravebot_config::provider::{Credential, Provider, Source};
 use bravebot_config::{Config, ConfigError, Managed, Settings, env_var};
 use bravebot_i18n::t;
+use bravebot_net::Transport;
 use bravebot_skus::StoredCredentials;
 use bravebot_skus::store::StoreError;
 use std::io::{BufRead, IsTerminal, Write};
@@ -230,7 +231,7 @@ fn sign_in(way: Way, rest: &[String]) -> ExitCode {
             ),
             // One channel, where `import-leo-creds` would take the last of several.
             [_, extra, ..] => unexpected(way, extra),
-            _ => crate::import_leo_creds(rest),
+            _ => import_leo_creds(rest),
         },
         Way::Bedrock | Way::Import if !rest.is_empty() => unexpected(way, &rest[0]),
         Way::Bedrock => bedrock(),
@@ -1083,7 +1084,7 @@ fn logout(args: &[String]) -> ExitCode {
     match way {
         // Allowed in an incognito session, as INCOG-7 allows forgetting an import: it leaves less
         // behind, not more. The gateway key on the same footing.
-        Way::Leo => crate::import_leo_creds(&["--forget".to_string()]),
+        Way::Leo => import_leo_creds(&["--forget".to_string()]),
         Way::Bedrock => fail(Ending::Argument, t!(auth_logout_bedrock)),
         Way::Import => fail(Ending::Argument, t!(auth_logout_import)),
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
@@ -1156,6 +1157,141 @@ fn forgotten(stored: &Keys, named: Option<&str>) -> Result<String, String> {
         (None, Some(only), None) => Ok(only.to_string()),
         (None, _, _) => Err(t!(auth_logout_gateway_which, ids = listed(stored.ids()))),
     }
+}
+
+/// Import a Leo Premium subscription from a local Brave install.
+///
+/// This registers as an *additional* device rather than taking the browser's credentials, so the
+/// browser keeps its own and nothing it holds is spent. Only the order id is read from the
+/// profile; the credentials themselves are minted here and signed by Brave's service.
+pub(crate) fn import_leo_creds(args: &[String]) -> ExitCode {
+    let mut channel = None;
+    let mut forget = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--forget" => forget = true,
+            other if other.starts_with('-') => {
+                return fail(Ending::Argument, t!(cli_unknown_option, flag = other));
+            }
+            other => match bravebot_skus::Channel::parse(other) {
+                Some(parsed) => channel = Some(parsed),
+                None => {
+                    let refused = fail(Ending::Argument, t!(leo_unknown_channel, channel = other));
+                    eprintln!("{}", t!(leo_expected_channel));
+                    return refused;
+                }
+            },
+        }
+    }
+
+    // There is one stored batch, so forgetting takes no channel: naming one would suggest
+    // `--forget nightly` leaves a stable import in place, and it does not. It is refused rather
+    // than ignored, before anything is removed.
+    if forget {
+        if channel.is_some() {
+            return fail(Ending::Argument, t!(leo_forget_takes_no_channel));
+        }
+        return match bravebot_skus::store::clear() {
+            Ok(()) => {
+                println!("{}", t!(leo_forgotten));
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(Ending::Failed, err),
+        };
+    }
+
+    // Stable is what someone importing without saying which install means.
+    let channel = channel.unwrap_or(bravebot_skus::Channel::Stable);
+
+    // Refused rather than silently skipped, and refused before the device is registered so a
+    // batch is not minted that nothing will ever be able to spend. An import is a write by
+    // definition: a credential that did not outlive the session would not be an import. It is the
+    // one command an incognito session cannot carry out rather than merely decline to record.
+    // Forgetting above is allowed: removing a stored secret leaves less behind, not more.
+    if bravebot_core::incognito::engaged() {
+        return fail(Ending::Failed, t!(leo_not_while_incognito));
+    }
+
+    // Warned about early: the import would otherwise succeed and then never be used, since a
+    // credential is only ever sent to the premium host.
+    match Config::from_env() {
+        Ok(config) if config.premium_endpoint.is_none() => {
+            eprintln!("{}", t!(leo_no_premium_endpoint));
+            eprintln!(
+                "         {}",
+                t!(
+                    leo_set_and_rebuild,
+                    variable = bravebot_config::env_var::PREMIUM_ENDPOINT
+                )
+            );
+        }
+        _ => {}
+    }
+
+    println!("{}", t!(leo_looking, channel = channel.as_str()));
+
+    let order = match bravebot_skus::find_leo_order(channel) {
+        Ok(order) => order,
+        Err(err) => return fail(Ending::Failed, err),
+    };
+
+    println!(
+        "{}",
+        t!(
+            leo_found,
+            environment = order.environment.as_str(),
+            order = &order.order_id
+        )
+    );
+    println!("{}", t!(leo_registering));
+
+    // A fresh request id is what makes this a new device rather than a claim on an existing
+    // device's batch.
+    let request_id = bravebot_skus::new_request_id();
+
+    let registration = match bravebot_skus::device::register(
+        order.environment,
+        &order.order_id,
+        &request_id,
+        Transport::shared().agent_config_builder(),
+    ) {
+        Ok(registration) => registration,
+        Err(err) => return fail(Ending::Failed, err),
+    };
+
+    let credentials: bravebot_skus::StoredCredentials = registration.into();
+    let count = credentials.credentials.len();
+    let last = credentials
+        .credentials
+        .iter()
+        .map(|c| c.valid_to.as_str())
+        .max()
+        .unwrap_or("unknown")
+        .to_string();
+
+    if let Err(err) = bravebot_skus::store::save(&credentials) {
+        return fail(Ending::Failed, err);
+    }
+
+    // Named so the user knows where the secret went: it is an ordinary file now, and one they may
+    // want to inspect, exclude from a backup, or delete by hand.
+    let where_stored = match bravebot_skus::store::path() {
+        Ok(path) => path.display().to_string(),
+        Err(err) => return fail(Ending::Failed, err),
+    };
+
+    println!(
+        "{}",
+        t!(
+            leo_stored,
+            count = count,
+            path = where_stored,
+            expiry = last
+        )
+    );
+    println!("{}", t!(leo_browser_untouched));
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

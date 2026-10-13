@@ -15,6 +15,7 @@ governs:
   - crates/agent/src/scratch.rs
   - crates/agent/src/trusted.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/doctor.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
   - crates/ui-files/src/names.rs

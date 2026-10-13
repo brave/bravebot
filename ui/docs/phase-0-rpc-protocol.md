@@ -145,7 +145,7 @@ library does not change. Two rules preserve that, and reviewers should enforce t
 
 Honest limits. Two things could eventually want an upstream change, and neither blocks v1:
 
-- **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
+- **Structured `doctor` output.** The checks live in `crates/cli/src/doctor.rs`, in a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
 - **New approval types.** Command, fetch, language-server, plan, credential-exposure and MCP
@@ -825,7 +825,7 @@ was asked to be kept.
 The app will otherwise fail opaquely on a machine with no credentials, which is the first
 machine anyone will try it on.
 
-**v1 shells out.** The checks live in `crates/cli/src/main.rs`, a binary, so they cannot
+**v1 shells out.** The checks live in `crates/cli/src/doctor.rs`, in a binary, so they cannot
 be called as a library without an upstream change (§2.3). The bridge runs `bravebot doctor`,
 captures stdout and stderr, and returns their combined text:
 

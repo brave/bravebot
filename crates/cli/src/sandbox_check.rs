@@ -120,7 +120,7 @@ mod unix {
         };
         let (lines, ending) = facts(&report);
         for (name, value) in lines {
-            crate::fact(name, value);
+            crate::doctor::fact(name, value);
         }
         // Kept when a row failed, since its log is where the reason is.
         if ending.ok() {
