@@ -1801,7 +1801,12 @@ directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)
 grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` holds back writes on
 this machine and nothing else: the network follows [SANDBOX-20](#SANDBOX-20) as in every mode, and a
 stage whose argv carries the remote scope ([SANDBOX-16](#SANDBOX-16)), such as `git push` or
-`gh pr create`, still reaches the remote with the person's credentials. Under `read-only` the file
+`gh pr create`, still reaches the remote with the person's credentials. It holds back the programs
+`run` starts and the file tools below, and no process a person approved outside them: a language
+server runs with the person's own access in every mode ([LSP-5](tools/lsp.md#LSP-5)), so the build
+tooling it runs, a crate's `build.rs` among them, may write anywhere the person can, the session's
+directories included, and a local MCP server writes its own home and the directory its declaration
+names in every mode ([SERVERS-10](mcp-servers.md#SERVERS-10)). Under `read-only` the file
 tools write nothing either, in every permission mode, accepting edits and bypassing included:
 `write_file`, `edit_file`, `download_url` and `apply_checkout` are refused before the tool runs and
 nobody is asked, a manifest plan with a step that writes a file is refused before it is put to
