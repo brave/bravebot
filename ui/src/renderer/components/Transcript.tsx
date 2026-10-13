@@ -1807,7 +1807,7 @@ function Card({
       // reason: a call the agent could not even name reads as "Tool", and giving that
       // the prominence of a real line would be worse than the gap.
       return (
-        <div className={`tool replayed ${entry.why ? 'has-why' : ''}`}>
+        <div className="tool replayed">
           <span className="tool-status" aria-hidden="true"><Icon name="check-normal" /></span>
           <span className="tool-body">
             <span className="call"><span className="verb">{entry.text}</span></span>
@@ -1820,7 +1820,7 @@ function Card({
       const { activity, landing } = entry
       const running = activity.note === null
       return (
-        <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''} ${activity.why ? 'has-why' : ''}`}>
+        <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''}`}>
           <span className="tool-status" role="img" aria-label={running ? 'Running' : activity.failed ? 'Failed' : 'Done'}>
             {running ? <ProgressRing className="tool-ring" /> : <Icon name={activity.failed ? 'close' : 'check-normal'} />}
           </span>

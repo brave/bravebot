@@ -37,8 +37,9 @@
 .tool-body {
   flex: 1 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--leo-spacing-m);
+  column-gap: var(--leo-spacing-m);
   min-width: 0;
   max-width: calc(100% - var(--icon-meta) - var(--leo-spacing-m));
 }
@@ -60,20 +61,19 @@
   font: var(--type-code);
   color: var(--ink-tertiary);
 }
-/* The planner's reason for the call follows the call on its row, a step dimmer than it. The
-   reason adds nothing to the width the row asks for: it fills what the call and the note leave,
-   and a long one ellipsises rather than pushing the note aside. A note long enough to wrap, which
-   a refusal is, stops at half the row so the reason keeps the rest. */
+/* The planner's reason for the call follows the call on its row. It adds nothing to the width
+   the row asks for, so it fills what the call and the note leave and a long one ellipsises
+   rather than pushing the note aside. Where a few words of it would not fit beside the call, it
+   goes on under the call rather than shrinking out of sight. */
 .tool .why {
-  flex: 1 1 0;
+  flex: 1 1 12ch;
   contain: inline-size;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--ink-tertiary);
+  color: var(--ink-secondary);
 }
-.tool.has-why .note { max-width: 50%; }
 /* Clear of the generic `.note` warning chip, which this is not. */
 .tool .note {
   flex: 0 1 auto;
