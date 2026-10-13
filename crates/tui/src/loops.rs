@@ -626,6 +626,30 @@ mod tests {
         }
     }
 
+    /// A time expression after `every` is the clause only when nothing follows it. Read off the
+    /// front of what follows, `every 20m until it is green` would take the interval and drop the
+    /// words after it from every tick.
+    #[test]
+    fn a_time_followed_by_more_words_is_not_a_trailing_interval() {
+        for line in [
+            "check the deploy every 20m until it is green",
+            "check it every 20 minutes and report",
+        ] {
+            let request = request(line);
+            assert_eq!(request.pacing, Pacing::SelfPaced, "{line}");
+            assert_eq!(request.prompt, line, "{line}");
+        }
+    }
+
+    /// A word that only ends in every is not the clause either: `every` needs whitespace or the
+    /// start of the line before it, or `thievery 20m` would send `write about thi` on each tick.
+    #[test]
+    fn a_word_that_merely_ends_with_every_is_not_an_interval() {
+        let request = request("write about thievery 20m");
+        assert_eq!(request.pacing, Pacing::SelfPaced);
+        assert_eq!(request.prompt, "write about thievery 20m");
+    }
+
     /// A word that merely begins with every is not an every clause, and the sentence keeps it.
     #[test]
     fn a_word_that_merely_starts_with_every_is_not_an_interval() {
@@ -901,7 +925,11 @@ mod tests {
 
         running.dispatching();
         assert!(running.ended(None, now));
-        assert_eq!(running.until(now), Some(KEEPALIVE));
+        assert_eq!(
+            running.until(now),
+            Some(Duration::from_secs(20 * 60)),
+            "the fallback wake is not twenty minutes away"
+        );
 
         running.dispatching();
         assert!(!running.ended(None, now));

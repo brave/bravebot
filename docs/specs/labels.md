@@ -21,7 +21,7 @@ guards:
       - crates/bedrock/src/lib.rs: 6
       - crates/core/src/policy.rs: 114
       - crates/core/src/slot.rs: 5
-      - crates/core/src/value.rs: 7
+      - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
       - crates/mcp/src/protocol.rs: 2
@@ -65,7 +65,7 @@ guards:
     sites:
       - crates/core/src/policy.rs: 1
       - crates/core/src/slot.rs: 1
-      - crates/core/src/value.rs: 4
+      - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
       - crates/core/src/policy.rs: 60
@@ -385,6 +385,7 @@ design is wrong, not the label.
 `verified-by: bravebot_core::value::relabel_may_degrade`
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
+`verified-by: bravebot_core::value::relabel_may_not_make_private_content_public`
 `verified-by: bravebot_core::label::degradation_is_not_the_lattice_ordering`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`

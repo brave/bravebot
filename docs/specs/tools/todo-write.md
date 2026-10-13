@@ -37,6 +37,7 @@ happened.
 `verified-by: bravebot_core::todo::outstanding_tasks_are_not_struck_whether_started_or_not`
 `verified-by: bravebot_tui::render::outstanding_tasks_are_not_struck_through`
 `verified-by: bravebot_agent::tools::an_unrecognised_status_shows_as_outstanding`
+`verified-by: bravebot_agent::tools::a_task_with_no_status_or_one_that_is_not_a_string_shows_as_outstanding`
 
 <a id="TODO-3"></a>
 ### TODO-3: a cancelled task is struck through and is not counted as done
