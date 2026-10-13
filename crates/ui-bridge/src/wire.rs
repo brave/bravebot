@@ -735,6 +735,7 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "alias": request.alias,
         "tools": tools,
         "refused": request.refused,
+        "withheld": request.withheld,
         "changed": request.changed,
         "vetting": vetting(request.verdict, request.reason.as_deref()),
     })

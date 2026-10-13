@@ -1038,6 +1038,8 @@ mcp-env-word-refused =
     word { $position } after add is not NAME=value, and is not repeated since it may be a value: a
     name alone is read from your environment only as the one word its -e takes
 mcp-dir-needs-a-path = --dir needs a directory
+mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
+mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1067,6 +1069,8 @@ mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
+mcp-problem-tool = { $name } is not a tool name
+mcp-problem-tools = { $key } is not a list of tool names
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1089,6 +1093,8 @@ mcp-may-read = may read: { $path }
 mcp-directory = directory, which it may write: { $path }
 # The seconds a server has for its handshake and for each call, where a declaration gives either.
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
+mcp-declaration-tools = tools: { $names }
+mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1266,6 +1272,11 @@ mcp-tools-not-listed =
     { $count ->
         [one] one more tool is not listed: its name or its arguments cannot be offered
        *[other] { $count } more tools are not listed: their names or their arguments cannot be offered
+    }
+mcp-tools-withheld =
+    { $count ->
+        [one] one tool was withheld by the server's allow or deny list
+       *[other] { $count } tools were withheld by the server's allow or deny list
     }
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.

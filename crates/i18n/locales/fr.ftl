@@ -881,6 +881,8 @@ mcp-env-word-refused =
     le mot { $position } après add n'est pas NOM=valeur, et n'est pas répété car il peut être une
     valeur : un nom seul n'est lu dans votre environnement que s'il est le seul mot que prend son -e
 mcp-dir-needs-a-path = --dir a besoin d'un répertoire
+mcp-tools-needs-a-list = --tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
+mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -911,6 +913,8 @@ mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
 mcp-problem-remote = un serveur distant ne prend pas de { $key }
 mcp-problem-timeout = { $key } n'est pas un nombre entier de secondes de 1 à { $most }
+mcp-problem-tool = { $name } n'est pas un nom d'outil
+mcp-problem-tools = { $key } n'est pas une liste de noms d'outils
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -931,6 +935,8 @@ mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire, où il peut écrire : { $path }
 mcp-timeouts = temps accordé : { $startup } secondes pour démarrer, { $tool } secondes par appel
+mcp-declaration-tools = outils : { $names }
+mcp-declaration-exclude-tools = outils exclus : { $names }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?
@@ -1102,6 +1108,11 @@ mcp-tools-not-listed =
     { $count ->
         [one] un autre outil n'est pas listé : son nom ou ses arguments ne peuvent pas être proposés
        *[other] { $count } autres outils ne sont pas listés : leurs noms ou leurs arguments ne peuvent pas être proposés
+    }
+mcp-tools-withheld =
+    { $count ->
+        [one] un outil a été retenu par la liste d'autorisation ou d'exclusion du serveur
+       *[other] { $count } outils ont été retenus par la liste d'autorisation ou d'exclusion du serveur
     }
 mcp-tools-argument-list-of = { $kind } de { $items }
 mcp-tools-argument-required = requis

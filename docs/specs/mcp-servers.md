@@ -1485,6 +1485,46 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
 
+<a id="SERVERS-17"></a>
+### SERVERS-17: a declaration may name tool allow and deny lists that filter what is offered
+
+A declaration may name `tools` (an allow list) and `exclude_tools` (a deny list) of tool names.
+Tool names are either bare words (`get_forecast`) or qualified by server alias (`weather:get_forecast`).
+Each name must be a valid tool identifier under the format rules.
+
+When a server completes its handshake and lists its tools, filtering is applied before the tools
+are offered to the model or recorded in approvals:
+1. Deny list precedence: if a tool matches any entry in `exclude_tools`, it is withheld.
+2. Allow list restriction: if `tools` is non-empty and the tool matches no entry in `tools`, it is withheld.
+
+A qualified filter `alias:word` matches only when the server's alias matches `alias` and the tool name
+matches `word`. A bare filter `word` matches any tool named `word` on that server.
+
+Withheld tools are not offered to the planner, cannot be called, and are counted under `withheld`.
+The count of withheld tools is distinct from tools refused by format or protocol errors, and is
+reported to the user alongside the active tool count during confirmation prompts.
+
+Where either filter is specified, both lists are included in the declaration digest so any change
+requires renewed approval. An existing declaration without filters produces the identical digest.
+
+**Why.** A general-purpose MCP server often provides dozens of tools, many of which are irrelevant,
+redundant, or dangerous in specific environments. Filtering unwanted tools at the boundary prevents
+unnecessary context consumption and eliminates unwanted tool invocation surface while ensuring
+full user visibility into withheld tools.
+
+`verified-by: bravebot_mcp::protocol::tool_filtering_filters_by_allow_and_deny_lists`
+`verified-by: bravebot_config::mcp::a_tool_filter_name_is_a_tool_word_or_alias_qualified`
+`verified-by: bravebot_config::mcp::a_digest_covers_tool_filters_and_order_does_not_matter`
+`verified-by: bravebot_config::mcp::a_declaration_with_no_tool_filters_digests_as_it_did_before`
+`verified-by: bravebot_config::mcp::tool_filters_are_read_written_and_roundtripped`
+`verified-by: bravebot_config::mcp::tool_filter_changes_are_named_by_field`
+`verified-by: bravebot_config::mcp::tools_and_exclude_tools_require_lists_of_valid_tool_names`
+`verified-by: bravebot_agent::servers::handshake_local_filters_tools_by_allow_and_deny_lists`
+`verified-by: bravebot_agent::mcp::withheld_mcp_tools_are_not_offered_and_reported_in_confirmation`
+`verified-by: bravebot_cli::mcp::the_tool_filter_flags_set_allow_and_deny_lists_and_refuse_invalid_inputs`
+`verified-by: bravebot_cli::mcp::the_question_shows_tool_allow_and_deny_filters`
+
+
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below
