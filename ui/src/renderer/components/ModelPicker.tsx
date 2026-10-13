@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
-import { useFocusReturn } from '../hooks'
+import { useDelayedFlag, useFocusReturn } from '../hooks'
 import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 
 /** The two capabilities this app uses; the rest are in the catalogue but not shown. */
@@ -46,6 +46,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const preferences = useExperience()
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null)
   const [loading, setLoading] = useState(false)
+  const showLoading = useDelayedFlag(loading)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -214,7 +215,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           }
         }} />
       <div className="model-notices">
-        {loading && <p className="model-status" role="status"><ProgressRing mode="indeterminate" /> Loading available models…</p>}
+        {loading && <p className="model-status" role="status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading available models…</p>}
         {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
         {catalogue?.warnings.map((warning) => <p className="model-status" key={warning}>{warning}</p>)}
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}

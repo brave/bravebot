@@ -3,6 +3,7 @@ import type { FileSearch } from '../../shared/files'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
+import { useDelayedFlag } from '../hooks'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
 import { Alert, Icon, Input, ProgressRing } from '../nala'
 import { IconButton } from './IconButton'
@@ -70,6 +71,7 @@ export function FileTree({
   }, [searchOpen])
   const [results, setResults] = useState<FileSearch | null>(null)
   const [searching, setSearching] = useState(false)
+  const showSearching = useDelayedFlag(searching)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   useEffect(() => {
     if (!search.trim()) { setResults(null); setSearching(false); return }
@@ -207,7 +209,7 @@ export function FileTree({
           take the header with it. */}
       <div className="tree-body">
         {terms.length > 0 ? <div className="file-search-results">
-          {searching && <p className="tree-status" role="status"><span className="tree-spinner" aria-hidden="true"><ProgressRing mode="indeterminate" /></span>Searching project…</p>}
+          {searching && <p className="tree-status" role="status" data-delayed={!showSearching || undefined}><span className="tree-spinner" aria-hidden="true"><ProgressRing mode="indeterminate" /></span>Searching project…</p>}
           {!searching && results?.paths.length === 0 && <p className="tree-empty">No matching files.</p>}
           {results?.paths.map((path) => (
             <button key={path} type="button" className="search-result" onClick={() => setPreviewPath(path)} data-tooltip={`Preview ${path}`}>
