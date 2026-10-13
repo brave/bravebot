@@ -1639,8 +1639,8 @@ against a local remote), `gh`, a wrapper script that starts `git` and `make`, `m
 `sed`, `awk`, `diff` and `patch`, and `vim` and `less`. A workflow works when every stage exits zero.
 The home holds a credential of each kind and has the cache directories of an account that has used
 each toolchain, so a first run on an account that never ran the tool is not what is measured
-([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the process
-environment overlaid by the stage's own and the withheld names removed, and a host variable that
+([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the withheld
+names removed from the process environment, and a host variable that
 moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARGO_HOME`) or names
 an agent socket removed.
 

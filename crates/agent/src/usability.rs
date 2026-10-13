@@ -55,7 +55,6 @@ pub enum Expect {
 pub struct Stage {
     program: String,
     args: Vec<String>,
-    environment: Vec<(String, String)>,
 }
 
 impl Stage {
@@ -66,18 +65,7 @@ impl Stage {
         Self {
             program: program.to_string(),
             args: args.iter().map(ToString::to_string).collect(),
-            environment: Vec::new(),
         }
-    }
-
-    /// `NAME=value` written in front of the program, which is how a line removes the credential
-    /// scope from the stage ([SANDBOX-16]).
-    ///
-    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
-    #[must_use]
-    pub fn with_env(mut self, name: &str, value: &str) -> Self {
-        self.environment.push((name.to_string(), value.to_string()));
-        self
     }
 }
 
@@ -505,17 +493,12 @@ fn start(
     let program = places.fill(&stage.program);
     let started_as = find_from(&program, &places.session, &path).ok_or(Started::Other)?;
     let args: Vec<String> = stage.args.iter().map(|arg| places.fill(arg)).collect();
-    let environment: Vec<(String, String)> = stage
-        .environment
-        .iter()
-        .map(|(name, value)| (name.clone(), places.fill(value)))
-        .collect();
     let step = Step {
         program: stage.program.clone(),
         resolved: started_as.canonicalize().map_err(|_| Started::Other)?,
         started_as: started_as.clone(),
         args: args.clone(),
-        environment: environment.clone(),
+        environment: Vec::new(),
         routes: Vec::new(),
     };
 
@@ -538,9 +521,6 @@ fn start(
         && let Some(real) = std::env::var_os("HOME")
     {
         command.env("RUSTUP_HOME", Path::new(&real).join(".rustup"));
-    }
-    for (name, value) in &environment {
-        command.env(name, value);
     }
     crate::scrub::apply(&mut command);
 

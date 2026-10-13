@@ -485,7 +485,9 @@ impl Confined {
 }
 
 impl RunRequest {
-    /// A request for a pipeline of argv stages, which is a plan with no redirections.
+    /// A request for a plan of argv stages with no redirections, no stdin reference, no
+    /// confinement and no remembered record. It is for tests in this crate and others: shipped
+    /// code builds the request from a compiled plan in `tools.rs`.
     pub fn from_pipeline(pipeline: &Pipeline, resolved: &[String], directory: &str) -> Self {
         let steps = pipeline
             .stages
@@ -504,7 +506,7 @@ impl RunRequest {
             record: None,
             pattern: None,
             // A pipeline holds the label of what would be fed to its first stage and no reference
-            // to name: this constructor is for shell mode, where the bytes are the user's own.
+            // to name.
             stdin: None,
             confined: None,
             reach_record: None,

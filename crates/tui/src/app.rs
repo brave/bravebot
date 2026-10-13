@@ -1,6 +1,6 @@
 //! The event loop.
 //!
-//! Runs turns one at a time. Each turn builds its own policy inside `turn::run`, so
+//! Runs turns one at a time. Each turn builds its own policy inside `turn::resume`, so
 //! nothing about the interface can extend a policy's life beyond the turn that created
 //! it. What does outlive a turn is the conversation, which is how a follow-up like "try that
 //! again" has anything to refer to.

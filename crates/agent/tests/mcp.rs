@@ -6,6 +6,10 @@
 //! a tool answers is quarantined like any other content from off this machine. Each is asserted on
 //! the bytes that went out, to the model or to the server, rather than on a label.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
@@ -474,7 +478,7 @@ fn run_turn<C: Confirmer + Send>(
     confirmer: &mut C,
 ) -> bravebot_agent::Outcome {
     let workspace = Workspace::new(project).expect("workspace");
-    turn::run(
+    turns::run(
         &config_for(endpoint),
         &Egress::new(),
         &workspace,
@@ -973,7 +977,7 @@ fn a_turn_stopped_at_the_list_leaves_it_to_be_asked_again() {
     let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
     stopping.stop = Some(cancel.clone());
     let workspace = Workspace::new(scratch.project()).expect("workspace");
-    let _ = turn::run_cancellable(
+    let _ = turns::run_cancellable(
         &config_for(&endpoint),
         &Egress::new(),
         &workspace,
@@ -1098,7 +1102,7 @@ fn reported_turn<C: Confirmer + Send>(
 ) -> bravebot_agent::report::RecordingReporter {
     let workspace = Workspace::new(project).expect("workspace");
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
-    turn::run_cancellable(
+    turns::run_cancellable(
         &config_for(endpoint),
         &Egress::new(),
         &workspace,
@@ -2530,7 +2534,7 @@ fn noticed_turn<C: Confirmer + Send>(
 ) -> Vec<String> {
     let workspace = Workspace::new(project).expect("workspace");
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
-    turn::run_cancellable(
+    turns::run_cancellable(
         &config_for(endpoint),
         &Egress::new(),
         &workspace,
@@ -2991,7 +2995,7 @@ fn run_deferring<C: Confirmer + Send>(
     let workspace = Workspace::new(project).expect("workspace");
     let mut config = config_for(endpoint);
     config.defer_mcp_tools_above = Some(threshold);
-    turn::run(
+    turns::run(
         &config,
         &Egress::new(),
         &workspace,
