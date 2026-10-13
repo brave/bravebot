@@ -12,6 +12,8 @@ what stays out of it, and which runs may write the file.
     python3 agents/skills/check-spec/selftest.py
 """
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -955,6 +957,23 @@ def summary_of(length):
     return filler[: length - len(THE_COST)] + THE_COST
 
 
+def manifest_checks():
+    """What every step of the pipeline reads: the manifest, or a message and None."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "manifest.json").write_text('{"strict": true}', encoding="utf-8")
+        found = draft.collect.read_manifest(tmp)
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            missing = draft.collect.read_manifest(empty)
+    return [
+        ("a manifest in the work directory is read", found == {"strict": True}),
+        ("a work directory without one reads as none and says where it looked",
+         missing is None and err.getvalue() == f"no manifest at {empty / 'manifest.json'}\n"),
+    ]
+
+
 def draft_checks():
     """What one body says, against a finding whose every field is known.
 
@@ -1237,6 +1256,10 @@ def main():
     for name, held in drafted:
         note(name, held, "the body does not say it")
 
+    manifests = manifest_checks()
+    for name, held in manifests:
+        note(name, held, "the manifest was not read as the pipeline expects")
+
     sited = in_fixture(None, site_checks)
     for name, held in sited:
         note(name, held, "the drafter chose a different place")
@@ -1252,6 +1275,7 @@ def main():
         + len(UNVERIFIED_CASES)
         + len(SELECTIONS)
         + len(drafted)
+        + len(manifests)
         + len(sited)
         + len(selected)
     )
