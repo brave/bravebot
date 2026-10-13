@@ -238,6 +238,20 @@ mod tests {
         assert_eq!(settings.advisor_model(), Some("home/advisor"));
     }
 
+    #[test]
+    fn a_project_files_style_is_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"style":"concise"}"#),
+            Some(r#"{"style":"project-style"}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "style", "path": project })]
+        );
+        assert_eq!(settings.style(), Some("concise"));
+    }
+
     fn vetting_layers(
         home_text: Option<&str>,
         project_text: Option<&str>,
