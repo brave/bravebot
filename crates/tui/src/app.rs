@@ -8065,6 +8065,9 @@ fn manifest_animated(
         })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            // Progress, with no reply to give. The goal as the planner understood it and the frozen
+            // plan both arrive as narration, and each step as an activity, so the transcript of a
+            // run reads the way the transcript of a turn does.
             let Some(message) = run.progress(session, message) else {
                 return;
             };
@@ -8077,7 +8080,7 @@ fn manifest_animated(
                     mark_title(terminal, crate::title::State::Waiting);
                     let answer = crate::confirm::ask_manifest(terminal, &request);
                     mark_title(terminal, crate::title::State::Working);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     // Nothing is noted on the transcript, for the reason a turn notes nothing: the
@@ -8098,29 +8101,26 @@ fn manifest_animated(
                 }
                 crate::remote_confirm::ToMain::Fetch(request) => {
                     let answer = crate::confirm::ask_fetch(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Vouch(request) => {
                     let answer = crate::confirm::ask_vouch(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Exposure(request) => {
                     let answer = crate::confirm::ask_exposure(terminal, &request);
-                    if answer == crate::confirm::Answer::Interrupt {
+                    if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
                     let _ =
                         answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
                 }
-                // Progress, with no reply to give. The goal as the planner understood it and the frozen
-                // plan both arrive as narration, and each step as an activity, so the transcript of a
-                // run reads the way the transcript of a turn does.
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose
@@ -8129,59 +8129,14 @@ fn manifest_animated(
                 // nothing can break: the loop would go round forever with the worker waiting on a
                 // reply and the cancel token never looked at. Answered the way every other failure to
                 // carry a question is answered, with the negative one.
-                crate::remote_confirm::ToMain::Run(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Run(
-                        bravebot_agent::confirm::RunDecision::reject(),
-                    ));
-                }
-                crate::remote_confirm::ToMain::ReadOutput(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Vet(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Server(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Server(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Ask(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
-                }
-                // A plan names no server tool, so a run neither settles a server's list nor calls one.
-                crate::remote_confirm::ToMain::ToolList(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::McpCall(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(
-                        bravebot_agent::confirm::CallDecision::reject(),
-                    ));
-                }
-                crate::remote_confirm::ToMain::Move(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Move(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Path(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
-                crate::remote_confirm::ToMain::Host(_) => {
-                    let _ = answer_tx.send(crate::remote_confirm::Reply::Host(
-                        bravebot_agent::confirm::Decision::Reject,
-                    ));
-                }
                 // What is left announces rather than asks, so nothing waits on it. The manifest is the
                 // task list, so no list changes; there is no planner to delegate or to be interjected
                 // at; and a run's steps report through `Started` and `Finished` above.
-                _ => {}
+                other => {
+                    if let Some(reply) = refusal(&other) {
+                        let _ = answer_tx.send(reply);
+                    }
+                }
             }
         });
 
