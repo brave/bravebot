@@ -5314,6 +5314,10 @@ fn write_file<S: Sink, C: Confirmer>(
     // in the question below, and nothing else reads it.
     let mut remark = None;
 
+    // Whether the body is the planner's own text, which is what WRITE-6 may reformat. Set from
+    // which argument was given, never from anything either body holds.
+    let mut planner_written = true;
+
     // What the planner called the body, for the account it is given afterwards. Its own words
     // either way: the reference it named, or its own text.
     let body_from = match &named {
@@ -5347,6 +5351,7 @@ fn write_file<S: Sink, C: Confirmer>(
                 Ok((body, would_change, said)) => {
                     changes_anything = would_change;
                     remark = said;
+                    planner_written = false;
                     body
                 }
                 Err(refusal) => return Produced::problem(refusal),
@@ -5370,6 +5375,7 @@ fn write_file<S: Sink, C: Confirmer>(
             remark,
             body_from,
             written_since_checkout: false,
+            planner_written,
         },
         false,
     )
@@ -5397,6 +5403,10 @@ struct Body {
     /// Whether the driver's record holds a write to this path in the working directory since the
     /// checkout the body comes from was made, which the question says (CHECKOUT-14).
     written_since_checkout: bool,
+    /// Whether the body is the planner's own `contents`, and so may be written in the line
+    /// endings and byte order mark of the file it replaces (WRITE-6). A body that came from
+    /// anywhere else is written as it is.
+    planner_written: bool,
 }
 
 /// Put `given` in the file `landing` names: the scan, the question, the grant and the write, which
@@ -5426,6 +5436,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         remark,
         body_from,
         written_since_checkout,
+        planner_written,
     } = given;
     let body_label = body.label();
 
@@ -5449,6 +5460,17 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // peek rather than read a second time: two reads of a file somebody else may be writing can
     // disagree, and then the diff a person approves is of a version that never existed.
     let replaced = crate::workspace::peeked_for_review(&existing, replaces);
+    // The planner's text in the format of the file it replaces, settled here so that the scan,
+    // the diff a person approves and the bytes that land are all the same text (WRITE-6). The
+    // pre-image used is the one labelled as the trust map holds the path, not the pessimistic
+    // copy kept for the review: that one is untrusted whatever the map says, so converting on it
+    // would convert nothing anywhere. A file nobody vouched for still converts nothing, and the
+    // driver never sees what ending it used.
+    let body = if replaces && planner_written {
+        crate::workspace::in_the_replaced_files_format(policy, "write_file", &pre_image, body)
+    } else {
+        body
+    };
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
     let intent = if replaces {
@@ -5989,6 +6011,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 remark: None,
                 body_from: format!("checkout {id}"),
                 written_since_checkout: workspace.written_since_checkout(id, relative),
+                planner_written: false,
             },
             true,
         );

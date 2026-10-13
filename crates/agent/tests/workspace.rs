@@ -624,6 +624,89 @@ fn an_untrusted_path_cannot_be_written() {
     assert!(!scratch.path.join("evil.txt").exists());
 }
 
+/// WRITE-6. A whole-file write of the planner's text carries the planner's format: LF, and no
+/// byte order mark. Over a file that uses CRLF and starts with one, that is a change to every
+/// line of the file, so the person approving the write sees the whole file as modified and the
+/// bytes that land differ from the ones the editor and the rest of the tooling expect.
+///
+/// The format is read from the pre-image, so it is read only where the trust map vouches for the
+/// file. An unvouched pre-image converts nothing, and converts nothing quietly: the label is
+/// asked before the gate, so an ordinary write over a file nobody vouched for leaves the turn
+/// clean rather than recording a blocked gate.
+#[test]
+fn a_replaced_files_format_is_detected_and_applied() {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let reformatted = |policy: &mut Policy<'_, RecordingSink>, existing: Labelled<String>| {
+        let body = Labelled::trusted("one\ntwo\n".to_string());
+        let shaped = bravebot_agent::workspace::in_the_replaced_files_format(
+            policy,
+            "write_file",
+            &existing,
+            body,
+        );
+        let proof = policy.authorise_content_release("test", "contents");
+        shaped.declassify(&proof)
+    };
+
+    // A file the map vouches for, using CRLF and carrying a mark: the body takes both.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("\u{feff}old\r\nlines\r\n".to_string())
+        ),
+        "\u{feff}one\r\ntwo\r\n",
+    );
+    // CRLF alone, so a mark is not invented.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("old\r\nlines\r\n".to_string())
+        ),
+        "one\r\ntwo\r\n",
+    );
+    // A mark alone, so the endings are left as the planner wrote them.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("\u{feff}old\nlines\n".to_string())
+        ),
+        "\u{feff}one\ntwo\n",
+    );
+    // An LF file with no mark: nothing to apply, and the body is unchanged.
+    assert_eq!(
+        reformatted(&mut policy, Labelled::trusted("old\nlines\n".to_string())),
+        "one\ntwo\n",
+    );
+    // A file holding both endings is replaced whole, so it comes out consistently CRLF rather
+    // than half converted. `edit_file` leaves a mixed file alone, because it replaces a passage
+    // and has the file's other lines to preserve.
+    assert_eq!(
+        reformatted(&mut policy, Labelled::trusted("old\r\nlines\n".to_string())),
+        "one\r\ntwo\r\n",
+    );
+
+    // A file nobody vouched for: no conversion, and no denial recorded for it.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::new("old\r\nlines\r\n".to_string(), Label::untrusted_private())
+        ),
+        "one\ntwo\n",
+    );
+    assert!(
+        policy.finish(),
+        "an ordinary write over an unvouched file recorded a blocked gate"
+    );
+}
+
 /// Private content must not be released by a write until it is declassified.
 #[test]
 fn private_contents_cannot_be_written() {

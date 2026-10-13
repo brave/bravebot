@@ -6641,6 +6641,106 @@ fn an_edit_to_a_crlf_file_keeps_its_line_endings() {
     );
 }
 
+/// WRITE-6. The planner writes a whole file with `\n`, because that is what it types. Over a
+/// file that uses `\r\n` that is a change to every line: the reviewer sees the whole file as
+/// modified with the real change buried in it, and the bytes that land use the other terminator.
+/// The body is written in the file's terminator, before the diff is built, so the diff shows the
+/// one line that changed and the reviewer is told the terminators were kept.
+#[test]
+fn a_crlf_file_rewritten_with_lf_contents_keeps_crlf() {
+    let scratch = Scratch::new("write-crlf");
+    std::fs::write(scratch.path.join("a.txt"), "keep\r\nold\r\ntail\r\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"a.txt","contents":"keep\nnew\ntail\n"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust("a.txt");
+    let task = Task::new("rewrite a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("a.txt")).unwrap(),
+        b"keep\r\nnew\r\ntail\r\n"
+    );
+    // What the person approved is what landed: a CRLF pre-image against a CRLF body, so the
+    // diff is the one changed line rather than the whole file.
+    assert_eq!(
+        confirmer.seen[0].line_endings_note().as_deref(),
+        Some("line endings: CRLF kept")
+    );
+    assert!(outcome.clean);
+}
+
+/// WRITE-6. What terminator a file uses is a fact about its bytes, so it is read only from a file
+/// the trust map vouches for. Over a file nobody vouched for the body lands as the planner wrote
+/// it, and nothing is recorded as refused: an ordinary write into an unvouched directory is the
+/// expected case, and a denial there would mark every such turn as one where something was
+/// blocked.
+#[test]
+fn an_untrusted_pre_image_converts_nothing() {
+    let scratch = Scratch::new("write-crlf-untrusted");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/a.txt"), "keep\r\nold\r\ntail\r\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"vendor/a.txt","contents":"keep\nnew\ntail\n"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+    let task = Task::new("rewrite vendor/a.txt");
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("vendor/a.txt")).unwrap(),
+        b"keep\nnew\ntail\n",
+        "an unvouched file's terminators were read and applied"
+    );
+    assert!(
+        outcome.clean,
+        "an ordinary write over an unvouched file recorded a blocked gate"
+    );
+}
+
 /// The reason edit_file exists: when review is needed, the user sees a diff of a located
 /// passage with the file's current contents to compare against.
 ///

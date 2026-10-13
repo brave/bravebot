@@ -3251,6 +3251,88 @@ pub fn peeked_for_review(peeked: &Labelled<String>, replaces: bool) -> Labelled<
     }
 }
 
+/// `body` written in the line ending and byte order mark of the file it replaces, where the trust
+/// map vouches for that file (WRITE-6).
+///
+/// Where the map does vouch for the path, the bytes go through
+/// [`Policy::read_trusted_content`], the gate `edit_file` reads a file through before comparing it.
+///
+/// The label is asked before the gate is, for the reason `skills` gives: the gate still runs
+/// whenever this proceeds, and what asking first avoids is recording a denial for a condition that
+/// is ordinary and expected. A write over a file nobody vouched for is that condition, and WRITE-6
+/// says it converts nothing, so a refusal there would mark the turn as one where something was
+/// blocked on every such write. What ending a file uses is a fact about its bytes, and converting
+/// on it would be the driver deciding from untrusted content. The body comes back as it went in,
+/// and nothing here reports which case it was.
+///
+/// Called before the diff is built, so the text a person approves is the text that lands.
+pub fn in_the_replaced_files_format<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    pre_image: &Labelled<String>,
+    body: Labelled<String>,
+) -> Labelled<String> {
+    if !pre_image.label().is_trusted() {
+        return body;
+    }
+    let Ok(existing) = policy.read_trusted_content(tool, pre_image) else {
+        return body;
+    };
+    let format = FileFormat::of(&existing);
+    policy.render_in_place(tool, &body, |text| format.applied_to(text))
+}
+
+/// The two things about a file's bytes a whole-file write would otherwise lose.
+///
+/// Read from a file the trust map vouches for and from nowhere else.
+#[derive(Clone, Copy)]
+struct FileFormat {
+    crlf: bool,
+    bom: bool,
+}
+
+/// The mark `std::fs::read_to_string` leaves at the start of a file that carried one.
+const BOM: char = '\u{feff}';
+
+impl FileFormat {
+    /// What `existing` uses, classified by [`crate::diff::LineEnding`] so the crate has one rule
+    /// for what a file's terminators are rather than two. A file holding `\r\n` anywhere is CRLF,
+    /// which is `Crlf` and `Mixed` together, and every other file is LF, including one with no
+    /// newline in it at all.
+    ///
+    /// `edit_file` converts for `Crlf` alone (`crate::replace`), because it matches a passage
+    /// inside the file and has to leave a mixed file's other lines as they are. A whole-file write
+    /// replaces every line, so there is nothing to leave alone and a mixed file comes out
+    /// consistent.
+    fn of(existing: &str) -> Self {
+        Self {
+            crlf: matches!(
+                crate::diff::LineEnding::of(existing),
+                Some(crate::diff::LineEnding::Crlf | crate::diff::LineEnding::Mixed)
+            ),
+            bom: existing.starts_with(BOM),
+        }
+    }
+
+    /// `text` in this format: every newline the file's, and the file's mark in front of it.
+    ///
+    /// Endings are taken to LF first, so a body that already mixes the two comes out consistent
+    /// rather than half converted. A body that brought its own mark keeps it, since removing one
+    /// the planner wrote would be a change to the document rather than to its format.
+    fn applied_to(&self, text: String) -> String {
+        let text = if self.crlf {
+            text.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            text.replace("\r\n", "\n")
+        };
+        if self.bom && !text.starts_with(BOM) {
+            format!("{BOM}{text}")
+        } else {
+            text
+        }
+    }
+}
+
 /// Caps on directory walks, so a large tree cannot stall a turn or flood the model's
 /// context. Truncation is size hygiene, not filtering: nothing is inspected to decide
 /// what to drop.

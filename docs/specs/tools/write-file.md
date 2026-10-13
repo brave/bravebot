@@ -90,3 +90,28 @@ approval on something the server already knew.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+
+<a id="WRITE-6"></a>
+### WRITE-6: a replaced file keeps its line endings and its byte order mark
+
+Where `contents` replaces a file the trust map vouches for, the body takes that file's format
+before the diff is built: its line endings become the ones the file uses, and it begins with a
+byte order mark where the file began with one. A file holding `\r\n` anywhere uses CRLF, and any
+other file uses LF. A body that begins with a byte order mark keeps it whatever the file had.
+
+WRITE-1 still says `contents` becomes the file. The normalised text is what lands and is what the
+person approves, because the detection happens before the diff: the diff then shows the lines the
+write changes rather than every line of the file.
+
+Nothing is converted in three cases. A file nobody vouched for is left alone, since its ending is
+a fact about untrusted bytes and converting on it would be the driver branching on content, which
+the rule in `agents/AGENTS.md` forbids. A body from `contents_ref` is left alone, since it is
+bytes nobody has read. A path with no file yet is written as given.
+
+**Why.** A planner that sends LF text over a CRLF file changes every line, and the approval diff
+then shows the whole file as changed. The person has to decline and ask again, or accept a diff
+they cannot read and a change of format nobody wanted.
+
+`verified-by: bravebot_agent::turn::a_crlf_file_rewritten_with_lf_contents_keeps_crlf`
+`verified-by: bravebot_agent::turn::an_untrusted_pre_image_converts_nothing`
+`verified-by: bravebot_agent::workspace::a_replaced_files_format_is_detected_and_applied`

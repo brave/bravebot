@@ -519,6 +519,13 @@ since you are the only one who sees which file it is.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+Replacing a **trusted** file with `contents` keeps that file's line endings and its leading byte
+order mark, so a file using `\r\n` stays CRLF and a file that began with a mark still does. This
+happens before the diff you approve is built, so the approval shows the lines the write changes
+rather than every line in the file, and it says `line endings: CRLF kept`. A file nobody vouched for
+is not converted, because its terminators are untrusted bytes and nothing may be decided from
+those. A file written from a `contents_ref`, and a path with no file yet, are written as given.
+
 Where a language server for the file's language is **already running**, the result also says how many
 errors it found and on which lines, and how many warnings. A write never starts a server, and the
 server's own messages are never shown, only counts and line numbers. A server that has not finished
