@@ -2142,6 +2142,8 @@ fn begin_session(
     // and `/effort` is how this one is changed.
     session.adopt_effort(&settings);
     session.adopt_limit(&settings);
+    // No unit test reaches this call, because this function needs a real terminal. A scripted
+    // session (`contrib/drive_tui.py`) with a `style` in settings and `/style` typed checks it.
     adopt_style(&mut session, settings.style());
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
