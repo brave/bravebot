@@ -1,7 +1,7 @@
-//! The network for the programs `run` starts, in the desktop front end (SANDBOX-20). The setting
-//! is a property of the process, read from the person's settings and the managed pin when the
-//! bridge starts, so a window that never says anything about it still gets the answer the terminal
-//! would.
+//! The network for the programs `run` starts, in the desktop front end and in a session an editor
+//! hosts (SANDBOX-20). The setting is a property of the process, read from the person's settings
+//! and the managed pin when the program starts, so a window or an editor that never says anything
+//! about it still gets the answer the terminal would.
 //!
 //! Driven through the binary against a model service of the test's own. What the planner was told
 //! about its programs is read off the request the service received.
@@ -124,16 +124,29 @@ fn a_model_service_that_ends_the_turn() -> (String, mpsc::Receiver<String>) {
     (endpoint, rounds)
 }
 
+/// The program a front end starts: the desktop window's bridge, or the program an editor hosts a
+/// session in. Each settles the process-wide answers itself.
+#[derive(Clone, Copy)]
+enum Program {
+    Window,
+    Editor,
+}
+
 /// The front end, in an environment the test wrote rather than the one it inherited.
 struct FrontEnd {
+    program: Program,
     child: Child,
     said: mpsc::Receiver<Value>,
     next: u64,
 }
 
 impl FrontEnd {
-    fn start(scratch: &Scratch, endpoint: &str, arguments: &[&Path]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+    fn start(program: Program, scratch: &Scratch, endpoint: &str, arguments: &[&Path]) -> Self {
+        let binary = match program {
+            Program::Window => env!("CARGO_BIN_EXE_bravebot-rpc"),
+            Program::Editor => env!("CARGO_BIN_EXE_bravebot-acp"),
+        };
+        let mut child = Command::new(binary)
             .args(arguments)
             .env_clear()
             .env("HOME", scratch.home())
@@ -150,24 +163,42 @@ impl FrontEnd {
             .expect("the built binary runs");
         let said = lines(child.stdout.take().expect("the front end answers"));
         Self {
+            program,
             child,
             said,
             next: 0,
         }
     }
 
-    fn send(&mut self, method: &str, params: Value) -> u64 {
-        self.next += 1;
-        let id = self.next;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
+    fn write(&mut self, message: Value) {
         let stdin = self
             .child
             .stdin
             .as_mut()
             .expect("the front end reads requests");
-        writeln!(stdin, "{line}").expect("the request is written");
+        writeln!(stdin, "{message}").expect("the request is written");
         stdin.flush().expect("the request is sent");
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        self.write(json!({"id": id, "method": method, "params": params}));
         id
+    }
+
+    /// A JSON-RPC 2.0 request, as an editor sends one.
+    fn request(&mut self, method: &str, params: Value) -> u64 {
+        self.next += 1;
+        let id = self.next;
+        self.write(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        id
+    }
+
+    /// The editor's answer to the request it sent as `id`, and not a request of the agent's that
+    /// happens to carry the same number.
+    fn answer_to(&self, id: u64) -> Value {
+        self.until(|message| message["id"] == id && message.get("method").is_none())
     }
 
     /// The next message `wanted` accepts, within a bound so a bridge that never answers fails.
@@ -194,6 +225,9 @@ impl FrontEnd {
 
     /// Open a session in the project, trust it, and run one turn to its end.
     fn one_turn(&mut self, scratch: &Scratch) {
+        if let Program::Editor = self.program {
+            return self.one_editor_turn(scratch);
+        }
         let opened = self.call(
             "session.new",
             json!({"directory": scratch.project().display().to_string()}),
@@ -207,6 +241,29 @@ impl FrontEnd {
         let ended = self
             .until(|message| message["event"] == "turn.done" || message["event"] == "turn.error");
         assert_eq!(ended["event"], "turn.done", "{ended}");
+    }
+
+    /// The same over the Agent Client Protocol, where the trust question is put as a permission
+    /// request when the first prompt arrives.
+    fn one_editor_turn(&mut self, scratch: &Scratch) {
+        let opened = self.request(
+            "session/new",
+            json!({"cwd": scratch.project(), "mcpServers": []}),
+        );
+        let opened = self.answer_to(opened);
+        let session = opened["result"]["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no session: {opened}"))
+            .to_string();
+        let prompt = self.request(
+            "session/prompt",
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": "do the work"}]}),
+        );
+        let asked = self.until(|message| message["method"] == "session/request_permission");
+        self.write(json!({"jsonrpc": "2.0", "id": asked["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}}}));
+        let ended = self.answer_to(prompt);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
     }
 }
 
@@ -232,8 +289,13 @@ fn lines(stdout: ChildStdout) -> mpsc::Receiver<Value> {
 }
 
 /// What the planner was told about the programs `run` starts, on the first request of a turn, with
-/// `home` as the person's settings and `named` as a file the bridge was started on with `--settings`.
-fn told_to_the_planner(name: &str, home: Option<&str>, named: Option<&str>) -> String {
+/// `home` as the person's settings and `named` as a file `program` was started on with `--settings`.
+fn told_to_the_planner(
+    program: Program,
+    name: &str,
+    home: Option<&str>,
+    named: Option<&str>,
+) -> String {
     let scratch = Scratch::new(name, home);
     let chosen = scratch.path.join("chosen.json");
     let mut arguments: Vec<&Path> = Vec::new();
@@ -242,7 +304,7 @@ fn told_to_the_planner(name: &str, home: Option<&str>, named: Option<&str>) -> S
         arguments.extend([Path::new("--settings"), chosen.as_path()]);
     }
     let (endpoint, rounds) = a_model_service_that_ends_the_turn();
-    let mut front = FrontEnd::start(&scratch, &endpoint, &arguments);
+    let mut front = FrontEnd::start(program, &scratch, &endpoint, &arguments);
     front.one_turn(&scratch);
     rounds
         .recv_timeout(PATIENCE)
@@ -256,8 +318,21 @@ fn told_to_the_planner(name: &str, home: Option<&str>, named: Option<&str>) -> S
 /// description that says the network is closed whatever was set fails it.
 #[test]
 fn a_closed_network_in_the_settings_reaches_a_windows_turns() {
+    the_settings_close_the_network_for(Program::Window, "bridge");
+}
+
+/// The same for a session an editor hosts. `bravebot-acp` makes its own call to settle the
+/// answers, so a copy of it that left the call out would pass the window's test above while an
+/// editor's programs kept the network.
+#[test]
+fn a_closed_network_in_the_settings_reaches_an_editors_turns() {
+    the_settings_close_the_network_for(Program::Editor, "acp");
+}
+
+fn the_settings_close_the_network_for(program: Program, prefix: &str) {
     let closed = told_to_the_planner(
-        "bridge-network-closed",
+        program,
+        &format!("{prefix}-network-closed"),
         Some(r#"{"run": {"network": "closed"}}"#),
         None,
     );
@@ -267,7 +342,8 @@ fn a_closed_network_in_the_settings_reaches_a_windows_turns() {
     );
 
     let chosen = told_to_the_planner(
-        "bridge-network-closed-by-a-named-file",
+        program,
+        &format!("{prefix}-network-closed-by-a-named-file"),
         None,
         Some(r#"{"run": {"network": "closed"}}"#),
     );
@@ -276,7 +352,7 @@ fn a_closed_network_in_the_settings_reaches_a_windows_turns() {
         "a settings file the bridge was started on was not read for the network: {chosen}"
     );
 
-    let open = told_to_the_planner("bridge-network-open", None, None);
+    let open = told_to_the_planner(program, &format!("{prefix}-network-open"), None, None);
     assert!(
         open.contains("Programs this tool starts are confined"),
         "the control run did not confine its programs: {open}"

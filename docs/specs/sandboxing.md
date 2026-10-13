@@ -1624,6 +1624,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_config::run_network::a_managed_pin_beats_the_flag_and_the_settings`
 `verified-by: bravebot_cli::main::the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other`
 `verified-by: bravebot_ui_bridge::run_network::a_closed_network_in_the_settings_reaches_a_windows_turns`
+`verified-by: bravebot_ui_bridge::run_network::a_closed_network_in_the_settings_reaches_an_editors_turns`
 `verified-by: bravebot_tui::confirm::a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it`
 `verified-by: bravebot_tui::logo::a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not`
 `verified-by: bravebot_tui::status::a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not`
@@ -2364,6 +2365,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
+`verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_an_editor_runs`
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
 
 <a id="SANDBOX-26"></a>

@@ -223,9 +223,22 @@ impl Host {
 
     /// As [`Host::start`], with `workspace` as the one directory a session may open in.
     fn start_in(scratch: &Scratch, endpoint: &str, workspace: &Path) -> Self {
+        Self::start_with(scratch, endpoint, workspace, None)
+    }
+
+    /// As [`Host::start_in`], started on the settings file `settings` names when it names one.
+    fn start_with(
+        scratch: &Scratch,
+        endpoint: &str,
+        workspace: &Path,
+        settings: Option<&Path>,
+    ) -> Self {
         let relay_path = scratch.directory.path().join("relay.sock");
         let relay = UnixListener::bind(&relay_path).expect("a relay socket");
         relay.set_nonblocking(true).unwrap();
+        let named: Vec<&std::ffi::OsStr> = settings
+            .map(|file| vec!["--settings".as_ref(), file.as_os_str()])
+            .unwrap_or_default();
         let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-host"))
             .env_clear()
             .env("HOME", scratch.home())
@@ -240,6 +253,7 @@ impl Host {
             .arg(scratch.root())
             .arg("--workspace")
             .arg(workspace)
+            .args(named)
             .arg("--")
             .arg(std::env::current_exe().unwrap())
             .args(["--exact", "relay_entry", "--nocapture"])
@@ -498,6 +512,61 @@ fn the_host_keeps_its_records_apart_from_a_windows() {
         seen[1]
     );
     client.leave();
+}
+
+/// What the planner was told about the programs `run` starts, on the first request of a turn in a
+/// host started on the settings file `named` holds, when there is one.
+fn told_to_a_hosts_planner(named: Option<&str>) -> String {
+    let scratch = Scratch::new();
+    let settings = named.map(|contents| {
+        let file = scratch.path("chosen.json");
+        std::fs::write(&file, contents).expect("a settings file");
+        file
+    });
+    let (asked, rounds) = mpsc::channel();
+    let asked = Mutex::new(asked);
+    let endpoint = a_model_service(
+        move |request| {
+            let _ = asked.lock().unwrap().send(request.to_string());
+            ends_the_turn(request)
+        },
+        || {},
+    );
+    let host = Host::start_with(&scratch, &endpoint, &scratch.project(), settings.as_deref());
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        json!({"session": session, "prompt": "do the work"}),
+    );
+    client.event("turn.done");
+    rounds
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model service")
+}
+
+/// The file named with `--settings` is one of the layers the host settles the process-wide answers
+/// from (HOST-4), so a closed network in it reaches the programs its sessions start. The host makes
+/// its own call to settle them when it starts, so a host that left the call out would pass every
+/// window's test while its clients' programs kept the network. The host started on no file is the
+/// control: its planner is told its programs are confined and not that the network is closed.
+#[test]
+fn a_closed_network_in_the_settings_the_host_was_started_on_reaches_its_turns() {
+    let closed = told_to_a_hosts_planner(Some(r#"{"run": {"network": "closed"}}"#));
+    assert!(
+        closed.contains("The network is closed"),
+        "the host's settings file was not read for the network: {closed}"
+    );
+
+    let open = told_to_a_hosts_planner(None);
+    assert!(
+        open.contains("Programs this tool starts are confined"),
+        "the control run did not confine its programs: {open}"
+    );
+    assert!(
+        !open.contains("The network is closed"),
+        "a run nobody closed the network for told the planner it was closed: {open}"
+    );
 }
 
 /// A close is answered at once, and the session is reported closed only after its turn has

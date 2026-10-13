@@ -71,6 +71,7 @@ The root is chosen once, before the first record is read or written, and a secon
 
 `verified-by: bravebot_ui_bridge::host_process::the_host_keeps_its_records_apart_from_a_windows`
 `verified-by: bravebot_ui_bridge::host_process::an_existing_sessions_root_that_others_can_read_or_a_link_is_refused`
+`verified-by: bravebot_ui_bridge::host_process::a_closed_network_in_the_settings_the_host_was_started_on_reaches_its_turns`
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
 `verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
 `verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`

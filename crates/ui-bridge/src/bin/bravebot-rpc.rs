@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+use bravebot_ui_bridge::arguments::{Launch, launch};
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{Event, Request, Unreadable, response};
 use std::io::{BufRead, Write};
@@ -31,37 +32,20 @@ fn main() {
     // settings file for a developer driving this by hand, and what that file may then grant
     // is decided by the policy layer rather than here. Nothing is authorised by an argument.
     // nosemgrep: rust.lang.security.args.args
-    let mut args = std::env::args().skip(1);
-    let mut settings = None;
-    if let Some(flag) = args.next() {
-        match flag.as_str() {
-            "--settings" => {
-                let Some(path) = args.next() else {
-                    eprintln!("--settings requires a file path");
-                    std::process::exit(2);
-                };
-                if args.next().is_some() {
-                    eprintln!("unexpected arguments after settings file");
-                    std::process::exit(2);
-                }
-                settings = Some(std::path::PathBuf::from(path));
-            }
-            "--version" | "-V" => {
-                println!(
-                    "bravebot-rpc {} (agent {})",
-                    env!("CARGO_PKG_VERSION"),
-                    bravebot_ui_bridge::agent_build()
-                );
-                return;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                eprintln!("usage: bravebot-rpc            speak NDJSON on stdin/stdout");
-                eprintln!("       bravebot-rpc --version");
-                std::process::exit(2);
-            }
+    let args = std::env::args().skip(1);
+    let settings = match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", args) {
+        Launch::Serve { settings } => settings,
+        Launch::Version(line) => {
+            println!("{line}");
+            return;
         }
-    }
+        Launch::Refused(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            std::process::exit(2);
+        }
+    };
 
     // Before a session is assembled, so every turn this process runs reads one answer for the
     // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
