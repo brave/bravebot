@@ -850,9 +850,10 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
 
 /// A program that fails for a module its Python lacks is otherwise handed back to the person as a
 /// request to install a newer Python or edit the program. An installed package often provides the
-/// module under another name, and a module of the missing name in the session's own directory,
-/// named on that one line's `PYTHONPATH`, runs the program with nothing on the machine changed.
-/// Where no package provides it, the planner says what is missing.
+/// module under another name, and a module of the missing name in a directory inside the session's
+/// own, named on that one line's `PYTHONPATH`, runs the program with nothing on the machine changed.
+/// Where no package provides it, the planner says what is missing. The road is two `run`s, so it is
+/// said to the person's turn and kept out of the block a reader, which has no `run`, is given.
 #[test]
 fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
     let tree = Scratch::new("stand-in-module");
@@ -877,16 +878,22 @@ fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
 
     for said in [
         "with a line that only reads",
-        "write a module of the missing name in the scratch directory",
-        "`PYTHONPATH=` and the scratch directory's path",
+        "in a new directory inside the scratch directory",
+        "`PYTHONPATH=` and that directory's path",
+        "in single quotes",
         "say which module is missing",
     ] {
         assert!(
-            preamble.text.contains(said),
-            "`{said}` is not in the preamble: {}",
-            preamble.text
+            preamble.for_a_person.contains(said),
+            "`{said}` is not in what the person's turn is told: {}",
+            preamble.for_a_person
         );
     }
+    assert!(
+        !preamble.text.contains("PYTHONPATH"),
+        "a delegate was told a road that needs `run`: {}",
+        preamble.text
+    );
 }
 
 /// A session that could not be given one has nowhere of its own to write, and a planner told
@@ -916,13 +923,18 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
         "the rest of the block is missing too: {}",
         preamble.text
     );
-    for absent in ["Scratch directory:", "BRAVEBOT_SCRATCH_DIR", "PYTHONPATH"] {
+    for absent in ["Scratch directory:", "BRAVEBOT_SCRATCH_DIR"] {
         assert!(
             !preamble.text.contains(absent),
             "`{absent}` is stated for a session that has no directory of its own: {}",
             preamble.text
         );
     }
+    assert!(
+        !preamble.for_a_person.contains("PYTHONPATH"),
+        "a session with no directory of its own was told to write a module in one: {}",
+        preamble.for_a_person
+    );
 }
 
 /// A condition waiting on something outside the session is the case a goal handles worst if the

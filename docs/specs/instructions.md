@@ -211,16 +211,10 @@ this session has to itself ([trust-map.md](trust-map.md)) where it has one, with
 is for and the name a program started from a command line reads its path from. A session that has
 none has nothing said about one. These are facts about the machine, and the prompt says so.
 
-One of them carries imperatives, and those are the terms on which one is admitted here: gated on
+One of them carries an imperative, and those are the terms on which one is admitted here: gated on
 what the probe found, and naming the one case rather than stating a preference. The session's own
-directory is stated with what to put in it, and with what to do when a Python program fails because
-a module is missing: check, with a line that only reads and whose exit status is the answer, whether
-an installed package provides the same module under another name; where one does, write a module of
-the missing name in that directory that imports everything from the package, and run the program
-again with `PYTHONPATH` set to the directory's path, written out, in front of it on that one line;
-where nothing installed provides it, say which module is missing and what provides it. A session
-with no directory of its own is told none of this. The rest are facts alone and nothing is asked of
-the planner on their account.
+directory is stated with what to put in it. The rest are facts alone and nothing is asked of the
+planner on their account.
 
 What an installed GitHub CLI is for is said on the same terms, and to the turn a person is watching
 rather than in this block: the commands that read a pull request or an issue, with fetching the URL
@@ -228,6 +222,15 @@ named as the fallback for a CLI nobody has logged in with. A delegate reads this
 and is offered neither road, no `fetch_url` at all and no `run` without the capability for it
 ([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
 those tools are.
+
+What to do when a Python program fails because a module is missing is said on the same terms, to
+the turn a person is watching and only where the session has a directory of its own. Check, with a
+line that only reads and whose exit status is the answer, whether an installed package provides the
+same module under another name. Where one does, write a module of the missing name that re-exports
+the package in a new directory inside the session's own, and run the program again with
+`PYTHONPATH` set to that directory's path, written out in full and in single quotes, in front of it
+on that one line. Where nothing installed provides it, say which module is missing and what
+provides it. A session with no directory of its own is told none of this, and neither is a delegate.
 
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
@@ -251,17 +254,6 @@ part of the project and writes one into the project instead, which is the file a
 a reviewer each have to deal with. Saying nothing where there is no such directory is the same
 argument the other way: a path to a directory that is not there costs a turn the run that finds out.
 
-The stand-in for a missing module is stated because a planner not told of it looks for a newer
-interpreter, finds none, and asks the person to install one or edit the program. Both change the
-machine or the program to supply what an installed package often already provides, such as `tomli`
-for the `tomllib` a Python older than 3.11 lacks. A module of the missing name in the session's own
-directory changes neither, and goes when the session does. The assignment is on the one line
-because nothing carries over between lines, and that keeps the directory out of every other
-program's imports. The path is written out because a line expands no variable. It is gated on the
-directory because without one the only place to write the module is the project. Nothing here is a
-decision the driver takes on a program's output: the check is answered by an exit status
-([RUN-13](tools/run.md#RUN-13)), and what the planner does with it is the planner's.
-
 The GitHub CLI is the one whose fact would change nothing on its own, which is why the imperative
 goes with it. A URL arrives, there is a tool for URLs, and taking it fetches a whole page to read a
 fraction of it. The saving is the bytes and not the round: unvouched `run` output is `(U,priv)` just
@@ -276,6 +268,21 @@ The fact is still stated to a delegate, because whether a program is installed i
 whoever is asking, and a delegate that may run one can use it. What is withheld there is only the
 sentence choosing between two tools, one of which a delegate never has: a delegate told to fall back
 to `fetch_url` spends a round on a name that resolves to nothing.
+
+The stand-in for a missing module is stated because a planner not told of it looks for a newer
+interpreter, finds none, and asks the person to install one or edit the program. Both change the
+machine or the program to supply what an installed package often already provides, such as `tomli`
+for the `tomllib` a Python older than 3.11 lacks. A module of the missing name in the session's own
+directory changes neither, and goes when the session does. It goes in a directory of its own there,
+and only that directory goes on the path, because a directory on `PYTHONPATH` is imported from ahead
+of the standard library, and the session's directory also holds whatever else the work put in it,
+such as an archive unpacked to look inside. The assignment is on the one line because nothing
+carries over between lines. The path is written out because a line expands no variable, and quoted
+because a line reads an unquoted backslash as an escape and a Windows path is made of them. It is
+gated on the directory because without one the only place to write the module is the project. It is
+withheld from a delegate because the road is two `run`s and a reader is offered none. Nothing here
+is a decision the driver takes on a program's output: the check is answered by an exit status
+([RUN-13](tools/run.md#RUN-13)), and what the planner does with it is the planner's.
 
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`

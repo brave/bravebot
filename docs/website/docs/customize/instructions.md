@@ -182,9 +182,9 @@ username on its own, no file contents, no directory listing.
 
 They are labelled as facts about the machine rather than as instructions. One of them asks something
 of the planner as well, and only because a probe found what the request names: the scratch directory
-is stated with what to put in it, and with what to do when a Python program is missing a module.
-Nothing is asked on the account of the rest. What an installed `gh`
-is for is said too, just outside this block, and [below](#the-github-cli) is what it says.
+is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
+is for is said too, just outside this block, and [below](#the-github-cli) is what it says. So is
+[what to do about a missing Python module](#a-missing-python-module).
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
 ago that was. The rest is stated because discovering any of it otherwise costs a `run`, and a run
@@ -209,21 +209,27 @@ from another is given its own. A program started by [`run`](../reference/tools.m
 path from `BRAVEBOT_SCRATCH_DIR`. A session that could not be given a directory says so and runs
 without one, and the line is then absent rather than naming somewhere that is not there.
 
-The block also says what to do when a Python program fails because a module is missing, such as
-`tomllib` on a Python older than 3.11. The planner checks whether an installed package provides the
-same module under another name, with a command like `python3 -c 'import tomli'` whose exit status
-answers it. Where one does, it writes a module of the missing name in the scratch directory that
-imports from that package, and runs the program again with `PYTHONPATH=<the scratch directory>` in
-front of it on that one command. The program, your machine and your settings are left as they were,
-and the module goes with the session. Where nothing installed provides it, the planner says which
-module is missing and what provides it. A session with no scratch directory is not told any of
-this.
-
 It is stated because no `run` could discover it: nothing names that directory but this program, and a
 planner never told of it puts an intermediate file in the project instead. Reaching it grants nothing.
 A file there is read and written by its absolute path, but it prompts exactly when a file in the
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
+
+### A missing Python module
+
+Where the session has a scratch directory, the planner is also told what to do when a Python program
+fails because a module is missing, such as `tomllib` on a Python older than 3.11. It checks whether
+an installed package provides the same module under another name, with a command like
+`python3 -c 'import tomli'` whose exit status answers it. Where one does, it writes a module of the
+missing name that re-exports the package in a new directory inside the scratch directory, and runs
+the program again with `PYTHONPATH='<that directory>'` in front of it on that one command. The
+program, your machine and your settings are left as they were, and the module goes with the session.
+Where nothing installed provides it, the planner says which module is missing and what provides it.
+
+Only the new directory goes on `PYTHONPATH`, because Python imports from a directory there ahead of
+its standard library, and the scratch directory may hold other files the session put there. You
+approve each of these commands as you would any other. A session with no scratch directory is not
+told any of this, and neither is a delegate.
 
 ### The GitHub CLI
 
