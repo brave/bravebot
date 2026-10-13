@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useFitTextArea } from '../hooks'
+import { useDelayedFlag, useFitTextArea } from '../hooks'
 import { Alert, Button, Collapse, ProgressRing, TextArea } from '../nala'
 import { Modal } from './Modal'
 
@@ -17,6 +17,8 @@ export function BotMemory({ slug, directory }: { slug: string; directory: string
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(true)
   const [open, setOpen] = useState(false)
+  const loading = busy && !open
+  const showLoading = useDelayedFlag(loading)
   useEffect(() => {
     let gone = false
     // In turn, because reading the memory may tidy it, and the version that replaces is in the history.
@@ -42,8 +44,8 @@ export function BotMemory({ slug, directory }: { slug: string; directory: string
   return <section className="bot-memory-panel" data-test="bot-memory" aria-labelledby={`memory-${slug}`}>
     <span className="bot-field-label" id={`memory-${slug}`}>Memory</span>
     {problem && !open && <Alert type="error" size="small" role="alert">{problem}</Alert>}
-    {busy && !open && <p role="status" className="memory-loading"><ProgressRing mode="indeterminate" /> Loading…</p>}
-    <pre className="bot-memory"><span className="memory-excerpt">{text || 'Nothing remembered yet.'}</span></pre>
+    {loading && <p role="status" className="memory-loading" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading…</p>}
+    <pre className="bot-memory"><span className="memory-excerpt">{text || (loading ? '' : 'Nothing remembered yet.')}</span></pre>
     <div className="memory-actions">
       <Button size="small" kind="outline" isDisabled={busy} onClick={() => setOpen(true)} data-test="memory-edit">Edit memory</Button>
     </div>

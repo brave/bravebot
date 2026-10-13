@@ -89,7 +89,8 @@ matter:
 - `pnpm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
 - `make check-ui` from the repository root, or `node --test scripts/*.test.mjs` here after an
   install and a `cargo build -p bravebot-ui-files`: renderer state, models, file access,
-  memory retention, bot grounding, avatar motion and traits. File tests use the actual
+  memory retention, bot grounding, avatar motion and traits, and the delay before a loading row
+  shows. File tests use the actual
   secure-file helper, the grounding tests included: they assert that a briefing names the
   memory file and quotes no byte of it, and that a link at the memory path or at the
   briefing path is refused or displaced rather than followed. `marking.test.mjs` needs no

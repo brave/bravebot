@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FilePreview as Preview } from '../../shared/files'
+import { useDelayedFlag } from '../hooks'
 import { Modal } from './Modal'
 import { Alert, Button, Icon, ProgressRing } from '../nala'
 import { FileGlyph } from './FileGlyph'
@@ -9,6 +10,7 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
   const [loading, setLoading] = useState(true)
   const [problem, setProblem] = useState('')
   const [wrap, setWrap] = useState(false)
+  const showLoading = useDelayedFlag(loading)
   useEffect(() => {
     let gone = false
     setLoading(true); setPreview(null); setProblem('')
@@ -30,7 +32,7 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
         <Button kind="plain-faint" size="tiny" className="code-wrap" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</Button>
         <Button kind="plain-faint" size="tiny" onClick={open}><Icon name="launch" slot="icon-before" />Open in default app</Button>
       </div>
-      {loading ? <p role="status" className="preview-status"><ProgressRing mode="indeterminate" /> Loading preview…</p> : preview ? <>
+      {loading ? <p role="status" className="preview-status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading preview…</p> : preview ? <>
         {preview.truncated && <p role="status" className="preview-status">Showing the first 128 KB. Open the file to review the rest.</p>}
         <pre className={wrap ? 'code-wrapped' : ''}>{preview.text}</pre>
       </> : <p className="preview-status">This file is binary, unavailable, or outside the project. A text preview is not available.</p>}

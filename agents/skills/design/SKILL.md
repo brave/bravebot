@@ -147,7 +147,9 @@ and at the minimum window size.
 - Every interactive element has hover, pressed, focus-visible and disabled states. Hover feedback
   lands within `--motion-fast`. Nothing animates on first paint.
 - Every list and panel has designed empty, loading and error states. Loading shows a skeleton or a
-  12px ring only after 150ms (`useDelayedFlag`), with no blank flash.
+  12px ring only after 150ms (`useDelayedFlag`), with no blank flash. The loading row mounts when
+  loading starts and carries `data-delayed` until the delay passes, so it holds its height while
+  hidden. An empty state and any other branch still read the raw flag.
 - Switching sessions shows the target's skeleton immediately and restores scroll, with no flash of
   the previous session.
 - An inactive window dims its chrome through `data-window-inactive`: selected rows go grey and
