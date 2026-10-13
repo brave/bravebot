@@ -7,6 +7,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/agent/src/home.rs
+  - crates/tui/src/command_table.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---

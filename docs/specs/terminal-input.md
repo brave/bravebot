@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/list_picker.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
+  - crates/tui/src/command_table.rs
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md

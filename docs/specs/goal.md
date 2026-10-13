@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: Session::start_goal
   - symbol: Session::goal_not_met

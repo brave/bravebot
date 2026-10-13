@@ -93,9 +93,10 @@ pub fn expand(directory: &Path, line: &str) -> Expansion {
     match agent {
         None if begins_with_a_command(body) => refused(name, Why::BeginsWithACommand),
         None => Expansion::Expanded(body.to_string()),
-        Some(agent) if is_one_word(&agent) => {
-            Expansion::Expanded(format!("{} {agent} {body}", crate::app::AGENT_COMMAND))
-        }
+        Some(agent) if is_one_word(&agent) => Expansion::Expanded(format!(
+            "{} {agent} {body}",
+            crate::command_table::AGENT_COMMAND
+        )),
         Some(_) => refused(name, Why::AgentNotAName),
     }
 }
@@ -125,7 +126,7 @@ fn split(line: &str) -> Option<(&str, &str)> {
 }
 
 fn claimed_by_a_command(word: &str) -> bool {
-    crate::app::commands()
+    crate::command_table::commands()
         .iter()
         .any(|command| command.name.strip_prefix('/') == Some(word))
 }
@@ -307,7 +308,7 @@ mod tests {
     #[test]
     fn a_name_a_command_claims_is_never_a_file() {
         let directory = scratch("prompt-files-claimed");
-        for command in crate::app::commands() {
+        for command in crate::command_table::commands() {
             let name = command.name.trim_start_matches('/');
             std::fs::write(directory.join(format!("{name}.md")), "from a file").unwrap();
             assert_eq!(

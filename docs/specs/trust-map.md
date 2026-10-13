@@ -33,6 +33,7 @@ governs:
   - ui/scripts/session-directory.test.mjs
   - ui/src/renderer/components/Permissions.tsx
   - ui/scripts/remembered-trust-list.test.mjs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust

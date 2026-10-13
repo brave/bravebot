@@ -53,7 +53,7 @@ pub fn typed(line: &str) -> Option<&str> {
     }
     let mut words = line.split_whitespace();
     let name = words.clone().next_back()?.strip_prefix('/')?;
-    if words.nth(1).is_some() && crate::app::command_typed(line).is_some() {
+    if words.nth(1).is_some() && crate::command_table::command_typed(line).is_some() {
         return None;
     }
     Some(name)
@@ -93,7 +93,7 @@ pub fn named<'a>(held: &'a [Skill], word: &str) -> Option<&'a Skill> {
 fn offerable(name: &str) -> bool {
     !name.is_empty()
         && !name.chars().any(|c| c.is_whitespace() || c.is_control())
-        && !crate::app::commands()
+        && !crate::command_table::commands()
             .iter()
             .any(|command| command.name.strip_prefix('/') == Some(name))
 }
@@ -158,7 +158,7 @@ mod tests {
     /// offered.
     #[test]
     fn no_offered_skill_completes_to_a_command_line() {
-        let held: Vec<Skill> = crate::app::commands()
+        let held: Vec<Skill> = crate::command_table::commands()
             .iter()
             .map(|command| skill(command.name.trim_start_matches('/')))
             .chain([skill("add-dir /etc"), skill("bell\u{7}"), skill("ordinary")])
@@ -169,7 +169,7 @@ mod tests {
         for skill in &offered {
             let line = format!("/{} ", skill.name);
             assert_eq!(
-                crate::app::command_typed(&line),
+                crate::command_table::command_typed(&line),
                 None,
                 "{line:?} is a command"
             );

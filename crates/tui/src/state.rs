@@ -711,7 +711,7 @@ pub enum Offered {
     /// The commands first and then the skills, walked as one list. Commands only where the word is
     /// the whole line, since anywhere else a command is a prompt.
     Slash {
-        commands: Vec<crate::app::Command>,
+        commands: Vec<crate::command_table::Command>,
         skills: Vec<crate::skills::Skill>,
     },
     Files(Vec<bravebot_mentions::Entry>),
@@ -6333,7 +6333,7 @@ impl Session {
             let commands = if self.shell {
                 Vec::new()
             } else {
-                crate::app::completions(&self.input)
+                crate::command_table::completions(&self.input)
             };
             return if commands.is_empty() {
                 Offered::Nothing
@@ -6350,7 +6350,7 @@ impl Session {
         if self.shell {
             return Offered::Nothing;
         }
-        let commands = crate::app::completions(&self.input);
+        let commands = crate::command_table::completions(&self.input);
         let skills = match (crate::skills::typed(&self.input), &self.skills) {
             (Some(typed), Some(held)) => crate::skills::matching(held, typed),
             _ => Vec::new(),
@@ -6399,7 +6399,7 @@ impl Session {
     }
 
     /// The commands the half-typed line could still become.
-    pub fn completions(&self) -> Vec<crate::app::Command> {
+    pub fn completions(&self) -> Vec<crate::command_table::Command> {
         match self.offered() {
             Offered::Slash { commands, .. } => commands,
             _ => Vec::new(),
@@ -6411,7 +6411,7 @@ impl Session {
     /// Clamped here rather than when the input changes, because the list is a function of the
     /// input: typing a letter can shorten it, and a cursor past the end would otherwise choose
     /// nothing at the moment Tab was pressed.
-    pub fn highlighted_completion(&self) -> Option<crate::app::Command> {
+    pub fn highlighted_completion(&self) -> Option<crate::command_table::Command> {
         let Offered::Slash { commands, skills } = self.offered() else {
             return None;
         };
@@ -6570,7 +6570,7 @@ impl Session {
         if self.shell || self.caret() != self.input.len() {
             return None;
         }
-        crate::app::complete_argument(&self.input)
+        crate::command_table::complete_argument(&self.input)
     }
 
     /// Finish the level started after `/effort ` as far as the levels that fit it agree.

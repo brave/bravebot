@@ -151,7 +151,7 @@ fn named_words(session: &Session) -> Vec<(usize, usize)> {
         return Vec::new();
     }
     let line = session.input();
-    if let Some(name) = crate::app::command_typed(line) {
+    if let Some(name) = crate::command_table::command_typed(line) {
         let start = line.len() - line.trim_start().len();
         return vec![(start, start + name.len())];
     }
@@ -182,7 +182,7 @@ fn argument_hint(session: &Session) -> Option<String> {
     if word.len() == line.len() || word.contains(char::is_whitespace) {
         return None;
     }
-    let hint = match crate::app::commands()
+    let hint = match crate::command_table::commands()
         .iter()
         .find(|command| command.name == word)
     {

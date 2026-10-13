@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again

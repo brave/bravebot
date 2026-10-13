@@ -13,7 +13,7 @@ use crate::wrap;
 use super::{dim, head_of, printable, tail_of};
 
 /// How a command is written in the list: the word, and what follows it.
-fn command_word(command: &crate::app::Command) -> String {
+fn command_word(command: &crate::command_table::Command) -> String {
     if command.argument.is_empty() {
         command.name.to_string()
     } else {
@@ -231,11 +231,11 @@ pub(super) fn lines_beneath_the_box(
 /// visible rows instead would slide the descriptions sideways with each letter typed.
 fn slash_lines(
     session: &Session,
-    commands: &[crate::app::Command],
+    commands: &[crate::command_table::Command],
     skills: &[crate::skills::Skill],
     width: u16,
 ) -> Vec<Line<'static>> {
-    let column = crate::app::commands()
+    let column = crate::command_table::commands()
         .iter()
         .map(|command| command_word(command).chars().count())
         .chain(
@@ -314,13 +314,13 @@ fn slash_lines(
 ///
 /// Work that is not a turn, a compaction or an aside, holds every command back, whatever the table
 /// says of one typed during a turn.
-fn command_when(session: &Session, command: &crate::app::Command) -> &'static str {
-    use crate::app::MidTurn;
+fn command_when(session: &Session, command: &crate::command_table::Command) -> &'static str {
+    use crate::command_table::MidTurn;
     if !session.a_turn_is_running() {
         return t!(command_when_queued);
     }
     match command.mid_turn {
-        MidTurn::Runs if crate::app::waits_behind_the_queue(session, command.name) => {
+        MidTurn::Runs if crate::command_table::waits_behind_the_queue(session, command.name) => {
             t!(command_when_queued)
         }
         MidTurn::Runs => t!(command_when_now),

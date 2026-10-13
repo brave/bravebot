@@ -20,6 +20,7 @@ mod away;
 pub mod caffeinate;
 pub mod checkouts_command;
 pub mod clipboard;
+pub mod command_table;
 pub mod config_prompt;
 pub mod confirm;
 pub mod dropped;
