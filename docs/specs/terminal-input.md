@@ -2530,5 +2530,11 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
 `verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
 `verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
+`verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
+`verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
+`verified-by: bravebot_tui::app::a_worker_that_ends_without_answering_is_forgotten`
+`verified-by: bravebot_tui::app::an_answer_that_arrives_after_typing_is_charged_and_not_offered`
+`verified-by: bravebot_tui::app::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
 `verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
 `verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`
