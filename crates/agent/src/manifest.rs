@@ -1201,13 +1201,13 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         release = release.allow(slot);
     }
     // Each connector act's slot, to the one place its plan named, fixed from the frozen plan and
-    // named on the line the person approves below.
+    // named on the line the person approves below. An act that only takes values sends no slot,
+    // so it is named on its line and entered here as nothing.
     let releases = plan.releases();
     for connector_release in &releases {
-        release = release.allow_into(
-            connector_release.slot.clone(),
-            connector_release.destination(),
-        );
+        if let Some(slot) = &connector_release.slot {
+            release = release.allow_into(slot.clone(), connector_release.destination());
+        }
     }
 
     // A grant for each connector the frozen plan names and for no other, the way a turn holds one

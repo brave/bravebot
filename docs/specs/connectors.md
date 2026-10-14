@@ -389,3 +389,4 @@ line names.
 `verified-by: bravebot_agent::connectors::an_act_takes_only_what_an_earlier_fetch_records_and_its_definition_allows`
 `verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
 `verified-by: bravebot_core::selector::a_take_names_a_slot_and_a_field_for_each_value`
+`verified-by: bravebot_agent::connectors::a_take_names_only_a_slot_a_fetch_filled`

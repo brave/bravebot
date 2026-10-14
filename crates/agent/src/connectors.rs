@@ -2077,4 +2077,49 @@ mod tests {
             "{catalogue}"
         );
     }
+
+    /// A value is taken only from a fetch's receipt, so a take naming a workspace read or a
+    /// processor's slot is refused: neither has a receipt, and the value would have to be read.
+    #[test]
+    fn a_take_names_only_a_slot_a_fetch_filled() {
+        let calendar = connector(
+            "calendar",
+            serde_json::json!({
+                "resources": {
+                    "add_event": { "step": "act", "uses": ["place", "with"], "summary": "add an event",
+                                   "text": false, "with": { "start": "datetime" }, "takes": ["start"] }
+                }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([("calendar".to_string(), Ok(calendar))]));
+        let read = DraftStep::new("read_file")
+            .with_text("path", "trip.md")
+            .with_text("out_slot", "trip");
+        let mut process = DraftStep::new("process")
+            .with_text("instruction", "find the departure")
+            .with_text("out_slot", "when");
+        process
+            .args
+            .insert("reads".into(), Arg::List(vec!["trip".into()]));
+        let taking = |slot: &str| {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "calendar")
+                .with_text("resource", "add_event")
+                .with_text("place", "primary")
+                .with_text("take", format!("start:{slot}.departs"))
+        };
+        for (steps, slot) in [
+            (vec![read.clone(), taking("trip")], "trip"),
+            (vec![read, process, taking("when")], "when"),
+        ] {
+            let plan = validate_for_tests(&Draft::new(steps)).unwrap();
+            let refused = connectors.check(&plan).unwrap_err();
+            assert!(
+                refused.contains(&format!(
+                    "'take' names '{slot}', which no earlier fetch filled"
+                )),
+                "{slot}: {refused}"
+            );
+        }
+    }
 }

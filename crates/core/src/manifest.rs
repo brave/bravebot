@@ -1029,8 +1029,8 @@ impl fmt::Display for Origin {
     }
 }
 
-/// One connector act's release: which slot leaves, where its content came from, and the one
-/// connector and place it goes to.
+/// One connector act's release: the slot it carries, where it carries one, where its content and
+/// any it takes came from, and the one connector and place it goes to.
 ///
 /// Fixed at validation, from the frozen plan alone, which is what makes it a precommitted
 /// release: the plan was written from the task string and nothing had been read when this was
@@ -1038,7 +1038,9 @@ impl fmt::Display for Origin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub step: usize,
-    pub slot: SlotId,
+    /// The slot whose content leaves, where the act carries one. An act that only takes values
+    /// sends none: the authority reads them from the receipts it issued.
+    pub slot: Option<SlotId>,
     pub origins: BTreeSet<Origin>,
     pub connector: String,
     pub place: String,
@@ -1116,8 +1118,7 @@ impl Manifest {
     }
 
     /// The release the step at `index` makes, where it is a connector act carrying a slot or taking
-    /// values from fetches, with the origins of each looked up in `origins`. Its slot is the one it
-    /// carries, or else the first it takes from.
+    /// values from fetches, with the origins of each looked up in `origins`.
     fn release_at(
         &self,
         index: usize,
@@ -1133,7 +1134,9 @@ impl Manifest {
             .and_then(Arg::text)
             .map(SlotId::new);
         let taken = taken_slots(step.text("take"));
-        let slot = carried.clone().or_else(|| taken.first().cloned())?;
+        if carried.is_none() && taken.is_empty() {
+            return None;
+        }
         Some(Release {
             step: index,
             origins: carried
@@ -1141,7 +1144,7 @@ impl Manifest {
                 .chain(&taken)
                 .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
                 .collect(),
-            slot,
+            slot: carried,
             connector: step.text("connector").to_string(),
             place: step.text("place").to_string(),
         })
@@ -1909,7 +1912,7 @@ mod tests {
         assert_eq!(releases.len(), 1);
         let release = &releases[0];
         assert_eq!(release.step, 3);
-        assert_eq!(release.slot, SlotId::new("fix"));
+        assert_eq!(release.slot, Some(SlotId::new("fix")));
         assert_eq!(release.destination(), "github brave/bravebot");
         assert_eq!(
             release.origins,
@@ -1983,5 +1986,39 @@ mod tests {
         assert!(noted.describe_step(2).contains(
             "content from github brave/bravebot to github brave/bravebot; the authority"
         ));
+    }
+
+    /// An act that carries one slot and takes values from another names the origins of both, and
+    /// one that only takes values releases no slot of its own.
+    #[test]
+    fn a_release_names_what_an_act_carries_and_what_it_takes() {
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("find_pull", "brave/bravebot", "pr"),
+            act("comment", "brave/bravebot")
+                .with_text("item", "1")
+                .with_text("take", "branch:pr.head")
+                .with_text("from_slot", "doc"),
+            act("protect", "brave/bravebot").with_text("take", "branch:pr.head"),
+        ]))
+        .unwrap();
+        let releases = plan.releases();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].slot, Some(SlotId::new("doc")));
+        assert_eq!(
+            releases[0].origins,
+            BTreeSet::from([
+                Origin::Workspace,
+                Origin::Place {
+                    connector: "github".into(),
+                    place: "brave/bravebot".into()
+                }
+            ])
+        );
+        assert_eq!(releases[1].slot, None);
+        assert_eq!(
+            releases[1].describe(),
+            "content from github brave/bravebot to github brave/bravebot"
+        );
     }
 }

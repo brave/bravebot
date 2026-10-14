@@ -388,6 +388,7 @@ lets fetched content change what a slot says and never where it goes.
 `verified-by: bravebot_core::manifest::a_connector_act_release_is_named_before_anything_is_read`
 `verified-by: bravebot_core::policy::a_connector_release_is_refused_unless_precommitted_to_that_place`
 `verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
+`verified-by: bravebot_core::manifest::a_release_names_what_an_act_carries_and_what_it_takes`
 
 ## Known costs
 
