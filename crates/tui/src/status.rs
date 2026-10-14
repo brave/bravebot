@@ -216,8 +216,8 @@ pub struct Facts<'a> {
     /// The paths the person let programs reach for this session, one row each as `/reach paths`
     /// lists it (SANDBOX-28). Empty says nothing.
     pub requested_paths: &'a [String],
-    /// The answer about this directory a session was told to remember, where one is kept and
-    /// would settle the next session started here (TRUST-23).
+    /// The yes about this directory a session kept, where one is kept and would settle the next
+    /// session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
 }
 
@@ -2031,7 +2031,7 @@ mod tests {
 
     /// TRUST-12: a yes kept past a session stops the only screen that would have shown it, so the
     /// report says it is held, when it was given, where it is written and how to take it back.
-    /// Nothing is said where none is kept, which is every directory nobody said to remember.
+    /// Nothing is said where none is kept, which is every directory nobody answered yes about.
     #[test]
     fn the_report_says_a_directory_is_trusted_by_a_remembered_answer() {
         let config = config_for("http://127.0.0.1:1", None);

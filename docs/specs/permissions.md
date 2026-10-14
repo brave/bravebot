@@ -911,9 +911,9 @@ have made each of those three depend on nobody else having spoken.
   show, or a terminal too small for one rule and the keys, is never granted there at all. Both fail
   closed: `n` still answers, and the person is asked about each action as they would have been.
 - **A grant outlives the session that gave it, which no other answer here does.** PERM-15's record
-  makes a later session in that workspace honour a rule without asking, where the startup trust
-  answer is asked afresh unless the person said to remember it, and then only for that one
-  directory ([trust-map.md](trust-map.md#TRUST-23)). The narrowness is what
+  makes a later session in that workspace honour a rule without asking, where a startup trust
+  answer is honoured only for a yes, and then only for that one directory or the root of its git
+  worktree ([trust-map.md](trust-map.md#TRUST-23)). The narrowness is what
   makes it sound: an entry covers one rule text from one file in one workspace, so what a second
   session honours unasked is exactly what a person read and accepted. Deleting the line, or the
   file, is the way back, and `doctor` names both.

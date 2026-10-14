@@ -92,22 +92,30 @@ cli-plain-takes-nothing-else =
     --plain starts a session and takes no other arguments. --incognito,
     --dangerously-skip-permissions, --settings and --agent go with it; everything else is another
     way of starting.
-# Said where the startup question was not put because an earlier session here was told to remember
-# the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
+# Said where the startup question was not put because an earlier session here was answered yes and
+# the yes was kept (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
 # lines rather than the file, since a directory whose path is spelled alike shares the file.
 # Said on stderr by a one-shot run that opens with a kept answer about its working directory
 # or the root of the git worktree around it, naming the directory the answer was about.
 cli-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
     /forget-trust in bravebot, or delete the lines naming it from { $path })
 
 cli-plain-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 cli-plain-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; to be asked again, run
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming { $root } from { $path })
+# Said in a session in lines (CLI-14) after a yes is kept, and in the lines before the question. It
+# has no /forget-trust of its own, so both name the command in the interface that draws.
+cli-plain-trust-kept =
+    trusting { $directory }, and later sessions started here will not ask; to take it back, run
+    /forget-trust in bravebot without --plain, or delete the lines naming it from { $path }
+cli-plain-trust-remember-where =
+    To take it back, run /forget-trust in bravebot without --plain, or delete the lines naming
+    this directory from this file:
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -1424,23 +1432,28 @@ trust-directory-explained =
 trust-directory-regardless =
     Either way, anything derived from the web or from an untrusted file is still shown
     before it is written.
+# The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
+# directory or one holding it, a filesystem that does not say when a directory was made, or an
+# incognito session.
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
-# The key that keeps the answer for later sessions (TRUST-23). Offered only where it can be written
-# down, and its lines say what it covers and where it goes, since nobody can endorse a record they
-# were not shown.
+# The yes where it keeps the answer for later sessions (TRUST-23). Its lines say what it covers and
+# where it goes, since nobody can endorse a record they were not shown.
 trust-directory-remember = trust and remember
 trust-directory-remember-explained =
-    r: trust it, and skip this question in later sessions started in this directory, or below it if it is a git root
+    A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked.
 trust-directory-remember-exact =
     A session started above it is still asked, and so is one in a nested repository or in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
-# Above the keys while the lines saying what r does and where it writes have not been on the screen
-# together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
+# Said where a yes cannot be kept, so the person is not left to find out from the next session.
+trust-directory-not-remembered =
+    This answer cannot be kept here, so a session started in this directory later asks again.
+# Above the keys while the lines saying what y keeps and where it writes have not been on the screen
+# together, which is when y is not taken. What y does comes first, so a narrow terminal that cuts the
 # line off keeps it.
-trust-directory-remember-unseen = ↑↓ r remembers nothing: what it writes is not shown yet
+trust-directory-remember-unseen = ↑↓ y trusts nothing yet: what it keeps is not shown yet
 # The same where those lines are taller than the box, so no scroll shows them together.
-trust-directory-remember-too-small = r remembers nothing: what it writes is taller than this box
+trust-directory-remember-too-small = y trusts nothing: what it keeps is taller than this box
 quit = quit
 trust-quit-again = again
 
@@ -2756,13 +2769,13 @@ session-trusting-as-left = trusting { $directory } (as this session left it)
 # what made it.
 session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
-# Said where the question was not put because an earlier session here was told to remember the
-# answer (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
+# Said where the question was not put because an earlier session here was answered yes and the yes
+# was kept (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
 # in this session and the line is the only thing on the screen that says where it came from.
 session-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+    trusting { $directory } (you trusted it { $when }; /forget-trust to be asked again)
 session-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; /forget-trust to be asked again)
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; /forget-trust to be asked again)
 session-trust-kept =
     trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
 # The answer was given, but writing it down failed, so the next session will ask after all.

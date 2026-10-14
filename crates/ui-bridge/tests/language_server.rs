@@ -321,7 +321,10 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call("trust.reply", json!({"session": session, "trusted": true}));
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}));
+        }
         session
     }
 

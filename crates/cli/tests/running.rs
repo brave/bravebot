@@ -6878,7 +6878,7 @@ fn a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trus
         "the kept answer did not trust the file"
     );
     assert!(
-        stderr.contains("you said to remember it") && stderr.contains("/forget-trust"),
+        stderr.contains("you trusted it") && stderr.contains("/forget-trust"),
         "the run did not say it was trusting a kept answer: {stderr}"
     );
 }

@@ -261,10 +261,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         (session, opened)
     }
 

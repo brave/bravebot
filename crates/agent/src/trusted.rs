@@ -108,6 +108,23 @@ pub fn record_for(
     Some((Store::new(home, directory), identity))
 }
 
+/// The record a yes is kept in, where it may be kept and this session may write it.
+///
+/// [`record_for`] in a session that adds to `~/.bravebot`. An incognito session reads the record
+/// and writes nothing ([`may_be_written`]), so a yes given there is not offered as one that is
+/// kept. Every front end asks here when it puts the startup question, so none says a yes is kept
+/// where another would write nothing.
+pub fn record_to_keep(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    directory: &Path,
+) -> Option<(Store, Identity)> {
+    if !may_be_written() {
+        return None;
+    }
+    record_for(home, profile, directory)
+}
+
 /// A kept answer that settles a session, and the record it is in.
 ///
 /// [`Kept::root`] is the session's own directory where the answer was kept there, and the root of

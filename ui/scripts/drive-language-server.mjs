@@ -109,7 +109,7 @@ try {
   }, project)
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
 
   const composer = page.locator('.composer textarea')

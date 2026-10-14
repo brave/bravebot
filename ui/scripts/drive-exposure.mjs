@@ -69,7 +69,7 @@ try {
   }, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
   const trustIt = async () => {
-    await trust.getByRole('button', { name: 'Trust this directory' }).click()
+    await trust.locator('[data-test="trust-approve"]').click()
     await trust.waitFor({ state: 'hidden' })
   }
   await page.getByRole('button', { name: 'Open project', exact: true }).click()

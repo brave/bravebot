@@ -270,9 +270,20 @@ fn run(
         .as_ref()
         .and_then(|record| record.trust_map(workspace.root()))
         .or_else(|| {
-            opening_trust(&mut asking, mode, workspace.root(), |root| {
-                bravebot_agent::trusted::honoured(home.as_deref(), profile.as_deref(), root)
-            })
+            opening_trust(
+                &mut asking,
+                mode,
+                workspace.root(),
+                |root| bravebot_agent::trusted::honoured(home.as_deref(), profile.as_deref(), root),
+                |root| {
+                    bravebot_agent::trusted::record_to_keep(
+                        home.as_deref(),
+                        profile.as_deref(),
+                        root,
+                    )
+                },
+                hosted_as.as_deref().unwrap_or_default(),
+            )
         })
     else {
         return ExitCode::SUCCESS;
@@ -892,16 +903,26 @@ impl Running<'_> {
 /// somebody leaving, which starts no session. The map itself is built by the interface's own
 /// function, so what a yes grants here is what a yes grants there.
 ///
-/// An answer another front end was told to remember about this directory answers here too
-/// (TRUST-23), after the mode and before the question. `remembered` finds the record about the
-/// directory it is handed, which is `root`, and is called only where the mode has not answered.
-/// Nothing here writes it: a line has one answer per question, and none of them outlives the
-/// session.
+/// An answer kept about this directory answers here too (TRUST-23), after the mode and before the
+/// question. `remembered` finds the record about the directory it is handed, which is `root`, and is
+/// called only where the mode has not answered.
+///
+/// A yes is kept wherever `keeping` finds a record to write it in, and the lines before the question
+/// say so and name the file. Where it finds none, or the session writes nothing, the lines say the
+/// answer cannot be kept and a yes trusts this session only. A no is never kept. `session` names the
+/// session in the entry, and is empty where this one has no name yet.
 fn opening_trust<R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
     mode: PermissionMode,
     root: &std::path::Path,
     remembered: impl FnOnce(&std::path::Path) -> Option<bravebot_agent::trusted::Honoured>,
+    keeping: impl FnOnce(
+        &std::path::Path,
+    ) -> Option<(
+        bravebot_agent::trusted::Store,
+        bravebot_agent::trusted::Identity,
+    )>,
+    session: &str,
 ) -> Option<TrustStore> {
     if let Some(answered) = bravebot_tui::trust_prompt::answered_by(mode, root) {
         return Some(answered);
@@ -931,12 +952,22 @@ fn opening_trust<R: BufRead, W: Write>(
 
     // What is being asked about first and the question last, as every question here is put: a
     // person reading a line at a time, or hearing one, has read the detail by the time they are
-    // asked to answer it.
-    let lines = [
+    // asked to answer it. That includes what a yes keeps and where.
+    let keeping = keeping(root);
+    let mut lines = vec![
         root.display().to_string(),
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
     ];
+    match &keeping {
+        Some((store, _)) => lines.extend([
+            t!(trust_directory_remember_explained).to_string(),
+            t!(trust_directory_remember_exact).to_string(),
+            t!(cli_plain_trust_remember_where).to_string(),
+            store.path().display().to_string(),
+        ]),
+        None => lines.push(t!(trust_directory_not_remembered).to_string()),
+    }
     let answer = match asking.put(&lines, t!(trust_directory_title)) {
         Some(Decision::Approve) => bravebot_tui::trust_prompt::Answer::Trust,
         Some(Decision::Reject) => bravebot_tui::trust_prompt::Answer::Decline,
@@ -944,11 +975,36 @@ fn opening_trust<R: BufRead, W: Write>(
     };
     let trust = bravebot_tui::trust_prompt::trust_for(answer, root)?;
 
+    if let (bravebot_tui::trust_prompt::Answer::Trust, Some((store, identity))) = (answer, &keeping)
+    {
+        let directory = root.display().to_string();
+        asking.say(&match store.keep(identity, session, seconds_now()) {
+            true => t!(
+                cli_plain_trust_kept,
+                directory = directory,
+                path = store.path().display().to_string()
+            ),
+            false => t!(
+                session_trust_not_kept,
+                directory = directory,
+                path = store.path().display().to_string()
+            ),
+        });
+        return Some(trust);
+    }
+
     asking.say(&match trust.is_trusted(".") {
         true => t!(session_trusting, directory = root.display().to_string()),
         false => t!(session_not_trusting).to_string(),
     });
     Some(trust)
+}
+
+/// Seconds since the epoch, which is how a kept answer says when it was given.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
 }
 
 /// The one thing that reads what the person types, and the one thing that writes what is not the
@@ -1925,6 +1981,8 @@ mod tests {
                 PermissionMode::Ask,
                 std::path::Path::new("/work"),
                 |_| None,
+                |_| None,
+                "",
             )
         };
 
@@ -1959,6 +2017,8 @@ mod tests {
             PermissionMode::Bypass,
             std::path::Path::new("/work"),
             |_| panic!("the record was read for a session that asks about nothing"),
+            |_| panic!("a record was found to write for a session that asks about nothing"),
+            "",
         );
 
         assert!(
@@ -2004,21 +2064,46 @@ mod tests {
         }
     }
 
+    /// The startup question with this input, the record to read and to write found by `keeping`.
+    fn opening_keeping_in(
+        answer: &str,
+        root: &std::path::Path,
+        remembered: impl FnOnce(&std::path::Path) -> Option<bravebot_agent::trusted::Honoured>,
+        keeping: impl FnOnce(
+            &std::path::Path,
+        ) -> Option<(
+            bravebot_agent::trusted::Store,
+            bravebot_agent::trusted::Identity,
+        )>,
+    ) -> (Option<TrustStore>, String) {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
+            Vec::new(),
+        );
+        let trust = opening_trust(
+            &mut asking,
+            PermissionMode::Ask,
+            root,
+            remembered,
+            keeping,
+            "1-2",
+        );
+        let said = String::from_utf8(asking.output).expect("what was written is text");
+        (trust, said)
+    }
+
     /// The startup question with this input, the record found where a session here finds it.
     fn opening_with_a_record(
         answer: &str,
         home: &std::path::Path,
         root: &std::path::Path,
     ) -> (Option<TrustStore>, String) {
-        let mut asking = Prompting::new(
-            std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
-            Vec::new(),
-        );
-        let trust = opening_trust(&mut asking, PermissionMode::Ask, root, |root| {
-            bravebot_agent::trusted::honoured(Some(home), None, root)
-        });
-        let said = String::from_utf8(asking.output).expect("what was written is text");
-        (trust, said)
+        opening_keeping_in(
+            answer,
+            root,
+            |root| bravebot_agent::trusted::honoured(Some(home), None, root),
+            |root| bravebot_agent::trusted::record_for(Some(home), None, root),
+        )
     }
 
     /// An answer the terminal interface or the desktop was told to remember answers a session in
@@ -2128,15 +2213,15 @@ mod tests {
         assert_eq!(fresh.handle.agent(), Some("another"));
     }
 
-    /// With no answer kept about this directory the question is put. A yes here, and the `r` the
-    /// terminal interface takes as "remember", are answered as every line is: the first trusts the
-    /// directory for this session, the second declines, and neither writes the record, since
-    /// nothing answered in lines outlives the session (CLI-14).
+    /// With no answer kept about this directory the question is put, and a yes is the answer that
+    /// is kept (TRUST-23): the next session in lines started here is not asked and trusts the same
+    /// tree, and says the answer is why.
     #[test]
-    fn an_answer_in_lines_is_asked_for_and_never_kept() {
-        let scratch = Remembering::new("plain-answer-not-kept");
+    fn a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking() {
+        let scratch = Remembering::new("plain-yes-kept");
         let (home, root) = (&scratch.home, &scratch.root);
         let Some(identity) = bravebot_agent::trusted::Identity::of(root) else {
+            // A filesystem that cannot say when a directory was made keeps no answer.
             return;
         };
         let store = bravebot_agent::trusted::Store::new(home, root);
@@ -2147,17 +2232,150 @@ mod tests {
             "a directory with no kept answer was not asked about: {said}"
         );
         assert!(
-            trust.is_some_and(|trust| trust.is_trusted(".")),
+            trust.is_some_and(|trust| trust.is_trusted("src/main.rs")),
             "the affirmative did not trust the working directory"
         );
-        assert_eq!(store.kept(&identity), None, "a yes in lines was remembered");
-
-        let (trust, _) = opening_with_a_record("r\n", home, root);
+        let kept = store.kept(&identity).expect("a yes in lines was not kept");
+        assert_eq!(kept.root, *root);
         assert!(
-            trust.is_some_and(|trust| !trust.is_trusted(".")),
-            "r was taken as something other than a line that is not yes"
+            said.contains(&t!(
+                cli_plain_trust_kept,
+                directory = root.display().to_string(),
+                path = store.path().display().to_string()
+            )),
+            "the session did not say the answer was kept: {said}"
         );
-        assert_eq!(store.kept(&identity), None, "r in lines was remembered");
+
+        // The input is empty, so a question put again would have been left and started no session.
+        let (trust, said) = opening_with_a_record("", home, root);
+        let trust = trust.expect("the kept yes did not settle the next session");
+        assert!(trust.is_trusted("src/main.rs"));
+        assert!(
+            !said.contains(t!(trust_directory_title)),
+            "the question was put again after a yes: {said}"
+        );
+    }
+
+    /// A no is never kept, and neither is a line that is not yes, `r` included: the key the terminal
+    /// interface once took as "remember" is an ordinary refusal here. The end of the input leaves.
+    #[test]
+    fn a_no_or_the_end_of_the_input_in_lines_keeps_nothing() {
+        let scratch = Remembering::new("plain-no-not-kept");
+        let (home, root) = (&scratch.home, &scratch.root);
+        let Some(identity) = bravebot_agent::trusted::Identity::of(root) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(home, root);
+
+        for typed in ["n\n", "r\n", "\n"] {
+            let (trust, _) = opening_with_a_record(typed, home, root);
+            assert!(
+                trust.is_some_and(|trust| !trust.is_trusted(".")),
+                "{typed:?} trusted the directory"
+            );
+            assert_eq!(store.kept(&identity), None, "{typed:?} was kept");
+        }
+        let (trust, _) = opening_with_a_record("", home, root);
+        assert!(trust.is_none(), "the end of the input started a session");
+        assert_eq!(store.kept(&identity), None, "leaving was kept");
+        assert!(!store.path().exists(), "a record was written for no yes");
+    }
+
+    /// Everything a yes keeps is on the screen before it can be given: the lines say what it
+    /// covers and name the file, ahead of the question.
+    #[test]
+    fn the_question_in_lines_names_the_file_a_yes_is_kept_in() {
+        let scratch = Remembering::new("plain-names-the-file");
+        let (home, root) = (&scratch.home, &scratch.root);
+        if bravebot_agent::trusted::Identity::of(root).is_none() {
+            return;
+        }
+        let store = bravebot_agent::trusted::Store::new(home, root);
+
+        let (_, said) = opening_with_a_record("n\n", home, root);
+
+        let file = said
+            .find(&store.path().display().to_string())
+            .expect("the question did not name the file");
+        let asked = said
+            .find(t!(trust_directory_title))
+            .expect("the question was not put");
+        assert!(
+            file < asked,
+            "the file was named after the question: {said}"
+        );
+        assert!(
+            said.contains(t!(trust_directory_remember_explained)),
+            "nothing said what a yes keeps: {said}"
+        );
+        assert!(
+            !said.contains(t!(trust_directory_not_remembered)),
+            "a yes that is kept said it was not: {said}"
+        );
+    }
+
+    /// Where no record can be found for the directory, a yes trusts this session and the lines say
+    /// the answer cannot be kept, so the next session's question is not a surprise. Nothing is
+    /// written.
+    #[test]
+    fn a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so() {
+        let scratch = Remembering::new("plain-nothing-to-keep");
+        let (home, root) = (&scratch.home, &scratch.root);
+
+        let (trust, said) = opening_keeping_in("y\n", root, |_| None, |_| None);
+
+        assert!(
+            trust.is_some_and(|trust| trust.is_trusted("src/main.rs")),
+            "the yes did not trust the session"
+        );
+        assert!(
+            said.contains(t!(trust_directory_not_remembered)),
+            "nothing said the answer cannot be kept: {said}"
+        );
+        assert!(
+            !said.contains(t!(trust_directory_remember_explained)),
+            "a yes that cannot be kept said it was: {said}"
+        );
+        assert!(
+            !said.contains("later sessions started here will not ask"),
+            "the session said a yes was kept: {said}"
+        );
+        assert!(
+            !home.join("trusted").exists(),
+            "a record was written where none was offered"
+        );
+    }
+
+    /// A record that cannot be written leaves the yes as a yes for this session, and the session
+    /// says so and names the file.
+    #[test]
+    fn a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so() {
+        let scratch = Remembering::new("plain-unwritable-record");
+        let root = &scratch.root;
+        let Some(identity) = bravebot_agent::trusted::Identity::of(root) else {
+            return;
+        };
+        // A file where the state directory should be, so the record's directory cannot be made.
+        let blocker = scratch.base.join("blocker");
+        std::fs::write(&blocker, "").expect("a file in the way");
+        let store = bravebot_agent::trusted::Store::new(&blocker, root);
+        let path = store.path().display().to_string();
+
+        let (trust, said) =
+            opening_keeping_in("y\n", root, |_| None, move |_| Some((store, identity)));
+
+        assert!(
+            trust.is_some_and(|trust| trust.is_trusted(".")),
+            "a record that could not be written withheld the yes"
+        );
+        assert!(
+            said.contains(&t!(
+                session_trust_not_kept,
+                directory = root.display().to_string(),
+                path = path
+            )),
+            "the session did not say the answer was not kept: {said}"
+        );
     }
 
     /// A write is approved from the change it would make, so the change is what the question

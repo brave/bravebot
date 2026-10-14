@@ -88,7 +88,7 @@ interface Live {
   running: boolean
   /** Set when a fresh session needs the trust question answered before it can run. */
   askingTrust: string | null
-  /** Where remembering the answer would write it, while the question offers that (TRUST-23). */
+  /** Where a yes would be kept, while the question is asked and the answer may be kept (TRUST-23). */
   keepingTrust: string | null
   /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
   trustRemembered: KeptTrust | null
@@ -609,14 +609,14 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  const answerTrust = useCallback(async (trusted: boolean, remember = false) => {
+  const answerTrust = useCallback(async (trusted: boolean) => {
     const handle = handleRef.current
-    // One answer per question: a second click would be refused, the offer to remember being spent.
+    // One answer per question: a second click would be refused, the offer to keep a yes being spent.
     if (!handle || answeringTrust.current) return
     answeringTrust.current = true
     const path = openedLives.current.get(handle)?.keepingTrust ?? null
     try {
-      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, remember })
+      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted })
       const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
       updateSession(handle, (old) => (old ? {
         ...old,
