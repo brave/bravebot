@@ -105,7 +105,8 @@ mode, and what a command does once it is approved is bounded by that prompt rath
 clause.
 
 A manifest run the session starts ([manifest.md](manifest.md#MANIFEST-11)) is refused from its
-frozen plan, before the plan is put to the person, where any step in it writes a file. The plan is
+frozen plan, before the plan is put to the person, where any step in it writes a file or acts on an
+account through a connector. The plan is
 where the mode has to be answered for the same reason the prompt is not: a body the plan carried,
 going to a path the person vouched for, raises no write prompt at all, so a refusal that waited for
 one would let the whole run through. A plan that writes nothing runs, since there is nothing in it
@@ -135,6 +136,7 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::turn::plan_mode_refuses_an_edit_the_trust_map_would_have_let_through`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_a_settings_rule_would_have_let_through`
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
+`verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_acts_through_a_connector`
 `verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
 `verified-by: bravebot_ui_bridge::manifest::a_session_in_plan_mode_refuses_a_plan_that_writes`
 

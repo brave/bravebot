@@ -43,7 +43,7 @@ guards:
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 63
+      - crates/core/src/policy.rs: 64
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -71,7 +71,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 60
+      - crates/core/src/policy.rs: 61
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -375,6 +375,7 @@ could read that the driver may not read for itself.
 `verified-by: bravebot_agent::turn::a_proposed_url_is_read_through_the_argument_gate`
 `verified-by: bravebot_agent::turn::a_job_name_is_read_through_the_argument_gate`
 `verified-by: bravebot_agent::turn::a_command_line_and_its_directory_are_read_through_the_argument_gate`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 
 ## Which direction a label may move
 
@@ -421,7 +422,7 @@ and the content has no say in it.
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
-| what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes and counts withheld | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count and a reason in lower-case kebab, and a value out of form is replaced rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
+| what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes, counts withheld and a link | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count, a reason in lower-case kebab and one `https://` URL, and a value out of form is replaced or dropped rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed | its input's label, carried through unchanged | `verified-by: bravebot_core::policy::a_filter_passes_an_untrusted_label_through_unchanged` |

@@ -122,11 +122,10 @@ has read nothing. `todo_write` is unavailable because the manifest is already th
 There is no shell and no `run`: a command string is destination and payload at once. The one
 program this mode starts is a connector's authority, at the absolute path in the person's own
 definition, with one fixed argument and the request on its standard input
-([connectors.md](connectors.md)). A plan may fetch through a connector and may not yet act
-through one.
+([connectors.md](connectors.md)).
 
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
-`verified-by: bravebot_agent::manifest::a_connector_act_is_not_a_capability_a_plan_may_name`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
@@ -146,8 +145,12 @@ Optional routing is filled at validation with an explicit default, where the pla
 field or left it empty and nowhere else, so the driver never invents a destination that did not
 pass the lock and a default never stands in for a value the plan gave. An omitted listing pattern
 or search include is locked as no filter, not as a glob of the empty string, which would match
-nothing. A connector fetch's connector, resource, place, item and selector are routing, and the
-optional ones are locked as the absence of a value.
+nothing. A connector step's connector, resource, place, item and selector, and an act's path and
+option, are routing, and the optional ones are locked as the absence of a value. The item a
+connector act lands on, where the plan did not name it, is named by `on`: a slot reference to the
+fetch that chose it, not a routing field. That fetch has to be of the same connector and place as
+the act, or the plan is refused, so an act cannot reach an item from anywhere its own locked place
+does not cover.
 
 `verified-by: bravebot_core::manifest::every_effect_destination_is_named_for_the_routing_lock`
 `verified-by: bravebot_core::manifest::an_omitted_search_directory_is_locked_as_the_workspace`
@@ -160,6 +163,9 @@ optional ones are locked as the absence of a value.
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
+`verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`
+`verified-by: bravebot_core::manifest::a_connector_act_naming_its_item_validates_without_a_fetch`
+`verified-by: bravebot_agent::manifest::an_act_naming_a_fetch_from_another_place_is_refused_before_anybody_is_asked`
 
 <a id="MANIFEST-7"></a>
 ### MANIFEST-7: the only path to a screen is the one the plan named
@@ -215,9 +221,12 @@ observe before it plans. Name a workspace file instead.
 Between freezing a plan and walking it, the frozen plan is put to a person: the task in their own
 words, then every step in order, each naming its tier, what it would do, and every routing field the
 step fixed. The routing is part of what is being answered for, so the line a person reads carries the
-directory a search runs in and the glob it filters by, not the pattern alone. A file write that carries
-a slot names where that slot's content came from, a connector's place or several, wherever that is
-anything but the workspace. Declining stops the run, and what was declined comes back with the
+directory a search runs in and the glob it filters by, not the pattern alone. A connector act's line
+also names where the content it carries came from and where it goes (MANIFEST-13), since approving
+the plan is what releases it, and the text and title the plan wrote for it, the first 200 characters
+of each on one line with control characters escaped. A file write that carries a slot names where
+that slot's content came from, in the same words, wherever that is anything but the workspace.
+Declining stops the run, and what was declined comes back with the
 error under MANIFEST-3, so the plan can still be read.
 Nothing has been read or written by then, so a declined run leaves the workspace exactly as it was.
 
@@ -227,6 +236,9 @@ each run, so remembering an answer would be approving steps nobody has seen.
 
 Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
 does not replace the gates inside it, so each write is still put to the person as its step reaches it.
+A connector act is sent to the authority in every mode that runs the plan, bypass included, and its
+request carries no answer: the driver asks nothing about the act, and the person is asked in the
+authority's popup. Plan mode runs no such plan ([permission-modes.md](permission-modes.md)).
 
 Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal
 is somebody: the plan goes out beside the progress and the answer is read back, which is the one
@@ -244,6 +256,8 @@ run's worth of effects, and this mode's own guarantee, that nothing after the pl
 what makes one question about the whole of it worth more than a question per step.
 
 `verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
+`verified-by: bravebot_agent::manifest::the_plan_prompt_names_where_a_connector_act_sends_its_content`
+`verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
 `verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_its_writes`
 `verified-by: bravebot_agent::permission_mode::a_plan_is_put_to_a_person_in_every_mode_but_bypass`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
@@ -252,6 +266,7 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
 `verified-by: bravebot_core::manifest::a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace`
 `verified-by: bravebot_agent::manifest::a_fetched_slot_is_written_to_a_file_and_answered_as_it_came`
+`verified-by: bravebot_agent::manifest::a_connector_act_is_sent_to_the_authority_under_bypass_carrying_no_answer`
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
 `verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
 
@@ -334,15 +349,43 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 <a id="MANIFEST-12"></a>
 ### MANIFEST-12: an authority's detail about a call reaches only the margin
 
-The detail an authority reports about a connector fetch it did not accept is drawn in the margin
-every untrusted byte is drawn in, labelled as the connector's output. It goes to no model and into
-no step's failure line, which holds only the outcome and the authority's reason code, and a reply
-that does not parse is reported by where it failed and not by what it held.
+The detail an authority reports about a connector call, for a fetch it did not accept and for an
+act whatever its outcome, is drawn in the margin every untrusted byte is drawn in, labelled as the
+connector's output. It goes to no model and into no step's failure line, which holds only the
+outcome and the authority's reason code, and a reply that does not parse is reported by where it
+failed and not by what it held.
 
-**Why.** The detail may quote the service, which is text other people wrote.
+An accepted act's link, where the authority gives one, is shown on the step's line only when it is
+one `https://` URL of at most 512 printable ASCII characters with no space; any other is dropped,
+not shown in part.
+
+**Why.** The detail may quote the service, which is text other people wrote. The link is a
+fixed-shape field the authority builds from its definition's template and values it checked, and
+its form is held here so that it cannot draw anything but one URL on one line.
 
 `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service`
 `verified-by: bravebot_agent::manifest::a_reply_that_does_not_parse_fails_its_step_without_quoting_it`
+`verified-by: bravebot_agent::manifest::an_authoritys_detail_about_an_accepted_act_is_shown`
+`verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed`
+
+<a id="MANIFEST-13"></a>
+### MANIFEST-13: a connector act's content is released only to the place its plan fixed
+
+A connector act that carries a slot names, from the frozen plan, the one connector and place the
+slot may go to and where its content came from: a workspace read, a connector fetch's place, or the
+union of what a processor read. The slot is released to that place and nowhere else, and not to a
+screen. Content the plan wrote itself releases nothing.
+
+A release fixes the account and the place. Whom an act addresses within that place, such as the
+recipient of a reply, is what its definition takes from the item the act lands on: the plan line
+names it, and the authority's popup shows it before anything is sent, but the release does not fix
+it, and an item a fetch chose without narrowing is one its content chose.
+
+**Why.** The plan is written from the task before anything is read, so a release fixed from it
+lets fetched content change what a slot says and never where it goes.
+
+`verified-by: bravebot_core::manifest::a_connector_act_release_is_named_before_anything_is_read`
+`verified-by: bravebot_core::policy::a_connector_release_is_refused_unless_precommitted_to_that_place`
 
 ## Known costs
 
