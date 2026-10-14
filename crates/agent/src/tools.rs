@@ -13970,6 +13970,27 @@ mod tests {
         );
     }
 
+    /// CMDLINE-11: the line between head and tail names how many bytes and lines went, and the
+    /// figures are those of the dropped middle. Thirty lines of ten bytes under a cap of a hundred
+    /// keep five lines each end and drop twenty, two hundred bytes, so a figure taken from either
+    /// kept part, from the whole output or from the cap is a different number.
+    #[test]
+    fn a_capped_output_says_how_many_bytes_and_lines_went() {
+        let log: String = (10..40).map(|n| format!("line {n}..\n")).collect();
+        assert_eq!(log.len(), 300);
+
+        let sample = bounded(&log, 100).expect("an output three times the cap is capped");
+
+        assert!(
+            sample.contains(
+                "(the middle of this output was dropped: 200 bytes, about 20 lines, from byte 50.)"
+            ),
+            "the dropped middle is not counted: {sample}"
+        );
+        assert!(sample.starts_with("line 10..\n"), "the head went");
+        assert!(sample.ends_with("line 39..\n"), "the tail went");
+    }
+
     /// The cap is a bound on a long result, not a transformation every result goes through: a
     /// planner told that a two-line answer was cut short would narrow a command that answered it.
     #[test]

@@ -4825,6 +4825,66 @@ fn a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at() {
     );
 }
 
+/// LIST-5: a depth of N walks N directory levels, the one named included, so a depth of two or
+/// three stops one level at a time and names the directories it stopped at by their full paths.
+/// A walk that read any depth past one as unbounded, or counted from the first level below the
+/// directory, would list a different set of files or none of the stopping points.
+#[test]
+fn a_depth_of_two_or_more_walks_that_many_levels_and_names_where_it_stopped() {
+    let scratch = Scratch::new("list-depth-levels");
+    std::fs::create_dir_all(scratch.path.join("a/b/c")).unwrap();
+    std::fs::write(scratch.path.join("top.txt"), "0").unwrap();
+    std::fs::write(scratch.path.join("a/one.txt"), "1").unwrap();
+    std::fs::write(scratch.path.join("a/b/two.txt"), "2").unwrap();
+    std::fs::write(scratch.path.join("a/b/c/three.txt"), "3").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut listed = Vec::new();
+    for depth in [2, 3] {
+        let listing = workspace
+            .list(
+                &mut policy,
+                &Labelled::trusted(".".to_string()),
+                None,
+                Some(depth),
+            )
+            .expect("list succeeds");
+        let proof = policy.authorise_content_release("test", "paths");
+        let listing = listing.declassify(&proof);
+        listed.push((listing.files.clone(), listing.directories.clone()));
+    }
+
+    assert_eq!(
+        listed[0],
+        (
+            vec!["a/one.txt".to_string(), "top.txt".to_string()],
+            vec!["a/b".to_string()]
+        ),
+        "a depth of 2 is the directory and the one level below it"
+    );
+    assert_eq!(
+        listed[1],
+        (
+            vec![
+                "a/b/two.txt".to_string(),
+                "a/one.txt".to_string(),
+                "top.txt".to_string()
+            ],
+            vec!["a/b/c".to_string()]
+        ),
+        "a depth of 3 is one level further, stopping at the next directory down"
+    );
+}
+
 /// The default is what every existing caller gets, so a listing nobody bounded still walks the
 /// whole tree and reports no boundary: a directory in that listing is one the walk went into.
 #[test]
