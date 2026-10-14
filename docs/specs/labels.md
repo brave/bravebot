@@ -59,7 +59,7 @@ guards:
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 250
+      - crates/agent/tests/workspace.rs: 252
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
