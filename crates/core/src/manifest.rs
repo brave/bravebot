@@ -485,6 +485,9 @@ struct Contract {
     paths: &'static [&'static str],
     /// Arguments that must be a whole number where present.
     counts: &'static [&'static str],
+    /// Fields whose value is a body the driver hands on as it is, so a number or a list is a
+    /// wrong shape and not an empty string.
+    texts: &'static [&'static str],
     /// Exactly one of these must be present. Empty where the tool has no such choice.
     alternatives: &'static [&'static str],
     /// Arguments that decide where an effect lands, to be locked before execution.
@@ -512,6 +515,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &[],
         paths: &["path"],
         counts: &["offset", "limit"],
+        texts: &[],
         alternatives: &[],
         routing: &["path"],
         headline: &["path"],
@@ -527,6 +531,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &[],
         paths: &["directory"],
         counts: &[],
+        texts: &[],
         alternatives: &[],
         routing: &["directory", "pattern"],
         headline: &["directory"],
@@ -542,6 +547,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &[],
         paths: &["directory"],
         counts: &[],
+        texts: &[],
         alternatives: &[],
         routing: &["pattern", "directory", "include"],
         headline: &["pattern"],
@@ -557,6 +563,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &[],
         paths: &[],
         counts: &[],
+        texts: &["instruction"],
         alternatives: &[],
         routing: &[],
         headline: &[],
@@ -572,6 +579,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &["from_slot"],
         paths: &["path"],
         counts: &[],
+        texts: &["contents"],
         alternatives: &["contents", "from_slot"],
         routing: &["path"],
         headline: &["path"],
@@ -587,6 +595,7 @@ const CONTRACTS: &[Contract] = &[
         slot_refs: &["from_slot"],
         paths: &[],
         counts: &[],
+        texts: &[],
         alternatives: &[],
         routing: &[],
         headline: &[],
@@ -723,6 +732,19 @@ pub(crate) fn validate(draft: &Draft) -> Result<Manifest, ManifestError> {
                     tool: contract.tool,
                     field,
                     wanted: "a whole number",
+                });
+            }
+        }
+
+        for field in contract.texts {
+            if let Some(value) = draft_step.args.get(*field)
+                && value.text().is_none()
+            {
+                return Err(ManifestError::WrongType {
+                    step: index,
+                    tool: contract.tool,
+                    field,
+                    wanted: "text",
                 });
             }
         }
@@ -1148,6 +1170,39 @@ mod tests {
                 wanted: "a whole number"
             }
         );
+    }
+
+    /// Rejects: a validator that leaves `contents` and `instruction` to the driver, which reads a
+    /// number or a list as an empty body and writes it.
+    #[test]
+    fn a_body_field_must_hold_text() {
+        let wrong = [Arg::Count(42), Arg::List(vec!["a".to_string()])];
+        for value in wrong {
+            let write = DraftStep::new("write_file")
+                .with_text("path", "notes.md")
+                .with("contents", value.clone());
+            assert_eq!(
+                validate(&Draft::new(vec![write])).unwrap_err(),
+                ManifestError::WrongType {
+                    step: 0,
+                    tool: "write_file",
+                    field: "contents",
+                    wanted: "text"
+                }
+            );
+
+            let mut step = process(&["doc"], "out");
+            step.args.insert("instruction".to_string(), value);
+            assert_eq!(
+                validate(&Draft::new(vec![read("a.md", "doc"), step])).unwrap_err(),
+                ManifestError::WrongType {
+                    step: 1,
+                    tool: "process",
+                    field: "instruction",
+                    wanted: "text"
+                }
+            );
+        }
     }
 
     #[test]

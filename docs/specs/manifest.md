@@ -97,7 +97,9 @@ never half adopted, and a step is never repaired to make a plan usable.
 `verified-by: bravebot_core::manifest::a_path_outside_the_workspace_is_refused`
 `verified-by: bravebot_core::manifest::a_read_after_an_action_is_refused`
 `verified-by: bravebot_core::manifest::validation_is_deterministic`
+`verified-by: bravebot_core::manifest::a_body_field_must_hold_text`
 `verified-by: bravebot_agent::manifest::a_plan_that_fails_validation_runs_nothing`
+`verified-by: bravebot_agent::manifest::a_plan_whose_body_field_is_not_text_is_refused`
 
 <a id="MANIFEST-5"></a>
 ### MANIFEST-5: the driver adds nothing

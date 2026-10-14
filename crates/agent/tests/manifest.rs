@@ -2115,6 +2115,55 @@ fn a_plan_whose_routing_field_is_not_text_is_refused() {
     assert!(received.try_recv().is_err(), "something asked the model");
 }
 
+/// A body the planner gave as a number or a list is refused as a plan. It used to pass validation
+/// and reach the driver as an empty string, so an approved `write notes.md` truncated the file.
+#[test]
+fn a_plan_whose_body_field_is_not_text_is_refused() {
+    let cases = [
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": 42}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": ["a"]}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "TRANSFORM", "args": {"reads": ["doc"], "instruction": 7, "out_slot": "out"}}),
+            "'instruction' must be text",
+        ),
+    ];
+    for (index, (step, message)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("body-shape-{index}"));
+        std::fs::write(scratch.path.join("notes.md"), "keep me").unwrap();
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                step,
+            ])),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        let failure = run(&config, &workspace, "write notes", &mut sink).expect_err("must refuse");
+        assert!(
+            failure.to_string().contains(message),
+            "unhelpful message: {failure}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+            "keep me"
+        );
+        let _ = received.recv();
+        let _ = received.recv();
+        assert!(received.try_recv().is_err(), "something asked the model");
+    }
+}
+
 /// A path leaving the workspace is refused at validation, so it never reaches a person to
 /// approve and never reaches the filesystem to be caught there.
 #[test]
