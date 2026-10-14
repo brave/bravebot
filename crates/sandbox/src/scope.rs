@@ -331,10 +331,14 @@ pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String
 ///
 /// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
 /// `~/.ssh` or `~/.bravebot` or inside either, not `~/.config`, `~/.cache` or `~/Library` whole,
-/// and a link judged by where it leads. It must also be a directory that exists, since a grant of a path nothing is at
-/// reads as a grant of whatever is created there later.
+/// and a link judged by where it leads. It is also refused where it is, or lies inside, a credential
+/// location of the base's table (`~/.aws`, `~/.gnupg`, a browser profile), as `--add-dir` refuses
+/// it. It must also be a directory that exists, since a grant of a path nothing is at reads as a
+/// grant of whatever is created there later.
 pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
-    judged(named, true, home).filter(|path| path.is_dir())
+    judged(named, true, home)
+        .filter(|path| path.is_dir())
+        .filter(|path| !crate::rules::inside_a_credential_location(path, home))
 }
 
 /// `named` as the sandbox will be told it, or `None` where it is refused.
@@ -2048,6 +2052,32 @@ mod tests {
             assert_eq!(judged_directory(&spelled, &home), None, "{spelled:?}");
         }
         assert!(judged_directory(&home.join(".bravebotx"), &home).is_some());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A remembered directory is refused at every credential location of the base's table and
+    /// inside one, as `--add-dir` refuses it, typed or reached by a link; a neighbour that only
+    /// shares a prefix is not. The regression it rejects: a judgement that names `~/.ssh` and
+    /// `~/.bravebot` alone, which lets `/reach ~/.aws write` lift the base's refusal.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_at_or_inside_a_credential_location_is_refused() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("directory-credential-locations");
+        let _ = std::fs::remove_dir_all(&home);
+        for row in every_credential_directory() {
+            let at = home.join(row);
+            let inner = at.join("inner");
+            std::fs::create_dir_all(&inner).unwrap();
+            let beside = home.join(format!("{row}x"));
+            std::fs::create_dir_all(&beside).unwrap();
+            let link = home.join(format!("link-to-{}", row.replace('/', "-")));
+            symlink(&at, &link).unwrap();
+            for spelled in [&at, &inner, &link] {
+                assert_eq!(judged_directory(spelled, &home), None, "{spelled:?}");
+            }
+            assert!(judged_directory(&beside, &home).is_some(), "{beside:?}");
+        }
         std::fs::remove_dir_all(&home).unwrap();
     }
 

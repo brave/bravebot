@@ -1478,7 +1478,7 @@ reach-lifetime-session-in = pour cette session dans { $workspace }
 reach-lifetime-always-in = toujours dans { $workspace }
 reach-added = retenu : { $command } { $access } aussi { $entry }, { $lifetime }. Le prochain plan pour cette commande affichera cette ligne.
 reach-removed = oublié : { $command } ne { $access } plus aussi { $entry }
-reach-refused-entry = { $entry } n'est ni une portée d'identifiants (remote, aws, kubernetes, docker) ni un répertoire accessible. Ce doit être un chemin absolu ou commençant par ~/, existant, et ni votre répertoire personnel, ni ~/.ssh, ni un répertoire qui les contient.
+reach-refused-entry = { $entry } n'est ni une portée d'identifiants (remote, aws, kubernetes, docker) ni un répertoire accessible. Ce doit être un chemin absolu ou commençant par ~/, existant, et ni votre répertoire personnel, ni un répertoire qui le contient, ni ~/.ssh, ni un emplacement d'identifiants tel que ~/.aws ou ~/.gnupg.
 reach-refused-write = une portée d'identifiants est en lecture seule. Seul un répertoire peut être écrit.
 reach-refused-line = cette ligne de commande ne peut pas être exécutée telle quelle, il n'y a donc rien pour quoi retenir l'accès
 reach-refused-assignment = une commande précédée de NOM=valeur ne reçoit aucun accès retenu
