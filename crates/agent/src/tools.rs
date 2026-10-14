@@ -18636,6 +18636,58 @@ mod tests {
         );
     }
 
+    /// The regression it rejects: a comparison of where a link lands with the skill's directory
+    /// that renders both lossily, so a link into an opened directory whose name is not text is
+    /// read as inside the skill's directory named with the replacement character (PATH-003).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_into_a_directory_whose_name_is_not_text_is_not_taken_for_its_lookalike_skill() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = SkillFixture::new("skill-files-link-not-text");
+        let skills = fixture.home.join(".bravebot/skills");
+        let lookalike = skills.join("shared-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).unwrap();
+        std::fs::write(
+            lookalike.join("SKILL.md"),
+            "---\nname: lookalike\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::write(lookalike.join("own.md"), "THE-SKILLS-OWN\n").unwrap();
+        let scratch = skills.join(std::ffi::OsStr::from_bytes(b"shared-\xff"));
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("untrusted.md"), "NOT-THE-SKILLS-OWN\n").unwrap();
+        std::os::unix::fs::symlink(scratch.join("untrusted.md"), lookalike.join("out.md")).unwrap();
+        std::os::unix::fs::symlink(lookalike.join("own.md"), lookalike.join("in.md")).unwrap();
+        let mut workspace = fixture.workspace();
+        workspace.open_scratch(Some(scratch.canonicalize().unwrap()));
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        load_named(&mut policy, &catalogue, "lookalike");
+
+        let (failed, _, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({ "path": "~/.bravebot/skills/shared-\u{FFFD}/out.md" }),
+        );
+        assert!(
+            failed && !said.contains("NOT-THE-SKILLS-OWN"),
+            "a link into a directory that is not text was read as the skill's own: {said}"
+        );
+        let (failed, trusted, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({ "path": "~/.bravebot/skills/shared-\u{FFFD}/in.md" }),
+        );
+        assert!(
+            !failed && trusted && said.contains("THE-SKILLS-OWN"),
+            "a link inside the skill's directory was refused: {said}"
+        );
+    }
+
     /// The regression it rejects: a setting that keeps the file tools inside the project (PERM-16)
     /// being bypassed by the reach a load grants.
     #[cfg(unix)]
