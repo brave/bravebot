@@ -41,6 +41,8 @@ the planner and nothing at all to the person being asked about it.
 `verified-by: bravebot_core::policy::a_check_says_where_the_content_came_from_and_not_which_slot_it_is_in`
 `verified-by: bravebot_core::policy::a_check_over_a_file_reference_says_the_path_and_not_the_reference`
 `verified-by: bravebot_agent::turn::a_processors_output_is_vetted_under_the_file_it_was_made_from`
+`verified-by: bravebot_cli::plain::every_line_of_a_vetted_read_is_shown_before_a_yes_releases_it`
+`verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_a_vetted_read_before_a_yes_releases_it`
 
 <a id="VET-2"></a>
 ### VET-2: what it refuses
