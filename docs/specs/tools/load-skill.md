@@ -93,5 +93,6 @@ gives its body.
 
 `verified-by: bravebot_agent::tools::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
 `verified-by: bravebot_agent::tools::reaching_a_loaded_skills_files_is_for_reading_inside_the_directory_only`
+`verified-by: bravebot_agent::tools::a_link_from_a_loaded_skill_into_an_opened_directory_is_refused`
 `verified-by: bravebot_agent::tools::a_load_does_not_widen_a_session_kept_inside_its_project`
 `verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`

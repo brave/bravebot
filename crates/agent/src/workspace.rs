@@ -2086,6 +2086,14 @@ impl Workspace {
         skills: &[PathBuf],
     ) -> Result<PathBuf, WorkspaceError> {
         let refused = match self.resolve(relative) {
+            Ok(resolved)
+                if Self::leaves_loaded_skill(relative, &resolved, skills, self.home.as_deref()) =>
+            {
+                WorkspaceError::Escapes {
+                    path: relative.to_string(),
+                    remedy: Remedy::Nothing,
+                }
+            }
             Ok(resolved) => return Ok(resolved),
             Err(refused) => refused,
         };
@@ -2110,6 +2118,40 @@ impl Workspace {
             destination(directory).is_some_and(|landed| resolved.starts_with(landed))
         });
         if inside { Ok(resolved) } else { Err(refused) }
+    }
+
+    /// Whether `named`, spelled inside the directory of a loaded skill, lands outside it once links
+    /// are followed.
+    ///
+    /// The policy labels such a name by provenance, from its spelling alone (LOAD-5), so a link
+    /// from the directory into one this workspace opened would hand a file the trust map has not
+    /// vouched for to the planner as the user's own. `resolved` is where [`Workspace::resolve`]
+    /// says the name lands, and it accepts any opened directory.
+    fn leaves_loaded_skill(
+        named: &str,
+        resolved: &Path,
+        skills: &[PathBuf],
+        home: Option<&Path>,
+    ) -> bool {
+        let Ok(expanded) = expand_home(named, home) else {
+            return false;
+        };
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
+        if !candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return false;
+        }
+        let mut spelled_in = skills
+            .iter()
+            .filter(|directory| candidate.starts_with(directory))
+            .peekable();
+        spelled_in.peek().is_some()
+            && !spelled_in.any(|directory| {
+                destination(directory).is_some_and(|landed| resolved.starts_with(landed))
+            })
     }
 
     /// What a person can do so that `resolved`, which no opened directory holds, is reached.
