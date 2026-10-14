@@ -7894,10 +7894,13 @@ fn manifest_usage_controls_survive_storage() {
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["tokens"], expected, "{case}");
         assert_eq!(record["spend"]["1"], expected, "{case}");
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            if expected >= 46 { 3 } else { 1 }
-        );
+        // An empty processor reply is asked for once more, so that case makes one call more.
+        let calls = match case {
+            "unusable" => 4,
+            _ if expected >= 46 => 3,
+            _ => 1,
+        };
+        assert_eq!(count.load(Ordering::SeqCst), calls, "{case}");
     }
 }
 

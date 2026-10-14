@@ -159,11 +159,13 @@ release the plan named in advance.
 An unmarked processor answer is a remark, not a document. Treating it as the slot would write an
 explanation over whatever the plan named next. Such an answer is asked for once more, with the
 plan's instruction and one fixed sentence, both trusted, and a second answer without the mark fails
-the step.
+the step. An empty reply is asked for once more as it stands, sharing that one further try.
 
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_is_asked_once_more_for_its_document`
+`verified-by: bravebot_agent::manifest::an_empty_processor_reply_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest::a_processor_gets_one_further_try_whatever_went_wrong`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
 
 <a id="MANIFEST-9"></a>

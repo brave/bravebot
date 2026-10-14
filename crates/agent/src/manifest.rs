@@ -1479,7 +1479,8 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             // input is not a substitute for it: a plan reads that slot to write somewhere else,
             // so standing the input in would copy one file over whatever comes next. In a turn
             // the planner asks again for the line; a plan has no planner left, so the driver asks
-            // once more itself, with the plan's instruction and one fixed sentence, both trusted.
+            // once more itself, with the plan's instruction and one fixed sentence, both trusted;
+            // an empty reply is asked for once more as it stands.
             // A second answer without the line fails the step, which is the direction an
             // unmarked answer fails in everywhere.
             let mut asked = instruction;
@@ -1505,7 +1506,18 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     accounting.spent.add_usage(usage);
                 }
                 accounting.publish(reporter);
-                let mut processed = processed.map_err(|e| e.to_string())?;
+                let mut processed = match processed {
+                    Ok(done) => done,
+                    // An empty reply is asked for once more too, as it stands: the same one
+                    // further try an unmarked answer gets.
+                    Err(crate::processor::ProcessorError::Chat(error))
+                        if error.is_empty_reply() && !retried =>
+                    {
+                        retried = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
 
                 if let Some(document) = processed.document.take() {
                     break (spec, processed, document);

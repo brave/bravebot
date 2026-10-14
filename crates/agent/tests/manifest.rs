@@ -1070,6 +1070,68 @@ fn an_unmarked_transform_does_not_become_a_file() {
     );
 }
 
+/// An empty processor reply is asked for once more, and the second, marked answer fills the slot.
+#[test]
+fn an_empty_processor_reply_is_asked_for_once_more() {
+    let scratch = Scratch::new("empty-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says(""),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+}
+
+/// The one further try is shared: an empty reply and then an unmarked one, or two empty ones, fail
+/// the step, and no third call is made.
+#[test]
+fn a_processor_gets_one_further_try_whatever_went_wrong() {
+    for (first, second) in [("", "an unmarked answer"), ("", "")] {
+        let scratch = Scratch::new("one-further-try");
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+                {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+                {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+            ])),
+            says(first),
+            says(second),
+            processor_reply("NEVER ASKED FOR"),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        assert!(
+            run(&config, &workspace, "shout in.md", &mut sink).is_err(),
+            "{first:?} then {second:?} filled the slot"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+            "raw text"
+        );
+        // Shape, plan, and the two processor calls.
+        assert_eq!(received.try_iter().count(), 4, "{first:?} then {second:?}");
+    }
+}
+
 /// A plan has no planner to ask again for the line, so the driver asks once more itself, and a
 /// second answer that marks its document fills the slot with that document and nothing else.
 #[test]
