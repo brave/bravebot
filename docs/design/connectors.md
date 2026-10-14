@@ -74,6 +74,9 @@ what bravebot does; the prototype's gaps are in
     it is inserted: a path value against its declared form on both sides, a query-language value for
     quotes and spaces, a header value for line breaks and controls
     ([The engine](connectors-reference.md#the-engine), [Forms](connectors-reference.md#forms)).
+11. **Spend control.** An act that charges money is refused unless the amount, in its currency, fits
+    the ceiling the person set for that place; the popup opens with the amount
+    ([Writing](#writing)).
 
 Four mechanisms do separate jobs:
 
@@ -96,10 +99,16 @@ LLM Agents against Prompt Injections* advises combining for an email assistant[^
 
 ## Architecture and trust boundaries
 
-A connector gives bravebot access to one service. Two services so far:
+A connector gives bravebot access to one service. The services specified so far:
 
-- GitHub (issues, pull requests, files)
-- Gmail (read, send, reply, label, archive)
+- GitHub (issues, pull requests, files) and GitLab (issues, comments)
+- Gmail (read, send, reply, label, archive) and Outlook through Microsoft Graph (mail and calendar)
+- Google Calendar (read events, add one to a calendar you own)
+- Slack (channels, threads, search, replies and posts, as you)
+- X (search recent posts, publish one; paid per call)
+- Brave Sync (bookmarks, reading list, open tabs and tab groups the vault decoded)
+- Travel: Kiwi.com flights booked on Kiwi's own page, Duffel flights and LiteAPI hotels booked in
+  the agent within a spend ceiling
 
 Each is one JSON file, its definition, with a surface bravebot reads and a wire only the authority
 reads ([Connector definition language](#connector-definition-language)). Each side checks a request
@@ -164,7 +173,9 @@ in the validator's contract table. Every argument is text.
 | `item` | both | yes, optional | one thing in the place |
 | `path` | act | yes, optional | where in the item the text lands |
 | `select` | both | yes, optional | selector terms; on an act, the items it lands on |
+| `with` | both | yes, optional | the named values the resource asks for, as `key:value` terms, such as an event's `start` |
 | `option` | act | yes, optional | a choice from the definition's `values` |
+| `take` | act | yes, optional | `with` values taken from fields earlier fetches recorded, as `start:flight.departs` |
 | `on` | act | no, a slot reference | the slot of a fetch whose chosen item the act targets |
 | `out_slot` | fetch | no | the slot the payload fills |
 | `contents` or `from_slot` | act | no | the text; neither for a resource with `text: false` |
@@ -175,11 +186,12 @@ in the validator's contract table. Every argument is text.
 - An act's line carries the text and title the plan wrote (`sends: “…”`, `title: “…”`), cut short
   and escaped onto one line, or names the release for text a slot carries. Bound values come last.
 - The surface check refuses, before approval: a field the resource does not use, or one it needs and
-  lacks; a value outside its form, `values` or `select`; a bound value; text given to an act that
-  takes none, or none to one that does; an `on` naming a fetch of another connector or place, or one
-  with no receipt; a fetch in `on` that neither names its item nor uses one of the `narrow` terms,
-  or of the option's `narrow_when` terms, an empty selector included; and an act's own `select`, or
-  a fetch's, that uses none of its `narrow` terms.
+  lacks; a value outside its form, `values` or `select`; a `with` value the resource does not
+  declare, given twice, missing, or outside its form; a bound value; text given to an act that takes
+  none, or none to one that does; an `on` naming a fetch of another connector or place, or one with
+  no receipt; a fetch in `on` that neither names its item nor uses one of the `narrow` terms, or of
+  the option's `narrow_when` terms, an empty selector included; and an act's own `select`, or a
+  fetch's, that uses none of its `narrow` terms.
 - A plan the surface check refuses goes back to the fit call once, before anything is read or shown,
   with the check's own words ("'test' is not a key:value term"). A second refusal of any kind fails
   the run. Only this check asks again, which amends
@@ -237,8 +249,8 @@ comments ask for."*
 | --- | --- | --- | --- |
 | a run's plan | once, before anything runs | bravebot | bravebot: every manifest plan |
 | first use of an account | once: the service's own sign-in page | the browser | the authority, when it holds no credential |
-| a read (GitHub or Gmail) | once per connector, account and run; never if the person ticked "Read <name> without asking" for that agent and account | the authority's popup | the authority, from its grants and that setting |
-| a write (GitHub or Gmail) | every write, against its exact text and target | the authority's popup | always asked today |
+| a read | once per connector, account and run; never if the person ticked "Read <name> as <account> without asking" for that agent and account | the authority's popup | the authority, from its grants and that setting |
+| a write | every write, against its exact text and target | the authority's popup | always asked today |
 
 Bypass mode cannot answer the authority's popup, so reads and writes still ask under it, and no
 release is authorised before the popup ([Releases](#releases)).
@@ -251,11 +263,11 @@ refuses one, as an amended [MODE-3](../specs/permission-modes.md#MODE-3) would s
   `connector:<name>/<account>@run:<tag>`, the tag being the first 32 hex characters of an
   HMAC-SHA256 keyed by the run id over the connector name. The grant is saved in the vault file and
   listed in the Agents panel; the run id is not stored, so a later run asks again, and after a
-  failed save the next read asks again. The handle policy that "Read <name> without asking" sets
-  names `connector:<name>/<account>` and covers reads in every run of that connector and account,
-  and no write. An act's preparation reads without the grant, since nothing it reads leaves the
-  vault and the act's popup asks: the item again, the default branch, whether the branch exists,
-  the file it replaces, and named lookups, each a `GET`.
+  failed save the next read asks again. The handle policy that "Read <name> as <account> without
+  asking" sets names `connector:<name>/<account>` and covers reads in every run of that connector
+  and account, and no write. An act's preparation reads without the grant, since nothing it reads
+  leaves the vault and the act's popup asks: the item again, the default branch, whether the branch
+  exists, the file it replaces, and named lookups, each a `GET`.
 - **Grants and releases.** A read grant lets service data leave the authority into bravebot's
   quarantine; a release lets slot content leave quarantine for a later act's destination. They are
   separate boundaries, and neither implies the other.
@@ -289,10 +301,11 @@ the receipt back, and the vault takes the item from its own record. The vault ke
 run, connector, place and `definition_id`, and per chosen item the reading resource, recorded
 fields, title, author and level, taken for a resolve from the listed or expanded element. An element
 without the item's id fails the fetch (`bad-definition`); a recorded field it lacks fails only an
-act that binds it (`no-bound-field`). The receipt is refused in any other run, connector, place or
-definition, and acts in the run may reuse it. Before the popup, the vault reads the item again and
-holds it to the target floor. A receipt lets the frozen plan refer to what the authority chose
-without letting fetched text supply the route.
+act that binds it (`no-bound-field`). An act lands on a receipt only in its own run, connector,
+place and definition, and acts in the run may reuse it. Before the popup, the vault reads the item
+again and holds it to the target floor. A receipt lets the frozen plan refer to what the authority
+chose without letting fetched text supply the route. An act may also take a recorded value from
+any fetch in the run ([Values taken from a fetch](#values-taken-from-a-fetch)).
 
 ### Values taken from the item
 
@@ -326,12 +339,43 @@ them means, and shape the words; the person still sees the recipient and the tex
 choose another destination, add a recipient, open another header, redirect through `Reply-To` (a
 reply is bound to `From`), or change a value after the plan is approved.
 
+### Values taken from a fetch
+
+Some acts need a value only a read can supply, such as a calendar event at the time of a flight a
+fetch chose. The plan cannot write the value, since nothing has been read when it is fixed, and must
+not take it from text a processor saw. So the act names where the value is, and the vault fills it
+in from its own receipt.
+
+- **Declared.** A fetch's `records` lists receipt fields an act may take, with words for the
+  planner. An act's `takes` lists `with` values it may take instead of giving. A taken value never
+  fills a call's address, a message header, a page to open or a call made before the popup, so it
+  can shape what is sent, never where.
+- **At the plan.** `take "start:flight.departs end:flight.arrives"` is routing: which field of which
+  earlier fetch fills which value is fixed before anything is read. The fetch may be of any
+  connector. bravebot refuses a field the fetch does not record, a value the act cannot take, and a
+  value both given and taken. The act's release names the fetch's place among its origins, so the
+  person approves "content from kiwi kiwi to calendar primary".
+- **At the act.** bravebot sends the receipt of each fetch named, never a value. The vault takes the
+  value from that receipt, given in this run under the definition installed now and choosing one
+  item, holds it to the `with` value's form, and shows it in the popup with where it came from
+  ("start, taken from kiwi kiwi"). The value is not read again before the act, since the popup shows
+  it.
+
+An attacker who controls the fetched item can choose the value, as with any bound value, but only
+within the form, only for a value the definition lets an act take, and in front of the person.
+
 ### Credentials
 
 The vault holds one credential item per connected account: provider, account, client id and secret,
 token endpoint, the refresh token (or, with `refresh: false`, the one access token), the requested
 scopes and the hosts recorded at sign-in. Access tokens from a refresh are held in memory only.
 
+- **Flows.** A definition signs in by OAuth (`pkce-loopback`), as a confidential client or as a
+  public one that sends no secret, on a loopback callback whose host and, where the provider matches
+  the redirect exactly, port the definition names. A service reached with an API key (`key`) has the
+  key in the vault's copy, sent only in the header the definition names and only to its hosts. A
+  public service (`none`) is called with no credential, and a `local` definition reads only data
+  the vault already holds, such as the bookmarks it decoded from the person's sync chain.
 - **Sign-in, on first use.** With no credential, the vault opens the service's authorize page,
   receives the code and its `state` on its `127.0.0.1` listener, checks `state`, exchanges the code
   with the PKCE verifier, asks the service which account signed in (`whoami`), and stores the
@@ -340,8 +384,11 @@ scopes and the hosts recorded at sign-in. Access tokens from a refresh are held 
   one with no refresh token otherwise. bravebot takes no part.
 - **Scopes.** A sign-in whose token answer's `scope` lacks a requested scope is refused, naming the
   missing scope, so unticking one on Google's consent page[^granular] fails the sign-in.
-  `offline_access` is exempt, and an absent or empty `scope` is accepted. A refresh is not checked.
-- **Host pinning.** The access token goes only to the `base` host over HTTPS on port 443, and to the
+  A scope the definition lists in `unechoed` (such as `offline_access`) is exempt, its
+  `granted_separators` and `granted_prefix` say how the answer writes the rest, and an absent or
+  empty `scope` is accepted. A refresh is not checked.
+- **Host pinning.** The access token goes only to the `base` host and the hosts `also` names, over
+  HTTPS on port 443, and to the
   `whoami` host for that one call at sign-in. A refresh goes only to a recorded token endpoint. The
   HTTP client follows no redirects. GitHub's tokens carry no audience, so host pinning stands in for
   the audience binding the MCP authorization spec[^mcp-auth] and the OAuth security BCP[^bcp] ask
@@ -495,6 +542,9 @@ Places match ignoring ASCII case, and one named twice is refused. A place's own 
 and both lists apply. No file means the definition's `default_floor`. A file that does not parse,
 names an unknown key or level, uses `blocked` as a floor, or names an empty id or place refuses
 every call of that connector (`bad-settings`), so a floor the person set is never dropped silently.
+A place may also set `max_charge`, such as `"300 EUR"`, the most one act there may charge, or one
+amount per currency, such as `"300 EUR, 250 GBP"`; a charge must fit the one in its own currency,
+since nothing converts between them.
 The settings sit with the vault because the floor keeps injected items out of bravebot.
 
 The level names are gh-aw's[^gh-aw], which counts every private-repository item `approved` and a
@@ -573,6 +623,14 @@ An act is prepared without changing anything at the service, shown in the author
   above floor `none`. One popup names the count and the selector and lists the frozen targets, each
   id with a display line where the definition's `show` template can be filled (Gmail's, when the
   matches were read whole for an exact sender), and Allow is bound to those ids.
+- **Charges.** An act that spends money names which of its values are the amount and the currency.
+  It is high-impact, its popup opens with the amount, and the vault refuses it with no `max_charge`
+  set for the place (`no-ceiling`), in another currency or above it (`over-ceiling`). The amount is
+  the one the service states when the act is prepared: an offer read again, or a rate held by a
+  `before` call whose answer must match what the person is shown (`moved` otherwise).
+- **Pages opened in the browser.** An act may finish on the service's own page, opened in the
+  person's browser once they allow it, as a flight is booked and paid for on Kiwi.com. The page is
+  https on exactly the host the definition names, whatever a value holds, and the popup shows it.
 - **An act on a set** names in `on` a fetch that chose a set. Text that does not start like JSON
   (`{`, `[` or a code fence) goes to every item. Text that does must parse as an object from item to
   text (keys may lead with `#`; one code fence may wrap it). A malformed object (`bad-value`) or a
@@ -604,7 +662,7 @@ The file has two halves:
 | half | read by | holds | installed at |
 | --- | --- | --- | --- |
 | **surface** | bravebot | what can be done and the forms: what the planner may ask for and the plan check needs. No URLs, no secrets | `~/.bravebot/connectors/<name>.json`, with the connector's name, its `definition_id`, the authority's path and the credential item |
-| **wire** | the vault only | everything else: base URL, sign-in with the client secret, calls, paging, kept fields, standing and write rules | `~/.brave_vault/connectors/<name>.json`, the whole file |
+| **wire** | the vault only | everything else: base URL, sign-in, calls, paging, kept fields, standing and write rules; never a secret | `~/.brave_vault/connectors/<name>.json`, the whole file |
 
 ### Gmail's definition
 
@@ -621,7 +679,7 @@ in `…`, and `// …` stands for keys left out. GitHub's definition, trimmed th
       "find_message": {
         "step": "fetch",
         "uses": ["place", "select"],
-        "forms": { "place": "opaque-id" },         // a mailbox; `me` by default
+        "forms": { "place": "opaque-id" },         // a mailbox; `me` is the only one accepted
         "select": ["in:inbox", "is:unread", "from:*", "to:*", "subject:*", "after:*", …],
         "receipt": true,
         "summary": "the newest email matching a selector, with its body; …"
@@ -694,13 +752,15 @@ in `…`, and `// …` stands for keys left out. GitHub's definition, trimmed th
 ### Loading a definition
 
 In the prototype, brave-vault's `scripts/install-connector.sh` writes the two halves to the places
-in the table under [Connector definition language](#connector-definition-language), and the person
-writes the client secret into the vault's copy. brave-vault's README, under Connectors, covers
+in the table under [Connector definition language](#connector-definition-language). Neither copy
+holds a credential: an OAuth client's secret or an API key is added in the vault app and held in
+its sealed store, and a definition file carrying either is refused. brave-vault's README, under
+Connectors, covers
 registering the OAuth clients and the rest of setting up. The broker is to ship definitions signed
 by Brave instead ([Broker requirements](#broker-requirements)).
 
 The install script also computes the `definition_id`, the SHA-256 of the canonical definition
-without the client id and secret, and writes it into bravebot's copy. bravebot refuses a copy whose
+without its client id, and writes it into bravebot's copy. bravebot refuses a copy whose
 `definition_id` is missing or not 64 lower-case hex characters, and sends it with every request; the
 vault refuses a request that names none (`definition-missing`) or an id that differs from its own
 copy's (`definition-mismatch`), and binds receipts to it. The id ties the two halves to one
@@ -823,6 +883,25 @@ restricted-scope verification, and a security assessment if restricted data is s
 transmitted through servers[^gmail-scopes]. Mail a processor reads is sent to the model service the
 person configured, which may count. In Testing, a test-user list is needed.
 
+### Other services
+
+| service | reads | writes | what to know |
+| --- | --- | --- | --- |
+| Google Calendar | events on calendars you own | an event on your own calendar, inviting nobody | `calendar.events.owned` only; events others organised are read at `none` |
+| Outlook (Graph) | inbox, an email by sender or id, calendar events | send to one address; reply bound to the sender's address | a public client; no `Reply-To` redirect |
+| Slack | a channel, a thread, a workspace search | reply in a thread; post to a channel (high-impact) | user scopes only; a fixed `localhost` callback; refresh tokens last 30 days |
+| GitLab | an issue with notes, a project's issues | comment | a public client; the project is its numeric id |
+| X | recent posts by words or author | publish a post (high-impact) | paid per read and per post; a post with a link off x.com is refused |
+| Brave Sync | bookmarks, reading list, open tabs, tab groups | none | read from the vault's own sync snapshot; passwords and identities cannot be named |
+| Kiwi.com | one-way flights, cheapest first | open the chosen flight's booking page | an MCP server needing no key, its tool pinned; the person pays on Kiwi's page |
+| Duffel | the cheapest offer, read again | book it at its exact price | within `max_charge`; a test key spends no money |
+| LiteAPI | the cheapest room | book it after holding the rate | within `max_charge`; the rate's price must not have moved |
+
+A definition may reach an MCP server as well as a REST API: a `TOOL` call sends `tools/call` with
+arguments built from checked values, and the answer goes through the same floors, projection and
+receipts. The planner reads only the definition's words about a tool, never the server's, and a pin
+refuses a tool whose input schema changed since the definition was written.
+
 ## Prototype status and gaps
 
 **In the prototype.** brave-vault falls short of the #852 broker in these properties:
@@ -836,7 +915,7 @@ person configured, which may count. In Testing, a test-user list is needed.
 | a stop cancels a pending authorisation | yes | no (below) |
 | definitions signed | yes | no |
 | surface and wire bound to one version | yes, signed | yes, by `definition_id`, unsigned ([Loading a definition](#loading-a-definition)) |
-| receipts survive a restart | a design choice | no: a restart between a fetch and its act fails the act (`unknown-receipt`), since receipts and a run's branches live in memory |
+| receipts survive a restart | a design choice | no: a restart between a fetch and its act fails the act (`unknown-receipt`), since receipts and the items a run made live in memory |
 
 - bravebot starts whatever program the definition names.
 - The vault does not watch the connection, so an act, read popup or sign-in carries on after a stop
@@ -874,10 +953,13 @@ person configured, which may count. In Testing, a test-user list is needed.
 
 **Services and the format.**
 
-- A third service may need a client authentication method (none or basic), the token's place in
-  the token answer, a fixed callback port, a per-credential base URL (Jira), `POST` or GraphQL reads
-  (Linear), nested or typed values in an act's `fields` (Calendar), offset paging or
-  per-placeholder encoding.
+- A service may still need basic client authentication, a per-credential base URL (Jira), GraphQL
+  (Linear), offset paging, per-placeholder encoding, or an MCP server that keeps a session; none is
+  supported yet.
+- The booking keys are the business's, not the person's: in the prototype they sit in the vault's
+  copy, and Duffel books against the account's balance. In production they belong in a Brave
+  service, and the traveller pays with their own card on the provider's payment page, the supplier
+  or the provider being merchant of record.
 
 Gaps in the implementation itself are in
 [Implementation gaps](connectors-reference.md#implementation-gaps).
@@ -892,11 +974,11 @@ None of these is built, and none is part of the [Security invariants](#security-
 A write would run without its popup only when the complete request was fixed before any service
 content was read: the connector, account, capability, place, item, option, recipient, title and
 exact text or diff are all written in the plan; no fetched slot contributes text; there is no `on`;
-no bound value comes from a receipt; and no service answer changes the request. The authority would
-verify the request against an authorisation capability created at plan approval, which it stores or
-a broker signs, so the agent is never authoritative about its own approval; a mismatch asks or is
-refused. Anything else asks. A high-impact write always asks, and under bypass no plan is approved,
-so no capability exists.
+no bound or taken value comes from a receipt; and no service answer changes the request. The
+authority would verify the request against an authorisation capability created at plan approval,
+which it stores or a broker signs, so the agent is never authoritative about its own approval; a
+mismatch asks or is refused. Anything else asks. A high-impact write always asks, and under bypass
+no plan is approved, so no capability exists.
 
 ### Broker requirements
 

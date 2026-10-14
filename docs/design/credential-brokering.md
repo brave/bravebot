@@ -4,7 +4,8 @@ What Brave builds, in what order, and what the user has to do. The normative spe
 must be true follows separately.
 
 **We adopt [Brave Vault](https://github.com/brave-experiments/brave-vault)'s model and its grant
-machinery, harden it, and make bravebot one of its agents. We do not build a second broker.**
+machinery, and build the broker in this repository, hardened, with bravebot one of its agents.
+Brave Vault is the prototype the design was tried on, and is not ported.**
 
 **The broker is the authority, and it is the performer.** Those are the spec's words for the thing
 this document calls the broker, and nothing else in here is either.
@@ -772,11 +773,12 @@ is last on purpose.
 
 ## Decisions
 
-**Promote Vault out of `brave-experiments` and staff it, before phase 1.** Both sides are ours:
-bravebot and the vault. Phase 1 is work on that code, and today it is still an experiment: no
-releases, no tags, a hardcoded vault password. The decision is whether this is a product we will
-maintain, not whether to take a dependency on someone else. Phase 1 does not start until that
-is yes.
+**Build the broker in this repository, before phase 1**
+([#852](https://github.com/brave/bravebot/issues/852)). Both sides are ours: bravebot and the
+broker. The broker, `bravevault-brokerd`, and its UI helper are built here, signed by the release
+job, and versioned with the protocol bravebot's client crate speaks. Brave Vault, in
+`brave-experiments`, stays the prototype the design and the connector contract were tried on: it has
+no releases, no tags and a hardcoded vault password, and none of it is ported.
 
 **When the broker is not running, refuse.** Loudly, naming the vault. Degrading to bravebot holding
 a secret would defeat the design at the moment nobody is watching.
