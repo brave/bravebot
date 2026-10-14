@@ -755,4 +755,28 @@ mod tests {
         assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL)));
         assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
     }
+
+    /// A block written before undo existed could put another action on `ctrl-_` and keep it,
+    /// since nothing else answered that chord. `undo`'s own default now does, so loading that
+    /// block contests the request the same way two actions asking for one chord always have
+    /// (INPUT-32): neither has more right than the other, and the request gives it up. The chord
+    /// that moved is `trail`'s, by name rather than by position, so the same holds whichever of
+    /// the ten is the one an old block put there.
+    #[test]
+    fn a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up() {
+        let mut map = BTreeMap::new();
+        map.insert("trail".to_string(), "ctrl-_".to_string());
+        let bindings = Keybindings::from_map(&map);
+
+        assert_eq!(
+            bindings.trail,
+            KeyChord::ctrl('t'),
+            "trail did not fall back to its own default"
+        );
+        assert_eq!(
+            bindings.undo,
+            Keybindings::UNDO,
+            "undo did not keep the default the request contested"
+        );
+    }
 }
