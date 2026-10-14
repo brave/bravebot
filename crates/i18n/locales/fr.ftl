@@ -242,11 +242,15 @@ cli-bypass-unreachable =
     ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
 cli-sandbox-needs-a-mode = --sandbox demande l'un de : { $names }
 cli-sandbox-refused-flag =
-    --sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une exécution peut
-    être plus stricte que cela mais pas plus souple. Lancez avec --sandbox { $pinned } ou plus strict, ou sans l'option.
+    --sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une exécution ne peut
+    lire ni écrire davantage. { $looser } Lancez avec --sandbox { $pinned }, ou sans l'option.
 cli-sandbox-refused-file =
     sandbox.mode { $asked } dans { $asked_in } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned },
-    et une exécution peut être plus stricte que cela mais pas plus souple. Modifiez-le là, ou retirez-le.
+    et une exécution ne peut lire ni écrire davantage. { $looser } Remplacez-le par { $pinned } là,
+    ou retirez-le.
+sandbox-looser-reads = { $asked } lit davantage de la machine que { $pinned }.
+sandbox-looser-writes = { $asked } écrit davantage que { $pinned }.
+sandbox-looser-both = { $asked } lit davantage de la machine et écrit davantage que { $pinned }.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé
     sans bac à sable n'est pas tenu à cela. Lancez avec --sandbox workspace-write ou plus strict, ou sans l'option.
@@ -543,6 +547,8 @@ doctor-settings-mcp-declared =
     rien de ce qu'il contient n'est démarré
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } dans { $path } n'est pas appliqué : le fichier d'un projet ne peut demander que strict, et les autres modes sont lus uniquement dans ~/.bravebot/settings.json et dans le fichier que --settings nomme
+doctor-settings-sandbox-strict-ignored =
+    sandbox.mode strict dans { $path } n'est pas appliqué : strict laisse les programmes écrire dans les répertoires de la session, ce que { $mode } depuis { $held } ne permet pas, et un fichier situé dans l'espace de travail ne peut pas assouplir le mode
 doctor-settings-sandbox-unreadable =
     sandbox.mode dans { $path } n'est ni strict, ni read-only, ni workspace-write, ni off : il est lu comme absent et la valeur par défaut s'applique
 doctor-sandbox-mode = mode du bac à sable
@@ -873,6 +879,8 @@ mcp-two-transports = add prend un programme après -- ou --http, pas les deux
 mcp-stdio-needs-a-program =
     un programme et ses arguments viennent après un -- seul, comme dans -- npx -y weather-mcp
 mcp-http-needs-a-url = --http a besoin d'une url
+mcp-bearer-env-needs-a-name = --bearer-env nécessite le nom d'une variable d'environnement
+mcp-header-env-needs-a-pair = --header-env nécessite <EN_TÊTE>=<VARIABLE_D_ENVIRONNEMENT>
 mcp-env-needs-a-name =
     -e a besoin de NOM=valeur, ou du nom d'une variable lue dans votre environnement
 mcp-env-after-the-alias =
@@ -911,6 +919,7 @@ mcp-problem-directory = le répertoire n'est pas un chemin absolu
 mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
 mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
+mcp-problem-header = { $name } n'est pas un jeton d'en-tête HTTP valide
 mcp-problem-remote = un serveur distant ne prend pas de { $key }
 mcp-problem-timeout = { $key } n'est pas un nombre entier de secondes de 1 à { $most }
 mcp-problem-tool = { $name } n'est pas un nom d'outil
@@ -931,6 +940,7 @@ mcp-no-state-directory =
 mcp-not-written = { $path } n'a pas pu être écrit ({ $error })
 mcp-declared = { $alias } déclaré dans { $path }
 mcp-variables = variables : { $names }
+mcp-headers = en-têtes : { $headers }
 mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire, où il peut écrire : { $path }
@@ -1428,6 +1438,8 @@ run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
 run-confined = ses fichiers sont confinés à ces répertoires, au répertoire temporaire du système et aux fichiers système dont tout programme a besoin :
 run-confined-machine = il peut lire cette machine sauf les endroits qui contiennent des identifiants, et n'écrire que dans ces répertoires, le répertoire temporaire du système et les caches des chaînes d'outils :
+run-confined-git = ses fichiers sont confinés à ces répertoires, au répertoire temporaire du système et aux fichiers système dont tout programme a besoin, et un de ses programmes autre que git peut écrire les hooks et la configuration d'un dépôt, que git exécute ensuite sans bac à sable :
+run-confined-machine-git = il peut lire cette machine sauf les endroits qui contiennent des identifiants, et n'écrire que dans ces répertoires, le répertoire temporaire du système et les caches des chaînes d'outils, et un de ses programmes autre que git peut écrire les hooks et la configuration d'un dépôt, que git exécute ensuite sans bac à sable :
 run-carries-known-hosts = { $program } ajoute aussi à vos hôtes ssh connus et peut atteindre votre agent ssh
 run-carries-toolchain = { $program } atteint aussi l'installation et le cache de la chaîne d'outils { $toolchain }
 run-carries-loopback = { $program } peut aussi écouter sur des ports de cette machine et s'y connecter
@@ -1438,13 +1450,15 @@ run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.dock
 run-carries-signing = { $program } lit aussi la clé publique avec laquelle votre configuration git signe, et signe par votre agent ssh, sans jamais lire de clé privée
 run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
 run-carries-identity = { $program } fait proposer d'abord par ssh la clé { $path }, que votre git.identities désigne pour le propriétaire de cette adresse, puis seulement les clés que nomme votre configuration ssh
+run-carries-identity-chosen = { $program } fait proposer d'abord par ssh la clé { $path }, que vous avez choisie pour { $owner } le { $date }, puis seulement les clés que nomme votre configuration ssh
+run-carries-identity-chosen-default = { $program } laisse le choix de la clé à ssh, qui propose vos clés dans l'ordre, comme vous l'avez choisi pour { $owner } le { $date }
 run-network-closed = le réseau est fermé aux programmes que cette session lance, sauf à ceux ci-dessous
 run-keeps-network = { $program } atteint aussi le réseau
 run-carries-requested = { $sentence } (demandé par le planificateur pour cette ligne)
 run-carries-remembered = { $sentence } (retenu pour cette commande, autorisé le { $date })
 run-carries-remembered-read = { $program } lit aussi { $path } (retenu pour cette commande, autorisé le { $date })
 run-carries-remembered-write = { $program } lit et écrit aussi { $path } (retenu pour cette commande, autorisé le { $date })
-reach-usage = /reach liste les accès retenus pour des commandes. /reach <remote|aws|kubernetes|docker|répertoire> [write] [always] -- <commande> le retient pour cette commande. /reach remove <numéro> en oublie un.
+reach-usage = /reach liste les accès retenus pour des commandes. /reach <remote|aws|kubernetes|docker|répertoire> [write] [always] -- <commande> le retient pour cette commande. /reach remove <numéro> en oublie un. /reach paths liste les chemins qu'une session a été autorisée à atteindre, et /reach paths remove <numéro> en retire un. /reach keys liste la clé ssh choisie à une demande d'exécution pour chaque propriétaire, et /reach keys remove <numéro> en oublie une.
 reach-none = aucun accès n'est retenu pour une commande
 reach-listed = { $number }. { $command } { $access } aussi { $entry }, autorisé le { $date }, { $lifetime }
 reach-access-reads = lit
@@ -1464,6 +1478,12 @@ reach-refused-workspace = ce répertoire ne peut pas être distingué d'un autre
 reach-refused-incognito = cette session n'ajoute rien à ~/.bravebot, rien n'a donc été retenu
 reach-refused-no-home = cette session n'a pas de répertoire personnel pour juger un accès
 reach-refused-number = aucun accès n'est numéroté { $number }
+reach-key-none = aucune clé ssh n'est choisie pour un propriétaire
+reach-key-listed = { $number }. { $owner } : { $key }, choisie le { $date }
+reach-key-default = la clé que ssh essaie en premier
+reach-key-usage = /reach keys liste la clé ssh choisie à une demande d'exécution pour chaque propriétaire, et /reach keys remove <numéro> en oublie une.
+reach-key-refused-number = aucune clé n'est numérotée { $number }
+reach-key-removed = oubliée : la clé pour { $owner }. La prochaine demande d'exécution d'une commande git qui l'atteint redemande, là où elle pourrait proposer plus d'une clé.
 run-filesystem-rules = vos propres règles de système de fichiers s'appliquent à ces programmes : { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
@@ -1506,6 +1526,12 @@ run-keep-reach-undo =
     /reach liste ce qui est retenu, et /reach remove <numéro> en oublie un
 run-keep-reach = retenir l'accès
 run-keep-reach-always = le retenir pour toute session
+run-key-choice-explained = { $first }-{ $last } : l'exécuter, et désormais faire proposer d'abord cette clé par ssh chaque fois que git atteint { $owner } :
+run-key-choice-default = laisser le choix de la clé à ssh, qui propose vos clés dans l'ordre, et ne plus demander
+run-key-choice-yes = y l'exécute avec la clé que ssh essaie en premier, et redemande la prochaine fois
+run-key-choice-undo = /reach keys liste les clés choisies, et /reach keys remove <numéro> en oublie une
+run-key-choose = proposer cette clé
+run-key-leave = laisser le choix à ssh
 run-remember-explained =
     r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
 run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :
@@ -3018,8 +3044,8 @@ session-sandbox-kept = Le mode du bac à sable reste { $mode }.
 session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
 session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
 session-sandbox-refused-mode =
-    /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session peut
-    être plus stricte que cela mais pas moins.
+    /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session ne peut
+    lire ni écrire davantage. { $looser }
 session-sandbox-refused-network =
     /sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé sans
     bac à sable n'y est pas tenu. Utilisez /sandbox workspace-write, read-only ou strict.
@@ -3043,3 +3069,4 @@ doctor-push-not-recognised = aucun compte sur { $host } n'a cette clé (Permissi
 doctor-push-unanswered = { $host } n'a donné aucune réponse pour cette clé
 doctor-push-chosen = Choisie
 doctor-push-chosen-by = git.identities nomme cette clé pour le propriétaire
+doctor-push-chosen-at-prompt = vous avez choisi cette clé pour le propriétaire à une demande d'exécution ; /reach keys dans le client en terminal la liste et l'oublie

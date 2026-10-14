@@ -157,6 +157,18 @@ mod tests {
         assert!(v.relabel(Label::trusted_public()).is_none());
     }
 
+    /// Confidentiality degrades as well. A relabel from private to public would release content
+    /// with no witness, whatever its integrity, so it is refused for trusted and untrusted
+    /// values alike.
+    #[test]
+    fn relabel_may_not_make_private_content_public() {
+        let trusted = Labelled::new(1u8, Label::trusted_private());
+        assert!(trusted.relabel(Label::trusted_public()).is_none());
+
+        let untrusted = Labelled::new(1u8, Label::untrusted_private());
+        assert!(untrusted.relabel(Label::untrusted_public()).is_none());
+    }
+
     /// Incomparable labels are not reachable from one another.
     #[test]
     fn relabel_refuses_incomparable_labels() {

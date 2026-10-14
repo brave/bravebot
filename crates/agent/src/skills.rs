@@ -37,7 +37,8 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 
 /// What a `SKILL.md` declares about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -675,16 +676,24 @@ pub fn discover<S: Sink>(
         return (catalogue, notices);
     }
 
-    if let Some(home) = home {
-        discover_home(
-            policy,
-            workspace,
-            &home.join(SKILLS),
-            &mut catalogue,
-            &mut notices,
-        );
+    let home_skills = home.map(|home| home.join(SKILLS));
+    let passed_over = match &home_skills {
+        Some(root) => discover_home(policy, workspace, root, &mut catalogue, &mut notices),
+        None => 0,
+    };
+    let read = discover_workspace(policy, workspace, &mut catalogue, &mut notices);
+    // Not where the project's pass read the same directory, as it does in a session started in the
+    // home directory: that pass has already said what it did with each of them (SKILL-6). Compared
+    // by the directories alone, so no entry's name is held or compared.
+    let read_as_the_projects = home_skills
+        .and_then(|root| std::fs::canonicalize(root).ok())
+        .is_some_and(|root| read.contains(&root));
+    if passed_over > 0 && !read_as_the_projects {
+        notices.push(Notice::new(t!(
+            home_skills_reached_through_the_workspace,
+            count = passed_over
+        )));
     }
-    discover_workspace(policy, workspace, &mut catalogue, &mut notices);
 
     (catalogue, notices)
 }
@@ -721,19 +730,29 @@ pub fn resolved<S: Sink>(
 }
 
 /// Skills from `~/.bravebot/skills`, labelled from where they sit.
+///
+/// Not a file the way to which goes through the workspace, as every one does where the working
+/// directory is or holds the home directory. A turn can write there, so the trust map labels that
+/// file, and labelling it from provenance as well would be laundering it (SKILL-3). How many were
+/// passed over is returned for the caller to count.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-) {
+) -> usize {
+    let mut passed_over = 0;
     if policy.before_capability(Capability::FileRead).is_err() {
-        return;
+        return passed_over;
     }
 
     for name in skill_directories(root) {
         let file = root.join(&name).join(SKILL_FILE);
+        if goes_through_the_workspace(workspace, &file) {
+            passed_over += 1;
+            continue;
+        }
         let origin = format!("~/.bravebot/{SKILLS}/{name}/{SKILL_FILE}");
 
         let Ok(text) = std::fs::read_to_string(&file) else {
@@ -780,39 +799,128 @@ fn discover_home<S: Sink>(
             ))),
         }
     }
+    passed_over
+}
+
+/// The most links followed on the way to one home skill before it is taken to go through the
+/// workspace, which is the limit Linux puts on resolving one path.
+const MAX_LINKS_TO_A_HOME_SKILL: usize = 40;
+
+/// Whether the way to `path` goes through a directory the workspace's file tools may write to.
+///
+/// Each entry on the way is compared where it sits, and each link is followed by hand, so a link
+/// inside the workspace is found wherever it leads. A turn can change such a link, so where it
+/// leads says nothing about who wrote what is there. An entry whose place cannot be resolved, and
+/// a path with too many links, count as going through.
+fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
+    let steps = |path: &Path| -> Vec<PathBuf> {
+        path.components()
+            .rev()
+            .map(|step| PathBuf::from(step.as_os_str()))
+            .collect()
+    };
+    let Ok(path) = std::path::absolute(path) else {
+        return true;
+    };
+
+    let mut pending = steps(&path);
+    let mut at = PathBuf::new();
+    let mut followed = 0;
+    while let Some(step) = pending.pop() {
+        match step.components().next() {
+            Some(Component::Normal(name)) => {
+                // `at` holds no link, so resolving it only spells it as the root is spelled.
+                let Ok(parent) = std::fs::canonicalize(&at) else {
+                    return true;
+                };
+                let entry = parent.join(name);
+                if workspace.lands_in_reach(&entry) {
+                    return true;
+                }
+                match std::fs::read_link(&entry) {
+                    Ok(target) => {
+                        followed += 1;
+                        if followed > MAX_LINKS_TO_A_HOME_SKILL {
+                            return true;
+                        }
+                        pending.extend(steps(&target));
+                    }
+                    Err(_) => at = entry,
+                }
+            }
+            Some(Component::ParentDir) => {
+                at.pop();
+            }
+            Some(Component::RootDir | Component::Prefix(_)) => at.push(&step),
+            Some(Component::CurDir) | None => {}
+        }
+    }
+    false
 }
 
 /// Skills from a project's skill directories, labelled by the trust map.
 ///
 /// Each root is visited in [`WORKSPACE_SKILL_ROOTS`] order, least specific first, so a skill in
 /// `.bravebot/skills` replaces one of the same name found under another agent's directory.
+///
+/// Returns each of those directories that exists, resolved, whatever was done with what it holds.
 fn discover_workspace<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-) {
-    // The skipped names are held back rather than reported as each root is read, because the roots
+) -> Vec<PathBuf> {
+    // The skipped roots are held back rather than reported as each root is read, because the roots
     // are read least specific first and a more specific one later in the list may offer the same
     // skill. Reporting in place would tell a person a skill was not loaded while they can see that
     // it was: the layout `make init` creates in this repository symlinks the same skills into all
-    // three, so that notice would be wrong on every turn.
-    let mut skipped: Vec<(String, Vec<String>)> = Vec::new();
-    for root in WORKSPACE_SKILL_ROOTS {
-        discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
+    // three, so with `.bravebot/skills` vouched for that notice would be wrong on every turn.
+    let roots: Vec<String> = WORKSPACE_SKILL_ROOTS
+        .iter()
+        .map(|root| root.to_string())
+        // After the root's, so a skill under a directory the session has worked in shadows the
+        // project's of the same name, the deeper directory last (INSTR-14).
+        .chain(
+            workspace
+                .touched_directories()
+                .into_iter()
+                .map(|directory| format!("{directory}/{WORKSPACE_SKILLS}")),
+        )
+        .collect();
+    let mut skipped = Vec::new();
+    for (position, root) in roots.iter().enumerate() {
+        if let Some(held) = discover_workspace_root(policy, workspace, root, catalogue, notices) {
+            skipped.push((position, held));
+        }
     }
-    // After the root's, so a skill under a directory the session has worked in shadows the
-    // project's of the same name, the deeper directory last (INSTR-14).
-    for directory in workspace.touched_directories() {
-        let root = format!("{directory}/{WORKSPACE_SKILLS}");
-        discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
-    }
-    for (root, names) in skipped {
-        let missing = names.len()
-            - names
-                .iter()
-                .filter(|name| catalogue.get(name).is_some())
-                .count();
+    // Each project skill on the list, by the position of the root it came from and its directory
+    // name. A built-in or a skill of the user's own is under no project root and covers nothing.
+    let listed: Vec<(usize, &str)> = catalogue
+        .iter()
+        .filter(|skill| skill.source == Source::Workspace)
+        .filter_map(|skill| {
+            let (from, name) = skill.directory.as_deref()?.rsplit_once('/')?;
+            Some((roots.iter().position(|root| root == from)?, name))
+        })
+        .collect();
+    for (position, held) in skipped {
+        let root = &roots[position];
+        // Only a skill from a root read after this one could have replaced its skill, so one from a
+        // less specific root covers nothing (INSTR-13).
+        let offered: BTreeSet<&str> = listed
+            .iter()
+            .filter(|(from, _)| *from > position)
+            .map(|(_, name)| *name)
+            .collect();
+        // Only names from the list are looked up in the untrusted root, so no name of its own is
+        // held or compared (SKILL-4).
+        let path = workspace.root().join(root);
+        let covered = offered
+            .iter()
+            .filter(|name| is_skill_directory(&path.join(name)))
+            .count();
+        // Saturating because a case-insensitive filesystem answers for two spellings of one entry.
+        let missing = held.saturating_sub(covered);
         if missing == 0 {
             continue;
         }
@@ -821,34 +929,34 @@ fn discover_workspace<S: Sink>(
             "{count} in {root} {verb} not loaded: this directory is not trusted"
         )));
     }
+    roots
+        .iter()
+        .filter_map(|root| std::fs::canonicalize(workspace.root().join(root)).ok())
+        .collect()
 }
 
-/// Skills from one of a project's skill directories, labelled by the trust map.
+/// Skills from one of a project's skill directories, labelled by the trust map, or how many skill
+/// directories it holds where the trust map does not vouch for it and it holds any.
 fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     skills_root: &str,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-    skipped: &mut Vec<(String, Vec<String>)>,
-) {
+) -> Option<usize> {
     let root = workspace.root().join(skills_root);
-    let names = skill_directories(&root);
-    if names.is_empty() {
-        return;
-    }
 
     // Checked before anything is enumerated, and checked on the label rather than on any
     // content. A directory name is content too: a skill directory in a project nobody vouched
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
     if !policy.trusts_path(skills_root) {
-        // The names, so the caller can drop the ones a more specific root went on to offer. Held
-        // here and never put in a notice: a directory name in a project nobody vouched for is
-        // content, and only the count of it reaches a screen (SKILL-6).
-        skipped.push((skills_root.to_string(), names));
-        return;
+        // Counted with no entry's name held, so the caller has nothing of this directory's to
+        // compare, and only the count reaches a screen (SKILL-6).
+        return Some(skill_entries(&root).count()).filter(|held| *held > 0);
     }
+
+    let names = skill_directories(&root);
 
     // Counted rather than named, as the directory above is (SKILL-6). The directory is vouched
     // for, but a skill file inside it can still be distrusted, and the name of a directory a
@@ -924,6 +1032,7 @@ fn discover_workspace_root<S: Sink>(
             )));
         }
     }
+    None
 }
 
 /// The most files a skill's listing names, and the deepest a directory under it is searched.
@@ -1009,18 +1118,25 @@ fn counted(n: usize) -> (String, &'static str) {
 /// Sorted so a turn offers the same skills in the same order every time. An order that came from
 /// the filesystem would vary by machine, which would make the prompt vary with it.
 fn skill_directories(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_dir())
+    let mut names: Vec<String> = skill_entries(root)
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| root.join(name).join(SKILL_FILE).is_file())
         .collect();
     names.sort();
     names
+}
+
+/// The entries under a skills root that hold a skill, in whatever order the filesystem gives.
+fn skill_entries(root: &Path) -> impl Iterator<Item = std::fs::DirEntry> {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| is_skill_directory(&entry.path()))
+}
+
+/// Only a directory can have a `SKILL.md` beneath it, so the one lookup also says it is a directory.
+fn is_skill_directory(directory: &Path) -> bool {
+    directory.join(SKILL_FILE).is_file()
 }
 
 #[cfg(test)]

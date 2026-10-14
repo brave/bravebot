@@ -3208,7 +3208,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// it before the run is what keeps the processor out of the decision: nothing it writes has
     /// any bearing on how what it writes is labelled.
     ///
-    /// The instruction is the planner's own words and must be public. It is not routing, since
+    /// The instruction is the planner's own words and must be public. `spawn_processor` labels it
+    /// from the context with [`Policy::adopt_model_output`], so once the planner has been shown
+    /// private content no instruction it writes passes. It is not routing, since
     /// a processor has nowhere to route anything to: no tool, no path, no address, and one
     /// output slot chosen by the driver. It is nonetheless read here rather than carried,
     /// which is the same relaxation [`Policy::promote_confined_read`] makes and rests on the
@@ -3234,12 +3236,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let label = instruction.label();
         if !label.is_public() {
+            // An instruction labelled from a context holding private content is private however
+            // it is worded, so advice to reword would only send the planner round again.
+            let instead = if self.holds == Confidentiality::Private {
+                "what you write has been private since you were shown private content, so no \
+                 rewording changes that and no processor can be started in this conversation; \
+                 tell the user what this one was for"
+            } else {
+                "say what to do rather than pasting what was read"
+            };
             return Err(self.deny(
                 "processor",
                 Principle::Confinement,
                 format!(
                     "{id}: the instruction is {label} and private content must not become one; \
-                     say what to do rather than pasting what was read"
+                     {instead}"
                 ),
             ));
         }
@@ -6396,6 +6407,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
     }
 
+    /// [`Policy::record_permission_mode`] for a manifest run, which is not a turn and is not
+    /// called one in the trail.
+    pub fn record_manifest_permission_mode(&mut self, mode: &'static str) {
+        self.allow(
+            "permission_mode",
+            format!("the manifest run began in {mode} mode"),
+        );
+    }
+
     /// Record the output style whose words open a turn's system prompt, by name and by whether the
     /// person's own file or this build supplied it (INSTR-12).
     ///
@@ -6789,6 +6809,32 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "confine",
             Principle::Confinement,
             format!("{call}: '{named}' resolves outside the workspace; remedy offered: {offered}"),
+        );
+    }
+
+    /// Record that the permission mode refused a write before anything was written (MODE-3).
+    ///
+    /// The mode is answered before any other gate sees the call, so without this the planner is
+    /// told of a refusal the trail leaves out (TRACE-1), and the turn reads as clean. `call` is the
+    /// tool, or a plan's step and its tool, and `mode` is the mode's own name.
+    pub fn refuse_write_in_mode(&mut self, call: &str, mode: &'static str) {
+        let _ = self.deny(
+            "permission_mode",
+            Principle::Capability,
+            format!("{call}: {mode} mode refuses a write, so nothing was written"),
+        );
+    }
+
+    /// Record that the sandbox mode refused a write before anything was written (SANDBOX-22).
+    ///
+    /// The mode is answered before any other gate sees the call, for the reason
+    /// [`Policy::refuse_write_in_mode`] gives. `call` is the tool, a plan's step and its tool, or
+    /// `run` for a line that redirects into a file, and `mode` is the sandbox mode's own name.
+    pub fn refuse_write_in_sandbox(&mut self, call: &str, mode: &'static str) {
+        let _ = self.deny(
+            "sandbox",
+            Principle::Confinement,
+            format!("{call}: the {mode} sandbox mode refuses a write, so nothing was written"),
         );
     }
 

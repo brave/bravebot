@@ -73,6 +73,8 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
+`verified-by: bravebot_cli::plain::every_line_of_an_output_is_shown_before_a_yes_releases_it`
+`verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_an_output_before_a_yes_releases_it`
 
 <a id="OUTPUT-2"></a>
 ### OUTPUT-2: only output from a program can be read this way

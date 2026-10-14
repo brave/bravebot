@@ -85,10 +85,12 @@ word that only begins with those five letters, such as `everything`, is not the 
 `verified-by: bravebot_tui::loops::an_interval_written_last_is_taken_off_the_end`
 `verified-by: bravebot_tui::loops::a_trailing_interval_may_spell_its_unit_out`
 `verified-by: bravebot_tui::loops::every_without_a_time_after_it_is_words_rather_than_an_interval`
+`verified-by: bravebot_tui::loops::a_time_followed_by_more_words_is_not_a_trailing_interval`
 `verified-by: bravebot_tui::loops::a_leading_interval_wins_over_a_trailing_one`
 `verified-by: bravebot_tui::loops::a_line_with_no_interval_is_paced_by_the_planner`
 `verified-by: bravebot_tui::loops::a_word_that_is_not_a_time_stays_part_of_the_prompt`
 `verified-by: bravebot_tui::loops::a_word_that_merely_starts_with_every_is_not_an_interval`
+`verified-by: bravebot_tui::loops::a_word_that_merely_ends_with_every_is_not_an_interval`
 `verified-by: bravebot_tui::loops::a_count_too_large_to_be_a_duration_is_not_an_interval`
 `verified-by: bravebot_tui::loops::an_interval_with_nothing_to_send_is_not_a_request`
 `verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
@@ -254,7 +256,8 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::state::stopping_a_loop_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_loop_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
-`verified-by: bravebot_tui::app::stopping_a_turn_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::stopping_a_tick_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
 `verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 `verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`

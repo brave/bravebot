@@ -21,7 +21,7 @@ guards:
       - crates/bedrock/src/lib.rs: 6
       - crates/core/src/policy.rs: 114
       - crates/core/src/slot.rs: 5
-      - crates/core/src/value.rs: 7
+      - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
       - crates/mcp/src/protocol.rs: 2
@@ -34,7 +34,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 39
+      - crates/agent/src/tools.rs: 38
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -53,7 +53,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 21
+      - crates/agent/src/tools.rs: 22
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
@@ -65,7 +65,7 @@ guards:
     sites:
       - crates/core/src/policy.rs: 1
       - crates/core/src/slot.rs: 1
-      - crates/core/src/value.rs: 4
+      - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
       - crates/core/src/policy.rs: 60
@@ -114,7 +114,7 @@ guards:
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 32
+      - crates/agent/src/tools.rs: 34
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
@@ -136,7 +136,7 @@ guards:
       - crates/agent/src/compact.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/agent/src/turn.rs: 3
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
@@ -385,6 +385,7 @@ design is wrong, not the label.
 `verified-by: bravebot_core::value::relabel_may_degrade`
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
+`verified-by: bravebot_core::value::relabel_may_not_make_private_content_public`
 `verified-by: bravebot_core::label::degradation_is_not_the_lattice_ordering`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`

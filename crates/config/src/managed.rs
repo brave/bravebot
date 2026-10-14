@@ -476,7 +476,8 @@ impl Managed {
         self.network
     }
 
-    /// Whether the file named `run.network` as neither `open` nor `closed`, which pins nothing.
+    /// Whether the file named `run.network` as neither `open` nor `closed`, which is read as
+    /// `closed` (SANDBOX-20).
     pub fn network_unreadable(&self) -> bool {
         self.network_unreadable
     }

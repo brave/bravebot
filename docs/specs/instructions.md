@@ -223,14 +223,17 @@ and is offered neither road, no `fetch_url` at all and no `run` without the capa
 ([DELEGATE-4](delegation.md#DELEGATE-4)), so an imperative choosing between them is stated where
 those tools are.
 
-What to do when a Python program fails because a module is missing is said on the same terms, to
-the turn a person is watching and only where the session has a directory of its own. Check, with a
-line that only reads and whose exit status is the answer, whether an installed package provides the
-same module under another name. Where one does, write a module of the missing name that re-exports
-the package in a new directory inside the session's own, and run the program again with
-`PYTHONPATH` set to that directory's path, written out in full and in single quotes, in front of it
-on that one line. Where nothing installed provides it, say which module is missing and what
-provides it. A session with no directory of its own is told none of this, and neither is a delegate.
+What to do when a program fails because something it needs is missing from this machine is said on
+the same terms, to the turn a person is watching and only where the session has a directory of its
+own. Check whether something installed can stand in for what is missing, with a line that only
+reads and whose exit status is the answer, run by the same interpreter or runtime the program uses.
+Where something can, write what connects the two in a new directory inside the session's own, and
+run the program again with that directory on a search path the program reads from its environment
+in addition to its own, assigned in front of it on that one line, the path written out in full and
+in single quotes. Try that before asking the person to install anything or to edit the program.
+Where nothing installed can stand in, say what is missing and what provides it. The paragraph names
+no language, package or variable. A session with no directory of its own is told none of this, and
+neither is a delegate.
 
 They do not pass `read_trusted_content`, and that is the difference between them and every other
 source here. There is no file behind any of them. The root is where the user pointed the session,
@@ -269,20 +272,25 @@ whoever is asking, and a delegate that may run one can use it. What is withheld 
 sentence choosing between two tools, one of which a delegate never has: a delegate told to fall back
 to `fetch_url` spends a round on a name that resolves to nothing.
 
-The stand-in for a missing module is stated because a planner not told of it looks for a newer
-interpreter, finds none, and asks the person to install one or edit the program. Both change the
-machine or the program to supply what an installed package often already provides, such as `tomli`
-for the `tomllib` a Python older than 3.11 lacks. A module of the missing name in the session's own
-directory changes neither, and goes when the session does. It goes in a directory of its own there,
-and only that directory goes on the path, because a directory on `PYTHONPATH` is imported from ahead
-of the standard library, and the session's directory also holds whatever else the work put in it,
-such as an archive unpacked to look inside. The assignment is on the one line because nothing
-carries over between lines. The path is written out because a line expands no variable, and quoted
-because a line reads an unquoted backslash as an escape and a Windows path is made of them. It is
-gated on the directory because without one the only place to write the module is the project. It is
-withheld from a delegate because the road is two `run`s and a reader is offered none. Nothing here
-is a decision the driver takes on a program's output: the check is answered by an exit status
-([RUN-13](tools/run.md#RUN-13)), and what the planner does with it is the planner's.
+The stand-in is stated because a planner not told of it asks the person to install what is missing
+or to edit the program, and both change the machine or the program to supply what something
+installed can often already provide. It describes no case: it says what to do when a program fails
+for something missing, and names no language, package or variable, because text naming one of them
+covers that one alone. What connects the two, written in the session's own directory, changes
+neither the machine nor the program, and goes when the session does. The check runs on the
+program's own interpreter or runtime because another one on the same machine can have what that one
+lacks. The
+search path is one read in addition to the program's own, because an assignment replaces whatever
+the variable held and a line cannot name the old value, so a path that stands in for a default would
+lose it. The stand-in goes in a directory of its own, and only that directory goes on the path,
+because the session's directory also holds whatever else the work put in it. The assignment is on
+the one line because nothing carries over between lines. The path is written out because a line
+expands no variable, and quoted because a line reads an unquoted backslash as an escape and a
+Windows path is made of them. It is gated on the directory because without one the only place to
+write the stand-in is the project. It is withheld from a delegate because the road is two `run`s and
+a reader is offered none. Nothing here is a decision the driver takes on a program's output: the
+check is answered by an exit status ([RUN-13](tools/run.md#RUN-13)), and what the planner does with
+it is the planner's.
 
 `verified-by: bravebot_agent::preamble::the_working_directory_is_stated_so_nothing_has_to_run_pwd`
 `verified-by: bravebot_agent::preamble::the_environment_is_stated_even_with_no_instructions_to_read`
@@ -290,7 +298,8 @@ is a decision the driver takes on a program's output: the check is answered by a
 `verified-by: bravebot_agent::preamble::moving_the_working_directory_restates_it`
 `verified-by: bravebot_agent::preamble::the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`
-`verified-by: bravebot_agent::preamble::a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory`
+`verified-by: bravebot_agent::preamble::a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory`
+`verified-by: bravebot_agent::preamble::the_stand_in_road_names_no_language_or_variable`
 `verified-by: bravebot_agent::confine::a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_names_it`
 `verified-by: bravebot_agent::preamble::a_windows_version_is_the_three_numbers_a_build_is_named_by`
 `verified-by: bravebot_agent::preamble::whether_the_github_cli_is_installed_is_said_either_way`
@@ -448,9 +457,14 @@ them, each directory is checked for trust before it is enumerated at all, and wh
 counted with the directory it was skipped from named and no skill inside it
 ([SKILL-4](skills.md#SKILL-4), [SKILL-6](skills.md#SKILL-6)).
 
-The count is what a more specific root did not go on to offer. A skill of the same name under a
-vouched root is on the list a person can see, so counting it as not loaded would contradict what is
-in front of them. A root whose every skill was covered that way is not reported at all.
+The count is what a more specific root did not go on to offer, a more specific root being one read
+after the skipped one, including a directory [INSTR-14](#INSTR-14) adds. It leaves out each entry
+with the directory name of a skill on the list from such a root. That skill is on the list a person
+can see, so counting the entry as not loaded would contradict what is in front of them. The
+untrusted root is asked only whether it holds an entry of each such name, and none of its own names
+is held or compared. A built-in skill, a skill from `~/.bravebot` and a skill from a less specific
+root leave the count as it is, and so does a skill that a more specific one of the same name took
+off the list. A root whose every skill was covered that way is not reported at all.
 
 **Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
 user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
@@ -461,6 +475,10 @@ here.
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
+`verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
+`verified-by: bravebot_agent::skills::a_skill_from_no_vouched_root_leaves_an_untrusted_entry_counted`
+`verified-by: bravebot_agent::skills::a_vouched_skill_shadowed_off_the_list_leaves_an_untrusted_entry_counted`
+`verified-by: bravebot_agent::skills::a_less_specific_vouched_root_leaves_an_untrusted_entry_counted`
 
 <a id="INSTR-14"></a>
 ### INSTR-14: a directory the session has worked in adds its own `AGENTS.md` and `.bravebot/skills`
@@ -500,6 +518,8 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
+`verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
+`verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`

@@ -452,6 +452,12 @@ pub struct Ended {
     pub rounds: usize,
     /// How long it ran, however it ended.
     pub took: std::time::Duration,
+    /// Whether it changed a file and whether it ran a program, however it ended.
+    ///
+    /// Two facts the driver recorded about its own calls, and nothing a delegate said. Outside the
+    /// result for the reason the record above is: a delegate that stopped part way has still left
+    /// the files it changed, and the turn that spawned it tells the person about them (TURN-4).
+    pub(crate) worked: crate::turn::Worked,
 }
 
 /// Settle everything a delegate needs from the run that spawned it.
@@ -575,6 +581,7 @@ pub fn run(
             notices: vec![said],
             rounds: 0,
             took: began.elapsed(),
+            worked: crate::turn::Worked::default(),
         };
     }
     // Refused rather than run on the turn's model, which would spend past a boundary the definition
@@ -596,6 +603,7 @@ pub fn run(
             notices: vec![said],
             rounds: 0,
             took: began.elapsed(),
+            worked: crate::turn::Worked::default(),
         };
     }
     let delegate_model = definition_model
@@ -656,6 +664,7 @@ pub fn run(
     let mut notices = Vec::new();
 
     let mut rounds = 0;
+    let mut worked = crate::turn::Worked::default();
 
     let outcome = match turn::delegated(
         config,
@@ -672,6 +681,7 @@ pub fn run(
         &mut vouched,
         &mut notices,
         &mut rounds,
+        &mut worked,
         wallet,
         servers.as_mut(),
     ) {
@@ -685,6 +695,7 @@ pub fn run(
                 notices,
                 rounds,
                 took: began.elapsed(),
+                worked,
             };
         }
     };
@@ -727,6 +738,7 @@ pub fn run(
         notices,
         rounds,
         took: began.elapsed(),
+        worked,
     }
 }
 

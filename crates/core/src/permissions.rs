@@ -950,19 +950,17 @@ impl PathPattern {
     /// pattern whose first segment is a plain name and which has more after it is the case Claude
     /// Code treats asymmetrically, and `floats_when_restricting` carries that.
     ///
-    /// `dotted` is whether the specifier was written `./x`, which starts at the workspace even with
-    /// one segment: it is not a name, so it neither floats to any depth nor restricts at one.
+    /// `dotted` is whether the specifier was written `./x`, which starts at the top of the
+    /// workspace however many segments it has: it is not a name, so it neither floats to any depth
+    /// nor reaches a nested copy where it restricts.
     fn relative(pattern: &str, dotted: bool) -> Self {
         let segments = split(pattern);
         let is_a_bare_name = segments.len() == 1 && !dotted;
-        let anchored_segment = segments.len() == 1 && dotted;
         let starts_at_a_named_segment = segments
             .first()
             .is_some_and(|first| first != "**" && !first.contains('*'));
         Self {
-            floats_when_restricting: !is_a_bare_name
-                && !anchored_segment
-                && starts_at_a_named_segment,
+            floats_when_restricting: !is_a_bare_name && !dotted && starts_at_a_named_segment,
             segments: if is_a_bare_name {
                 // A name matches at any depth, which is a leading `**` and nothing else.
                 let mut floated = vec!["**".to_string()];
@@ -1730,6 +1728,34 @@ mod tests {
             rules(&[], &[], &["Edit(notes.md)"]).for_path(Subject::Edit, "vendor/pkg/notes.md"),
             Decision::Ruled(Ruling::Allow)
         );
+    }
+
+    /// PERM-4: `./src/**` names the `src` at the top of the workspace in every list, so a deny or
+    /// ask rule written that way does not reach the nested copy that `src/**` reaches. It is the
+    /// spelling a `/x` rule from a checkout's settings file is read as (PERM-3), and there it pins
+    /// the rule to one place.
+    #[test]
+    fn a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list() {
+        for list in 0..3 {
+            let rule = "Edit(./src/**)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    permissions.for_path(Subject::Edit, "src/app.ts"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./src/** missed the workspace's own src"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
+                Decision::Unmatched,
+                "list {list}: ./src/** floated to a nested copy"
+            );
+        }
     }
 
     /// An anchored pattern means the place it names, in every list, which is how somebody pins a

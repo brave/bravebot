@@ -20,6 +20,15 @@ Project-file operations use a session handle and a relative path. Main-process
 code resolves the session root and validates the path. Text previews and memory
 operations use the descriptor-based `bravebot-ui-files` helper; directory listing
 and opening files in an external app use separate validation in `src/main/files.ts`.
+Opening hands the system a text, PDF, image, audio or video file that is not marked executable
+at once, judged by the file a symbolic link resolves to. For any other
+file the main process asks first, with Show in folder as the default button, and the renderer has
+no call that answers the question. A program run under the sandbox can write a file the system
+runs when it is opened (`.command` on macOS, `.desktop` on Linux, `.bat` or `.lnk` on Windows),
+and opening it runs it outside the sandbox. Opening the same file from the file manager is not
+asked about; [the sandboxing spec](../../docs/specs/sandboxing.md#programs-a-person-asked-for)
+records that. The check reads the file's name and mode and no other metadata.
+`scripts/open-in-app.test.mjs` holds this.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 

@@ -817,6 +817,17 @@ impl Address {
         })
     }
 
+    /// The address a `git.identities` entry's name spells, `<host>/<owner>`, by [`Address::spelled`].
+    pub fn from_entry_name(name: &str) -> Option<Address> {
+        let (host, owner) = name.split_once('/')?;
+        Address::spelled(host, owner)
+    }
+
+    /// The name a `git.identities` entry gives this address, `<host>/<owner>`.
+    pub fn entry_name(&self) -> String {
+        format!("{}/{}", self.host, self.owner)
+    }
+
     /// Whether two addresses name the same host and owner. Both are compared without regard to
     /// ASCII case, as a host name and a GitHub account are.
     pub fn same_as(&self, other: &Address) -> bool {

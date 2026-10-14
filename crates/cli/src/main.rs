@@ -210,7 +210,7 @@ fn main() -> ExitCode {
     match take_log_level(&mut args) {
         Ok(level) => bravebot_diag::configure(
             level.unwrap_or(bravebot_diag::Level::Error),
-            log_directory(),
+            bravebot_agent::home::writable(),
         ),
         Err(complaint) => {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
@@ -312,6 +312,11 @@ fn main() -> ExitCode {
         bravebot_core::tool_set::settle(tool_limit);
     }
 
+    // Before the words after a bare `--` rejoin the line, since those are another program's.
+    if let Some(refused) = interactive_out_of_place(&args) {
+        return stopped_before_the_turn(as_json, Ending::Argument, refused);
+    }
+
     args.extend(foreign);
 
     match args.first().map(String::as_str) {
@@ -332,6 +337,11 @@ fn main() -> ExitCode {
             skip_permissions,
             prompts,
         ),
+        // The same session, with a prompt from the command line sent as its first turn (CLI-31). A
+        // flag of its own because `bravebot "<task>"` is the one-shot run scripts already call.
+        Some("-i" | "--interactive") => {
+            open_on(&args[1..], as_json, agent, skip_permissions, prompts)
+        }
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
             run_task(&args, skip_permissions, agent, prompts)
@@ -445,6 +455,91 @@ fn main() -> ExitCode {
     }
 }
 
+/// `-i <prompt>`: the interface that draws, sending the prompt as its first turn (CLI-31).
+///
+/// Refused where stdin or stdout is not a terminal rather than run as a one-shot. Whoever wrote the
+/// line asked for a person to watch the task and be able to stop it, and a run with nobody watching
+/// is a different thing to do in their name, with `--dangerously-skip-permissions` most of all.
+fn open_on(
+    words: &[String],
+    as_json: bool,
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
+    let prompt = match prompt_to_open_on(words) {
+        Ok(prompt) => prompt,
+        Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
+    };
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return fail(Ending::Argument, t!(cli_interactive_needs_a_terminal));
+    }
+    interactive(
+        bravebot_tui::app::Start::Sending(prompt),
+        agent,
+        skip_permissions,
+        prompts,
+    )
+}
+
+/// The prompt `-i` opens a session on, or why the words after it give none.
+///
+/// One argument, taken as written: a prompt a script assembled holds newlines, and joining words as
+/// `--bg` does would flatten them. A missing or blank prompt is refused, for the reason a blank
+/// `--model` is: a script whose variable expanded to nothing asked for a task. So is one opening
+/// with `-` and holding no whitespace, which is the next flag. Anything after the prompt is refused
+/// by name rather than ignored, because the options that describe a task are a one-shot run's, and a
+/// session that dropped `--model` would run on a model the line did not ask for.
+fn prompt_to_open_on(words: &[String]) -> Result<String, String> {
+    let prompt = match words.first() {
+        Some(prompt) if is_a_value(prompt) => prompt.clone(),
+        _ => return Err(t!(cli_interactive_needs_a_prompt).to_string()),
+    };
+    match words.get(1) {
+        Some(after) => Err(t!(
+            cli_interactive_takes_nothing_else,
+            argument = after.as_str()
+        )),
+        None => Ok(prompt),
+    }
+}
+
+/// Whether the words after a flag that takes text are that text, rather than nothing or the next
+/// flag.
+///
+/// Blank is nothing: a script whose variable expanded to nothing asked for words. Opening with `-`
+/// and holding no whitespace is the next flag, and taken as the text it would be removed from the
+/// arguments. A sentence opening with `-` holds a space and is text.
+fn is_a_value(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty() && !(text.starts_with('-') && !text.contains(char::is_whitespace))
+}
+
+/// Why `-i` cannot go where the line put it, or `None` where it can.
+///
+/// It opens a new session, so it cannot go with another way of starting one. After `--fork` or
+/// `--from-pr` the session would open and the prompt be dropped, after `--resume` or `--continue`
+/// the same or a one-shot run, and after `--bg` the words would start a session nobody watches on a
+/// prompt opening `-i`. Only those decide: a command's own words, as in `permissions check Bash grep
+/// -i`, may hold one.
+fn interactive_out_of_place(args: &[String]) -> Option<String> {
+    let first = args.first()?;
+    let another_start = matches!(
+        first.as_str(),
+        "--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f" | "--from-pr" | "--bg"
+    );
+    let after_it = args[1..]
+        .iter()
+        .any(|arg| arg == "-i" || arg == "--interactive");
+    if !(another_start && after_it) {
+        return None;
+    }
+    Some(t!(
+        cli_interactive_not_with_another_start,
+        flag = first.as_str()
+    ))
+}
+
 /// `--bg <prompt>`, which starts a session in another process and so cannot carry what the other
 /// flags carry into this one.
 fn background_start(
@@ -556,12 +651,7 @@ fn take_system_prompts(args: &mut Vec<String>) -> Result<SystemPrompts, String> 
             continue;
         }
         let text = match args.get(index + 1).map(|text| text.trim()) {
-            Some(text)
-                if !text.is_empty()
-                    && !(text.starts_with('-') && !text.contains(char::is_whitespace)) =>
-            {
-                text.to_string()
-            }
+            Some(text) if is_a_value(text) => text.to_string(),
             _ => return Err(t!(cli_system_prompt_needs_text, flag = flag).to_string()),
         };
         match flag {
@@ -747,19 +837,13 @@ fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>
     Ok(named)
 }
 
-/// Where this process's diagnostic log goes, or `None` when it writes none: an incognito session,
-/// and a machine with no home to keep one in.
-fn log_directory() -> Option<PathBuf> {
-    bravebot_agent::home::writable().map(|home| home.join(bravebot_diag::DIRECTORY))
-}
-
 /// Take `--sandbox <mode>` out of the arguments, answering with the mode it named.
 ///
 /// Removed before dispatch for the reason `--settings` is: how far a program may reach is a
 /// property of the run, and a flag read per subcommand would be one silently ignored by whichever
 /// forgot it. Given twice the last one wins, as `--settings` does. A blank or unknown word is
-/// refused rather than read as the default, because the three modes differ in what a program may
-/// reach and a script whose variable expanded to nothing asked for one of them.
+/// refused rather than read as the default, because the modes differ in what a program may reach
+/// and a script whose variable expanded to nothing asked for one of them.
 fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
     let mut named = None;
     let mut kept = Vec::with_capacity(args.len());
@@ -826,14 +910,16 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
             asked = refused.asked.name(),
             asked_in = file.display().to_string(),
             pinned = refused.pinned.name(),
-            pinned_in = pinned_in
+            pinned_in = pinned_in,
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         )
         .to_string(),
         (None, Floor::Mode) => t!(
             cli_sandbox_refused_flag,
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
-            pinned_in = pinned_in
+            pinned_in = pinned_in,
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         )
         .to_string(),
         (Some(file), Floor::Network) => t!(
@@ -913,6 +999,7 @@ fn print_help() {
     println!("{}", t!(cli_usage_heading));
     for (form, description) in [
         ("bravebot", t!(cli_usage_interactive)),
+        ("bravebot -i \"<prompt>\"", t!(cli_usage_interactive_prompt)),
         ("bravebot --plain", t!(cli_usage_plain)),
         ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
         ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),
@@ -1041,6 +1128,7 @@ fn print_help() {
         ("--no-shell", t!(cli_option_no_shell)),
         ("--effort <level>", t!(cli_option_effort)),
         ("-p, --print", t!(cli_option_print)),
+        ("-i, --interactive <prompt>", t!(cli_option_interactive)),
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--json-stream", t!(cli_option_json_stream)),
@@ -1443,6 +1531,9 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 print = true;
                 index += 1;
             }
+            // Reached only behind a task flag, since a leading one opens a session instead. Taken as
+            // the prompt, `bravebot --model opus -i` would run the task `-i` with nobody watching.
+            "-i" | "--interactive" => return Err(t!(cli_interactive_not_with_a_task).to_string()),
             other if prompt.is_empty() => {
                 prompt = other.to_string();
                 index += 1;
@@ -1991,6 +2082,9 @@ fn run_task(
                 .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
                 .unwrap_or_default();
             let begins = conversation.recounted().len();
+            let mut rewind = continued.as_ref().map(|record| {
+                continued::rewind_points(record, &workspace, &conversation, &trust, &task.prompt)
+            });
             let completed = turn::resume(
                 &config,
                 &egress,
@@ -2005,6 +2099,9 @@ fn run_task(
                 None,
                 &Cancel::new(),
             );
+            if let Some(points) = rewind.as_mut() {
+                points.keep_backups(workspace.take_backups());
+            }
             let turn::Decisions {
                 trust,
                 programs: _,
@@ -2014,7 +2111,7 @@ fn run_task(
             if let Ok(finished) = &completed.outcome {
                 session = continued::keep(
                     workspace.root(),
-                    continued.take(),
+                    continued.take().zip(rewind),
                     continued::Finished {
                         prompt: &task.prompt,
                         conversation: &conversation,
@@ -5172,6 +5269,35 @@ mod tests {
         assert!(shown.is_empty(), "something was asked about: {shown:?}");
     }
 
+    /// ASK-7: a question in a one-shot run is declined by the confirmer a one-shot run uses, even
+    /// where there is a terminal and a "y" waiting to be read. The planner is told a reply came from
+    /// a person, so an answer this confirmer invented would be taken for theirs.
+    #[test]
+    fn a_one_shot_declines_every_question_even_where_it_may_ask_about_a_plan() {
+        let series = bravebot_core::ask::asking(&bravebot_core::ask::Series::new(vec![
+            bravebot_core::ask::Question::new(
+                "Cache",
+                "Which cache layer?",
+                vec![bravebot_core::ask::Choice::new("HTTP", None)],
+                false,
+            ),
+            bravebot_core::ask::Question::new("Branch", "Which branch?", Vec::new(), false),
+        ]));
+        let mut shown = Vec::new();
+        let mut one_shot = OneShot::new(&b"y\ny\n"[..], &mut shown, true);
+
+        let answers = one_shot.ask_user(&series);
+        assert!(
+            answers
+                .iter()
+                .all(|answer| *answer == bravebot_core::ask::Answer::Declined),
+            "a question was answered for the person: {answers:?}"
+        );
+        drop(one_shot);
+
+        assert!(shown.is_empty(), "a question was put to nobody: {shown:?}");
+    }
+
     /// A home directory and a checkout, each with the settings file a test writes into it.
     ///
     /// `Settings::layered` takes both rather than reading the process's own, so the layers under test
@@ -6223,6 +6349,117 @@ mod tests {
         assert!(err.contains("not-here"), "{err}");
     }
 
+    /// CLI-31. The prompt reaches the session as written. A prompt a script assembled holds line
+    /// breaks and indentation that are part of it, and joining the words after the flag, as `--bg`
+    /// does, would send a different prompt from the one the script built.
+    #[test]
+    fn the_prompt_a_session_opens_on_is_the_argument_as_written() {
+        let written = "Fix the failing test.\n\n  - run it alone first\n  - then the suite";
+        assert_eq!(
+            prompt_to_open_on(&args(&[written])),
+            Ok(written.to_string())
+        );
+        // A sentence opening with `-` holds a space, so it is a prompt and not the next flag.
+        assert_eq!(
+            prompt_to_open_on(&args(&["- one item"])),
+            Ok("- one item".to_string())
+        );
+    }
+
+    /// CLI-31. A line giving `-i` no prompt is refused rather than opening an empty session. A script
+    /// whose variable expanded to nothing asked for a task, and a session waiting for somebody to
+    /// type one leaves it undone with nothing said. A flag after `-i` is the next flag, and taken as
+    /// the prompt it would send `--json` to the planner as the person's words.
+    #[test]
+    fn a_session_given_no_prompt_is_refused() {
+        let refused = t!(cli_interactive_needs_a_prompt).to_string();
+        for words in [
+            &[][..],
+            &["  \n"][..],
+            &["--json"][..],
+            &["-p"][..],
+            &[" --json "][..],
+        ] {
+            assert_eq!(
+                prompt_to_open_on(&args(words)),
+                Err(refused.clone()),
+                "{words:?} was taken as a prompt"
+            );
+        }
+    }
+
+    /// CLI-31. Whatever follows the prompt is refused, and named. The flags every way of starting
+    /// takes are out of the line by then, so what is left belongs to a one-shot run: a session that
+    /// let `--model opus` pass unread would run on a model the line did not name, and one that let an
+    /// unquoted second word pass would send part of the prompt.
+    #[test]
+    fn anything_after_the_prompt_is_refused_by_name() {
+        for (words, named) in [
+            (&["fix it", "--model", "opus"][..], "--model"),
+            (&["fix it", "--effort", "high"][..], "--effort"),
+            (&["fix", "the", "tests"][..], "the"),
+        ] {
+            let refused = prompt_to_open_on(&args(words)).expect_err("must refuse");
+            assert!(
+                refused.contains(&format!("'{named}'")),
+                "{words:?}: {refused}"
+            );
+        }
+    }
+
+    /// CLI-31. `-i` after another way of starting a session is refused rather than dropped. `--fork`
+    /// and `--from-pr` read no further than their value, so the session would open and the prompt
+    /// never be sent, and `--bg` joins its words, so the session nobody watches would be given a
+    /// prompt opening `-i`. A command's own words are not read: `permissions check` takes a
+    /// program's arguments, and `grep -i` is one.
+    #[test]
+    fn a_session_flag_beside_another_way_of_starting_is_refused() {
+        for (typed, start) in [
+            (&["--fork", "abc", "-i", "try the other way"][..], "--fork"),
+            (&["-f", "abc", "--interactive", "try it"][..], "-f"),
+            (&["--from-pr", "12", "-i", "pick it up"][..], "--from-pr"),
+            (&["--resume", "abc", "-i"][..], "--resume"),
+            (&["-r", "abc", "-i", "carry on"][..], "-r"),
+            (&["--continue", "-i"][..], "--continue"),
+            (&["-c", "-i", "carry on"][..], "-c"),
+            (&["--bg", "-i", "fix the tests"][..], "--bg"),
+        ] {
+            assert_eq!(
+                interactive_out_of_place(&args(typed)),
+                Some(t!(cli_interactive_not_with_another_start, flag = start)),
+                "{typed:?}"
+            );
+        }
+        for typed in [
+            &["-i", "fix it"][..],
+            &["--resume", "abc"][..],
+            &["permissions", "check", "Bash", "grep", "-i", "needle"][..],
+            &["--bg", "explain what -i does"][..],
+        ] {
+            assert_eq!(interactive_out_of_place(&args(typed)), None, "{typed:?}");
+        }
+    }
+
+    /// CLI-31. `-i` behind a task's options is refused rather than read as the task. A one-shot run
+    /// takes its first word that is no option as the prompt, so `bravebot --model opus -i` would run
+    /// the task `-i` with nobody watching, and `bravebot --model opus -i "fix it"` would be refused
+    /// over `fix it` with nothing said about where `-i` goes.
+    #[test]
+    fn a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task() {
+        let refused = t!(cli_interactive_not_with_a_task).to_string();
+        for typed in [
+            &["--model", "opus", "-i"][..],
+            &["--model", "opus", "--interactive", "fix it"][..],
+            &["-p", "fix it", "-i"][..],
+        ] {
+            assert_eq!(
+                parse_invocation(&args(typed)).err(),
+                Some(refused.clone()),
+                "{typed:?}"
+            );
+        }
+    }
+
     /// Turn is what an unqualified run has always been, so an omitted `--mode` has to stay that.
     #[test]
     fn the_default_mode_is_the_turn_loop() {
@@ -6634,6 +6871,64 @@ mod tests {
         assert!(
             refused.contains("strict") && refused.contains("off"),
             "{refused}"
+        );
+    }
+
+    /// SANDBOX-22: a refusal under a pin says which of reading and writing the asked mode does more
+    /// of, and suggests the pin, which the pin always keeps. The fault it rejects is a sentence that
+    /// tells a person under a `read-only` pin to choose a stricter mode, of which there is none, or
+    /// tells one under a `strict` pin that `read-only` is looser without saying how.
+    #[test]
+    fn a_refused_mode_says_what_it_does_more_of_and_suggests_a_mode_the_pin_keeps() {
+        let settings = bravebot_config::Settings::default();
+        for (pin, asked, said) in [
+            (
+                "read-only",
+                SandboxMode::Strict,
+                "strict writes more than read-only.",
+            ),
+            (
+                "strict",
+                SandboxMode::ReadOnly,
+                "read-only reads more of the machine than strict.",
+            ),
+            (
+                "strict",
+                SandboxMode::WorkspaceWrite,
+                "workspace-write reads more of the machine and writes more than strict.",
+            ),
+        ] {
+            let managed = pin_file(
+                &format!("looser-{pin}-{asked}"),
+                &format!(r#"{{"sandbox": {{"mode": "{pin}"}}}}"#),
+            );
+            let refused = bravebot_config::sandbox::resolve(Some(asked), &settings, &managed)
+                .expect_err("looser than the pin");
+            let sentence = sandbox_refusal(&refused);
+            assert!(sentence.contains(said), "{sentence}");
+            assert!(
+                sentence.contains(&format!("Run with --sandbox {pin}, or without the flag.")),
+                "{sentence}"
+            );
+            assert!(!sentence.contains("stricter"), "{sentence}");
+            let suggested = SandboxMode::parse(pin).expect("a mode");
+            assert!(
+                bravebot_config::sandbox::resolve(Some(suggested), &settings, &managed).is_ok(),
+                "{pin} keeps {pin}"
+            );
+        }
+
+        let home = scratch("looser-file");
+        let file = home.join("settings.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let managed = pin_file("looser-file-pin", r#"{"sandbox": {"mode": "read-only"}}"#);
+        let refused = bravebot_config::sandbox::resolve(None, &settings, &managed)
+            .expect_err("looser than the pin");
+        let sentence = sandbox_refusal(&refused);
+        assert!(
+            sentence.contains("strict writes more than read-only. Change it to read-only there"),
+            "{sentence}"
         );
     }
 }

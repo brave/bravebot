@@ -809,6 +809,62 @@ fn plan_mode_refuses_a_plan_that_writes() {
     );
 }
 
+/// A plan that plan mode refused is a refusal in the trail, naming the step that writes.
+///
+/// The run is refused before any step is read or the plan is put to the person, so no other gate
+/// sees the write. With no record of its own, the trail ends at the planning calls that passed.
+#[test]
+fn a_plan_refused_by_plan_mode_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("plan-mode-write-recorded");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+            false,
+        ),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("plan mode must refuse a plan that writes");
+
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "permission_mode",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["step 2: write_file: plan mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes: {:?}",
+        sink.events()
+    );
+}
+
 /// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
 /// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
 /// the mode mean "no manifest runs", which is not what it says.
@@ -849,6 +905,95 @@ fn plan_mode_runs_a_plan_that_writes_nothing() {
         outcome.reply_for_display().contains("raw text"),
         "got: {}",
         outcome.reply_for_display()
+    );
+}
+
+/// SANDBOX-22: under the sandbox mode `read-only` a plan with a step that writes a file is refused
+/// from the plan, in the mode that approves the plan and every write in it, so the refusal is the
+/// sandbox mode's. The control is the same plan under `workspace-write`, where the file is written,
+/// and a plan that writes nothing still runs under `read-only`, since the mode holds back writes
+/// and not runs.
+#[test]
+fn under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let plan_under = |name: &str, sandbox, steps| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![any_shape(), plan(steps)]);
+        let mut sink = RecordingSink::new();
+        let outcome = manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write a summary")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            skipping_permissions!(),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .map(|outcome| outcome.reply_for_display().to_string())
+        .map_err(|failure| failure.to_string());
+        let refused: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        (outcome, scratch.path.join("out.md").exists(), refused)
+    };
+    let writing = || {
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])
+    };
+
+    let (control, written, refused) =
+        plan_under("read-only-plan-control", WorkspaceWrite, writing());
+    assert!(control.is_ok(), "the control was refused: {control:?}");
+    assert!(written, "the control did not write");
+    assert!(refused.is_empty(), "the control recorded {refused:?}");
+
+    let (held, written, refused) = plan_under("read-only-plan-held", ReadOnly, writing());
+    let failure = held.expect_err("read-only must refuse a plan that writes");
+    assert!(
+        failure.contains("the sandbox mode is read-only, and step 2 of this plan writes a file"),
+        "got: {failure}"
+    );
+    assert!(!written, "a manifest run wrote a file under read-only");
+    assert_eq!(
+        refused,
+        ["step 2: write_file: the read-only sandbox mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes"
+    );
+
+    let (reading, _, refused) = plan_under(
+        "read-only-plan-reads",
+        ReadOnly,
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ]),
+    );
+    assert!(
+        reading
+            .as_deref()
+            .is_ok_and(|reply| reply.contains("raw text")),
+        "a plan that writes nothing did not run under read-only: {reading:?}"
+    );
+    assert!(
+        refused.is_empty(),
+        "a plan that writes nothing recorded {refused:?}"
     );
 }
 
@@ -1687,6 +1832,191 @@ fn bypassing_answers_a_credential_a_plan_writes() {
         Some(format!("{GENERATED_SECRET}\n")),
         "bypassing did not write the key"
     );
+}
+
+/// TRACE-7 over a planned run. The policy's entry ending in "asking" reads as a person having been
+/// asked, so a step's write it put to somebody is followed by an entry saying what answered, as a
+/// turn's is. Without one, a run the mode answered reads as a run a person approved.
+#[test]
+fn a_planned_write_names_what_answered_it() {
+    use bravebot_agent::PermissionMode;
+    // One step writing `contents` to `notes.md`, with a person behind the mode who says yes, held
+    // to both what the trail says answered and how many writes the person was shown. `vouched`
+    // vouches for the whole tree, which leaves a credential as the only thing that puts the write
+    // to anybody.
+    let check = |mode: PermissionMode, contents: &str, vouched: bool, answered: &[&str], shown| {
+        let scratch = Scratch::new("planned-write-answered");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": contents}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        if vouched {
+            trust.trust(".");
+        }
+        let mut sink = RecordingSink::new();
+        let mut person = RecordsEveryQuestion::default();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write the notes").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut person, mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } if detail.starts_with("answered by")
+                    || detail.starts_with("no mode answered") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, answered, "{mode:?}, vouched: {vouched}");
+        assert_eq!(
+            person.writes.len(),
+            shown,
+            "{mode:?}, vouched: {vouched}: the writes the person was shown"
+        );
+    };
+
+    // A path nobody vouched for puts the write to somebody, and accepting edits answers it as
+    // bypassing does.
+    let plain = "notes\n";
+    check(
+        PermissionMode::Ask,
+        plain,
+        false,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::AcceptEdits,
+        plain,
+        false,
+        &["answered by accept-edits mode, nobody was asked"],
+        0,
+    );
+    check(
+        PermissionMode::Bypass,
+        plain,
+        false,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A credential is put to the person under accepting edits, so no mode answered it there.
+    let credential = format!("{GENERATED_SECRET}\n");
+    check(
+        PermissionMode::AcceptEdits,
+        &credential,
+        true,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::Bypass,
+        &credential,
+        true,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A write the policy did not put to anybody was not answered by anything.
+    check(PermissionMode::Bypass, plain, true, &[], 0);
+}
+
+/// TRACE-7 over a planned run: the trail names the permission mode the run began in, once, before
+/// the plan is frozen and so before any step runs. A run under the flag that skips permissions and
+/// one that asked look the same once the key has moved off bypass, and the trail is the only record
+/// that outlives the screen.
+#[test]
+fn a_manifest_run_records_the_mode_it_began_with() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Bypass,
+    ] {
+        // A plan that writes nothing, so plan mode runs it as the other three do.
+        let scratch = Scratch::new("records-the-mode");
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("what is in a.md").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut RecordsEveryQuestion::default(), mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let trail = sink.events();
+        let recorded: Vec<(usize, &str)> = trail
+            .iter()
+            .enumerate()
+            .filter_map(|(at, event)| match event {
+                Event::GatePassed {
+                    gate: "permission_mode",
+                    detail,
+                } => Some((at, detail.as_str())),
+                _ => None,
+            })
+            .collect();
+        let expected = format!("the manifest run began in {} mode", mode.name());
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(_, detail)| *detail)
+                .collect::<Vec<_>>(),
+            [expected.as_str()],
+            "{mode:?}: {trail:?}"
+        );
+        let frozen = trail
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::GatePassed {
+                        gate: "manifest",
+                        ..
+                    }
+                )
+            })
+            .expect("the plan was frozen");
+        assert!(
+            recorded[0].0 < frozen,
+            "{mode:?}: the mode was recorded after the plan was frozen: {trail:?}"
+        );
+    }
 }
 
 /// CRED-13's `a` over a planned run: a second step putting another secret in the same file is not

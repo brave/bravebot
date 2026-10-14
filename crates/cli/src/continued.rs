@@ -1,10 +1,13 @@
 //! A one-shot run's session record, and continuing one (CLI-25).
 
+use bravebot_agent::Workspace;
 use bravebot_agent::conversation::Conversation;
+use bravebot_agent::rewind::CoverageGap;
 use bravebot_agent::turn::Outcome;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
-use bravebot_session::sessions::{Continuation, Front, Handle, Record, Standing};
+use bravebot_session::rewind::RewindStack;
+use bravebot_session::sessions::{Continuation, Front, Handle, Record, Standing, TurnSnapshot};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -41,6 +44,54 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
     Ok(record)
 }
 
+/// The points the continued turn can be rewound to: the record's own, and one opened for this turn
+/// from the record as it stood before it (SESSION-19).
+///
+/// Opened before the turn and bound to `workspace`, so a program the turn runs is recorded as a
+/// coverage gap on every point a rewind could reach. `conversation` and `trust` are what the turn
+/// is about to be handed, so a `--trust-workspace` grant is in the point as the trust answer given
+/// before a session's turn is in that turn's point.
+pub fn rewind_points(
+    record: &Record,
+    workspace: &Workspace,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    prompt: &str,
+) -> RewindStack {
+    // The workspace is new to this run, so a language server an earlier turn started is not on
+    // it. The record remembers one, and the warning goes on the workspace before the points bind.
+    if record.server_children_may_run() {
+        workspace.mark_rewind_gap(CoverageGap::LanguageServer);
+    }
+    let mut points = RewindStack::of(record.rewind_points(workspace.root()));
+    points.open(
+        TurnSnapshot {
+            conversation: conversation.snapshot(),
+            turns: record.turns,
+            tokens: record.tokens,
+            spend: record.spend.clone(),
+            timing: record.timing.clone(),
+            cached: None,
+            cached_prompt_tokens: None,
+            // With the record's rules, so a yes this turn gives to a recorded memory does not
+            // outlive rewinding past it.
+            trust: bravebot_agent::memory::with_recorded(
+                trust,
+                workspace,
+                bravebot_agent::home::directory().as_deref(),
+            ),
+            programs: record.trusted_programs(workspace.root()),
+            // Not stored; a terminal resuming the record places each point again.
+            transcript_len: 0,
+            title: record.title.clone(),
+            was_wrote: true,
+        },
+        prompt.to_string(),
+    );
+    points.bind_coverage(workspace);
+    points
+}
+
 /// What a finished turn leaves to be written down.
 pub struct Finished<'a> {
     pub prompt: &'a str,
@@ -57,14 +108,21 @@ pub struct Finished<'a> {
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
 ///
+/// `previous` is the record continued, with the points [`rewind_points`] opened for it and the
+/// turn's backups kept against the newest.
+///
 /// The id of the record that was written, and `None` where nothing was: an incognito run writes
 /// none, and a record that cannot be saved does not fail a run that has already answered, as with
 /// every other writer under the state directory.
-pub fn keep(root: &Path, previous: Option<Record>, turn: Finished<'_>) -> Option<String> {
+pub fn keep(
+    root: &Path,
+    previous: Option<(Record, RewindStack)>,
+    turn: Finished<'_>,
+) -> Option<String> {
     let snapshot = turn.conversation.snapshot();
     let ends = turn.conversation.recounted().len();
     match previous {
-        Some(record) => {
+        Some((record, rewind)) => {
             let mut handle =
                 Handle::resuming(root, &record, Front::Terminal, bravebot_stamp::BUILD);
             handle.set_agent(turn.agent.map(str::to_string));
@@ -79,6 +137,7 @@ pub fn keep(root: &Path, previous: Option<Record>, turn: Finished<'_>) -> Option
                     begins: turn.begins,
                     ends,
                     prompt_at: turn.prompt_at,
+                    rewind: rewind.points(),
                 },
             );
             written.then(|| handle.id().to_string())

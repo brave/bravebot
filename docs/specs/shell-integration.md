@@ -47,7 +47,9 @@ newlines as spaces. The line is recorded as submitted, so what a command printed
 succeeded are not recorded. A line that is `@bravebot`, or begins with `@bravebot` and a space, is
 not recorded, so a question is not part of the next one. The state directory, the shell directory
 and the file are mode 0700, 0700 and 0600 whatever the shell's umask is and however the state
-directory was created ([STATE-1](state-directory.md#STATE-1)).
+directory was created ([STATE-1](state-directory.md#STATE-1)). A directory that is a link is
+stepped over rather than followed, as every writer into the state directory steps over one, so the
+directory it leads to keeps its mode.
 
 **Why.** A command line names paths, hosts and branches and can hold a token typed as an argument,
 which is what [STATE-1](state-directory.md#STATE-1) protects in the history file. Output is the
@@ -62,6 +64,7 @@ shells and are not run by the suite.
 
 `verified-by: bravebot_cli::running::a_question_carries_the_commands_since_the_last_one_on_stdin`
 `verified-by: bravebot_cli::running::the_recorded_lines_are_private_and_end_with_the_terminal`
+`verified-by: bravebot_cli::running::the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads`
 
 <a id="SHELLINT-3"></a>
 ### SHELLINT-3: `BRAVEBOT_INCOGNITO` set and not empty stops the recording

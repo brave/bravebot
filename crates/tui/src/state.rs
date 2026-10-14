@@ -1384,8 +1384,9 @@ pub struct Session {
     outputs: Vec<Output>,
     /// Where the rows of the turn in flight, or of the last one, begin in `outputs`.
     ///
-    /// The jobs the hint line counts and `/status` lists are the rows from here on: a job cannot
-    /// outlive its turn, so the last turn's are the only ones there is anything to say about.
+    /// The jobs the hint line counts and `/status` lists are the rows from here on. A job's row can
+    /// come before it and still be reported on: a kept job stopped between turns has its finish
+    /// told in the next turn (RUN-27).
     jobs_from: usize,
     /// Every question asked beside the work this session, oldest first.
     ///
@@ -2687,15 +2688,15 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
-        // A delegate announces its own phases while the turn waits on another, and none of them
-        // ends that wait.
-        if self.attributed_to.is_none() {
-            self.waiting_on = None;
-        }
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
-        // one that has been thrown away, so the tail starts empty.
-        self.streaming.clear();
+        // one that has been thrown away, so the tail starts empty. A delegate announces its own
+        // phases while the planner writes and while the turn waits on another, and none of them
+        // ends that reply or that wait.
+        if self.attributed_to.is_none() {
+            self.waiting_on = None;
+            self.streaming.clear();
+        }
         self.drop_composing();
     }
 
@@ -2779,17 +2780,19 @@ impl Session {
 
     /// Put the turn's own view back at its tail as a piece of work begins or a command line lands.
     ///
-    /// Nothing while the delegate view is open, because `scroll` is that view's position then and
-    /// the turn's own is held aside until it closes. A person who went to read a delegate or what
-    /// a command printed asked for that screen, and a row arriving under the turn is not them
-    /// asking for another.
+    /// Nothing while the delegate view or the scroller is open. Under the delegate view `scroll` is
+    /// that view's position and the turn's own is held aside until it closes; under the scroller it
+    /// is the row somebody is reading, in the transcript or in the request `/request` opened. A
+    /// person who went to read a delegate, what a command printed, an earlier part of the
+    /// transcript or the last request asked for that screen, and a row arriving under the turn is
+    /// not them asking for another.
     ///
     /// Each of those happens once and changes what the session is doing, so the tail is where its
     /// own view belongs afterwards. Nothing a running turn adds below the view is one of them: a
     /// person who scrolled back while it runs asked to read that place, and with nothing open over
     /// it a view at the tail follows what arrives unmoved, since `scroll` is 0 there.
     fn back_to_the_tail(&mut self) {
-        if self.watching.is_none() {
+        if self.watching.is_none() && !self.scrolling() {
             self.scroll = 0;
         }
     }
@@ -2809,6 +2812,12 @@ impl Session {
     /// This side may: the text has been released, and a blank line in a transcript is a
     /// presentation question.
     pub fn narrate(&mut self, text: impl Into<String>) {
+        // A delegate says a great deal on its way to an answer and none of it is the turn's. What
+        // it concluded arrives as the report, which is the sentence its block ends on. Nor is it
+        // the end of the reply the planner may be writing meanwhile, so the tail stays up.
+        if self.attributed_to.is_some() {
+            return;
+        }
         // Cleared first, and whatever the text turns out to be. This is the same words the tail
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
@@ -2817,11 +2826,6 @@ impl Session {
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
         if text.trim().is_empty() {
-            return;
-        }
-        // A delegate says a great deal on its way to an answer and none of it is the turn's. What
-        // it concluded arrives as the report, which is the sentence its block ends on.
-        if self.attributed_to.is_some() {
             return;
         }
         self.transcript.push(Entry::assistant(text, Vec::new()));
@@ -2967,6 +2971,10 @@ impl Session {
             row.outcome = printed.outcome;
             return;
         }
+        // What a job printed is drawn in its row and nowhere else (WATCH-22).
+        if printed.job.is_some() {
+            return;
+        }
         self.outputs.push(Output {
             command: printed.command,
             lines: printed.lines,
@@ -3024,11 +3032,15 @@ impl Session {
         }
     }
 
-    /// The row of the job by this name, among the jobs of the turn in flight that belong to whoever
-    /// the driver last said the reports are from.
+    /// The newest row of the job by this name that belongs to whoever the driver last said the
+    /// reports are from.
+    ///
+    /// The newest, because a job's start makes its row before anything else is said about it.
+    /// Searched from the first row and not from where the list of jobs starts: a kept job the person
+    /// stopped between turns is out of the next turn's list when that turn reports its finish.
     fn job_row(&mut self, name: &str) -> Option<&mut Output> {
         let whose = self.attributed_to;
-        self.outputs[self.jobs_from..].iter_mut().rev().find(|row| {
+        self.outputs.iter_mut().rev().find(|row| {
             row.job
                 .as_ref()
                 .is_some_and(|job| job.name == name && job.delegate == whose)
@@ -5354,11 +5366,24 @@ impl Session {
         self.handed_over = Some(prompt);
     }
 
+    /// Hold a prompt from the command line for the session beginning now to open with (CLI-31).
+    ///
+    /// It arrives whole from outside the box, as a paste does, and is drawn as the person's own line,
+    /// so it loses what a paste loses and the count is said (PASTE-10). Sent as it came, a message
+    /// spelled in characters nothing draws would reach the planner as words nobody read.
+    pub fn hand_over_from_the_command_line(&mut self, prompt: &str) {
+        let (text, removed) = crate::invisible::without_invisible(&normalised(prompt));
+        if removed > 0 {
+            self.note(t!(cli_prompt_invisible_removed, count = removed));
+        }
+        self.hand_over(text);
+    }
+
     /// Send the prompt [`Session::hand_over`] held, as the person's own line.
     ///
     /// It goes through [`Session::submit`], the path a prompt they typed takes, because that is what
-    /// it is: they read it and chose to send it. Nothing is sent where the box has something in it
-    /// by now, which stays theirs.
+    /// it is: they read it and chose to send it. A line already in the box by now is kept as the
+    /// draft Up brings back first.
     pub fn start_handed_over(&mut self) -> Option<String> {
         if self.status != Status::Idle {
             return None;
@@ -6765,6 +6790,7 @@ impl Session {
             .to_string(),
             None => name.to_string(),
         };
+        let turn_is_running = self.a_turn_is_running();
         let job = self.outputs[self.jobs_from..]
             .iter_mut()
             .rev()
@@ -6780,6 +6806,11 @@ impl Session {
                     job.state = JobState::Stopping;
                     (t!(job_stop_asked, name = label).to_string(), true)
                 }
+                // The token is already set. With a turn in flight it reads it; with none, nothing
+                // will, so the stop is carried out below rather than answered with a refusal.
+                JobState::Stopping if !turn_is_running && self.kept_jobs.is_some() => {
+                    (t!(job_stop_asked, name = label).to_string(), true)
+                }
                 JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
                 JobState::Ended | JobState::EndedWithTurn => {
                     (t!(jobs_already_ended, name = label).to_string(), false)
@@ -6789,19 +6820,27 @@ impl Session {
         self.note(said);
         // Between turns nothing reads the token, so the stop is carried out here and the row says
         // so. The planner is told at the next turn's first round, as it is of any finish (RUN-27).
-        if asked
-            && !self.a_turn_is_running()
-            && let Some(kept) = &self.kept_jobs
-        {
-            let stopped = kept.stop_requested();
-            for (name, ran_for) in stopped {
-                self.job(bravebot_agent::report::JobEvent::Ended {
-                    name,
-                    outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
-                });
-            }
+        if asked && !turn_is_running {
+            self.carry_out_stops();
         }
         asked
+    }
+
+    /// Kill every job whose stop token is set and say each was the person's stop (RUN-27).
+    ///
+    /// For the moments no turn is left to read a token: between turns, and at a turn's end, where a
+    /// reply with no tool calls ends the turn without another step and a kept session's jobs
+    /// outlive it.
+    fn carry_out_stops(&mut self) {
+        let Some(kept) = &self.kept_jobs else {
+            return;
+        };
+        for (name, ran_for) in kept.stop_requested() {
+            self.job(bravebot_agent::report::JobEvent::Ended {
+                name,
+                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
+            });
+        }
     }
 
     /// Say where each listed memory is kept and what the map says of it (MEMORY-12), one note
@@ -7146,6 +7185,9 @@ impl Session {
                     job.state = JobState::EndedWithTurn;
                 }
             }
+        } else {
+            // A stop asked for while the last reply was in flight was never read by the turn.
+            self.carry_out_stops();
         }
     }
 
@@ -8590,6 +8632,53 @@ mod tests {
             );
         }
 
+        /// The planner goes on writing while a delegate works, and a delegate starting a round or
+        /// saying something is not the planner's round ending. Taken down for it, the words already
+        /// drawn left the screen and came back whole when the planner's round did end.
+        #[test]
+        fn a_delegates_round_leaves_the_reply_the_turn_is_writing() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            let id = spawn(&mut session, "explore", "look around");
+
+            session.reporting_for(None);
+            session.streaming("Meanwhile I will ");
+            // A delegate's request sent again throws away the delegate's words, not the turn's.
+            session.reporting_for(Some(id));
+            session.set_phase(Phase::Planning);
+            session.set_phase(Phase::Reconnecting);
+            session.reporting_for(None);
+            assert_eq!(
+                session.reply_so_far(),
+                "Meanwhile I will ",
+                "a delegate's phase took down the reply the turn is writing"
+            );
+
+            // A delegate's round that said nothing ends the delegate's round, not the turn's.
+            session.streaming("check ");
+            session.reporting_for(Some(id));
+            session.narrate("Reading the parser.");
+            session.narrate("");
+            session.reporting_for(None);
+            assert_eq!(
+                session.reply_so_far(),
+                "Meanwhile I will check ",
+                "a delegate's narration took down the reply the turn is writing"
+            );
+
+            session.streaming("the config.");
+            session.narrate("Meanwhile I will check the config.");
+            assert!(
+                session.streaming.is_empty(),
+                "the turn's own round left its tail up"
+            );
+            assert_eq!(
+                session.transcript.last().expect("an entry").text,
+                "Meanwhile I will check the config."
+            );
+        }
+
         /// The key is for looking at what is happening now, and the delegate that is working is
         /// what is happening now. Anything else makes a person hunt for the one they meant.
         #[test]
@@ -9102,6 +9191,149 @@ mod tests {
             }
         }
 
+        /// Each of these puts the transcript back at its tail, and each happens with nobody pressing
+        /// anything for it. Under the scroller no key reaches the box at all, whether it is showing
+        /// the transcript or the last request, so the one press the reader made was the one that
+        /// took them to the row they are on, and moving them off it takes away what they opened the
+        /// scroller to do. With nothing open the tail is still where each of them takes the
+        /// transcript, so that state is checked too: a fix that stopped putting the view back at all
+        /// would hold the scroller and leave the transcript short of its tail.
+        #[test]
+        fn what_starts_without_a_press_leaves_an_open_scroller_where_its_reader_put_it() {
+            type Step = fn(&mut Session);
+            let events: [(&str, Step, Step); 9] = [
+                (
+                    "the queue starting a turn",
+                    |session| {
+                        queue(session, "and tidy up");
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .send_queued()
+                            .expect("the queued prompt did not begin a turn");
+                    },
+                ),
+                (
+                    "a loop's tick",
+                    |session| {
+                        session.start_loop(
+                            crate::loops::request("5m /status"),
+                            Vec::new(),
+                            Vec::new(),
+                        );
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .dispatch_tick()
+                            .expect("the tick did not begin a turn");
+                    },
+                ),
+                (
+                    "a watch firing",
+                    |session| session.arm_watch("notes.md", "/work", saw("first")),
+                    |session| {
+                        session
+                            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+                                saw("second")
+                            })
+                            .expect("the change did not begin a turn");
+                    },
+                ),
+                (
+                    "a goal sending the work back",
+                    |session| session.start_goal("cargo test exits 0".to_string()),
+                    |session| {
+                        session
+                            .goal_not_met("nothing above runs the tests".to_string())
+                            .expect("the goal did not send the work back");
+                    },
+                ),
+                (
+                    "the queue giving up a command line",
+                    |session| {
+                        queue_shell(session, "ls -1");
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .take_queued_shell()
+                            .expect("the queued command line was not taken");
+                    },
+                ),
+                ("a command starting", |_| {}, Session::begin_command),
+                (
+                    "what a command printed",
+                    |_| {},
+                    |session| session.printed("first\nsecond"),
+                ),
+                (
+                    "what a command run privately printed",
+                    |_| {},
+                    |session| session.printed_privately("first\nsecond"),
+                ),
+                ("an aside beginning", |_| {}, Session::begin_aside),
+            ];
+            for (event, before, starts) in events {
+                for place in ["at rest", "the scroller", "the request view"] {
+                    let mut session = Session::new("none");
+                    before(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 100,
+                        ..Laid::default()
+                    });
+                    match place {
+                        "at rest" => session.scroll_up(40),
+                        "the scroller" => {
+                            session.open_scroller();
+                            session.scroller_back(40);
+                        }
+                        _ => {
+                            session.set_last_request(a_request());
+                            session.show_request();
+                            session.scroller_to_last_row();
+                            session.scroller_back(40);
+                        }
+                    }
+                    assert_eq!(
+                        session.top_row(),
+                        50,
+                        "the view is not scrolled back off the tail"
+                    );
+
+                    starts(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 130,
+                        ..Laid::default()
+                    });
+                    if place == "at rest" {
+                        assert_eq!(
+                            session.top_row(),
+                            120,
+                            "{event} left the transcript short of its tail"
+                        );
+                    } else {
+                        assert!(session.scrolling(), "{event} closed {place}");
+                        assert_eq!(
+                            session.viewing_request(),
+                            place == "the request view",
+                            "{event} changed what {place} was showing"
+                        );
+                        assert_eq!(
+                            session.top_row(),
+                            50,
+                            "{event} moved the row {place} was holding"
+                        );
+                    }
+                }
+            }
+        }
+
         /// A prompt typed and sent while a turn is running, which is what the turn later takes.
         fn queue(session: &mut Session, prompt: &str) {
             session.status = Status::Working;
@@ -9549,6 +9781,24 @@ mod tests {
             );
         }
 
+        /// WATCH-22. What a job printed is drawn in its row and nowhere else, so a look at a job
+        /// with no row of its own adds none. A row made from it would be a second row for the job,
+        /// listed as a plain command, and a delegate's row by the same name is not its row either.
+        #[test]
+        fn a_look_at_a_job_with_no_row_of_its_own_adds_no_row() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            job_started(&mut session, "job:1", "cargo test");
+            session.reporting_for(None);
+            job_looked(&mut session, "job:1", &["Compiling a"]);
+
+            assert_eq!(session.outputs().len(), 1, "the look made a row");
+            assert!(
+                session.outputs()[0].lines.is_empty(),
+                "the turn's look landed on the delegate's row"
+            );
+        }
+
         /// A job the turn stopped did not finish and did not fail, and "running" would be a lie
         /// once the turn that owned it is gone.
         #[test]
@@ -9794,6 +10044,26 @@ mod tests {
                 said[2].ends_with(&format!(", started by delegate {id}")),
                 "{said:?}"
             );
+        }
+
+        /// RUN-27. A row at "being stopped" with no turn in flight is one nothing will read the
+        /// token of, so the person's second try is carried out and not answered "already being
+        /// stopped", which was the whole of what typing it again did.
+        #[test]
+        fn a_second_stop_with_no_turn_in_flight_is_not_refused() {
+            let mut session = Session::new("none");
+            session.keep_jobs_between_turns();
+            job_with_stop(&mut session, "job:1", "sleep 600");
+            assert!(!session.a_turn_is_running());
+            // The first stop finds nothing registered to kill, which leaves the row Stopping.
+            assert!(session.stop_job("job:1", None));
+            let (_, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Stopping);
+
+            let said = noted(&mut session, |session| {
+                assert!(session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_asked, name = "job:1")]);
         }
 
         /// RUN-27. A stop sets the job's token and nothing more, so the row says it is being

@@ -26,7 +26,7 @@ import { shell, dialog, type BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join, sep, relative } from 'node:path'
+import { basename, extname, join, sep, relative } from 'node:path'
 import { isProjectPath } from '../shared/recents'
 import {
   ROWS_MAX,
@@ -241,24 +241,72 @@ export function list(handle: string, subpath: string): Listing | null {
 }
 
 /**
+ * Extensions of the files handed to the system's default app without a question: text, PDF,
+ * images, audio and video.
+ *
+ * An allow list, because which files the system runs when they are opened differs by platform and
+ * grows: `.command` and `.terminal` on macOS, `.desktop` on Linux, `.bat`, `.lnk` and `.js` on
+ * Windows. A program a person approved with `run` can write any of them into the project, and
+ * opening one runs it on the host, outside the sandbox. Source files are left out because Windows
+ * runs `.js` and `.vbs` when they are opened, and HTML and SVG because the browser that opens them
+ * runs the script they hold. Spreadsheets, office and OpenDocument files and RTF are left out
+ * because the app that opens them updates links and fields and evaluates formulas, and a file a
+ * confined program wrote carries no download mark that makes that app treat it with suspicion.
+ */
+const OPENS_IN_APP = new Set([
+  'txt', 'md', 'markdown', 'log', 'json', 'pdf',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic',
+  'mp3', 'm4a', 'wav', 'flac', 'ogg', 'aac', 'mp4', 'm4v', 'mov', 'webm',
+])
+
+const OPEN = 'Open'
+const SHOW_IN_FOLDER = 'Show in folder'
+const CANCEL = 'Cancel'
+
+/**
  * Hand a file to whichever app the system assigns its type.
  *
  * Only a regular file: a directory would open a Finder window nobody asked for, and a device or a
  * socket is not something to hand to `open(1)` at all. `shell.openPath` resolves to an empty
  * string when it worked and to a message when it did not, and that message is worth repeating —
  * somebody double-clicked and nothing happened, which is the one case here they can act on.
+ *
+ * A file whose extension is not on `OPENS_IN_APP`, or that is marked executable, is opened only
+ * after the person answers a question the main process asks. The renderer cannot answer it. The
+ * default button is Show in folder, so a stray Enter never starts a program.
  */
-export async function open(handle: string, subpath: string): Promise<OpenOutcome> {
+export async function open(handle: string, subpath: string, parent?: BrowserWindow | null): Promise<OpenOutcome> {
   const target = inside(handle, subpath)
   // The same refusal for a path outside the project as for one that is not a file. The renderer
   // has no business telling those apart, and the person sees a row that would not open either way.
   if (target === null) return { status: 'failed', message: 'that is not a file in this project' }
+  let mode: number
   try {
-    if (!statSync(target).isFile()) {
+    const stat = statSync(target)
+    if (!stat.isFile()) {
       return { status: 'failed', message: 'that is not a file' }
     }
+    mode = stat.mode
   } catch {
     return { status: 'failed', message: 'that is not a file in this project' }
+  }
+  // `target` is past `realpath`, so a link is judged by the name and mode of the file it reaches.
+  if ((mode & 0o111) !== 0 || !OPENS_IN_APP.has(extname(target).slice(1).toLowerCase())) {
+    const options = {
+      type: 'warning' as const,
+      message: 'Opening this file may run it',
+      detail: `"${basename(target)}" is not a text, PDF, image, audio or video file, or it is marked as a program. A program run in this project may have written it, and opening it may run it on this computer, outside the sandbox.`,
+      buttons: [OPEN, SHOW_IN_FOLDER, CANCEL],
+      defaultId: 1,
+      cancelId: 2,
+      noLink: true,
+    }
+    const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+    if (options.buttons[response] === SHOW_IN_FOLDER) {
+      shell.showItemInFolder(target)
+      return { status: 'revealed' }
+    }
+    if (options.buttons[response] !== OPEN) return { status: 'cancelled' }
   }
   const failure = await shell.openPath(target)
   return failure === '' ? { status: 'opened' } : { status: 'failed', message: failure }

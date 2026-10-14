@@ -542,6 +542,11 @@ prefers this to rewriting a whole body.
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
 diff of the combined result.
 
+The result gives the agent back the changed lines with three lines either side. Those lines are
+scanned for credentials as a file read is. If they hold what looks like a credential and you have not
+agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
+and reads alike. A no leaves the edit in place and the lines out of the result.
+
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.
 
@@ -812,8 +817,8 @@ only once the whole body has arrived, so a dropped connection, a stop or a body 
 leaves what was there and no partial file.
 
 The cap is 100 MiB per call and is the [`download.maxBytes`](../customize/configuration.md#downloadmaxbytes)
-setting. A delegate is never offered the tool, and plan mode
-refuses it, since it writes a file.
+setting. A delegate is never offered the tool, and plan mode and the
+[sandbox mode](../security/security.md#confinement) `read-only` refuse it, since it writes a file.
 
 ## `spawn_processor`
 

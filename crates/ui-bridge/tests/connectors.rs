@@ -209,7 +209,8 @@ fn a_connector_is_declared_approved_and_requested_only_as_it_was_shown() {
 }
 
 /// SERVERS-3: removing a connector rewrites the approvals file, so an approvals file that cannot be
-/// read refuses the removal and is left as it was, with the declaration still there.
+/// read refuses the removal, and a refused removal changes nothing: the approvals file, the
+/// declaration and the home settings file's request all stay, so the connector stays on.
 #[test]
 fn removing_a_connector_leaves_an_approvals_file_it_cannot_read() {
     let scratch = Scratch::new("bridge-connectors-unreadable-approvals");
@@ -226,19 +227,69 @@ fn removing_a_connector_leaves_an_approvals_file_it_cannot_read() {
         );
     }
 
+    let settings = scratch.file("settings.json");
+    let requested: Value = serde_json::from_str(&settings).expect("json");
+    assert_eq!(requested["mcp"]["request"], json!(["calc", "other"]));
+
     let approvals = scratch.home().join(".bravebot/mcp-approved");
-    let mut text = scratch.file("mcp-approved");
+    let readable = scratch.file("mcp-approved");
+    let mut text = readable.clone();
     text.push_str(&"#".repeat(70 * 1024));
     std::fs::write(&approvals, &text).expect("an approvals file too large to read");
 
     let said = front.refused("connectors.remove", json!({"alias": "calc"}));
-    assert!(said.contains("cannot be read"), "{said}");
+    assert!(said.contains("mcp-approved cannot be read"), "{said}");
     assert_eq!(
         std::fs::read_to_string(&approvals).expect("still there"),
         text,
         "the approvals file was written over"
     );
     assert!(scratch.file("mcp.json").contains("calc"));
+    assert_eq!(
+        scratch.file("settings.json"),
+        settings,
+        "the refused removal changed the home settings file"
+    );
+
+    // Readable again, calc is on as it was, and the same removal goes through and takes calc's
+    // request with it.
+    std::fs::write(&approvals, &readable).expect("a readable approvals file");
+    let listed = front.call("connectors.list", json!({}));
+    assert_eq!(named(&listed, "calc").expect("declared")["connected"], true);
+    let gone = front.call("connectors.remove", json!({"alias": "calc"}));
+    assert!(named(&gone, "calc").is_none());
+    assert_eq!(named(&gone, "other").expect("declared")["connected"], true);
+    let requested: Value = serde_json::from_str(&scratch.file("settings.json")).expect("json");
+    assert_eq!(requested["mcp"]["request"], json!(["other"]));
+}
+
+/// A declarations file that cannot be read refuses a removal before the home settings file is
+/// written, so a removal the window reports refused has not turned the connector off.
+#[test]
+fn removing_a_connector_leaves_the_request_when_the_declarations_cannot_be_read() {
+    let scratch = Scratch::new("bridge-connectors-unreadable-declarations");
+    let mut front = FrontEnd::start(&scratch.home());
+    let form = remote("calc", "http://localhost:3333/mcp");
+    let shown = front.call("connectors.preview", form.clone());
+    front.call(
+        "connectors.connect",
+        with(form, "fingerprint", shown["fingerprint"].clone()),
+    );
+    let settings = scratch.file("settings.json");
+    let requested: Value = serde_json::from_str(&settings).expect("json");
+    assert_eq!(requested["mcp"]["request"], json!(["calc"]));
+
+    let declarations = scratch.home().join(".bravebot/mcp.json");
+    std::fs::write(&declarations, "not json").expect("a declarations file that cannot be read");
+
+    let said = front.refused("connectors.remove", json!({"alias": "calc"}));
+    assert!(said.contains("mcp.json cannot be read"), "{said}");
+    assert_eq!(scratch.file("mcp.json"), "not json");
+    assert_eq!(
+        scratch.file("settings.json"),
+        settings,
+        "the refused removal changed the home settings file"
+    );
 }
 
 /// Adding a connector cannot quietly change another of the same name. A settings page that means

@@ -264,6 +264,13 @@ pub struct RunRequest {
     /// without one. [`RunRequest::confined`] is `None` for such a line, since its stages start
     /// with no profile.
     pub unconfined: bool,
+    /// The keys the prompt may offer the person to choose between for the owner a `git` push of
+    /// this line leaves to ssh, where it may offer them (SANDBOX-16).
+    ///
+    /// `Some` exactly where the digits are bound: a confined line whose one unchosen owner ssh
+    /// could offer two or more keys, in a session that may write the answer down. The acting layer
+    /// reads the answer against this list and not against what was drawn.
+    pub key_choice: Option<Box<KeyChoice>>,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -293,6 +300,10 @@ pub struct Confined {
     pub requested_reaches: Vec<(String, bravebot_sandbox::scope::Reach)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
+    /// Whether a stage whose program is not git may write a repository's hooks and configuration,
+    /// which is so on a platform whose backend holds no `.git` back for a stage that writes more
+    /// than the temporary directory (SANDBOX-18).
+    pub writes_git_directories: bool,
 }
 
 /// What one ambient authority is, in the words a person reads.
@@ -324,13 +335,51 @@ pub struct Carried {
     /// What the person's environment moves that scope to, beyond its fixed rows, each named with
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
-    /// The public key the person's `git.identities` chose for the owner the argv's ssh address
-    /// names, which ssh offers the host first.
-    pub identity: Option<std::path::PathBuf>,
+    /// What decides the key ssh offers the host for the owner the argv's ssh address names, where
+    /// the person decided it.
+    pub identity: Option<Offered>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,
     /// What a person attached to this command with `/reach`, each with the day it was allowed.
     pub remembered: Vec<Remembered>,
+}
+
+/// Who decided which key a `git` stage has ssh offer first (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offered {
+    /// The public key the person's `git.identities` names for the owner.
+    Configured(std::path::PathBuf),
+    /// What the person chose for the owner at an earlier run prompt: a key, or leaving it to ssh.
+    Chosen(crate::reach::ChosenKey),
+}
+
+/// The keys a run prompt offers the person to choose between for the one owner a line's `git`
+/// push leaves to ssh (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyChoice {
+    /// The host and owner its argv's ssh address names.
+    pub address: bravebot_sandbox::scope::Address,
+    /// The public key files on offer, numbered from 1 in this order.
+    pub candidates: Vec<std::path::PathBuf>,
+    /// Where the answer is written, which the prompt shows for the reason
+    /// [`RunRequest::record`] carries a path.
+    pub record: std::path::PathBuf,
+}
+
+impl KeyChoice {
+    /// The host and owner as a `git.identities` entry names them.
+    pub fn owner(&self) -> String {
+        self.address.entry_name()
+    }
+}
+
+/// Which key the person chose at a run prompt that offered a [`KeyChoice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAnswer {
+    /// The candidate at this place in [`KeyChoice::candidates`], counted from 0.
+    Candidate(usize),
+    /// Leave the key to ssh, which offers the agent's keys in order.
+    SshDefault,
 }
 
 /// One reach a person remembered for a command, as the plan that carries it says so.
@@ -364,9 +413,11 @@ impl Confined {
 
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
-        match self.reads_the_machine {
-            true => t!(run_confined_machine).to_string(),
-            false => t!(run_confined).to_string(),
+        match (self.reads_the_machine, self.writes_git_directories) {
+            (true, false) => t!(run_confined_machine).to_string(),
+            (true, true) => t!(run_confined_machine_git).to_string(),
+            (false, false) => t!(run_confined).to_string(),
+            (false, true) => t!(run_confined_git).to_string(),
         }
     }
 
@@ -444,15 +495,33 @@ impl Confined {
                     .to_string(),
                 );
             }
-            if let Some(key) = &stage.identity {
-                sentences.push(
+            match &stage.identity {
+                Some(Offered::Configured(key)) => sentences.push(
                     t!(
                         run_carries_identity,
                         program = program,
                         path = key.display().to_string()
                     )
                     .to_string(),
-                );
+                ),
+                Some(Offered::Chosen(chosen)) => sentences.push(match &chosen.key {
+                    Some(key) => t!(
+                        run_carries_identity_chosen,
+                        program = program,
+                        path = key.display().to_string(),
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                    None => t!(
+                        run_carries_identity_chosen_default,
+                        program = program,
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                }),
+                None => {}
             }
             for remembered in &stage.remembered {
                 let date = remembered.allowed.as_str();
@@ -511,6 +580,7 @@ impl RunRequest {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -683,6 +753,18 @@ impl RunRequest {
     /// Whether the prompt may offer to remember the requested reach.
     pub fn offers_to_keep_reach(&self) -> bool {
         !self.kept_reach_shapes().is_empty()
+    }
+
+    /// The answer a digit pressed at the prompt gives, or `None` for a digit it does not offer:
+    /// `0` leaves the key to ssh, and `1` up to the number of keys on offer chooses that key.
+    pub fn key_answer_for(&self, digit: u32) -> Option<KeyAnswer> {
+        let choice = self.key_choice.as_ref()?;
+        let at = usize::try_from(digit).ok()?;
+        match at {
+            0 => Some(KeyAnswer::SshDefault),
+            _ if at <= choice.candidates.len() => Some(KeyAnswer::Candidate(at - 1)),
+            _ => None,
+        }
     }
 
     /// Whether the prompt may offer to record this answer past the session.
@@ -1216,9 +1298,25 @@ pub struct RunDecision {
     ///
     /// [SANDBOX-27]: ../../../docs/specs/sandboxing.md
     pub remember_reach: Option<crate::reach::Lasting>,
+    /// The key the person chose for the owner the line's push leaves to ssh, from the prompt's
+    /// [`RunRequest::key_choice`] ([SANDBOX-16]). Run with it and remembered for every session.
+    ///
+    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
+    pub key: Option<KeyAnswer>,
 }
 
 impl RunDecision {
+    /// Run it with the key `answer` names offered first, and remember that choice for the owner.
+    ///
+    /// Vouches for nothing and records no line: it decides which key a push offers, and the next
+    /// line pushing to that owner is asked about as it would have been.
+    pub fn approve_with_key(answer: KeyAnswer) -> Self {
+        Self {
+            key: Some(answer),
+            ..Self::approve()
+        }
+    }
+
     /// Run it this once.
     pub fn approve() -> Self {
         Self {
@@ -1227,6 +1325,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1238,6 +1337,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1253,6 +1353,7 @@ impl RunDecision {
             record: true,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1265,6 +1366,7 @@ impl RunDecision {
             record: false,
             record_family: true,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1282,6 +1384,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: Some(lasting),
+            key: None,
         }
     }
 
@@ -1293,6 +1396,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -2582,6 +2686,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
         };
         let offered = request(
             a_listed_line(),
@@ -2935,6 +3040,7 @@ mod tests {
                     remembered: Vec::new(),
                 },
             ],
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -2974,6 +3080,7 @@ mod tests {
             }],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -3017,6 +3124,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried,
+            writes_git_directories: false,
         };
 
         let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
@@ -3046,6 +3154,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         };
         let said = confined(Counts {
             allow_read: 1,
@@ -3067,6 +3176,36 @@ mod tests {
             );
         }
         assert!(confined(Counts::default()).sentences().is_empty());
+    }
+
+    /// SANDBOX-18: a hook or a configuration a program writes into a `.git` runs later with no
+    /// sandbox, so where the platform lets a program that is not git write one, the heading the
+    /// person approves under says so, whichever account of the reach it gives, and where it does
+    /// not, the heading is the one it was.
+    #[test]
+    fn a_line_that_can_write_a_repositorys_hooks_says_so_in_its_heading() {
+        let confined = |reads_the_machine, writes_git_directories| Confined {
+            reads_the_machine,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories,
+        };
+
+        for reads_the_machine in [true, false] {
+            let plain = confined(reads_the_machine, false).heading();
+            let said = confined(reads_the_machine, true).heading();
+            assert!(
+                said.contains("hooks and configuration") && said.contains("no sandbox"),
+                "{said}"
+            );
+            assert!(!plain.contains("hooks"), "{plain}");
+            assert!(said.starts_with(plain.trim_end_matches(':')), "{said}");
+            assert!(confined(reads_the_machine, true).sentences().is_empty());
+        }
     }
 
     fn a_run() -> RunRequest {

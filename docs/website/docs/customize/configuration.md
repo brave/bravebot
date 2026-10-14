@@ -884,7 +884,7 @@ thing to switch off by near-miss.
 `open` is the default: every program the agent runs keeps the network. `closed` takes it from every
 program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
 `pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
-a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. `cat`, `grep`, `make`, `python3` and a test
+a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
 run get none, so what they read cannot be sent anywhere.
 
 `--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
@@ -971,6 +971,16 @@ file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and 
 lend: a path that is not a regular `*.pub` file, one inside another credential location such as
 `~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
 either.
+
+Without an entry for the owner, the terminal interface asks instead. Where a `git` command such as a
+push names an ssh address of an owner nothing has chosen a key for, and ssh could offer two to nine
+of your public keys (the ones at ssh's default names and the ones an `IdentityFile` line in
+`~/.ssh/config` names), the run prompt numbers them. Press a key's number to run the command with
+that key offered first, or `0` to leave the key to ssh. Either answer is kept in
+`~/.bravebot/reach.jsonl` and decides every later `git` command that reaches that owner over ssh, in
+every session, as an entry would; `y` runs the command without choosing, and the next prompt asks
+again. An entry in your settings decides over a kept answer. `/reach keys` lists the answers kept,
+and `/reach keys remove <number>` forgets one. The plain interface and the desktop app do not ask.
 
 ### `download.maxBytes`
 
@@ -1115,25 +1125,28 @@ pattern begins:
 |---|---|
 | `//x` | the filesystem root |
 | `~/x` | your home directory |
-| `/x` | the directory the settings file is in |
+| `/x` | the workspace, in `.bravebot/settings.json` and `.bravebot/settings.local.json`; the directory the settings file is in, in `~/.bravebot/settings.json` and a file `--settings` names |
 | `x` or `./x` | the workspace |
 
 So a single leading slash is **not** the filesystem root. A specifier with no slash in it is a name
-and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule. Relative and
-absolute patterns are separate namespaces and neither reaches into the other.
+and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule; one written from
+`./` stays at the top of the workspace. Relative and
+absolute patterns are separate namespaces and neither reaches into the other. A `/x` rule that
+starts inside the workspace is a relative one, so `Read(/secrets/**)` in a project's
+`.bravebot/settings.json` is the same rule as `Read(./secrets/**)`.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
 with, and whichever case the drive letter is in. A rule written from the drive letter is the same
 rule, though in a JSON file each backslash is doubled, `"Read(D:\\work\\secrets\\**)"`, so the
 forward-slash form is easier to write. `~/x` starts at your home directory on its drive in the same
-way. `Read(/D:/work/**)`, with one slash, is still about the settings file's directory. A workspace
+way. `Read(/D:/work/**)`, with one slash, still starts where any `/x` rule does. A workspace
 rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
 
 **A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
 in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
-pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(/src/**)` to pin it to one
-place in either list.
+pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(./src/**)` to pin it to the
+top of the workspace in either list.
 
 A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 

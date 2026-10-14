@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useDelayedFlag } from '../hooks'
 import { Modal } from './Modal'
 import { Alert, Button, Icon, Input, ProgressRing } from '../nala'
 
@@ -10,6 +11,8 @@ export function Watches({ session, onClose }: { session: string; onClose: () => 
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+  const loading = !listing && !problem
+  const showLoading = useDelayedFlag(loading)
   const request = async (method = 'watches.list', params: Record<string, unknown> = {}) => {
     if (method !== 'watches.list') { setBusy(true); setProblem('') }
     try {
@@ -51,7 +54,7 @@ export function Watches({ session, onClose }: { session: string; onClose: () => 
     </>}>
     <p className="grant-lede">Normal read and approval rules still apply. Up to eight watches, for seven days each. They run while this conversation is open in the app; closing it ends the watches.</p>
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}{status && <Alert type="success" size="small" role="status">{status}</Alert>}
-    {!listing && !problem && <p role="status" className="settings-busy"><ProgressRing mode="indeterminate" /> Loading watches…</p>}
+    {loading && <p role="status" className="settings-busy" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading watches…</p>}
     {listing?.watches.length === 0 && <p className="grant-empty"><Icon name="eye-on" />No files watched. Add one below, or ask the agent to watch a file.</p>}
     {!!listing?.watches.length && <ul className="grant-list watch-list" ref={list}>{listing.watches.map(w => <li key={w.number} className="grant-row">
       <Icon name="eye-on" />

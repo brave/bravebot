@@ -76,7 +76,7 @@ AREAS = (
 )
 INFRASTRUCTURE = "infrastructure"
 INFRASTRUCTURE_PATHS = ("contrib/", "agents/", ".github/", "Makefile", "scripts/")
-KIND, BROKEN = "maintenance", "bug"
+KIND, BROKEN = "refactor", "bug"
 ASSIGNEE = "netzenbot"
 
 LANGUAGE = {
@@ -1206,7 +1206,7 @@ def render_review(manifest, findings, verdicts, problems):
 
 
 def labels_for(finding, manifest):
-    """`maintenance`, or `bug` where the reviewer found a defect, and an area where one is clear."""
+    """`refactor`, or `bug` where the reviewer found a defect, and an area where one is clear."""
     labels = [BROKEN if finding.get("bug") else KIND]
     area = str(finding.get("area") or "").strip().strip("`")
     if area and not area.startswith("area/") and area != INFRASTRUCTURE:

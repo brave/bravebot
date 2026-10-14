@@ -335,8 +335,9 @@ pub struct Settings {
     /// the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
     /// the merge cannot say which file a value came from.
     sandbox_chosen: Option<(SandboxMode, PathBuf)>,
-    /// The layers not entitled to choose that asked for `strict`, weakest first. They may only
-    /// tighten, so nothing a stronger layer chose lifts one.
+    /// The layers not entitled to choose that asked for `strict`, weakest first. Obeyed over a
+    /// stronger layer's choice except where `strict` is looser than it or than the managed pin,
+    /// which it is only of `read-only`.
     sandbox_asked_strict: Vec<PathBuf>,
     /// The layers not entitled to choose that named `workspace-write` or `off`, with the mode, for
     /// `doctor`: dropped rather than obeyed, and said so.
@@ -783,6 +784,9 @@ impl Settings {
         let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
+        // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
+        // spelled relative to (PERM-3).
+        let workspace = cwd.map(resolved);
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -914,7 +918,10 @@ impl Settings {
                 &mut git_identities_ignored,
                 &mut git_identities_misshapen,
             );
-            let directory = settings_directory(&path);
+            // One of the checkout's two files is one however the command line reached it, so naming
+            // it does not move where its rules start.
+            let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
+            let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
@@ -922,7 +929,7 @@ impl Settings {
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
                     true => {
-                        let anchored = anchor_slash_rule(&rule, &directory);
+                        let anchored = anchor_slash_rule(&rule, &anchor);
                         rule_sources.push(RuleSource {
                             list: "allow",
                             anchored: anchored.clone(),
@@ -952,7 +959,7 @@ impl Settings {
             }
             let written = permission_lists(&root);
             found.push(path.clone());
-            root.anchor_slash_rules(&directory);
+            root.anchor_slash_rules(&anchor);
             let anchored = permission_lists(&root);
             for (list, written, anchored) in [
                 ("deny", written.deny, anchored.deny),
@@ -1414,28 +1421,75 @@ impl Settings {
     /// The sandbox mode the settings files ask for and the file that asked, if any did
     /// (SANDBOX-22).
     ///
-    /// `strict` from any layer wins over what an entitled layer chose, because it only tightens: a
-    /// checkout asking for it is obeyed, and the person's own `off` does not lift it. Otherwise the
-    /// entitled layer's choice stands, the command-line file over the home one.
+    /// The entitled layer's choice, the command-line file over the home one, unless a checkout
+    /// asked for `strict` and `strict` is not looser than that choice: then the checkout's file.
+    /// So the person's own `off` does not lift a checkout's `strict`, and a checkout's `strict`
+    /// does not lift the person's `read-only`. The managed file is not read here;
+    /// [`crate::sandbox::resolve`] gives the mode in force.
     pub fn sandbox(&self) -> Option<(SandboxMode, &Path)> {
-        match &self.sandbox_chosen {
-            Some((SandboxMode::Strict, file)) => Some((SandboxMode::Strict, file.as_path())),
-            chosen => match self.sandbox_asked_strict.first() {
-                Some(file) => Some((SandboxMode::Strict, file.as_path())),
-                None => chosen.as_ref().map(|(mode, file)| (*mode, file.as_path())),
-            },
+        self.sandbox_under(&crate::Managed::default())
+    }
+
+    /// [`Settings::sandbox`] where a checkout's `strict` may not be looser than the mode `managed`
+    /// pins either.
+    pub(crate) fn sandbox_under(&self, managed: &crate::Managed) -> Option<(SandboxMode, &Path)> {
+        let chosen = self
+            .sandbox_chosen
+            .as_ref()
+            .map(|(mode, file)| (*mode, file.as_path()));
+        match self.sandbox_asked_strict.first() {
+            Some(file)
+                if !matches!(chosen, Some((SandboxMode::Strict, _)))
+                    && self.strict_held_by(managed).is_none() =>
+            {
+                Some((SandboxMode::Strict, file.as_path()))
+            }
+            _ => chosen,
         }
     }
 
-    /// The layers that named `workspace-write` or `off` without being entitled to, with the mode, weakest
-    /// first. Reported rather than obeyed, for the reason `vetting_ignored` is.
+    /// The checkout's files that asked for `strict` and are not obeyed, weakest first, each with
+    /// the mode `strict` is looser than and the file that chose that mode (SANDBOX-22).
+    ///
+    /// `strict` writes the session's directories, so a checkout asking for it would loosen a
+    /// `read-only` that the person's own file chose or that `managed` pins. Reported rather than
+    /// obeyed, as [`Settings::sandbox_ignored`] is.
+    pub fn sandbox_strict_ignored<'a>(
+        &'a self,
+        managed: &'a crate::Managed,
+    ) -> impl Iterator<Item = (&'a Path, SandboxMode, &'a Path)> {
+        self.strict_held_by(managed)
+            .into_iter()
+            .flat_map(|(mode, by)| {
+                self.sandbox_asked_strict
+                    .iter()
+                    .map(move |file| (file.as_path(), mode, by))
+            })
+    }
+
+    /// The mode a checkout's `strict` would be looser than, and the file that chose it: the
+    /// entitled layer's choice, else the managed pin.
+    fn strict_held_by<'a>(
+        &'a self,
+        managed: &'a crate::Managed,
+    ) -> Option<(SandboxMode, &'a Path)> {
+        self.sandbox_chosen
+            .as_ref()
+            .map(|(mode, file)| (*mode, file.as_path()))
+            .into_iter()
+            .chain(managed.sandbox().zip(managed.path()))
+            .find(|(mode, _)| SandboxMode::Strict.is_looser_than(*mode))
+    }
+
+    /// The layers that named `read-only`, `workspace-write` or `off` without being entitled to, with
+    /// the mode, weakest first. Reported rather than obeyed, for the reason `vetting_ignored` is.
     pub fn sandbox_ignored(&self) -> impl Iterator<Item = (&Path, SandboxMode)> {
         self.sandbox_ignored
             .iter()
             .map(|(path, mode)| (path.as_path(), *mode))
     }
 
-    /// The layers that named `sandbox.mode` as something other than one of the three words. Read as
+    /// The layers that named `sandbox.mode` as something that names none of the four modes. Read as
     /// absence and reported, since a mistyped `strict` is the failure worth interrupting somebody
     /// over.
     pub fn sandbox_unreadable(&self) -> impl Iterator<Item = &Path> {
@@ -2031,13 +2085,13 @@ impl Document {
         std::mem::take(&mut self.root)
     }
 
-    /// Respell every `/x` path rule in `deny` and `ask` as the `//` path it names, which is where
-    /// the file this document was read from puts it (PERM-3).
+    /// Respell every `/x` path rule in `deny` and `ask` as the path it names from `anchor`, which
+    /// [`slash_anchor`] gives for the file this document was read from (PERM-3).
     ///
     /// The merge unions the lists of every layer into one and keeps no record of which file wrote
     /// an entry, so the one place that still knows is the layer's own read. Rules that are not a
     /// `Read` or `Edit` path are left as written.
-    fn anchor_slash_rules(&mut self, directory: &str) {
+    fn anchor_slash_rules(&mut self, anchor: &str) {
         let Some(serde_json::Value::Object(block)) = self.root.get_mut(PERMISSIONS_BLOCK) else {
             return;
         };
@@ -2047,7 +2101,7 @@ impl Document {
             };
             for entry in entries {
                 if let serde_json::Value::String(text) = entry {
-                    *text = anchor_slash_rule(text, directory);
+                    *text = anchor_slash_rule(text, anchor);
                 }
             }
         }
@@ -2874,27 +2928,67 @@ fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize
         .and_then(|rows| usize::try_from(rows).ok())
 }
 
-/// The directory a settings file sits in, spelled for a rule that is anchored there.
-///
-/// Absolute, since a rule is matched against a path a gate holds in full and a named file may have
-/// been spelled relative to the working directory.
-fn settings_directory(file: &Path) -> String {
-    let file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
-    file.parent()
-        .map(|directory| directory.display().to_string())
-        .unwrap_or_default()
+/// Whether `character` separates one segment of a path from the next on this host.
+fn separates(character: char) -> bool {
+    character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
 }
 
-/// `rule` with a single-slash path specifier respelled as the `//` path it names under `directory`.
+/// `path` as the filesystem resolves it, or made absolute where it cannot be resolved.
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `file` is one of the two settings files the checkout at `cwd` keeps, however it was
+/// spelled.
+fn is_a_checkouts_file(file: &Path, cwd: Option<&Path>) -> bool {
+    let Some(cwd) = cwd else { return false };
+    let file = resolved(file);
+    [project_settings_file(cwd), local_settings_file(cwd)]
+        .iter()
+        .any(|layer| resolved(layer) == file)
+}
+
+/// Where a `/x` rule in the settings file at `file` starts, spelled as the specifier `/` is
+/// respelled to ([PERM-3](../../../docs/specs/permissions.md#PERM-3)).
 ///
-/// A `Read` or `Edit` rule written `/x` starts at the directory of the file that wrote it
+/// A checkout's own two files start at `workspace`, which is already [`resolved`], and any other
+/// file at the directory it is in. A start that resolves to the workspace or somewhere inside it is
+/// spelled from `.`, as a gate holds a file there, and any other in full from `//`. Resolved for the
+/// comparison because a link, a `..` or another spelling of the same directory names the same
+/// place, and comparing the text would answer about the spelling.
+fn slash_anchor(file: &Path, a_checkouts_file: bool, workspace: Option<&Path>) -> String {
+    let start = match (a_checkouts_file, workspace) {
+        (true, Some(workspace)) => workspace.to_path_buf(),
+        _ => std::path::absolute(file)
+            .unwrap_or_else(|_| file.to_path_buf())
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+    };
+    let resolved_start = resolved(&start);
+    match workspace.and_then(|workspace| resolved_start.strip_prefix(workspace).ok()) {
+        Some(below) => std::iter::once(".".into())
+            .chain(
+                below
+                    .components()
+                    .map(|segment| segment.as_os_str().to_string_lossy()),
+            )
+            .collect::<Vec<_>>()
+            .join("/"),
+        None => format!("//{}", start.display().to_string().trim_matches(separates)),
+    }
+}
+
+/// `rule` with a single-slash path specifier respelled as the path it names from `anchor`, which
+/// [`slash_anchor`] spelled.
+///
+/// A `Read` or `Edit` rule written `/x` starts where the layer that wrote it says
 /// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
 /// directory it is handed for every rule it reads, so a rule from any other file is told where it
 /// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
-fn anchor_slash_rule(rule: &str, directory: &str) -> String {
-    let separates = |character: char| {
-        character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
-    };
+fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some((name, rest)) = rule.trim().split_once('(') else {
         return rule.to_string();
     };
@@ -2910,7 +3004,7 @@ fn anchor_slash_rule(rule: &str, directory: &str) -> String {
         return rule.to_string();
     }
     let below = specifier.trim_start_matches(separates);
-    format!("{name}(//{}/{below})", directory.trim_matches(separates))
+    format!("{name}({anchor}/{below})")
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -4349,8 +4443,8 @@ mod tests {
         assert_eq!(source("ask", "Bash(git *)"), Some(project.as_path()));
         assert_eq!(source("deny", "Bash(git *)"), None);
 
-        // A single leading slash is anchored where the file sits, and the file's own spelling is
-        // what comes back for the person to search for.
+        // A single leading slash is respelled where the rule starts, and the file's own spelling
+        // is what comes back for the person to search for.
         let anchored = settings
             .permissions()
             .deny
@@ -4423,13 +4517,16 @@ mod tests {
         assert_eq!(settings.run_network_unreadable().count(), 1);
     }
 
-    /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in
-    /// two files names two places, and neither is the global state directory.
+    /// PERM-3: a `/x` rule in a checkout's two files starts at the workspace, and in the person's
+    /// own file and a named one at the directory the file is in, so the same text in four files
+    /// names three places. A start outside the workspace is spelled in full, which is how a gate
+    /// holds a file there.
     #[test]
-    fn a_slash_rule_starts_at_the_directory_of_the_file_that_wrote_it() {
+    fn a_slash_rule_starts_at_the_workspace_in_a_checkouts_file_and_beside_any_other() {
         let layers = Layers::new("slash-rule-per-layer")
             .global(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
             .project(r#"{"permissions": {"deny": ["Read(/secrets/**)", "Bash(/usr/bin/ls *)"]}}"#)
+            .local(r#"{"permissions": {"ask": ["Edit(/drafts/**)"]}}"#)
             .named(r#"{"permissions": {"ask": ["Edit(/notes.md)"], "allow": ["Read(/open/**)"]}}"#);
         let settings = layers.read();
         let spelled = |directory: &Path, rest: &str| {
@@ -4438,7 +4535,6 @@ mod tests {
                 directory.display().to_string().trim_start_matches('/')
             )
         };
-        let project = layers.cwd.join(PROJECT_DIR);
         let named = layers
             .named
             .as_ref()
@@ -4449,15 +4545,66 @@ mod tests {
             rules.deny,
             [
                 format!("Read({})", spelled(&layers.home, "secrets/**")),
-                format!("Read({})", spelled(&project, "secrets/**")),
+                "Read(./secrets/**)".to_string(),
                 "Bash(/usr/bin/ls *)".to_string(),
             ]
         );
-        assert_eq!(rules.ask, [format!("Edit({})", spelled(named, "notes.md"))]);
+        assert_eq!(
+            rules.ask,
+            [
+                "Edit(./drafts/**)".to_string(),
+                format!("Edit({})", spelled(named, "notes.md")),
+            ]
+        );
         assert_eq!(
             rules.allow,
             [format!("Read({})", spelled(named, "open/**"))]
         );
+    }
+
+    /// PERM-3: naming one of the checkout's own files on the command line reads it in the named
+    /// file's place, and its `/x` rules still start at the workspace, so which way the file was
+    /// reached does not move what its rules are about.
+    #[test]
+    fn a_checkouts_file_named_on_the_command_line_still_starts_at_the_workspace() {
+        let settings = Layers::new("slash-rule-named-project")
+            .project(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
+            .naming_the_project_layer()
+            .read();
+        assert_eq!(settings.permissions().deny, ["Read(./secrets/**)"]);
+    }
+
+    /// PERM-3: a `/x` rule whose start is inside the workspace is spelled from the workspace, since
+    /// a gate holds a file there by its relative name and a full path would never meet it. A named
+    /// file in a subdirectory starts there however its path was spelled, and the person's own file
+    /// starts at its directory where a session works in a directory above it, in `allow` as in
+    /// `deny`.
+    #[test]
+    fn a_slash_rule_starting_inside_the_workspace_is_spelled_from_it() {
+        let layers = Layers::new("slash-rule-inside-the-workspace");
+        let state = layers.cwd.join("state");
+        let named = layers.cwd.join("tooling").join("bravebot.json");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(layers.cwd.join("sub")).unwrap();
+        std::fs::write(
+            state.join(SETTINGS_FILE),
+            r#"{"permissions": {"deny": ["Read(/secrets/**)"], "allow": ["Read(/open/**)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(&named, r#"{"permissions": {"ask": ["Edit(/notes.md)"]}}"#).unwrap();
+        let through_a_parent = layers
+            .cwd
+            .join("sub")
+            .join("..")
+            .join("tooling")
+            .join("bravebot.json");
+
+        let settings = Settings::layered(Some(state), Some(&layers.cwd), Some(&through_a_parent));
+        let rules = settings.permissions();
+        assert_eq!(rules.deny, ["Read(./state/secrets/**)"]);
+        assert_eq!(rules.ask, ["Edit(./tooling/notes.md)"]);
+        assert_eq!(rules.allow, ["Read(./state/open/**)"]);
     }
 
     /// The point of a project layer: a checkout says which gateway or profile the work in it uses,
@@ -6751,6 +6898,76 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: a checkout's `strict` writes the session's directories, so it does not replace a
+    /// `read-only` the person's own file or a named file outside the workspace chose, and is
+    /// reported with the file that chose `read-only`. Over `workspace-write` and `off` it is still
+    /// obeyed. The regressions it rejects are a repository giving its programs the writes the person
+    /// withheld, in a session or a window, and a checkout's `strict` dropped under every choice.
+    #[test]
+    fn a_checkouts_strict_does_not_lift_the_persons_read_only() {
+        use crate::sandbox::for_a_window;
+        let none = crate::Managed::default();
+        let strict = r#"{"sandbox": {"mode": "strict"}}"#;
+        let read_only = r#"{"sandbox": {"mode": "read-only"}}"#;
+        for (name, layer) in [("home", "h"), ("named", "n")] {
+            for checkout in ["project", "local"] {
+                let layers = Layers::new(&format!("sandbox-read-only-{name}-{checkout}"));
+                let layers = match layer {
+                    "h" => layers.global(read_only),
+                    _ => layers.named(read_only),
+                };
+                let layers = match checkout {
+                    "project" => layers.project(strict),
+                    _ => layers.local(strict),
+                };
+                let chosen_in = match layer {
+                    "h" => layers.home.join(SETTINGS_FILE),
+                    _ => layers.named.clone().expect("a named file"),
+                };
+                let asked_in = layers.cwd.join(PROJECT_DIR).join(match checkout {
+                    "project" => SETTINGS_FILE,
+                    _ => LOCAL_SETTINGS_FILE,
+                });
+                let settings = layers.read();
+                assert_eq!(
+                    settings.sandbox(),
+                    Some((SandboxMode::ReadOnly, chosen_in.as_path())),
+                    "{name} {checkout}: the checkout's strict lifted read-only"
+                );
+                assert_eq!(
+                    settings.sandbox_strict_ignored(&none).collect::<Vec<_>>(),
+                    [(
+                        asked_in.as_path(),
+                        SandboxMode::ReadOnly,
+                        chosen_in.as_path()
+                    )],
+                    "{name} {checkout}"
+                );
+                assert_eq!(
+                    for_a_window(&settings, &none),
+                    SandboxMode::ReadOnly,
+                    "{name} {checkout}: the window"
+                );
+            }
+        }
+        for chosen in ["workspace-write", "off", "strict"] {
+            let settings = Layers::new(&format!("sandbox-strict-over-{chosen}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{chosen}"}}}}"#))
+                .project(strict)
+                .read();
+            assert_eq!(
+                settings.sandbox().map(|(mode, _)| mode),
+                Some(SandboxMode::Strict),
+                "{chosen}"
+            );
+            assert_eq!(
+                settings.sandbox_strict_ignored(&none).count(),
+                0,
+                "{chosen}"
+            );
+        }
+    }
+
     /// SANDBOX-22, COMPAT-001: a settings file or a managed pin written before `standard` was
     /// renamed `workspace-write` keeps its meaning, and a checkout's file that still says
     /// `standard` is not obeyed and is reported as the mode it names. The regression it rejects is
@@ -6794,7 +7011,7 @@ mod tests {
         }
     }
 
-    /// SANDBOX-22: a value that is not one of the three words is absence and is reported with its
+    /// SANDBOX-22: a value that names none of the four modes is absence and is reported with its
     /// file, in every layer. The regression it rejects is a near miss read as a mode.
     #[test]
     fn a_word_that_is_not_a_mode_chooses_nothing_and_is_reported() {
@@ -6928,6 +7145,94 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: under a pin of `read-only` a checkout's `strict` is not obeyed and refuses
+    /// nothing: the session starts at the pin, a refusal names the person's file rather than the
+    /// checkout's, and the checkout's file is reported with the pin. Under a pin `strict` is not
+    /// looser than, the checkout's `strict` is still the mode, and it does not stand in for the
+    /// person's `read-only` that a pin of `strict` refuses. The regressions it rejects are a
+    /// repository's file stopping the session at start-up, a refusal pointing the person at a file
+    /// that is not theirs, a checkout's `strict` dropped under every pin, and a repository's file
+    /// starting a session with the writes the person withheld.
+    #[test]
+    fn a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin() {
+        use crate::sandbox::{Choice, Floor, Refused, Source, resolve};
+        let strict = r#"{"sandbox": {"mode": "strict"}}"#;
+        let pin = pinned(
+            "checkout-under-read-only",
+            r#"{"sandbox": {"mode": "read-only"}}"#,
+        );
+        let pin_file = pin.path().expect("the pin's file").to_path_buf();
+
+        let layers = Layers::new("sandbox-checkout-under-read-only").project(strict);
+        let asked_in = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        let settings = layers.read();
+        assert_eq!(
+            resolve(None, &settings, &pin),
+            Ok(Choice {
+                mode: SandboxMode::ReadOnly,
+                source: Source::Managed(pin_file.clone()),
+            })
+        );
+        assert_eq!(
+            settings.sandbox_strict_ignored(&pin).collect::<Vec<_>>(),
+            [(
+                asked_in.as_path(),
+                SandboxMode::ReadOnly,
+                pin_file.as_path()
+            )]
+        );
+
+        let layers = Layers::new("sandbox-home-and-checkout-under-read-only")
+            .global(r#"{"sandbox": {"mode": "workspace-write"}}"#)
+            .project(strict);
+        assert_eq!(
+            resolve(None, &layers.read(), &pin),
+            Err(Refused {
+                asked: SandboxMode::WorkspaceWrite,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::ReadOnly,
+                pinned_in: pin_file.clone(),
+                because: Floor::Mode,
+            })
+        );
+
+        for (name, text) in [
+            ("strict", r#"{"sandbox": {"mode": "strict"}}"#),
+            (
+                "workspace-write",
+                r#"{"sandbox": {"mode": "workspace-write"}}"#,
+            ),
+            ("closed-network", r#"{"run": {"network": "closed"}}"#),
+        ] {
+            let other = pinned(&format!("checkout-under-{name}"), text);
+            assert_eq!(
+                resolve(None, &settings, &other),
+                Ok(Choice {
+                    mode: SandboxMode::Strict,
+                    source: Source::File(asked_in.clone()),
+                }),
+                "{name}"
+            );
+            assert_eq!(settings.sandbox_strict_ignored(&other).count(), 0, "{name}");
+        }
+
+        let strict_pin = pinned("read-only-under-strict", strict);
+        let layers = Layers::new("sandbox-read-only-and-checkout-under-strict")
+            .global(r#"{"sandbox": {"mode": "read-only"}}"#)
+            .project(strict);
+        assert_eq!(
+            resolve(None, &layers.read(), &strict_pin),
+            Err(Refused {
+                asked: SandboxMode::ReadOnly,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::Strict,
+                pinned_in: strict_pin.path().expect("the pin's file").to_path_buf(),
+                because: Floor::Mode,
+            }),
+            "the checkout's strict stood in for the person's refused read-only"
+        );
+    }
+
     /// SANDBOX-22: a managed file that pins the network closed is a floor of `workspace-write`, because
     /// `off` starts a program with no profile and nothing would hold the network shut. The
     /// regression it rejects is `--sandbox off` quietly opening a network an administrator closed.
@@ -6972,6 +7277,86 @@ mod tests {
             .because,
             Floor::Mode
         );
+    }
+
+    /// SANDBOX-22: SANDBOX-20 reads a managed `run.network` that is neither word as `closed`, so it
+    /// is the same floor of `workspace-write`, and a managed `sandbox.mode` of `off` beside it does
+    /// not lift it. Without it, `--sandbox off`, a person's `off` or `/sandbox off` starts programs
+    /// with no profile, and the network the pin was written to close is open. A managed file that
+    /// names no network word at all is the control: it floors nothing.
+    #[test]
+    fn a_network_pin_that_is_neither_word_refuses_off_as_a_closed_one_does() {
+        use crate::sandbox::{Choice, Floor, Refused, allowed_in_session, resolve};
+        let off_at_home =
+            Layers::new("sandbox-unreadable-network").global(r#"{"sandbox": {"mode": "off"}}"#);
+        let settings = off_at_home.read();
+        for (name, word) in [("capital", r#""Closed""#), ("boolean", "false")] {
+            let pin = pinned(
+                &format!("unreadable-network-{name}"),
+                &format!(r#"{{"run": {{"network": {word}}}}}"#),
+            );
+            assert!(pin.network_unreadable(), "{word}");
+            let pin_file = pin.path().expect("the pin's file").to_path_buf();
+            assert_eq!(
+                resolve(Some(SandboxMode::Off), &Settings::default(), &pin),
+                Err(Refused {
+                    asked: SandboxMode::Off,
+                    asked_in: None,
+                    pinned: SandboxMode::WorkspaceWrite,
+                    pinned_in: pin_file,
+                    because: Floor::Network,
+                }),
+                "{word}"
+            );
+            assert_eq!(
+                resolve(None, &settings, &pin)
+                    .map_err(|refused| (refused.asked_in, refused.because)),
+                Err((Some(off_at_home.home.join(SETTINGS_FILE)), Floor::Network)),
+                "{word}"
+            );
+            let refused =
+                allowed_in_session(SandboxMode::Off, &pin).expect_err("opens the network");
+            assert_eq!(
+                (refused.pinned, refused.because),
+                (SandboxMode::WorkspaceWrite, Floor::Network),
+                "{word}"
+            );
+            for mode in [
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::ReadOnly,
+                SandboxMode::Strict,
+            ] {
+                assert_eq!(
+                    resolve(Some(mode), &Settings::default(), &pin).map(|choice| choice.mode),
+                    Ok(mode),
+                    "{word}"
+                );
+                assert!(allowed_in_session(mode, &pin).is_ok(), "{word}");
+            }
+            assert_eq!(
+                resolve(None, &Settings::default(), &pin),
+                Ok(Choice::default()),
+                "the network pin chose a mode where it only sets a floor: {word}"
+            );
+        }
+        let off_beside = pinned(
+            "unreadable-network-and-off",
+            r#"{"run": {"network": "Closed"}, "sandbox": {"mode": "off"}}"#,
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Off), &Settings::default(), &off_beside)
+                .map_err(|refused| (refused.pinned, refused.because)),
+            Err((SandboxMode::WorkspaceWrite, Floor::Network)),
+            "a managed off lifted the floor the network word sets"
+        );
+        assert_eq!(
+            resolve(None, &Settings::default(), &off_beside).map(|choice| choice.mode),
+            Ok(SandboxMode::WorkspaceWrite)
+        );
+        let silent = pinned("no-network-word", r#"{"run": {}}"#);
+        assert!(silent.path().is_some() && !silent.network_unreadable());
+        assert!(resolve(Some(SandboxMode::Off), &Settings::default(), &silent).is_ok());
+        assert!(allowed_in_session(SandboxMode::Off, &silent).is_ok());
     }
 
     /// SANDBOX-22: a running session is held to the floor start-up applies. The regression it

@@ -18,6 +18,7 @@ import io
 import json
 import os
 import re
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -2101,6 +2102,274 @@ def test_the_prompt_lane_starts_from_every_prompt():
         audit.mechanics.changed_files = was
 
 
+PINNED_ROW = (
+    "| one effect | a write | the body | the value | the one effect "
+    "| `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart` |"
+)
+ACCEPTED_ROW = (
+    "| the trust map | `y` | the directory | the path | the session "
+    "| accepted: [costs.md](costs.md#known-costs) |"
+)
+KEPT = [
+    "Confirmer::confirm_write: one effect",
+    "Confirmer::interjection: nothing",
+    "Answers::trust: the trust map",
+    "trust_prompt::ask: the trust map",
+]
+
+
+def register_findings(
+    kept=KEPT,
+    rows=(PINNED_ROW, ACCEPTED_ROW),
+    trait="Confirmer",
+    methods=("confirm_write", "interjection"),
+    fields=("trust",),
+    asks=("ask",),
+    spec_id="PROMPT",
+    elsewhere="",
+    visibility="pub ",
+):
+    """Run the register check in a tree holding one of each declaration it reads."""
+    front = "".join(f"  - {one}\n" for one in kept)
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": f"---\nid: {spec_id}\ntitle: Asking\nstatus: normative\n"
+            f"governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n{front}---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + "".join(f"{row}\n" for row in rows) + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": f"---\nid: PLAIN\n{elsewhere}---\n\n### Known costs\n\nNone.\n",
+            "crates/agent/src/confirm.rs": f"pub trait {trait} {{\n"
+            + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Decision;\n" for one in methods)
+            + "}\n",
+            "crates/agent/src/answers.rs": "pub struct Answers<Rules = ()> {\n"
+            + "".join(f"    /// Kept.\n    {visibility}{one}: Kept,\n" for one in fields)
+            + "}\n",
+            "crates/tui/src/trust_prompt.rs": "".join(
+                f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
+                for one in (f"pub fn {ask}" if " " not in ask else ask for ask in asks)
+            ),
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_answers_registered(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_answers_registered():
+    """A question or a remembered set with no row is how a yes comes to cover something unshown.
+
+    The check reads the declarations rather than a list, so each fixture adds a member to one of
+    them and expects the finding that names it, and each row fault is one a reader would take for a
+    decision somebody made.
+    """
+    found = register_findings()
+    check("a register accounting for every question and set is silent", found == [], str(kinds(found)))
+
+    cases = [
+        ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
+        ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
+        ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
+        ("a field with no visibility nobody listed", {"fields": ("trust", "granted"), "visibility": ""}, ["answer-unregistered"]),
+        (
+            "a field visible to the crate nobody listed",
+            {"fields": ("trust", "granted"), "visibility": "pub(crate) "},
+            ["answer-unregistered"],
+        ),
+        ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
+        (
+            "an entry landing in a row the table does not have",
+            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3]]},
+            ["register-row-unknown"],
+        ),
+        ("an entry that is not member and row", {"kept": KEPT + ["the trust map"]}, ["kept-in-malformed"]),
+        ("an entry for a declaration the check reads nothing of", {"kept": KEPT + ["Elsewhere::thing: nothing"]}, ["kept-in-malformed"]),
+        ("a row with a cell left empty", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", ""))}, ["register-cell-empty"]),
+        ("a row with a cell past the last column", {"rows": (PINNED_ROW, ACCEPTED_ROW + " more |")}, ["register-cell-empty"]),
+        (
+            "a row citing a test that does not exist",
+            {"rows": (PINNED_ROW.replace("a_key_tells_two_cases_apart", "a_key_tells_nothing_apart"), ACCEPTED_ROW)},
+            ["register-test-missing"],
+        ),
+        ("a row citing neither a test nor a cost", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "see"))}, ["register-unpinned"]),
+        (
+            "a row accepting a cost from a spec that admits none",
+            {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("costs.md", "plain.md"))},
+            ["register-cost-missing"],
+        ),
+        ("a clause with no rows under its header", {"rows": ()}, ["register-unreadable"]),
+        ("a confirmer that is no longer a trait the check can find", {"trait": "Asker"}, ["register-unreadable"]),
+        ("a trust prompt that asks nothing the check can read", {"asks": ()}, ["register-unreadable"]),
+        ("a prompting spec that is no longer the one with the register's id", {"spec_id": "ASKING"}, ["register-unreadable"]),
+        ("a trust question only the crate can see", {"asks": ("ask", "pub(crate) fn ask_again")}, ["answer-unregistered"]),
+        ("a public helper whose name only starts like a question", {"asks": ("ask", "asking_line")}, []),
+        ("a member listed twice", {"kept": KEPT + ["Answers::trust: one effect"]}, ["kept-in-duplicate"]),
+        ("an entry keeping nothing and naming a row", {"kept": KEPT[:1] + ["Confirmer::interjection: nothing; one effect"] + KEPT[2:]}, ["kept-in-malformed"]),
+        ("a list in a spec the check does not read it from", {"elsewhere": "kept_in:\n  - Answers::trust: the trust map\n"}, ["kept-in-misplaced"]),
+        ("a cell holding a dash", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "-"))}, ["register-cell-empty"]),
+        ("a cell holding n/a", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "n/a"))}, ["register-cell-empty"]),
+        ("a row of empty cells", {"rows": (PINNED_ROW, ACCEPTED_ROW, "| | | | | | |")}, ["register-cell-empty", "register-unpinned"]),
+        ("a cost the cell says is not accepted", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "not accepted:"))}, ["register-unpinned"]),
+    ]
+    for name, change, expected in cases:
+        found = register_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    stale = register_findings(kept=KEPT + ["Answers::gone: the trust map"])
+    check(
+        "an entry outliving its member is a warning, since nothing is let through by it yet",
+        [one["severity"] for one in stale] == [audit.WARNING],
+        str(stale),
+    )
+    unlisted = register_findings(fields=("trust", "granted"))
+    check(
+        "the finding names the member and where it is declared",
+        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/agent/src/answers.rs" in unlisted[0]["summary"],
+        str(unlisted[0] if unlisted else "no finding"),
+    )
+
+    missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
+    check("every file the binding lane is selected by exists", missing == [], str(missing))
+
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    was = audit.mechanics.changed_files
+    try:
+        for touched, wanted in [
+            ("crates/agent/src/confirm.rs", True),
+            ("crates/core/src/credentials.rs", True),
+            ("crates/agent/src/tools.rs", True),
+            ("crates/tui/src/asks.rs", True),
+            ("crates/tui/src/app.rs", True),
+            ("docs/specs/asking.md", True),
+            ("crates/core/src/label.rs", False),
+        ]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()])
+            check(
+                f"a branch that touches {touched} "
+                + ("runs" if wanted else "does not run")
+                + " the lane that asks what a kept answer covers",
+                ("approval-binding" in lanes) == wanted,
+                str(lanes),
+            )
+    finally:
+        audit.mechanics.changed_files = was
+
+
+def test_the_stop_hook():
+    """A task that ends with the register broken is sent back, and one that never went near it is not.
+
+    The hook decides two things a session depends on: whether the working tree's diff is one the
+    check is worth running for, and what to say when it fails. A hook that never blocks and one that
+    blocks forever both read as a quiet failure, so each is run against the input that tells it apart
+    from the other.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    check("a tree the pass finds nothing in is let stop", audit.stop_response({}, []) is None)
+    check("a warning alone is let stop", audit.stop_response({}, [only_warned]) is None)
+    blocked = audit.stop_response({}, [only_warned, broken])
+    check(
+        "an error blocks the stop and hands the session the finding to fix",
+        blocked is not None
+        and blocked.get("decision") == "block"
+        and "a set nobody listed" in blocked["reason"]
+        and "an entry outliving its member" not in blocked["reason"],
+        str(blocked),
+    )
+    again = audit.stop_response({"stop_hook_active": True}, [broken])
+    check(
+        "a stop after a block is let through with the finding shown, so a session that cannot fix it ends",
+        again is not None and "decision" not in again and "a set nobody listed" in again["systemMessage"],
+        str(again),
+    )
+
+    specs = with_cwd(ROOT, audit.load_specs)
+    for touched, wanted in [
+        ("crates/agent/src/answers.rs", True),
+        ("crates/ui-bridge/src/running.rs", True),
+        ("crates/cli/src/plain.rs", True),
+        ("crates/tui/src/app.rs", True),
+        ("crates/tui/src/confirm.rs", True),
+        ("docs/specs/prompting.md", True),
+        ("crates/core/src/label.rs", False),
+        ("README.md", False),
+    ]:
+        check(
+            f"a working tree that touches {touched} "
+            + ("is checked" if wanted else "is not checked"),
+            audit.touches_kept_answers({touched}, specs) == wanted,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def git(*arguments):
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *arguments],
+                cwd=tmp,
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        for name in ("edited.txt", "moved.txt", "same.txt"):
+            (Path(tmp) / name).write_text("before\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "start")
+        none_yet = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "a clean tree with no default branch to measure from has changed nothing",
+            none_yet == [],
+            str(none_yet),
+        )
+        git("update-ref", "refs/remotes/upstream/main", "HEAD")
+        (Path(tmp) / "committed.txt").write_text("kept\n", encoding="utf-8")
+        git("add", "committed.txt")
+        git("commit", "-q", "-m", "a change the session already committed")
+        (Path(tmp) / "edited.txt").write_text("after\n", encoding="utf-8")
+        git("mv", "moved.txt", "renamed.txt")
+        (Path(tmp) / "staged.txt").write_text("new\n", encoding="utf-8")
+        git("add", "staged.txt")
+        (Path(tmp) / "deep").mkdir()
+        (Path(tmp) / "deep" / "untracked.txt").write_text("new\n", encoding="utf-8")
+        got = sorted(with_cwd(tmp, audit.uncommitted_files))
+        check(
+            "the working tree's diff is the edited, staged, untracked and both ends of a renamed path",
+            got == sorted(["edited.txt", "moved.txt", "renamed.txt", "staged.txt", "deep/untracked.txt"]),
+            str(got),
+        )
+        whole = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "the branch's changes are those and what it has already committed since the default branch",
+            whole == sorted(got + ["committed.txt"]),
+            str(whole),
+        )
+
+    wired = json.loads((ROOT / "agents" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        hook.get("command", "")
+        for entry in wired.get("hooks", {}).get("Stop", [])
+        for hook in entry.get("hooks", [])
+    ]
+    check(
+        "the Stop hook in agents/settings.json runs this script in the mode that answers it",
+        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        str(commands),
+    )
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -2573,6 +2842,8 @@ def main():
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
+        test_answers_registered,
+        test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,

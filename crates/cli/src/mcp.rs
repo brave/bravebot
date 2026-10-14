@@ -124,7 +124,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push_str(t!(mcp_forms_heading));
     for form in [
         "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]",
-        "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] --http <url>",
+        "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
         "bravebot mcp get <alias>",
@@ -311,6 +311,8 @@ fn declared(
 ) -> Result<Declaration, Refusal> {
     let mut variables = Vec::new();
     let mut env = BTreeMap::new();
+    let mut env_http_headers = BTreeMap::new();
+    let mut bearer_env: Option<String> = None;
     let mut directory = None;
     let mut transport = None;
     let mut startup = None;
@@ -430,6 +432,51 @@ fn declared(
             "--tool-timeout" => {
                 tool = Some(seconds(value, Timeouts::TOOL_KEY)?);
             }
+            "--bearer-env" => {
+                let name = value.ok_or_else(|| argument(t!(mcp_bearer_env_needs_a_name)))?;
+                if bearer_env.is_some() {
+                    return Err(Refusal::Problem(Problem::Twice(name.clone())));
+                }
+                bearer_env = Some(name.clone());
+            }
+            joined if joined.starts_with("--bearer-env=") => {
+                let name = joined.strip_prefix("--bearer-env=").unwrap_or_default();
+                if name.is_empty() {
+                    return Err(argument(t!(mcp_bearer_env_needs_a_name)).into());
+                }
+                if bearer_env.is_some() {
+                    return Err(Refusal::Problem(Problem::Twice(name.to_string())));
+                }
+                bearer_env = Some(name.to_string());
+                taken = 1;
+            }
+            "--header-env" => {
+                let pair = value.ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
+                let (header, var) = pair
+                    .split_once('=')
+                    .ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
+                if header.is_empty() || var.is_empty() {
+                    return Err(argument(t!(mcp_header_env_needs_a_pair)).into());
+                }
+                if env_http_headers.contains_key(header) {
+                    return Err(Refusal::Problem(Problem::Twice(header.to_string())));
+                }
+                env_http_headers.insert(header.to_string(), var.to_string());
+            }
+            joined if joined.starts_with("--header-env=") => {
+                let pair = joined.strip_prefix("--header-env=").unwrap_or_default();
+                let (header, var) = pair
+                    .split_once('=')
+                    .ok_or_else(|| argument(t!(mcp_header_env_needs_a_pair)))?;
+                if header.is_empty() || var.is_empty() {
+                    return Err(argument(t!(mcp_header_env_needs_a_pair)).into());
+                }
+                if env_http_headers.contains_key(header) {
+                    return Err(Refusal::Problem(Problem::Twice(header.to_string())));
+                }
+                env_http_headers.insert(header.to_string(), var.to_string());
+                taken = 1;
+            }
             "--http" => {
                 let url = value.ok_or_else(|| argument(t!(mcp_http_needs_a_url)))?;
                 if transport.is_some() {
@@ -469,6 +516,9 @@ fn declared(
     match transport {
         None => Err(argument(t!(mcp_needs_a_transport)).into()),
         Some(Transport::Stdio(argv)) => {
+            if !env_http_headers.is_empty() || bearer_env.is_some() {
+                return Err(Refusal::Problem(Problem::Remote("env_http_headers")));
+            }
             // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10), so
             // one typed with neither would be a server that can never start.
             if bravebot_agent::servers::is_a_bare_name(&argv[0]) && !env.contains_key("PATH") {
@@ -490,6 +540,7 @@ fn declared(
             Err(Refusal::Problem(Problem::Remote("directory")))
         }
         Some(Transport::Http(url)) => Declaration::http(url)
+            .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
             .and_then(|declaration| declaration.filtering(tools, exclude_tools))
             .map(|declaration| declaration.timing(timeouts))
             .map_err(Refusal::Problem),
@@ -1388,6 +1439,7 @@ fn ask<R: BufRead, W: Write>(
             .iter()
             .map(|field| match field {
                 Field::Env(names) => format!("{} ({})", field.key(), names.join(", ")),
+                Field::Headers(names) => format!("{} ({})", field.key(), names.join(", ")),
                 other => other.key().to_string(),
             })
             .collect();
@@ -2252,6 +2304,138 @@ mod tests {
         }
         let remote = ["--http", "https://mcp.example.com/mcp", "-e", "A=1"];
         assert_eq!(found(&remote), Problem::Remote("env"));
+    }
+
+    /// SERVERS-18: `--bearer-env` and `--header-env` are parsed for HTTP declarations,
+    /// read environment variable names, and are refused for stdio declarations.
+    #[test]
+    fn http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio() {
+        let parse = |flags: &[&str]| {
+            declared(&words(flags), 1, &mut None)
+                .unwrap_or_else(|_| panic!("{flags:?} was refused"))
+        };
+        let http = parse(&[
+            "--http",
+            "https://mcp.example.com/mcp",
+            "--bearer-env",
+            "API_KEY",
+            "--header-env",
+            "X-Custom=MY_HEADER",
+        ]);
+        assert_eq!(http.bearer_env(), Some("API_KEY"));
+        assert_eq!(
+            http.env_http_headers()
+                .find(|(k, _)| *k == "X-Custom")
+                .map(|(_, v)| v),
+            Some("MY_HEADER")
+        );
+
+        let http_eq = parse(&[
+            "--http",
+            "https://mcp.example.com/mcp",
+            "--bearer-env=TOKEN",
+            "--header-env=X-Another=VAR2",
+        ]);
+        assert_eq!(http_eq.bearer_env(), Some("TOKEN"));
+        assert_eq!(
+            http_eq
+                .env_http_headers()
+                .find(|(k, _)| *k == "X-Another")
+                .map(|(_, v)| v),
+            Some("VAR2")
+        );
+
+        let refused = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        for flags in [
+            &["--http", "https://mcp.example.com/mcp", "--bearer-env"][..],
+            &["--http", "https://mcp.example.com/mcp", "--bearer-env="],
+        ] {
+            assert_eq!(
+                refused(flags),
+                t!(mcp_bearer_env_needs_a_name).to_string(),
+                "{flags:?}"
+            );
+        }
+
+        for flags in [
+            &["--http", "https://mcp.example.com/mcp", "--header-env"][..],
+            &["--http", "https://mcp.example.com/mcp", "--header-env="],
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--header-env",
+                "no_equals",
+            ],
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--header-env",
+                "=VAR",
+            ],
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--header-env",
+                "HEADER=",
+            ],
+        ] {
+            assert_eq!(
+                refused(flags),
+                t!(mcp_header_env_needs_a_pair).to_string(),
+                "{flags:?}"
+            );
+        }
+
+        let found = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Problem(found)) => found,
+            _ => panic!("{flags:?} spelled no problem"),
+        };
+        for flags in [
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--bearer-env",
+                "A",
+                "--bearer-env",
+                "B",
+            ][..],
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--bearer-env=A",
+                "--bearer-env=B",
+            ],
+        ] {
+            assert_eq!(found(flags), Problem::Twice("B".into()), "{flags:?}");
+        }
+
+        for flags in [
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--header-env",
+                "X-A=1",
+                "--header-env",
+                "X-A=2",
+            ][..],
+            &[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--header-env=X-A=1",
+                "--header-env=X-A=2",
+            ],
+        ] {
+            assert_eq!(found(flags), Problem::Twice("X-A".into()), "{flags:?}");
+        }
+
+        let local_bearer = ["--bearer-env", "TOKEN", "--", "/opt/srv"];
+        assert_eq!(found(&local_bearer), Problem::Remote("env_http_headers"));
+
+        let local_header = ["--header-env", "X-Key=VAR", "--", "/opt/srv"];
+        assert_eq!(found(&local_header), Problem::Remote("env_http_headers"));
     }
 
     /// `--startup-timeout` and `--tool-timeout` take whole seconds, on either transport, and a word

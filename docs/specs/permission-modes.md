@@ -60,7 +60,8 @@ decision somebody made; this one is what holds when they have made none.
 ### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential
 
 A write goes through unasked. A run, a command's output and a file nobody vouched for are still put
-to the person.
+to the person. Under the sandbox mode `read-only` a write is refused before there is a prompt to
+answer ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so this mode lets none through there.
 
 A write the credential scan found a value in that a person decides about
 ([CRED-16](credential-protection.md#CRED-16)) is put to the person as well. The mode is not the
@@ -82,6 +83,7 @@ stop reviewing diffs one at a time is not somebody saying they will not look at 
 mode cannot be what answers it. Bypassing is that statement (MODE-4).
 
 `verified-by: bravebot_agent::permission_mode::accepting_edits_lets_writes_through_but_not_commands`
+`verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
@@ -165,7 +167,10 @@ is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxin
 The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
 bypass does not approve a line that asks to start with no profile
 ([SANDBOX-29](sandboxing.md#SANDBOX-29)), nor the start of a language server, which runs with no
-profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it.
+profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it. Under
+`read-only` the mode answers no write at all: the file tools' writes, a manifest plan that writes
+and a spawn asking for a checkout are refused before there is a question to answer
+([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
@@ -226,6 +231,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
+`verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
+`verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
+`verified-by: bravebot_agent::turn::under_read_only_a_spawn_asking_for_a_checkout_makes_none`
 `verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
@@ -360,6 +368,8 @@ withdraw it.
 `verified-by: bravebot_agent::turn::a_mode_chosen_during_a_turn_applies_to_the_rest_of_it`
 `verified-by: bravebot_agent::turn::leaving_plan_mode_during_a_turn_lets_the_rest_of_it_write`
 `verified-by: bravebot_agent::turn::an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode`
+`verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
 `verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`

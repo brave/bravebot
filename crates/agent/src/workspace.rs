@@ -145,14 +145,18 @@ fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'st
 ///
 /// "No such file or directory" alone reads as the file being absent, when the writer may have
 /// meant another directory than the one the path was joined to.
+///
+/// Names the directory and not the path joined to it. [`WorkspaceError::describe`] passes the
+/// detail through as it is, and a read through a reference was made on a filename the planner is
+/// never told (LIST-2).
 fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
     if error.kind() == std::io::ErrorKind::NotFound
         && !Path::new(named).is_absolute()
         && !named_home(named)
     {
         return format!(
-            "{error}; a relative path is looked up under the working directory, as {}",
-            root.join(named).display()
+            "{error}; a relative path is looked up under the working directory, {}",
+            root.display()
         );
     }
     error.to_string()
@@ -1341,6 +1345,12 @@ impl Workspace {
                 .is_some_and(|dir| resolved.starts_with(dir))
     }
 
+    /// Whether a resolved path lands where this workspace's file tools may write: the root or a
+    /// directory reached by its absolute name.
+    pub(crate) fn lands_in_reach(&self, resolved: &Path) -> bool {
+        resolved.starts_with(&self.root) || self.is_opened(resolved)
+    }
+
     /// Whether an absolute path is one this workspace may touch.
     ///
     /// For a destination something else opens, which is what a redirection in a command line is:
@@ -1355,7 +1365,7 @@ impl Workspace {
             remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
+        if self.lands_in_reach(&resolved) {
             return Ok(());
         }
         Err(escapes())
@@ -7031,12 +7041,15 @@ mod tests {
     }
 
     /// A missing relative file says where it was looked for, so a path that is merely absent reads
-    /// differently from one the writer meant somewhere else.
+    /// differently from one the writer meant somewhere else. It says so by the directory alone:
+    /// the detail reaches the planner unchanged in a sentence about a reference, where the path is
+    /// a filename the reference withholds (LIST-2).
     #[test]
     fn a_missing_relative_file_says_where_it_was_looked_for() {
         let missing = io::Error::from(io::ErrorKind::NotFound);
         let detail = io_detail(&missing, "todo.txt", Path::new("/work/project"));
-        assert!(detail.contains("/work/project/todo.txt"), "{detail}");
+        assert!(detail.contains("/work/project"), "{detail}");
+        assert!(!detail.contains("todo.txt"), "{detail}");
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
     }

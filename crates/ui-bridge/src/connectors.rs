@@ -189,17 +189,21 @@ pub fn disconnect(request: &Request) -> Result<Value, Failure> {
 }
 
 /// Remove a connector: turn it off, and delete its declaration and its approval together, since an
-/// approval outliving its declaration is a digest nothing resolves to.
+/// approval outliving its declaration is a digest nothing resolves to. Every file that can refuse is
+/// read before any is written, so a refused removal changes nothing.
 pub fn remove(request: &Request) -> Result<Value, Failure> {
     let directory = writable_state()?;
     let alias = request.string("alias")?;
     let mut settings = user_settings(&directory)?;
+    let mut declarations = read(&directory)?;
+    let approvals = match declarations.remove(&alias) {
+        true => Some(approvals_to_change(&directory)?),
+        false => None,
+    };
     if settings.withdraw(&alias) {
         write_settings(&settings)?;
     }
-    let mut declarations = read(&directory)?;
-    if declarations.remove(&alias) {
-        let mut approvals = approvals_to_change(&directory)?;
+    if let Some(mut approvals) = approvals {
         let file = mcp::declarations_file(&directory);
         bravebot_agent::mcp::replace(&file, declarations.to_text())
             .map_err(|error| written(&file, error))?;

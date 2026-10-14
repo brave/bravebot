@@ -24,11 +24,13 @@ saying what the person answered.
 
 `path` decides what the programs may reach, so it is read through the routing gate and must be
 trusted and public. `write` is a flag that shapes the grant and is routing too. `why` is content,
-drawn for the person and recorded, and decides nothing ([TOOL-5](tool-surface.md#TOOL-5)). A call
-without a path, or without a reason, is answered with an error and asks nobody.
+drawn for the person and recorded, and decides nothing ([TOOL-5](tool-surface.md#TOOL-5)): it is
+read through the display release alone, so a call with none, or a blank one, is asked about like any
+other. A call without a path is answered with an error and asks nobody.
 
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
+`verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
 
 <a id="PATHREQ-2"></a>
 ### PATHREQ-2: only a yes grants, and a run with nobody to ask refuses
@@ -48,13 +50,18 @@ project file or permission rule grants one in advance.
 
 `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
 credential location and any path holding a wildcard are refused whatever the person would answer.
-The result says so without asking.
+The result says so without asking, says what is true of the path that made it refuse (it holds
+credentials, a write there could leave code that runs later, it is too broad, or the person's own
+deny list covers it) and not which setting decided it, and for a request to write points at the
+`run` argument that lets the person approve one line ([SANDBOX-29](../sandboxing.md#SANDBOX-29))
+where the session would accept it.
 
 **Why.** Asking about a path no answer can grant teaches the person to say no to a question the
 program should not have put.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
+`verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 
 <a id="PATHREQ-4"></a>
 ### PATHREQ-4: a person's yes is reach and not trust, and it is recorded

@@ -5,7 +5,8 @@
     rebase.py continue <pr>             stage the resolved files and carry on
     rebase.py check <pr> [target ...]   run the checks the resolved files call for, or the make
                                         targets named, printing only a failure
-    rebase.py push <pr>                 push over the head `start` fetched, and nothing newer
+    rebase.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
+                                        make a signed pull request unsigned
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict. <pr> is a number or a pull request URL.
@@ -14,9 +15,7 @@ act on: the line ranges of each conflict. <pr> is a number or a pull request URL
 import argparse
 import importlib.util
 import os
-import re
 import sys
-import tempfile
 from pathlib import Path
 
 SCRIPT = "python3 agents/skills/rebase/rebase.py"
@@ -73,7 +72,6 @@ def pull(number, view, here, remotes, create=False):
 
 def lookup(number, create):
     return pr_worktree.lookup(number, create, SCRIPT, FIELDS)
-PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
 
 
 def report(pr):
@@ -199,45 +197,10 @@ def push(pr):
     if now == tip:
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
-    # The lease is the head `start` fetched, so a push made since is refused rather than lost.
-    args = [
-        "push",
-        f"--force-with-lease=refs/heads/{pr.head}:{tip}",
-        pr.head_remote,
-        f"HEAD:refs/heads/{pr.head}",
-    ]
-    done = run("git", *args, cwd=tree, check=False)
-    key = None
-    if done.returncode and PUSH_DENIED.search(done.stderr):
-        done, key = push_as_another_key(args, tree, done)
-    if done.returncode:
-        die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
-    if key:
-        print(f"pushed as the ssh-agent key {key}")
+    pr_worktree.refuse_unsigning(pr, tip, now, tree)
+    pr_worktree.push_head(pr, tree, tip)
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0
-
-
-def agent_keys():
-    listed = run("ssh-add", "-L", check=False)
-    if listed.returncode:
-        return []
-    return [line for line in listed.stdout.splitlines() if line.startswith(("ssh-", "ecdsa-", "sk-"))]
-
-
-def push_as_another_key(args, tree, denied):
-    """GitHub refused the key ssh offered first; try each other key the agent holds, once."""
-    with tempfile.TemporaryDirectory() as tmp:
-        for number, line in enumerate(agent_keys()):
-            file = Path(tmp) / f"key{number}.pub"
-            file.write_text(line + "\n")
-            env = {**os.environ, "GIT_SSH_COMMAND": f"ssh -i {file} -o IdentitiesOnly=yes"}
-            done = run("git", *args, cwd=tree, check=False, env=env)
-            if not done.returncode:
-                return done, line.split(maxsplit=2)[-1]
-            if not PUSH_DENIED.search(done.stderr):
-                return done, None
-    return denied, None
 
 
 def main():

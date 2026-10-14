@@ -412,10 +412,11 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
 
 /// The heading to hold at the top, where the window starts, and how many of its rows are left.
 ///
-/// A list scrolled into a gateway's roster has left that gateway's heading far above the screen,
-/// and rows that no longer say whose they are is the thing sections were drawn for. So the heading
-/// the cursor sits under is kept on the top line, at the cost of one row of the list, and only for
-/// as long as the real one is off screen.
+/// A list scrolled into a section has left that section's heading above the screen, and rows that
+/// no longer say whose they are is the thing sections were drawn for. So the heading of the section
+/// the top row belongs to is kept on the top line, at the cost of one row of the list. The top
+/// row's section rather than the cursor's, because a window straddling a boundary begins in the
+/// section before the cursor's, and those rows are the ones whose heading is off screen.
 fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a str>, usize, usize) {
     let first = start(rows.len(), cursor, visible);
     // A list one row tall is the only one with nothing to hold a heading over: the row under the
@@ -424,30 +425,35 @@ fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a st
     if visible <= 1 {
         return (None, first, visible);
     }
+    // A window beginning on a heading, or on the gap above one, already shows the heading of every
+    // model in it.
+    if section_of(rows, first).is_none() {
+        return (None, first, visible);
+    }
 
     // Holding one costs a row, so the window it leaves is a row shorter and begins a row further
     // down than the window drawn without it.
     let shown = visible.saturating_sub(1);
     let held_from = start(rows.len(), cursor, shown);
-
-    let heading = rows[..=cursor.min(rows.len().saturating_sub(1))]
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(at, row)| match row {
-            Row::Service(service) => Some((at, *service)),
-            _ => None,
-        });
-
-    match heading {
-        // Held only while the real one is above the window that will be drawn. Measured against
-        // that window rather than against the wider one drawn without a heading: the two begin a
-        // row apart, so at some offsets the wider one begins on the gap above a heading while the
-        // drawn one begins on the heading itself, and a heading held there is the same name twice
-        // two rows apart.
-        Some((at, service)) if at < held_from => (Some(service), held_from, shown),
-        _ => (None, first, visible),
+    match section_of(rows, held_from) {
+        // Its own heading is above `held_from`, so the held one is the only time that name is on
+        // screen.
+        Some(service) => (Some(service), held_from, shown),
+        // The shorter window begins on a heading or on the gap above one, so every model in it is
+        // under a heading it draws, and the row a held heading would have taken is drawn instead.
+        None => (None, held_from, visible),
     }
+}
+
+/// The service a model row is drawn under, or `None` where the row is a heading or a gap.
+fn section_of<'a>(rows: &[Row<'a>], at: usize) -> Option<&'a str> {
+    if !matches!(rows.get(at), Some(Row::Model(..))) {
+        return None;
+    }
+    rows[..at].iter().rev().find_map(|row| match row {
+        Row::Service(service) => Some(*service),
+        _ => None,
+    })
 }
 
 /// Where a window of `visible` rows starts with the cursor inside it.
@@ -634,6 +640,16 @@ mod tests {
                 &format!("model-{index}"),
             ));
         }
+        roster
+    }
+
+    /// A short section, a gateway's roster longer than the panel, then another short section, so a
+    /// window can straddle a boundary both into the long section and out of it.
+    fn a_long_section_between_two_short_ones() -> Vec<Model> {
+        let mut roster = a_roster_longer_than_the_panel();
+        roster.push(served_by("Ollama", "ollama/llama3.2", "llama3.2"));
+        roster.push(served_by("Ollama", "ollama/mistral", "mistral"));
+        roster.push(served_by("Ollama", "ollama/qwen2.5", "qwen2.5"));
         roster
     }
 
@@ -836,6 +852,14 @@ mod tests {
     }
 
     fn rendered_at(picker: &Picker, width: u16, height: u16) -> String {
+        screen_at(picker, width, height).concat()
+    }
+
+    fn rendered(picker: &Picker) -> String {
+        rendered_at(picker, 60, 20)
+    }
+
+    fn screen_at(picker: &Picker, width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
             .draw(|frame| draw(frame, picker))
@@ -844,13 +868,9 @@ mod tests {
             .backend()
             .buffer()
             .content()
-            .iter()
-            .map(|cell| cell.symbol())
+            .chunks(usize::from(width))
+            .map(|line| line.iter().map(|cell| cell.symbol()).collect())
             .collect()
-    }
-
-    fn rendered(picker: &Picker) -> String {
-        rendered_at(picker, 60, 20)
     }
 
     /// A premium model returns 403 without a subscription, so which rows those are has to be on the
@@ -946,6 +966,61 @@ mod tests {
                 headings, 1,
                 "after {presses} presses the roster has {headings} headings:\n{output}"
             );
+        }
+    }
+
+    /// A window straddling a boundary begins in the section before the cursor's, and that
+    /// section's heading is the one scrolled off, so the rows at the top are the ones that can be
+    /// left saying nothing about what answers them. Drawn at every cursor offset, at each terminal
+    /// height that leaves the list two to six rows, so the window begins on a heading, on a gap
+    /// and on a model at both boundaries, the one at the end of the list included. The cursor's row
+    /// is asserted too, because a list that never scrolled would show every heading.
+    #[test]
+    fn no_row_on_screen_is_without_its_service_heading_wherever_the_list_is_scrolled() {
+        let roster = a_long_section_between_two_short_ones();
+        let services: Vec<&str> = roster.iter().map(service_of).collect();
+        let answered_by = |name: &str| {
+            roster
+                .iter()
+                .find(|model| model.display_name == name)
+                .map(service_of)
+        };
+
+        for height in 10..=14 {
+            let mut picker = Picker::new(roster.clone(), None);
+            for presses in 0..roster.len() {
+                if presses > 0 {
+                    handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+                }
+                let screen = screen_at(&picker, 60, height);
+                let shown = screen.join("\n");
+                let mut heading = None;
+                let mut drawn = Vec::new();
+                for line in &screen {
+                    let text = line
+                        .trim_matches(|c: char| c == '│' || c.is_whitespace())
+                        .trim_start_matches('●')
+                        .trim();
+                    if text.is_empty() {
+                        heading = None;
+                    } else if services.contains(&text) {
+                        heading = Some(text);
+                    } else if let Some(service) = answered_by(text) {
+                        assert_eq!(
+                            heading,
+                            Some(service),
+                            "at {height} rows, after {presses} presses {text} is drawn without its \
+                             heading:\n{shown}"
+                        );
+                        drawn.push(text);
+                    }
+                }
+                let under_the_cursor = picker.chosen().expect("a model").display_name.as_str();
+                assert!(
+                    drawn.contains(&under_the_cursor),
+                    "at {height} rows, after {presses} presses the cursor is off screen:\n{shown}"
+                );
+            }
         }
     }
 

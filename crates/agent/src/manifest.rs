@@ -646,35 +646,6 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         Err(error) => return Err(stopped(attempt, error)),
     };
 
-    // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
-    // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
-    // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
-    // body it carried into a path the person vouched for asks nobody and goes straight through:
-    // that is the case the clause is written for, so the mode has to be answered from the plan or
-    // it does not hold in this mode at all.
-    //
-    // Here rather than at the step, so the refusal costs what a decline costs: nothing has been
-    // read, nothing has been written, and nobody has been asked to approve a plan whose writes
-    // were never going to land. A plan that writes nothing runs, because there is nothing in it
-    // for the mode to refuse.
-    if task.permission_mode.get().refuses_writes()
-        && let Some((index, _)) = planned
-            .plan
-            .steps()
-            .iter()
-            .enumerate()
-            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
-    {
-        return Err(stopped(
-            attempt,
-            TurnError::Precommit(format!(
-                "plan mode refuses a write, and step {} of this plan writes a file, so nothing \
-                 ran. Leave plan mode and ask again.",
-                index + 1
-            )),
-        ));
-    }
-
     let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let result = execute(
         config,
@@ -693,6 +664,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         cancel,
         task.model.as_deref(),
         &task.prompt,
+        &task.permission_mode,
         &mut attempt,
         accounting,
     );
@@ -824,6 +796,7 @@ fn plan<S: Sink, R: Reporter>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    policy.record_manifest_permission_mode(task.permission_mode.get().name());
 
     reporter.phase(Phase::Planning);
 
@@ -934,6 +907,53 @@ fn plan<S: Sink, R: Reporter>(
 
     attempt.plan = Some(template(&plan));
 
+    // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
+    // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
+    // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
+    // body it carried into a path the person vouched for asks nobody and goes straight through:
+    // that is the case the clause is written for, so the mode has to be answered from the plan or
+    // it does not hold in this mode at all.
+    //
+    // Here rather than at the step, so the refusal costs what a decline costs: nothing has been
+    // read, nothing has been written, and nobody has been asked to approve a plan whose writes
+    // were never going to land. A plan that writes nothing runs, because there is nothing in it
+    // for the mode to refuse. Decided before the planner's policy finishes, so that policy records
+    // the refusal (TRACE-1).
+    let mode = task.permission_mode.get();
+    if mode.refuses_writes()
+        && let Some((index, step)) = plan
+            .steps()
+            .iter()
+            .enumerate()
+            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
+    {
+        policy.refuse_write_in_mode(&format!("step {}: {}", index + 1, step.tool()), mode.name());
+        return Err(TurnError::Precommit(format!(
+            "plan mode refuses a write, and step {} of this plan writes a file, so nothing ran. \
+             Leave plan mode and ask again.",
+            index + 1
+        )));
+    }
+    // The sandbox mode `read-only` refuses on the same terms (SANDBOX-22). Bypassing approves the
+    // plan and every write in it, so a refusal left to the step would never be reached there.
+    if crate::tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
+        && let Some((index, step)) = plan
+            .steps()
+            .iter()
+            .enumerate()
+            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
+    {
+        policy.refuse_write_in_sandbox(
+            &format!("step {}: {}", index + 1, step.tool()),
+            task.sandbox.name(),
+        );
+        return Err(TurnError::Precommit(format!(
+            "the sandbox mode is read-only, and step {} of this plan writes a file, so nothing \
+             ran. Choose another sandbox mode and ask again.",
+            index + 1
+        )));
+    }
+
     Ok(Planned {
         plan,
         label,
@@ -1032,6 +1052,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     cancel: &Cancel,
     chosen_model: Option<&str>,
     task: &str,
+    permission_mode: &crate::LiveMode,
     attempt: &mut Attempt,
     accounting: &mut Accounting,
 ) -> Result<Outcome, TurnError> {
@@ -1167,6 +1188,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut slots,
                 &mut chat,
                 &mut asking,
+                permission_mode,
                 index,
                 step,
                 entry,
@@ -1328,6 +1350,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     slots: &mut SlotStore,
     chat: &mut Chat<'_>,
     confirmer: &mut C,
+    permission_mode: &crate::LiveMode,
     index: usize,
     step: &Step,
     entry: &'static Advertised,
@@ -1509,7 +1532,16 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 ..Done::default()
             })
         }
-        "write_file" => write(policy, workspace, recording, slots, confirmer, index, step),
+        "write_file" => write(
+            policy,
+            workspace,
+            recording,
+            slots,
+            confirmer,
+            permission_mode,
+            index,
+            step,
+        ),
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -1601,12 +1633,14 @@ fn locked_filter<S: Sink>(
 /// The same shape a turn's write has, and for the same reasons: the person sees the exact path
 /// and the exact body before any endorsement exists, and the endorsement is minted for what they
 /// saw. What differs is where the path came from, which here is the routing lock.
+#[allow(clippy::too_many_arguments)]
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
     slots: &SlotStore,
     confirmer: &mut C,
+    permission_mode: &crate::LiveMode,
     index: usize,
     step: &Step,
 ) -> Result<Done, String> {
@@ -1741,7 +1775,13 @@ fn write<S: Sink, C: Confirmer>(
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
+        // Read as the question is put, exactly as a turn's write reads it.
+        let mode = permission_mode.get();
         let answer = confirmer.confirm_write(&request);
+        policy.record_answer(
+            mode.answers_a_write_unasked(!request.credentials.is_empty())
+                .then(|| mode.name()),
+        );
         if !answer.approved() {
             return Err(format!("the user did not approve writing {path}"));
         }

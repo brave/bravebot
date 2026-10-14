@@ -104,7 +104,7 @@ failures reach the caller, and that scanner failures cannot pass as empty scans.
 half also holds `check-npm` to reaching the installer test and the lockfile lint's own cases before
 any lockfile is read, and to failing rather than passing when that test is no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest` and `check-maintenance-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest` and `check-session-review-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -167,17 +167,24 @@ container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share, and whether the check contexts a merge is held to are written down,
-name jobs that exist, and cover every job whose purpose is running a check. CI runs it too, so a
-pull request that moves a workflow step or a build image onto a movable tag, that puts an install
-back beside the publish credential, that points a checkout at a name instead of a ref, that gives a
-crate a network client the egress register does not admit, that drops the entry pinning a
-constructor, or that adds a check nothing holds a merge to, fails rather than holding only for
-whoever remembers to run this. It is the deterministic half of the
+branch and a tag can share, whether the check contexts a merge is held to are written down,
+name jobs that exist, and cover every job whose purpose is running a check, and whether every
+method of the agent's confirmer, every remembered set the front ends hold in `Answers` and every
+question the terminal's trust prompts ask has a row in the register of kept answers in
+`docs/specs/prompting.md`, with each cell filled and each test it names one that exists. CI runs it
+too, so a pull request that moves a workflow step or a build image onto a movable tag, that puts an
+install back beside the publish credential, that points a checkout at a name instead of a ref, that
+gives a crate a network client the egress register does not admit, that drops the entry pinning a
+constructor, that adds a check nothing holds a merge to, or that adds a confirmer method, a
+remembered set or a trust question the register does not account for, fails rather than holding
+only for whoever remembers to run this. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
-check contexts, or the trust specs.
+check contexts, the trust specs, the confirmer, the remembered answers
+(`crates/agent/src/answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical half
+itself when a task ends on a branch that changes a file where an answer is kept
+([agent-configuration.md](agent-configuration.md#checking-the-register-when-a-task-ends)).
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances

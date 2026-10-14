@@ -226,6 +226,13 @@ pub struct Task {
     ///
     /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`.
     pub sandbox: bravebot_sandbox::SandboxMode,
+    /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
+    ///
+    /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
+    /// question; a window refuses the request without asking, and a run with nobody to ask refuses
+    /// every question. A refusal names the `unconfined` argument only where this is on, so a planner
+    /// is not pointed at a request its front end would turn down. A delegate is never pointed at it.
+    pub asks_about_unconfined: bool,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -469,6 +476,7 @@ impl Task {
             // Unconfined, which is what a turn has always done.
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
+            asks_about_unconfined: false,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::LiveMode::default(),
@@ -716,6 +724,13 @@ impl Task {
     /// Hold those programs to `mode`'s profile. See [`Task::sandbox`].
     pub fn with_sandbox_mode(mut self, mode: bravebot_sandbox::SandboxMode) -> Self {
         self.sandbox = mode;
+        self
+    }
+
+    /// Say the front end can ask about a line that starts with no sandbox. See
+    /// [`Task::asks_about_unconfined`].
+    pub fn asking_about_unconfined(mut self, asks: bool) -> Self {
+        self.asks_about_unconfined = asks;
         self
     }
 

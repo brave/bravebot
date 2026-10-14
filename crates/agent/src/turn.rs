@@ -670,6 +670,8 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         None,
         // And how many rounds it made, off the same [`Outcome`].
         None,
+        // It has no parent to tell what it did to the workspace.
+        None,
         // And it opens the run's wallet rather than being lent one: it is the run.
         None,
     );
@@ -705,6 +707,8 @@ pub(crate) fn delegated(
     // How many rounds of tool calls it made, written however the turn ended, for the same reason
     // (TRACE-8).
     rounds: &mut usize,
+    // What it did to its workspace, written however the turn ended, for the parent's TURN-4 lines.
+    worked: &mut Worked,
     // The wallet the turn that started this one is spending from, where it found one. A delegate
     // opens none of its own (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
@@ -733,6 +737,7 @@ pub(crate) fn delegated(
         Some(&mut decisions),
         Some(notices),
         Some(rounds),
+        Some(worked),
         wallet,
     );
     *vouched = Vouched {
@@ -889,6 +894,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             run_directory: &mut run_directory,
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
+            asks_about_unconfined: false,
         },
         confirmer,
         id,
@@ -1203,6 +1209,32 @@ struct Working<'scope> {
     >,
 }
 
+/// What a run has done to the workspace it works in, which TURN-4's question and closing line
+/// report on.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Worked {
+    /// The round a file there first became different from how the run found it, where one did.
+    changed_at: Option<usize>,
+    /// Whether a program has been run there since the run began.
+    ran_a_program: bool,
+}
+
+impl Worked {
+    /// Count what one call did, in the round it was made.
+    fn count(&mut self, round: usize, changed_a_file: bool, ran_a_program: bool) {
+        if changed_a_file {
+            self.changed_at.get_or_insert(round);
+        }
+        self.ran_a_program |= ran_a_program;
+    }
+
+    /// Count what a delegate did in this run's workspace as this run's own, from the round it was
+    /// taken back in, since that is when this run learns a file changed.
+    fn adopt(&mut self, round: usize, delegate: Worked) {
+        self.count(round, delegate.changed_at.is_some(), delegate.ran_a_program);
+    }
+}
+
 /// Show the person what the planner said on the way to its calls: released to a screen and nowhere
 /// else, exactly as the final reply is.
 ///
@@ -1348,6 +1380,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
     // list: a delegate is a run inside this turn, and the account of itself this turn hands back
     // is the only one that reaches a caller with nowhere to draw (HOOK-7).
     notices: &mut Vec<String>,
+    // This turn's record of what was done to its workspace, and the round the delegates are taken
+    // back in (TURN-4).
+    worked: &mut Worked,
+    round: usize,
 ) -> Result<usize, TurnError> {
     let mut collected = 0;
     while let Some(at) = delegates
@@ -1379,6 +1415,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // the person whose formatter would not start is owed the sentence whether or not
                 // the delegate that fired it went on to report.
                 notices.extend(ended.notices);
+                // On both of the ways a run can end too, since a stopped delegate leaves the files
+                // it changed and has run what it ran. Only from one that shares this turn's
+                // workspace: a delegate in a checkout of its own built the commit the checkout
+                // holds, which has none of this turn's changes in it (TURN-4).
+                if working.checkout.is_none() {
+                    worked.adopt(round, ended.worked);
+                }
                 let ran = Some((ended.took, ended.rounds));
                 (ended.delegated, ran, partial, requests)
             }
@@ -1922,6 +1965,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // How many rounds of tool calls the turn made, written however it ended. Only a delegate's
     // caller passes one, for the record of how the delegate ended (TRACE-8).
     rounds_taken: Option<&mut usize>,
+    // What the turn did to its workspace, written however it ended. Only a delegate's caller
+    // passes one, for the turn that spawned it (TURN-4).
+    worked: Option<&mut Worked>,
     // The credential store the run that started this one is spending from. Only a delegate's
     // caller passes one, and a delegate spends nothing else: there is one subscription per
     // process and a credential is single-use, so a second wallet opened here would re-read a
@@ -1959,6 +2005,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // them is the thing that did not arrive.
     let mut fired: Vec<String> = Vec::new();
     let mut taken = 0;
+    let mut done = Worked::default();
 
     let mut outcome = one_turn(
         config,
@@ -1977,6 +2024,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         retained,
         &mut fired,
         &mut taken,
+        &mut done,
         lent_wallet,
     );
 
@@ -1998,6 +2046,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     }
     if let Some(rounds) = rounds_taken {
         *rounds = taken;
+    }
+    if let Some(worked) = worked {
+        *worked = done;
     }
 
     // In the order the moments came, which is not the order the turn produced them: what it found
@@ -2046,6 +2097,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // How many rounds of tool calls the turn made, written before a stop or a failed request
     // returns as well as on an answer.
     rounds_taken: &mut usize,
+    // What the turn did to its workspace, written at the same moment and for the same endings.
+    worked_out: &mut Worked,
     // The wallet the run that started this one is spending from, where this is a delegate's turn.
     // See [`run_inner`].
     lent_wallet: Option<&dyn crate::shared::Spends>,
@@ -2795,17 +2848,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // The round a file on disk first became different from how this turn found it, where one
         // did, and whether a program has been run since the turn began.
         //
-        // Both from what dispatch did rather than from what the planner asked for, which is the
-        // opposite of the write counted above and for the opposite reason. These say what the
-        // workspace holds: a write the person declined and a write plan mode refused leave nothing to
-        // build, and a run the person declined builds nothing, so a turn counting either would tell
-        // the planner and then the person about a diff that was never made or a check that never
-        // happened.
-        let mut changed_at: Option<usize> = None;
-        let mut ran_a_program = false;
+        // Both from what dispatch did, here and in the delegates that share this workspace, rather
+        // than from what the planner asked for, which is the opposite of the write counted above and
+        // for the opposite reason. These say what the workspace holds: a write the person declined
+        // and a write plan mode refused leave nothing to build, and a run the person declined builds
+        // nothing, so a turn counting either would tell the planner and then the person about a diff
+        // that was never made or a check that never happened.
+        let mut worked = Worked::default();
         let mut said_nothing_run = false;
-        // Whether a write is possible at all here, which a run offered no write tool cannot be
-        // nudged into. Read once: the offer does not change while the turn runs.
+        // Whether a write tool is offered at all, which a run offered none cannot be nudged into.
+        // Read once: a tool loaded while the turn runs is a server's, never one of these. The mode
+        // can change while it runs, and is read where the nudge is decided.
         let may_write = tools::offer_writes(&offered);
         let may_run = tools::offer_runs(&offered);
         // The same question in the form the refusals read it in: a tool that will not answer may say
@@ -2926,6 +2979,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         &mut waits,
                         &mut spent,
                         hook_notices,
+                        &mut worked,
+                        steps,
                     )?;
 
                     reporter.spent(crate::outcome::Spent {
@@ -3334,6 +3389,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             &mut waits,
                             &mut spent,
                             hook_notices,
+                            &mut worked,
+                            steps,
                         )?;
                         break completion;
                     }
@@ -3359,6 +3416,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut waits,
                                 &mut spent,
                                 hook_notices,
+                                &mut worked,
+                                steps,
                             )?;
                             // A round the planner spent waiting is still a round, and the wait is when a
                             // person watching a turn go somewhere they did not ask for is most likely to
@@ -3529,6 +3588,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 }
                                 crate::repeated_call::Held::Refuse => {
                                     Some(tools::refused_without_running(
+                                        &mut policy,
                                         &mut reporter,
                                         call,
                                         crate::repeated_call::refusal(
@@ -3599,6 +3659,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     run_directory: &mut run_directory,
                                     confine_runs: task.confine_runs,
                                     sandbox: task.sandbox,
+                                    asks_about_unconfined: task.asks_about_unconfined,
                                 },
                                 &mut asking,
                                 &mut reporter,
@@ -3612,10 +3673,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // gave it. Read at the end of the turn to say whether a change went out
                         // unbuilt, and the round is the one the first change landed on, since before
                         // that there was nothing to run.
-                        if output.changed_a_file {
-                            changed_at.get_or_insert(steps);
-                        }
-                        ran_a_program = ran_a_program || output.ran_a_program;
+                        worked.count(steps, output.changed_a_file, output.ran_a_program);
                         if (output.changed_a_file || output.started_a_program)
                             && let Some(checkout) = workspace.checkout()
                         {
@@ -4444,7 +4502,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // that asks for a change from one that asks a question, and it must not try: what it
                     // knows is that rounds have gone by and nothing was written, and the planner is the
                     // one that knows whether that is wrong.
+                    //
+                    // Plan mode offers the write tools and refuses every call to them, so no write
+                    // is possible while it is in force. Read as the round ends rather than once per
+                    // turn, since the person can change the mode while the turn runs (MODE-8).
+                    // The sandbox mode `read-only` does the same for the whole turn (SANDBOX-22).
                     if may_write
+                        && !task.permission_mode.get().refuses_writes()
+                        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
                         && !conversation.asked_to_write()
                         && !said_nothing_written
                         && steps >= ROUNDS_BEFORE_WRITING
@@ -4467,11 +4532,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // for the reason the line above is. A delegate is named because this is the case it
                     // exists for: a build log is long, what is wanted from it is one sentence, and a
                     // checker reads the one and reports the other.
+                    //
+                    // Not while a delegate working in this workspace is still out. It may be the
+                    // checker this line points at, part way through the build, and what it ran is
+                    // counted only once it is taken back.
                     if may_run
-                        && !ran_a_program
+                        && !worked.ran_a_program
                         && !said_nothing_run
-                        && changed_at
+                        && worked
+                            .changed_at
                             .is_some_and(|at| steps >= at + ROUNDS_AFTER_WRITING_BEFORE_RUNNING)
+                        && delegates.iter().all(|working| working.checkout.is_some())
                     {
                         said_nothing_run = true;
                         conversation.push_from(Message::user(format!(
@@ -4497,6 +4568,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &mut waits,
                     &mut spent,
                     hook_notices,
+                    &mut worked,
+                    steps,
                 );
             }
             result
@@ -4510,6 +4583,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             jobs.stop_all(&mut policy, &mut reporter);
         }
         *rounds_taken = steps;
+        *worked_out = worked;
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {
             timing: spent.finish(),
@@ -4524,13 +4598,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         //
         // Above the unwrap, so a stop and a failed request say it too: either leaves the same changed
         // files on disk as an answer does, and being stopped with none of it compiled is the state a
-        // person is least able to spot for themselves. Both flags are the round loop's own locals,
-        // settled by whatever it did before it ended.
+        // person is least able to spot for themselves. Both are the round loop's own record, settled
+        // by whatever it and the delegates it took back did before it ended, and every delegate is
+        // taken back before the rounds return.
         //
         // Only where a run was possible, the state the planner's question is asked in. A definition
         // or a delegate whose tools leave out `run` could not have built what it wrote, so the line
         // would report something it had no way to do.
-        if may_run && changed_at.is_some() && !ran_a_program {
+        if may_run && worked.changed_at.is_some() && !worked.ran_a_program {
             reporter.narration(
                 "files changed this turn and no command was run, so none of it has been \
              built or tested"
@@ -4800,6 +4875,7 @@ mod tests {
                         notices: Vec::new(),
                         rounds: 0,
                         took: Duration::ZERO,
+                        worked: Default::default(),
                     },
                     crate::outcome::Spent {
                         tokens: 17,
@@ -4839,6 +4915,8 @@ mod tests {
                     &mut waits,
                     &mut spent,
                     &mut Vec::new(),
+                    &mut Worked::default(),
+                    0,
                 )
                 .unwrap(),
                 1
@@ -4886,6 +4964,7 @@ mod tests {
                         notices: Vec::new(),
                         rounds: 12,
                         took: Duration::from_millis(4_200),
+                        worked: Default::default(),
                     },
                     Default::default(),
                     Vec::new(),
@@ -4922,6 +5001,8 @@ mod tests {
                 &mut crate::timing::DelegateWait::default(),
                 &mut Elapsed::default(),
                 &mut Vec::new(),
+                &mut Worked::default(),
+                0,
             )
             .unwrap();
         });
@@ -4989,6 +5070,7 @@ mod tests {
                         notices: Vec::new(),
                         rounds: 1,
                         took: Duration::from_millis(900),
+                        worked: Default::default(),
                     },
                     Default::default(),
                     Vec::new(),
@@ -5013,6 +5095,8 @@ mod tests {
                 &mut crate::timing::DelegateWait::default(),
                 &mut Elapsed::default(),
                 &mut Vec::new(),
+                &mut Worked::default(),
+                0,
             )
             .unwrap();
         });
@@ -5101,6 +5185,7 @@ mod tests {
                             notices: Vec::new(),
                             rounds: 1,
                             took: Duration::from_millis(900),
+                            worked: Default::default(),
                         },
                         Default::default(),
                         Vec::new(),
@@ -5125,6 +5210,8 @@ mod tests {
                     &mut crate::timing::DelegateWait::default(),
                     &mut Elapsed::default(),
                     &mut Vec::new(),
+                    &mut Worked::default(),
+                    0,
                 )
             });
             let Err(TurnError::Precommit(refused)) = outcome else {

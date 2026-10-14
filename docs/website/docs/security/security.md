@@ -60,6 +60,10 @@ the repository's own configuration. On those commands it replaces a `GIT_SSH_COM
 `core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
 workspace can set it.
 
+Without an entry for the owner, the run prompt in the terminal interface numbers the public keys
+your own ssh files name and asks which one to offer, once per owner, and keeps the answer in
+`~/.bravebot/reach.jsonl`. An entry still decides over a kept answer.
+
 On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
 `docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the
@@ -112,10 +116,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   login, `~/.npmrc` and `~/.netrc`, are readable. On macOS a program cannot listen on a port of the
   machine unless the planner asks for `loopback` on that line and you approve it, and only `git`
   itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
-  clone is refused. On Windows programs are not confined and run
-  with the access your own shell would give them. Their own network requests do not go through the
-  one way out described below, so an approved `curl`, `git push` or package install can read what its
-  profile reaches and send it with nothing here routing or inspecting the traffic.
+  clone is refused. On Windows a program runs in a container that reaches only the directories the
+  session was opened on, its scratch directory, the system temporary directory, the system and
+  program directories, git's configuration files, its toolchain's caches and the credential scope
+  its command names, so in no sandbox mode but `off` does it read the rest of the machine. A
+  program's own network requests do not go through the one way out described below, so an approved
+  `curl`, `git push` or package install can read what its profile reaches and send it with nothing
+  here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
@@ -231,22 +238,29 @@ Confinement bounds a process started to run code Brave Bot did not write, so a s
 none of those is inside no such boundary, and the level is what your machine offers rather than
 something holding the session back.
 
-**Sandbox modes.** The programs the agent runs start under one of four modes. `read-only` reads the
-machine as above and writes nothing in the session's directories, the scratch directory or the
-toolchain caches. `workspace-write` reads the same and also writes the session's directories, the
-scratch directory and the toolchain caches. `strict` reads nothing on the machine beyond what the
-program's binary needs, the session's directories and the credential scope its command names.
-`off` starts programs with no profile. The default is `workspace-write`. Choose one with
-`--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
+**Sandbox modes.** The programs the agent runs start under one of four modes. On Linux and macOS,
+`read-only` reads the machine as above and writes nothing in the session's directories, the scratch
+directory or the toolchain caches. `workspace-write` reads the same and also writes the session's
+directories, the scratch directory and the toolchain caches. `strict` reads nothing on the machine
+beyond what the program's binary needs, the session's directories and the credential scope its
+command names. On Windows no mode but `off` reads the machine: `strict` and `workspace-write` give a
+program the same container, and `read-only` gives it that container without its writes to the
+session's directories, the scratch directory and the toolchain caches. `off` starts programs with no
+profile. The default is `workspace-write`. Choose one with `--sandbox <mode>` or with
+`{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
 earlier name of `workspace-write`, `standard`, is still read in the
 flag, `/sandbox`, the settings files and the managed file, and is reported as `workspace-write`. A repository's `.bravebot/settings.json` can ask for `strict` and
-nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
+nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is not obeyed where your
+settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
 says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
 refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
 machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
-reaches the remote with your credentials. A request from the agent to write a path is refused under
-it, even with `--dangerously-skip-permissions`. The desktop app reads `off` as
+reaches the remote with your credentials. Under it the agent's file tools write nothing either,
+a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a
+command line that redirects output into a file is refused, and a request from the agent to write a
+path is refused, all of these even in accept-edits mode and with `--dangerously-skip-permissions`.
+Redirecting to `/dev/null` still runs. The desktop app reads `off` as
 `workspace-write`. When the mode is not `workspace-write`, the opening screen and `/status` say so,
 and `bravebot doctor` and `/sandbox` say what chose it.
 

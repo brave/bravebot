@@ -535,7 +535,10 @@ the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, list
 since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
 workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
-`run`. A path that climbs out with `..` into a directory that is not open is refused the same
+`run`. For a call that writes, the refusal names the one route that ends in a prompt: a `run` line
+that redirects into the file, started with `unconfined: true`, which the person is asked to
+approve with the file shown ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It names it only where the
+session would accept that request and the front end can ask about it. A path that climbs out with `..` into a directory that is not open is refused the same
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
 path work: a climb that lands inside the root, off the top of the file system or on a name that is
@@ -573,6 +576,7 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_path_is_spelled_out_from_the_home_only_by_a_whole_leading_tilde`
 `verified-by: bravebot_agent::workspace::a_missing_relative_file_says_where_it_was_looked_for`
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
+`verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
@@ -700,6 +704,11 @@ person has to that is `/add-dir /tmp`, which under TRUST-9 marks whatever every 
 machine has left in a world-writable directory as trusted input in the same action. What is left is
 writing into the project, where the file is untracked and a build, a test run, a `git add -A` and a
 reviewer each have to deal with it, and somebody has to remember to delete it.
+
+The exception is a line the person approves with no sandbox ([SANDBOX-29](sandboxing.md#SANDBOX-29)),
+and any line under the mode `off`: its redirection targets are not confined, because nothing holds
+its programs back, and the person is shown each file before it runs. That reaches one file for one
+line and makes no directory reachable or trusted.
 
 <a id="TRUST-14"></a>
 ### TRUST-14: a session is given a directory of its own, outside the project
@@ -1069,7 +1078,8 @@ whose directory it is rather than from anything here. That is the same footing t
 system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
 instance of it: it is the person's own directory.
 
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the bot-folder road onto a pinned directory is pinned instead by ui/scripts/bot-directory.test.mjs, which loads the real bots and opened modules against a picker it supplies the answer for and asserts that a bot takes a folder only once the picker handed that folder over and not the folder beside it, that a cancelled picker leaves nothing a window may name, and that editing a bot keeps the folder it already has whatever folder the payload states; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing. The session.new and session.open roads are pinned by ui/scripts/session-directory.test.mjs, which asserts that the main process admits a directory only once the picker handed it over or a list the main process itself keeps (the recents list, the directories the agent reported on session.list) did, and not a third absolute path beside them, and that the request handler refuses one before forwarding it. session.fork takes no directory: the root files.ts records for it is the child directory off the agent's answer.)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the bot-folder road onto a pinned directory is pinned instead by ui/scripts/bot-directory.test.mjs, which loads the real bots and opened modules against a picker it supplies the answer for and asserts that a bot takes a folder only once the picker handed that folder over and not the folder beside it, that a cancelled picker leaves nothing a window may name, and that editing a bot keeps the folder it already has whatever folder the payload states; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing. The session.new and session.open roads are pinned by ui/scripts/session-directory.test.mjs, which asserts that the main process admits a directory only once the picker handed it over or a list the main process itself keeps (the recents list, the directories the agent reported on session.list) did, and not a third absolute path beside them, and that the request handler refuses one before forwarding it. A session.list request never carries a directory of the window's own into the agent: ui/scripts/sanitise.test.mjs asserts the sanitiser drops it, so a window cannot choose which store is read, and the rows the bridge reports name the directory the store's record holds (bravebot_ui_bridge::listing::a_list_asked_about_one_path_reports_the_directory_the_record_holds). session.fork takes no directory: the root files.ts records for it is the child directory off the agent's answer.)`
+`verified-by: bravebot_ui_bridge::listing::a_list_asked_about_one_path_reports_the_directory_the_record_holds`
 
 <a id="TRUST-21"></a>
 ### TRUST-21: a directory the helper cannot pin itself to is refused rather than resolved

@@ -750,6 +750,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     let request = RunRequest {
         reach_record: None,
         unconfined: false,
+        key_choice: None,
         confined: None,
         record: None,
         pattern: None,
@@ -805,6 +806,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     let request = RunRequest {
         reach_record: None,
         unconfined: false,
+        key_choice: None,
         confined: Some(Confined {
             reads_the_machine: false,
             directories: vec![],
@@ -816,6 +818,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
             ],
             requested_reaches: vec![],
             carried: vec![],
+            writes_git_directories: false,
         }),
         record: None,
         pattern: None,
@@ -868,6 +871,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
     let request = RunRequest {
         reach_record: None,
         unconfined: false,
+        key_choice: None,
         confined: None,
         record: None,
         pattern: None,
@@ -909,6 +913,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
     let request = RunRequest {
         reach_record: None,
         unconfined: false,
+        key_choice: None,
         confined: None,
         record: None,
         pattern: None,
@@ -1486,6 +1491,42 @@ fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
         "{by_network}"
     );
     assert!(by_network.contains("run.network"), "{by_network}");
+}
+
+/// SANDBOX-22: the refusal says which of reading and writing the asked mode does more of than the
+/// pin. The modes are not a line, so the fault it rejects is a window told a mode is looser with no
+/// word of how, which under a `strict` pin leaves `read-only` refused for no reason given.
+#[test]
+fn a_refused_sandbox_mode_says_whether_it_reads_or_writes_more_than_the_pin() {
+    use bravebot_config::sandbox::{Floor, Refused};
+    use bravebot_sandbox::SandboxMode;
+    for (asked, pinned, said) in [
+        (
+            SandboxMode::ReadOnly,
+            SandboxMode::Strict,
+            "read-only reads more of the machine than strict.",
+        ),
+        (
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            "strict writes more than read-only.",
+        ),
+        (
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::Strict,
+            "workspace-write reads more of the machine and writes more than strict.",
+        ),
+    ] {
+        let sentence = wire::sandbox_refusal(&Refused {
+            asked,
+            asked_in: None,
+            pinned,
+            pinned_in: "/etc/bravebot/managed.json".into(),
+            because: Floor::Mode,
+        });
+        assert!(sentence.contains(said), "{sentence}");
+        assert!(!sentence.contains("stricter"), "{sentence}");
+    }
 }
 
 /// The hosts cross as the program named them, and nothing else does.

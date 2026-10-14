@@ -827,6 +827,58 @@ fn doctor_names_a_checkouts_key_choice_and_an_entry_it_cannot_read() {
     );
 }
 
+/// SANDBOX-22: under the person's `read-only`, `doctor` gives the mode as `read-only` from their
+/// file and says the checkout's `strict` is not obeyed, naming both files.
+///
+/// The settings tests check the accessors. The process is where the settings a session starts
+/// under are loaded and `doctor` is the only place that turns a dropped `strict` into a line, so a
+/// report naming the checkout's `strict` as the mode, or saying nothing of it, would leave those
+/// tests passing.
+#[test]
+fn doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only() {
+    let scratch = Scratch::new("cli-running-doctor-strict-under-read-only")
+        .with_settings(r#"{"sandbox": {"mode": "read-only"}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"mode": "strict"}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let home = scratch.settings().display().to_string();
+    let mode = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("sandbox mode"))
+        .unwrap_or_else(|| panic!("the report gave no sandbox mode: {stdout}{stderr}"));
+    assert!(
+        mode.contains(&format!("read-only from {home}")),
+        "the checkout's strict replaced the person's read-only: {stdout}"
+    );
+    let ignored = line("sandbox.mode strict in");
+    assert!(
+        ignored.contains("not obeyed")
+            && ignored.contains(&checkout.join(".bravebot").display().to_string())
+            && ignored.contains(&format!("read-only from {home}")),
+        "the checkout's strict went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -1312,8 +1364,57 @@ fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() 
 #[cfg(unix)]
 #[test]
 fn doctor_push_identity_reports_the_login_each_key_gets() {
+    let stdout = doctor_push_identity_in(
+        "cli-running-doctor-push-identity",
+        r#"{"git": {"identities": {"github.com/netzenbot": "~/.ssh/bot.pub"}}}"#,
+        None,
+    );
+    let line = |key: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(key))
+            .unwrap_or_else(|| panic!("no line for {key}: {stdout}"))
+            .to_string()
+    };
+    assert!(
+        line("id_ed25519.pub").contains("SHA256:fpided25519"),
+        "{stdout}"
+    );
+    assert!(line("id_ed25519.pub").contains("bbondy"), "{stdout}");
+    assert!(line("bot.pub").contains("SHA256:fpbot"), "{stdout}");
+    assert!(line("bot.pub").contains("netzenbot"), "{stdout}");
+    assert!(stdout.contains("git.identities names this key"), "{stdout}");
+}
+
+/// SANDBOX-16 over the process: with no `git.identities` entry for the owner, the key the person
+/// chose at a run prompt is the one marked, read from the record of reach in this process. Rejects
+/// a report that reads the settings alone, which shows no key chosen while every push offers one.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_marks_the_key_chosen_at_a_run_prompt() {
+    let stdout = doctor_push_identity_in(
+        "cli-running-doctor-push-identity-chosen",
+        "{}",
+        Some("bot.pub"),
+    );
+    assert!(
+        stdout.contains("you chose this key for the owner at a run prompt"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("git.identities names this key"),
+        "{stdout}"
+    );
+}
+
+/// What `doctor --push-identity github.com/netzenbot` prints in a home holding the public keys
+/// `id_ed25519` and `bot`, the second named by `~/.ssh/config`, with `settings` as the person's
+/// settings and `chosen` the key a run prompt kept for the owner. A `ssh` that answers by the key it
+/// was offered stands in for GitHub: netzenbot for `bot.pub`, bbondy for any other.
+#[cfg(unix)]
+fn doctor_push_identity_in(name: &str, settings: &str, chosen: Option<&str>) -> String {
     use std::os::unix::fs::PermissionsExt;
-    let scratch = Scratch::new("cli-running-doctor-push-identity");
+    let scratch = Scratch::new(name);
     let home = scratch.path.join("home");
     let tools = scratch.path.join("tools");
     std::fs::create_dir_all(home.join(".ssh")).unwrap();
@@ -1327,11 +1428,16 @@ fn doctor_push_identity_reports_the_login_each_key_gets() {
         .unwrap();
     }
     std::fs::write(home.join(".ssh/config"), "IdentityFile ~/.ssh/bot\n").unwrap();
-    std::fs::write(
-        home.join(".bravebot/settings.json"),
-        r#"{"git": {"identities": {"github.com/netzenbot": "~/.ssh/bot.pub"}}}"#,
-    )
-    .unwrap();
+    std::fs::write(home.join(".bravebot/settings.json"), settings).unwrap();
+    if let Some(chosen) = chosen {
+        let line = serde_json::json!({
+            "action": "allow",
+            "key_for": "github.com/netzenbot",
+            "key": home.join(".ssh").join(chosen).to_str().expect("a key path that is text"),
+            "allowed": "2026-10-13",
+        });
+        std::fs::write(home.join(".bravebot/reach.jsonl"), format!("{line}\n")).unwrap();
+    }
     let script = |name: &str, body: &str| {
         let path = tools.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -1361,21 +1467,7 @@ exit 1"#,
 
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    let line = |key: &str| {
-        stdout
-            .lines()
-            .find(|line| line.contains(key))
-            .unwrap_or_else(|| panic!("no line for {key}: {stdout}"))
-            .to_string()
-    };
-    assert!(
-        line("id_ed25519.pub").contains("SHA256:fpided25519"),
-        "{stdout}"
-    );
-    assert!(line("id_ed25519.pub").contains("bbondy"), "{stdout}");
-    assert!(line("bot.pub").contains("SHA256:fpbot"), "{stdout}");
-    assert!(line("bot.pub").contains("netzenbot"), "{stdout}");
-    assert!(stdout.contains("git.identities names this key"), "{stdout}");
+    stdout
 }
 
 /// SANDBOX-16 over the argument list: an argument that is not `<host>/<owner>` is refused before
@@ -2362,6 +2454,58 @@ fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
     );
 }
 
+/// CLI-31. `-i` opens a session on the terminal it was started from, so started without one it is
+/// refused before anything is sent, rather than run as the one-shot it resembles. Whoever wrote the
+/// line asked for somebody to watch the task and be able to stop it, and with
+/// `--dangerously-skip-permissions` a one-shot in its place would make every change with nobody
+/// watching. The refusal names `-p`, the invocation for a run nobody watches.
+///
+/// A property of the process, as the refusal of a session in lines is: nothing inside the program
+/// can arrange to have been started from a terminal.
+#[test]
+fn a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch = Scratch::new("cli-running-interactive-not-a-terminal")
+        .with_settings(&settings_for(&gateway));
+
+    for flag in ["-i", "--interactive"] {
+        let output = bravebot(
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[
+                "--dangerously-skip-permissions",
+                flag,
+                "fix the failing test",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flag} did not exit as a refused argument: {stderr}"
+        );
+        assert!(
+            stdout.is_empty(),
+            "{flag} put something on the reply stream: {stdout}"
+        );
+        assert!(
+            stderr.contains("terminal") && stderr.contains("-p"),
+            "{flag} was not refused for the terminal, naming -p: {stderr}"
+        );
+        assert!(
+            !stderr.contains('\x1b') && !stdout.contains('\x1b'),
+            "{flag} asked something of the terminal: {stderr:?}"
+        );
+    }
+    // The gateway hands over each request's body before it answers, so a turn either run sent
+    // is already here.
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused start sent a turn"
+    );
+}
+
 /// Run the built binary with a terminal for its input, and read back everything it wrote to one.
 ///
 /// A session in lines refuses a pipe before it does anything else, so nothing it decides after
@@ -3055,6 +3199,81 @@ fn a_configured_git_identity_reaches_only_the_matching_run_stage() {
                 "ssh -i '{}' -o IdentitiesOnly=yes\n",
                 scratch.path.join(".ssh/work.pub").display()
             ),
+            _ => "unset\n".to_string(),
+        };
+        assert_eq!(actual, expected, "{name}: {stdout}{stderr}");
+    }
+}
+
+/// SANDBOX-16: a key chosen at a run prompt reaches the git process `run` starts in a session
+/// that puts no prompt to anybody, as a `git.identities` entry does, and a key chosen for another
+/// owner does not. The record is read by `Tools::confinement` in this process, which a test that
+/// hands the chosen keys to the confinement directly would pass with that read dropped. A fake git
+/// records its environment without contacting a remote.
+#[cfg(unix)]
+#[test]
+fn a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping chosen key run-stage test: confinement is unavailable");
+        return;
+    }
+    for (name, owner) in [
+        ("cli-running-chosen-key-matching", "acme"),
+        ("cli-running-chosen-key-other", "other"),
+    ] {
+        let gateway =
+            a_gateway_asking_to_run("git push git@example.invalid:acme/widgets.git > identity.txt");
+        let scratch = Scratch::new(name)
+            .with_settings(&settings_for(&gateway))
+            .with_file(".ssh/work.pub", "ssh-ed25519 AAAA\n")
+            .with_file(".ssh/config", "IdentityFile ~/.ssh/work\n")
+            .with_file(
+                "bin/git",
+                "#!/bin/sh\n[ \"$1\" = push ] || exit 1\nprintf '%s\\n' \"${GIT_SSH_COMMAND-unset}\"\n",
+            );
+        let key = scratch.path.join(".ssh/work.pub");
+        let scratch = scratch.with_state(
+            "reach.jsonl",
+            &format!(
+                "{}\n",
+                serde_json::json!({
+                    "action": "allow",
+                    "key_for": format!("example.invalid/{owner}"),
+                    "key": key.to_str().expect("a key path that is text"),
+                    "allowed": "2026-10-13",
+                })
+            ),
+        );
+        std::fs::set_permissions(
+            scratch.path.join("bin/git"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("make fake git executable");
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let path = format!("{}:/usr/bin:/bin", scratch.path.join("bin").display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", &path));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[
+                "--dangerously-skip-permissions",
+                "-p",
+                "record the push identity",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{name}: {stdout}{stderr}");
+        let actual =
+            std::fs::read_to_string(project.join("identity.txt")).unwrap_or_else(|error| {
+                panic!("{name}: git did not record its identity: {error}; {stdout}{stderr}")
+            });
+        let expected = match owner {
+            "acme" => format!("ssh -i '{}' -o IdentitiesOnly=yes\n", key.display()),
             _ => "unset\n".to_string(),
         };
         assert_eq!(actual, expected, "{name}: {stdout}{stderr}");
@@ -10027,6 +10246,223 @@ fn a_task_continuing_the_latest_session_adds_a_turn_to_its_record() {
     );
 }
 
+/// A gateway whose model does what the task it was just given names: `WRITE-NOTES` overwrites
+/// `notes.txt`, `WRITE-PLAN` creates `plan.txt` and `RUN-ECHO` runs `echo hello`, and once the
+/// call's result is in the conversation it says it is done. Any other task gets a reply and no call.
+fn a_gateway_doing_what_each_task_names() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let request: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+        let last = request["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .cloned()
+            .unwrap_or_default();
+        let task = match last["role"] == "user" {
+            true => last["content"].to_string(),
+            false => String::new(),
+        };
+        let call = |name: &str, arguments: serde_json::Value| {
+            serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":name,"arguments":arguments.to_string()}}]},
+                "finish_reason":"tool_calls"}]})
+        };
+        let frame = if task.contains("WRITE-NOTES") {
+            call(
+                "write_file",
+                serde_json::json!({"path": "notes.txt", "contents": "the model's notes\n"}),
+            )
+        } else if task.contains("WRITE-PLAN") {
+            call(
+                "write_file",
+                serde_json::json!({"path": "plan.txt", "contents": "the model's plan\n"}),
+            )
+        } else if task.contains("RUN-ECHO") {
+            call(
+                "run",
+                serde_json::json!({"command": "echo hello", "why": "say hello"}),
+            )
+        } else {
+            serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]})
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// Where the record named `id` is under `scratch`'s home.
+fn the_record_file(scratch: &Scratch, id: &str) -> PathBuf {
+    let records = scratch.path.join(".bravebot").join("sessions");
+    std::fs::read_dir(&records)
+        .expect("a run created the sessions directory")
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).expect("a project directory"))
+        .flatten()
+        .find(|file| file.file_name().to_string_lossy() == format!("{id}.json"))
+        .unwrap_or_else(|| panic!("no record named {id} under {records:?}"))
+        .path()
+}
+
+/// The record named `id` under `scratch`'s home, as it is on disk.
+fn the_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(the_record_file(scratch, id)).expect("read the record"))
+        .expect("a record is JSON")
+}
+
+/// Run a task that may write or start a program, in `project`, and return the session its result
+/// object names.
+fn a_writing_run(scratch: &Scratch, project: &Path, arguments: &[&str]) -> String {
+    let mut all = vec![
+        "--json",
+        "--dangerously-skip-permissions",
+        "--trust-workspace",
+    ];
+    all.extend_from_slice(arguments);
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(&scratch.path, project, &environment, &all);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    session_of(&stdout).unwrap_or_else(|| panic!("no session in {stdout}"))
+}
+
+/// CLI-25 and SESSION-19: a continued task leaves a point to rewind it to, behind the points the
+/// record already held. Without one the newest point is the one before the record's previous turn,
+/// and an undo in the session resumed next takes the conversation back past both turns while
+/// putting back only the earlier turn's files.
+///
+/// Each point holds the record as it stood before its task and what that task wrote over, which
+/// is what lets an undo move the conversation and the files back together. The notes are vouched
+/// for, so their bytes are kept, and the plan did not exist, so its point removes it.
+#[test]
+fn a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-rewind").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(project.join("notes.txt"), "the person's notes\n").expect("write the notes");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let first = the_record(&scratch, &id);
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "WRITE-NOTES", "--continue"]),
+        id
+    );
+    let second = the_record(&scratch, &id);
+    assert_eq!(
+        a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]),
+        id
+    );
+    let third = the_record(&scratch, &id);
+
+    assert_eq!(third["turns"], 3);
+    let points = third["rewind"].as_array().expect("a list of points");
+    assert_eq!(points.len(), 2, "{points:#?}");
+    for (point, before, prompt) in [
+        (&points[0], &first, "WRITE-NOTES"),
+        (&points[1], &second, "WRITE-PLAN"),
+    ] {
+        assert_eq!(point["prompt"], prompt);
+        for field in ["turns", "tokens", "spend", "conversation"] {
+            assert_eq!(point[field], before[field], "{prompt}: {field}");
+        }
+    }
+    let wrote_over = |point: &serde_json::Value| {
+        point["wrote_over"]
+            .as_array()
+            .expect("a list of backups")
+            .iter()
+            .map(|backup| {
+                (
+                    backup["path"].clone(),
+                    backup["before"].clone(),
+                    backup["bytes"].clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        wrote_over(&points[0]),
+        // "the person's notes\n"
+        [(
+            "notes.txt".into(),
+            "bytes".into(),
+            "dGhlIHBlcnNvbidzIG5vdGVzCg==".into()
+        )]
+    );
+    assert_eq!(
+        wrote_over(&points[1]),
+        [("plan.txt".into(), "nothing".into(), serde_json::Value::Null)]
+    );
+}
+
+/// SESSION-19: a language server's children may outlive it and still write, so a point a continued
+/// task opens after the session started one carries that warning, including where the record kept
+/// it only beside its points, as it does once an undo has consumed the point that carried it. The
+/// desktop's undo reads the warning off the points, so a point written without it would let that
+/// undo report a complete restore.
+#[test]
+fn a_continued_task_after_a_language_server_warns_on_the_point_it_opens() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-server-warning").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    let mut record = the_record(&scratch, &id);
+    assert_eq!(record["rewind"], serde_json::json!([]));
+    record["server_children_may_run"] = serde_json::Value::Bool(true);
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&record).expect("a record serialises"),
+    )
+    .expect("write the record back");
+    a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]);
+    let after = the_record(&scratch, &id);
+
+    assert_eq!(
+        after["rewind"][0]["coverage"]["gaps"],
+        serde_json::json!(["language-server"]),
+        "{after:#?}"
+    );
+    assert_eq!(after["server_children_may_run"], true);
+}
+
+/// SESSION-19: a program a continued task runs is a gap in what a rewind can put back, on the point
+/// opened for that task and on the record's own points, since an undo going back past any of them
+/// leaves whatever the program did. A point that recorded nothing would report a complete restore.
+#[cfg(unix)]
+#[test]
+fn a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch =
+        Scratch::new("cli-running-continued-command-gap").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let gaps = |point: &serde_json::Value| point["coverage"]["gaps"].clone();
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    a_writing_run(&scratch, &project, &["-p", "WRITE-PLAN", "--continue"]);
+    let second = the_record(&scratch, &id);
+    assert_eq!(gaps(&second["rewind"][0]), serde_json::json!([]));
+    a_writing_run(&scratch, &project, &["-p", "RUN-ECHO", "--continue"]);
+    let third = the_record(&scratch, &id);
+
+    let points = third["rewind"].as_array().expect("a list of points");
+    assert_eq!(points.len(), 2, "{points:#?}");
+    for point in points {
+        assert_eq!(gaps(point), serde_json::json!(["command"]), "{point:#?}");
+    }
+}
+
 /// CLI-25 and CLI-3: piped input stays a reference across the continuation. The planner is never
 /// handed the bytes, in the first run or the follow-up, and the follow-up is told the reference it
 /// holds no longer names anything, which is what a record written without the quarantine says.
@@ -10559,6 +10995,40 @@ fn the_recorded_lines_are_private_and_end_with_the_terminal() {
         .expect("the directory outlives the shell")
         .collect();
     assert!(left.is_empty(), "the terminal closed and left {left:?}");
+}
+
+/// SHELLINT-2, STATE-1. A person who keeps the state directory or the shell directory on a synced
+/// volume and links it into place has put the volume outside what the hook was given, so the
+/// directory the link leads to keeps the mode its owner set. The directory that is not a link is
+/// still narrowed.
+#[cfg(unix)]
+#[test]
+fn the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let mode = |p: &Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+    let open_up = |p: &Path| {
+        std::fs::create_dir_all(p).expect("create");
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    };
+
+    let linked_state = Scratch::new("cli-running-shell-init-linked-state");
+    let synced = linked_state.path.join("synced");
+    open_up(&synced);
+    open_up(&synced.join("shell"));
+    symlink(&synced, linked_state.path.join(".bravebot")).expect("link the state directory");
+    a_bash_session(&linked_state, &["echo recorded"]);
+    assert_eq!(mode(&synced), 0o755, "the linked state directory's target");
+    assert_eq!(mode(&synced.join("shell")), 0o700, "the shell directory");
+
+    let linked_shell = Scratch::new("cli-running-shell-init-linked-shell");
+    let state = linked_shell.path.join(".bravebot");
+    let synced = linked_shell.path.join("synced-shell");
+    open_up(&state);
+    open_up(&synced);
+    symlink(&synced, state.join("shell")).expect("link the shell directory");
+    a_bash_session(&linked_shell, &["echo recorded"]);
+    assert_eq!(mode(&synced), 0o755, "the linked shell directory's target");
+    assert_eq!(mode(&state), 0o700, "the state directory");
 }
 
 /// SHELLINT-3. With the variable set, the shell records nothing, the run is started incognito, and

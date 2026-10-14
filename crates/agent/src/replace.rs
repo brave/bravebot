@@ -124,6 +124,54 @@ const CONTEXT_LINES: usize = 3;
 /// that wanted the file back would have read it.
 const MAX_EXCERPT_LINES: usize = 40;
 
+/// The lines of an edited file that its result shows, kept apart from how they are drawn.
+///
+/// Drawing them numbers each one and joins them; scanning them for credentials needs the same
+/// lines with the number of the first, so both are read off this and neither is parsed back out of
+/// the other.
+#[derive(Debug, Clone)]
+pub struct Excerpt {
+    /// One run of consecutive lines, or two with the middle of a long span cut out between them.
+    runs: Vec<Run>,
+    /// How many lines were cut from between the two runs.
+    omitted: usize,
+}
+
+#[derive(Debug, Clone)]
+struct Run {
+    /// The number of the first line, counted from one as an editor counts.
+    first_line: usize,
+    /// The lines themselves, without their terminators.
+    lines: Vec<String>,
+}
+
+impl Excerpt {
+    /// The lines as the planner is shown them: numbered, with a note where the middle was cut.
+    pub fn render(&self) -> String {
+        let mut shown = Vec::new();
+        for (at, run) in self.runs.iter().enumerate() {
+            if at > 0 {
+                shown.push(format!("         … {} more lines …", self.omitted));
+            }
+            shown.extend(
+                run.lines
+                    .iter()
+                    .enumerate()
+                    .map(|(n, text)| format!("{:>6}  {text}", run.first_line + n)),
+            );
+        }
+        shown.join("\n")
+    }
+
+    /// The text of each run with the number of its first line, which is every line that
+    /// [`Excerpt::render`] draws and none that it cuts.
+    pub fn runs(&self) -> impl Iterator<Item = (usize, String)> + '_ {
+        self.runs
+            .iter()
+            .map(|run| (run.first_line, run.lines.join("\n")))
+    }
+}
+
 /// The changed region of `after`, with a little of the text either side of it.
 ///
 /// Computed by comparing rather than by locating the replacement: a deletion has no new text to
@@ -137,7 +185,7 @@ const MAX_EXCERPT_LINES: usize = 40;
 ///
 /// Returns `None` only where the two texts are identical, which `replace` refuses before ever
 /// reaching here.
-pub fn changed_region(before: &str, after: &str) -> Option<String> {
+pub fn changed_region(before: &str, after: &str) -> Option<Excerpt> {
     if before == after {
         return None;
     }
@@ -165,11 +213,10 @@ pub fn changed_region(before: &str, after: &str) -> Option<String> {
 
     let mut lines: Vec<String> = new[from..to]
         .iter()
-        .enumerate()
-        .map(|(at, line)| {
+        .map(|line| {
             let text = line.strip_suffix('\n').unwrap_or(line);
             let text = text.strip_suffix('\r').unwrap_or(text);
-            format!("{:>6}  {text}", from + at + 1)
+            text.to_string()
         })
         .collect();
 
@@ -178,14 +225,31 @@ pub fn changed_region(before: &str, after: &str) -> Option<String> {
     // one that stopped halfway.
     if lines.len() > MAX_EXCERPT_LINES {
         let keep = MAX_EXCERPT_LINES / 2;
-        let dropped = lines.len() - keep * 2;
+        let omitted = lines.len() - keep * 2;
         let end = lines.split_off(lines.len() - keep);
         lines.truncate(keep);
-        lines.push(format!("         … {dropped} more lines …"));
-        lines.extend(end);
+        return Some(Excerpt {
+            runs: vec![
+                Run {
+                    first_line: from + 1,
+                    lines,
+                },
+                Run {
+                    first_line: to - keep + 1,
+                    lines: end,
+                },
+            ],
+            omitted,
+        });
     }
 
-    Some(lines.join("\n"))
+    Some(Excerpt {
+        runs: vec![Run {
+            first_line: from + 1,
+            lines,
+        }],
+        omitted: 0,
+    })
 }
 
 #[cfg(test)]
@@ -196,7 +260,9 @@ mod tests {
     fn an_excerpt_shows_the_changed_line_with_its_neighbours() {
         let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
         let after = "a\nb\nc\nD\ne\nf\ng\nh\n";
-        let shown = changed_region(before, after).expect("something changed");
+        let shown = changed_region(before, after)
+            .expect("something changed")
+            .render();
         assert!(
             shown.contains("D"),
             "the change is not in the excerpt: {shown}"
@@ -219,7 +285,9 @@ mod tests {
     fn an_excerpt_carries_the_line_numbers_of_the_file_it_came_from() {
         let before = "one\ntwo\nthree\nfour\nfive\n";
         let after = "one\ntwo\nTHREE\nfour\nfive\n";
-        let shown = changed_region(before, after).expect("something changed");
+        let shown = changed_region(before, after)
+            .expect("something changed")
+            .render();
         let line = shown
             .lines()
             .find(|l| l.contains("THREE"))
@@ -231,7 +299,9 @@ mod tests {
     fn an_insertion_is_shown_even_though_nothing_was_removed() {
         let before = "a\nb\n";
         let after = "a\ninserted\nb\n";
-        let shown = changed_region(before, after).expect("something changed");
+        let shown = changed_region(before, after)
+            .expect("something changed")
+            .render();
         assert!(shown.contains("inserted"), "{shown}");
     }
 
@@ -239,7 +309,9 @@ mod tests {
     fn a_deletion_is_shown_even_though_there_is_no_new_text_to_find() {
         let before = "a\ngone\nb\n";
         let after = "a\nb\n";
-        let shown = changed_region(before, after).expect("something changed");
+        let shown = changed_region(before, after)
+            .expect("something changed")
+            .render();
         assert!(shown.contains("a") && shown.contains("b"), "{shown}");
         assert!(
             !shown.contains("gone"),
@@ -249,7 +321,9 @@ mod tests {
 
     #[test]
     fn a_change_of_line_terminator_still_shows_the_line() {
-        let shown = changed_region("a\r\nb\r\nc\r\n", "a\nb\r\nc\r\n").expect("the text differs");
+        let shown = changed_region("a\r\nb\r\nc\r\n", "a\nb\r\nc\r\n")
+            .expect("the text differs")
+            .render();
         assert!(
             shown.contains("     1  a"),
             "the edited line is missing: {shown}"
@@ -262,7 +336,9 @@ mod tests {
 
     #[test]
     fn removing_the_final_newline_still_shows_the_last_line() {
-        let shown = changed_region("a\nb\n", "a\nb").expect("the text differs");
+        let shown = changed_region("a\nb\n", "a\nb")
+            .expect("the text differs")
+            .render();
         assert!(
             shown.contains("     2  b"),
             "the last line is missing: {shown}"
@@ -271,7 +347,9 @@ mod tests {
 
     #[test]
     fn adding_the_final_newline_still_shows_the_last_line() {
-        let shown = changed_region("a\nb", "a\nb\n").expect("the text differs");
+        let shown = changed_region("a\nb", "a\nb\n")
+            .expect("the text differs")
+            .render();
         assert!(
             shown.contains("     2  b"),
             "the last line is missing: {shown}"
@@ -280,14 +358,16 @@ mod tests {
 
     #[test]
     fn identical_text_has_no_changed_region() {
-        assert_eq!(changed_region("a\nb\n", "a\nb\n"), None);
+        assert!(changed_region("a\nb\n", "a\nb\n").is_none());
     }
 
     #[test]
     fn a_long_span_is_cut_in_the_middle_and_says_so() {
         let before: String = (0..200).map(|n| format!("line {n}\n")).collect();
         let after: String = (0..200).map(|n| format!("LINE {n}\n")).collect();
-        let shown = changed_region(&before, &after).expect("something changed");
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
         assert!(
             shown.contains("more lines"),
             "the cut was not reported: {shown}"
@@ -299,6 +379,46 @@ mod tests {
         );
         assert!(shown.contains("LINE 0"), "the start is missing: {shown}");
         assert!(shown.contains("LINE 199"), "the end is missing: {shown}");
+    }
+
+    /// What is scanned for a credential has to be what the planner is shown, at the numbers the
+    /// person would open their editor at. Lines counted from the top of the excerpt rather than of
+    /// the file would send them to the wrong place.
+    #[test]
+    fn the_runs_an_excerpt_hands_back_carry_the_line_numbers_of_the_file() {
+        let before = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
+        let after = "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\n";
+        let excerpt = changed_region(before, after).expect("something changed");
+        let runs: Vec<(usize, String)> = excerpt.runs().collect();
+        assert_eq!(
+            runs,
+            vec![(2, "two\nthree\nfour\nFIVE\nsix\nseven\neight".to_string())]
+        );
+    }
+
+    /// The middle of a long span is not in the planner's context, so it is not a disclosure and a
+    /// credential in it is not a reason to hold the result back. The two runs are the head and the
+    /// tail, each with the number of its own first line.
+    #[test]
+    fn a_cut_excerpt_hands_back_only_the_lines_it_shows() {
+        let before: String = (1..=200).map(|n| format!("line {n}\n")).collect();
+        let after: String = (1..=200).map(|n| format!("LINE {n}\n")).collect();
+        let excerpt = changed_region(&before, &after).expect("something changed");
+        let runs: Vec<(usize, String)> = excerpt.runs().collect();
+        assert_eq!(runs.len(), 2, "a long span is a head and a tail");
+        assert_eq!(runs[0].0, 1);
+        assert!(runs[0].1.starts_with("LINE 1\n") && runs[0].1.ends_with("LINE 20"));
+        assert_eq!(runs[1].0, 181);
+        assert!(runs[1].1.starts_with("LINE 181\n") && runs[1].1.ends_with("LINE 200"));
+        let everything = runs
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !everything.contains("LINE 100"),
+            "a line the excerpt cuts was handed back to be scanned"
+        );
     }
 
     #[test]

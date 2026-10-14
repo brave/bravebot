@@ -138,6 +138,7 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::resume::a_pull_request_number_leaves_only_the_session_linked_to_that_number`
 `verified-by: bravebot_tui::resume::a_pull_request_address_leaves_only_the_session_linked_to_it`
 `verified-by: bravebot_tui::resume::the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further`
+`verified-by: bravebot_tui::resume::with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
@@ -149,7 +150,10 @@ it still has a title.
 
 `verified-by: bravebot_session::sessions::a_title_is_the_first_line_of_the_prompt`
 `verified-by: bravebot_session::sessions::a_long_title_is_cut_and_says_it_was`
+`verified-by: bravebot_session::sessions::a_title_is_cut_after_sixty_characters_rather_than_bytes`
 `verified-by: bravebot_session::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
+`verified-by: bravebot_session::sessions::a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt`
+`verified-by: bravebot_tui::app::compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session`
 
 <a id="SESSION-5"></a>
 ### SESSION-5: everything here degrades to doing nothing
@@ -559,6 +563,7 @@ prompt written over it would cost them that line.
 `verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
 `verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
 `verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
+`verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
@@ -612,6 +617,9 @@ separately from the coverage warning, which names each recorded cause once. Unkn
 be identified as unknown rather than guessed from the available backups.
 
 `verified-by: bravebot_tui::undo_tests::undo_warnings_name_recorded_causes`
+`verified-by: bravebot_cli::running::a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach`
+`verified-by: bravebot_session::sessions::continuing_a_record_keeps_a_server_warning_only_its_replaced_points_carried`
+`verified-by: bravebot_cli::running::a_continued_task_after_a_language_server_warns_on_the_point_it_opens`
 
 Undo runs only after the turn's delegates and background jobs have finished cleanup. It stops and
 reaps the session's tracked language servers before restoring files; later questions may start

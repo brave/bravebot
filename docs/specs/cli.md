@@ -25,7 +25,8 @@ documented-by:
 ## Scope
 
 Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, `auth`,
-a session in lines, and what goes where on the way out. The interface that draws is
+a session in lines, and what goes where on the way out. Also the command line that opens the
+interface that draws on a task (CLI-31). The interface itself is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
 A one-shot run has nobody to ask, and most of what makes it different follows from that. A session
@@ -1310,8 +1311,12 @@ carries the record's id in `session`, and carries `null` where the run wrote non
 
 `--resume <id>` and `--continue` given with a task, in either order (`-p "task" --resume <id>` and
 `--resume <id> -p "task"`), run the task as one more turn over that record's conversation and write
-the record back with the turn added. Everything else in the record stays as it was read. The run is
-a one-shot run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
+the record back with the turn added. The turn adds a rewind point behind the ones the record held,
+as a turn in a session does ([SESSION-19](sessions.md#SESSION-19)), so `/undo` in the session
+resumed next takes back this turn alone, on disk and in the conversation. A program the turn runs,
+and a language server the session started, is recorded on each of those points as something a
+rewind cannot put back. Everything else in the record stays as it was read. The run is a one-shot
+run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
 session's person vouched for in the trust map comes back, as it does in a session. The commands
 they vouched for do not, and the record keeps them for the session that is next resumed
 interactively.
@@ -1362,6 +1367,7 @@ process that holds the record is known.
 `verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
+`verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
 
 <a id="CLI-26"></a>
 ### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run
@@ -1552,3 +1558,68 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
+
+<a id="CLI-31"></a>
+### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn
+
+`bravebot -i "<prompt>"`, or `--interactive`, opens the session a bare `bravebot` opens and sends the
+prompt as its first turn once every question the session opens with is answered: the question about
+the working directory ([trust-map.md](trust-map.md)), a rule a checkout proposes, a directory a
+settings file names, and the match of an `--agent` name (CLI-17). It is sent as a prompt typed into
+the box is sent by Enter, so the transcript, the history and the session record hold it as the
+person's, and the session goes on from it. A line opening with `/` or `!` is sent as words, as a
+one-shot run sends it, rather than carried out as a command. A person who leaves at one of those
+questions, or an `--agent` name that matches nothing, starts no session and sends nothing.
+`bravebot "<task>"` is still the one-shot run.
+
+The prompt is the one argument after the flag. It arrives whole, as a paste does, so the characters
+a terminal draws as nothing are removed from it and counted as they are from a paste
+([pasting.md](pasting.md)), and a carriage return, alone or before a line break, becomes one line
+break. Otherwise its line breaks and indentation are kept, and only the space around it is trimmed,
+as from a typed line. `-i` composes with every flag taken out of the line before anything dispatches
+on it, as a bare `bravebot` does, `--dangerously-skip-permissions` and `--agent` among them. It
+comes first among the rest, and is refused with the status for an argument (CLI-6), before the
+terminal is taken, when no prompt follows it, when the prompt is blank or opens with `-` and holds no
+whitespace, when anything follows the prompt, when it follows a one-shot run's own options, and when
+it follows another way of starting a session: `--resume`, `--continue`, `--fork`, `--from-pr` or
+`--bg`. It is refused the same way where stdin or stdout is not a terminal, and the refusal names
+`-p`.
+
+**Why.** A script that hands somebody a task to watch otherwise has the one-shot run, which nobody
+can interrupt or follow up, and a bare session, which waits for the task to be typed. Sending the
+prompt the way Enter sends a line makes the first turn an ordinary one, under the same trust answer
+and the same questions as a turn the person typed. It is the same words a one-shot run would send,
+so a line that is a command in the box is still a prompt here.
+
+The transcript draws the prompt as the person's own line, so it is held to what the box does with
+text that arrives whole: a prompt a script read out of a file can hold an instruction spelled in
+characters nothing draws, and sent unchanged it would reach the planner as words nobody read.
+
+A flag of its own rather than the positional prompt, because scripts call `bravebot "<task>"` as the
+one-shot it is, and opening the interface there would leave them waiting at a screen nobody reads.
+
+Anything after the prompt is refused rather than ignored, for the reason CLI-13 refuses a settings
+path that is not a file. `--model`, `--effort` and the other options for a task describe a one-shot
+run, and a session that opened on a model other than the one the line named would be running under a
+choice its author did not make. The prompt is one argument because a prompt a script assembled holds
+line breaks and indentation that are part of it, and joining words would flatten them. After another
+way of starting, `-i` would be dropped by one that reads no further than its value, read as the
+start of a one-shot run's arguments by another, or sent as the first word of a background session's
+prompt, and none of those is the session the line asked for.
+
+Refused without a terminal rather than run as a one-shot, because the line asked for somebody to
+watch the task and be able to stop it. A one-shot in its place, with `--dangerously-skip-permissions`,
+would make every change with nobody watching.
+
+**Known cost.** `--model` and `--effort` do not name the model or the level of a session, this one
+or a bare one: those are what `/model` and `/effort` recorded, or what a settings file names, and the
+two commands change them once the session is open.
+
+`verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
+`verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`
+`verified-by: bravebot_cli::main::anything_after_the_prompt_is_refused_by_name`
+`verified-by: bravebot_cli::main::a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task`
+`verified-by: bravebot_cli::main::a_session_flag_beside_another_way_of_starting_is_refused`
+`verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`
+`verified-by: bravebot_tui::app::a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once`
+`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`

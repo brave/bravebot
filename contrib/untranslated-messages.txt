@@ -7,6 +7,15 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:cli-interactive-needs-a-prompt
+fr:cli-interactive-needs-a-terminal
+fr:cli-interactive-not-with-a-task
+fr:cli-interactive-not-with-another-start
+fr:cli-interactive-takes-nothing-else
+fr:cli-option-interactive
+fr:cli-prompt-invisible-removed
+fr:cli-usage-interactive-prompt
+fr:home-skills-reached-through-the-workspace
 fr:host-asked
 fr:host-explained
 fr:host-no

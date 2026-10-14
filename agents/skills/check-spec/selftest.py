@@ -794,6 +794,11 @@ CASES = [
         None,
     ),
     (
+        "the register's front matter key, which the security-audit skill reads",
+        lambda root: edit_spec(root, "guards:\n", "kept_in:\n  - Confirmer::ask: nothing\nguards:\n"),
+        None,
+    ),
+    (
         "one guarded symbol pinning its sites while another does not",
         lambda root: edit_spec(root, "guards:\n", "guards:\n  - symbol: opens_twice\n"),
         "guard-sites-partial",

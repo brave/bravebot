@@ -416,7 +416,7 @@ impl Bridge {
         });
         let reported = rules.json();
         if let Ok(mut state) = open.state.lock() {
-            state.rules = rules;
+            state.answers.rules = rules;
         }
         reported
     }
@@ -641,15 +641,18 @@ impl Bridge {
                     "this session has not been written down yet, so there is nothing to fork from",
                 ));
             };
+            // What the record keeps and nothing else: a server approved, a run prompt drawn and a
+            // file agreed to hold a secret were answers given to the parent.
+            let (trust, programs, rules) = state.answers.what_a_record_keeps();
             (
                 state.conversation.snapshot(),
                 state.conversation.recounted(),
-                state.trust.clone(),
-                state.programs.clone(),
+                trust.clone(),
+                programs.clone(),
                 state.directories.clone(),
                 state.todos.clone(),
                 parent.clone(),
-                state.rules.clone(),
+                rules.clone(),
             )
         };
 
@@ -1432,12 +1435,13 @@ impl Bridge {
         }
         let gaps = point.coverage.gaps();
         let snapshot = point.snapshot;
+        let (trust, programs, servers) = state.answers.what_a_rewind_takes_back();
         let refused = bravebot_agent::rewind::restore(
             &workspace,
             point.backups,
-            &mut state.trust,
+            trust,
             &snapshot.trust,
-            &mut state.servers,
+            servers,
             bravebot_agent::home::directory().as_deref(),
         );
         if !refused.is_empty() {
@@ -1452,16 +1456,16 @@ impl Bridge {
         // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
         // which is the same set there, since its approvals only grow; here one can be revoked
         // after the turn that is being undone, and a rewind must not hand it back.
-        let mut programs = snapshot.programs;
-        let revoked: Vec<_> = programs
+        let mut restored = snapshot.programs;
+        let revoked: Vec<_> = restored
             .iter()
-            .filter(|command| !state.programs.iter().any(|held| held == *command))
+            .filter(|command| !programs.iter().any(|held| held == *command))
             .cloned()
             .collect();
         for command in &revoked {
-            programs.forget(command);
+            restored.forget(command);
         }
-        state.programs = programs;
+        *programs = restored;
         if let Some(history) = state.history.as_mut() {
             history.retain(|turn| turn.number <= snapshot.turns);
         }
@@ -1471,7 +1475,7 @@ impl Bridge {
             && !snapshot.was_wrote
             && refused.is_empty()
             && gaps.is_empty()
-            && state.trust == snapshot.trust;
+            && state.answers.trust == snapshot.trust;
         if let Some(stored) = state.handle.as_mut() {
             stored.truncate_audit(snapshot.turns + 1);
             if discard {
@@ -1507,7 +1511,7 @@ impl Bridge {
             "contextTokens": standing.measured,
             "archived": standing.archive.len(),
             "todos": todos_json(&state.todos),
-            "trust": { "rules": rules_json(&state.trust) },
+            "trust": { "rules": rules_json(&state.answers.trust) },
             "rewind": rewind_json(state, &project),
         }))
     }
@@ -1698,7 +1702,7 @@ impl Bridge {
         // nothing, so such a line names none.
         let mut named = String::new();
         if let Ok(mut state) = open.state.lock() {
-            state.trust = trust;
+            state.answers.trust = trust;
             if let Some(handle) = state.handle.as_ref() {
                 named = handle.id().to_string();
             }
@@ -1740,14 +1744,14 @@ impl Bridge {
             match kind.as_str() {
                 "path" => {
                     let path = request.string("path")?;
-                    if !state.trust.rules().any(|(held, integrity)| {
+                    if !state.answers.trust.rules().any(|(held, integrity)| {
                         held == path && integrity == Some(bravebot_core::label::Integrity::Trusted)
                     }) {
                         return Err(Failure::bad_request(
                             "This path grant is no longer present.",
                         ));
                     }
-                    state.trust.distrust(&path);
+                    state.answers.trust.distrust(&path);
                 }
                 "command" => {
                     let selected = request
@@ -1755,6 +1759,7 @@ impl Bridge {
                         .get("command")
                         .ok_or_else(|| Failure::bad_request("Missing command"))?;
                     let command = state
+                        .answers
                         .programs
                         .iter()
                         .find(|command| {
@@ -1765,7 +1770,7 @@ impl Bridge {
                         .ok_or_else(|| {
                             Failure::bad_request("This command grant is no longer present.")
                         })?;
-                    state.programs.forget(&command);
+                    state.answers.programs.forget(&command);
                 }
                 // Withdrawn for the directory rather than this session, which keeps the map it
                 // has: the next session started there asks (TRUST-24).
@@ -1784,14 +1789,14 @@ impl Bridge {
             }
         }
         Ok(json!({
-            "paths": rules_json(&state.trust),
-            "commands": state.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            "paths": rules_json(&state.answers.trust),
+            "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
             // The rules this session opened under. They are read from settings files and
             // cannot be revoked here: editing the file changes them for the next session.
-            "settingsRules": state.rules.json(),
+            "settingsRules": state.answers.rules.json(),
         }))
     }
 
@@ -2317,8 +2322,8 @@ fn work(work: Work) {
         Mcp::Unstarted => None,
     };
     let mut task = Task::new(&prompt)
-        .already_asked_about(state.asked_about.clone())
-        .already_exposed(state.exposed.clone())
+        .already_asked_about(state.answers.asked_about.clone())
+        .already_exposed(state.answers.exposed.clone())
         .with_home(bravebot_agent::home::directory())
         // What a leading `~` in a run line stands for, which is the home directory and not the
         // state directory above (CMDLINE-4). Without it the line is refused as having no home.
@@ -2338,7 +2343,7 @@ fn work(work: Work) {
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).
-        .with_permissions(state.rules.permissions.clone())
+        .with_permissions(state.answers.rules.permissions.clone())
         .with_mcp(mcp)
         // A turn in a bot's conversation is addressed to the bot's definition whatever composed
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
@@ -2375,14 +2380,14 @@ fn work(work: Work) {
 
     // Cloned out before the call, because the conversation is borrowed mutably for the
     // duration and both of these are passed by value.
-    let trust = state.trust.clone();
+    let trust = state.answers.trust.clone();
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
-    let programs = state.programs.clone();
+    let programs = state.answers.programs.clone();
     // The session's language servers (LSP-8), taken for this turn and put back after it. The
     // first turn builds the set. Building it starts no server: one starts on the first question
     // that needs it, after the person approves.
-    let mut servers = state.servers.take().unwrap_or_else(|| {
+    let mut servers = state.answers.servers.take().unwrap_or_else(|| {
         // Use the task's home so the index is cached with the rest of the session's state.
         bravebot_agent::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
     });
@@ -2410,23 +2415,12 @@ fn work(work: Work) {
     );
     // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
     // stop here, and the next turn would ask about the same language again.
-    state.servers = Some(servers);
+    state.answers.servers = Some(servers);
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
 
     // Cleanup has finished on every return, including cancellation and request errors.
-    // Taken apart with no `..`, so an answer a turn learns to remember does not build until this
-    // front-end says what becomes of it.
-    let agent_turn::Decisions {
-        trust,
-        programs,
-        asked_about,
-        exposed,
-    } = completed.decisions;
-    state.trust = trust;
-    state.programs = programs;
-    state.asked_about = asked_about;
-    state.exposed = exposed;
+    state.answers.adopt(completed.decisions);
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
@@ -2486,7 +2480,7 @@ fn work(work: Work) {
 
             let archived = save(&project, &mut state, turn, sink.trail());
 
-            let rules = rules_json(&state.trust);
+            let rules = rules_json(&state.answers.trust);
 
             Event::new(
                 "turn.done",
@@ -2681,11 +2675,11 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
         // With the record's rules, so a yes this turn gives to a recorded memory does not outlive
         // rewinding past it.
         trust: bravebot_agent::memory::with_recorded(
-            &state.trust,
+            &state.answers.trust,
             workspace,
             bravebot_agent::home::directory().as_deref(),
         ),
-        programs: state.programs.clone(),
+        programs: state.answers.programs.clone(),
         // A terminal index the desktop has no transcript for. Not stored; a terminal resuming the
         // record places each point again.
         transcript_len: 0,
@@ -2739,7 +2733,7 @@ fn record_turn(
 /// The same `Handle` the terminal uses, so a session written here is one `bravebot --resume`
 /// can pick up. Created on the first turn rather than when the window opened: an
 /// abandoned window should leave nothing behind.
-fn save(
+pub(crate) fn save(
     project: &std::path::Path,
     state: &mut State,
     turn: usize,
@@ -2768,8 +2762,8 @@ fn save(
             todos: &state.todos,
             asides: &state.asides,
             rewind: state.rewind.points(),
-            trust: &state.trust,
-            programs: &state.programs,
+            trust: &state.answers.trust,
+            programs: &state.answers.programs,
             directories: &state.directories,
             // Every session this window writes is a turn session. `Standing` carries the
             // manifest so the picker can mark a run that may be read and not continued, and
@@ -2981,7 +2975,7 @@ mod coverage_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), &directory);
         let mut state = State::fresh(TrustStore::new(&directory));
-        state.programs.trust(command.clone());
+        state.answers.programs.trust(command.clone());
         let workspace = Workspace::new(&directory).unwrap();
         open_rewind_point(&mut state, &workspace, "list the files");
         let mut bridge = Bridge::new(Box::new(|_| {}));
@@ -3010,6 +3004,148 @@ mod coverage_tests {
             json!([]),
             "the revoked command came back"
         );
+    }
+
+    /// SESSION-19: undoing a turn takes back the program vouched for in it and stops the servers,
+    /// as the terminal's undo does. A file agreed to be shown or to hold a secret keeps the
+    /// session's lifetime (CRED-13, CRED-15) and a run prompt drawn grants nothing, and no point
+    /// holds either, so both are still there afterwards.
+    #[test]
+    fn undoing_a_turn_stops_the_servers_and_keeps_the_files_agreed_to() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("rewind-answers");
+        std::fs::create_dir_all(&directory).unwrap();
+        let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), &directory);
+        let key = directory.join("deploy/key.pem");
+        let mut state = State::fresh(TrustStore::new(&directory));
+        let workspace = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &workspace, "list the files");
+        state.answers.programs.trust(command.clone());
+        state.answers.asked_about.record(command);
+        state.answers.exposed.allow(".env");
+        state.answers.exposed.allow_creating(&key);
+        state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(&directory, None));
+        let asked_about = state.answers.asked_about.clone();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
+
+        let line = json!({"id": 1, "method": "session.rewind", "params": {
+            "session": handle, "steps": 1
+        }})
+        .to_string();
+        bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+
+        let open = bridge.open.get(&handle).unwrap();
+        let state = open.state.lock().unwrap();
+        assert!(
+            state.answers.programs.is_empty(),
+            "the undo kept a program vouched for in the turn it took back"
+        );
+        assert!(
+            state.answers.servers.is_none(),
+            "the undo left the language servers running"
+        );
+        assert!(
+            state.answers.exposed.holds(".env"),
+            "the undo forgot a file agreed to be shown"
+        );
+        assert!(
+            state.answers.exposed.allows_creating(&key),
+            "the undo forgot a file agreed to hold a secret"
+        );
+        assert_eq!(
+            state.answers.asked_about, asked_about,
+            "the undo forgot the run prompts drawn"
+        );
+    }
+
+    /// A fork opens from what the record keeps: the map, the programs vouched for and the rules.
+    /// A server approved, a run prompt drawn and a file agreed to be shown or to hold a secret were
+    /// answers given to the parent, so the fork is asked again about each and the parent keeps
+    /// them.
+    #[test]
+    fn a_desktop_fork_asks_again_about_what_only_the_parent_was_asked() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-answers");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "answers-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), root);
+        let key = root.join("deploy/key.pem");
+        let mut trust = TrustStore::new(root);
+        trust.trust("notes.md");
+        let mut parent_state = State::resumed(root, &record, trust);
+        parent_state.answers.programs.trust(command.clone());
+        parent_state.answers.asked_about.record(command.clone());
+        parent_state.answers.exposed.allow(".env");
+        parent_state.answers.exposed.allow_creating(&key);
+        parent_state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(root, None));
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            parent_state,
+            true,
+            None,
+            false,
+        ));
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let state = child.state.lock().unwrap();
+        assert!(
+            state.answers.trust.is_trusted("notes.md"),
+            "the fork lost the map"
+        );
+        assert!(
+            state.answers.programs.iter().any(|held| *held == command),
+            "the fork lost a program vouched for"
+        );
+        assert!(
+            state.answers.servers.is_none(),
+            "the fork inherited the parent's language servers"
+        );
+        assert_eq!(
+            state.answers.asked_about,
+            bravebot_core::programs::AskedAbout::new(),
+            "the fork inherited the parent's run prompts"
+        );
+        assert!(
+            !state.answers.exposed.holds(".env"),
+            "the fork inherited a file the parent agreed to be shown"
+        );
+        assert!(
+            !state.answers.exposed.allows_creating(&key),
+            "the fork inherited a file the parent agreed to hold a secret"
+        );
+        drop(state);
+        let parent_state = bridge.open.get(&parent).unwrap().state.lock().unwrap();
+        assert!(
+            parent_state.answers.exposed.holds(".env"),
+            "forking took the parent's answers away"
+        );
+        assert!(parent_state.answers.servers.is_some());
     }
 
     /// A turn's workspace is new, so the server warning the record kept has to reach the point a
@@ -3142,7 +3278,7 @@ mod permissions_tests {
             bravebot_core::programs::Command::new("/usr/bin/python3", vec!["-V".into()], "/work");
         let link = file.clone().started_as("/work/.venv/bin/python");
         let mut state = State::fresh(TrustStore::new("/work"));
-        state.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
+        state.answers.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
         let revoke = Request::parse(

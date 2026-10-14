@@ -274,8 +274,11 @@ fn refresh(install: Install, stored: Option<Record>) {
         // joined: a session that ends while the ask is still out would otherwise record nothing,
         // and a registry that accepts the connection and then says nothing holds the thread for
         // the whole reply timeout, which outlasts most sessions. Recording the ask first bounds
-        // the requests to one an hour whatever becomes of this one.
-        store(install, recorded(stored, None, now()));
+        // the requests to one an hour whatever becomes of this one, so an ask whose stamp did not
+        // land is not made: nothing would hold the next launch back from making it again.
+        if !store(install, recorded(stored, None, now())) {
+            return;
+        }
         if let Some(latest) = ask(install) {
             store(install, recorded(stored, Some(latest), now()));
         }
@@ -355,24 +358,23 @@ fn version_in(install: Install, bytes: &[u8]) -> Option<Version> {
     parse_version(answer.get(install.field())?.as_str()?)
 }
 
-/// Write the record down for the next launch.
+/// Write the record down for the next launch, answering whether it landed.
 ///
-/// Best effort throughout: a machine with no home, a read-only disk and an incognito session all
-/// mean the next launch asks again, which is the same thing that happens on a first run.
-fn store(install: Install, record: Record) {
+/// A machine with no home, a directory this user cannot write to and an incognito session all
+/// answer `false`, and nothing is reported (UPDATE-9).
+fn store(install: Install, record: Record) -> bool {
     let Some(directory) = bravebot_agent::home::writable() else {
-        return;
+        return false;
     };
     if bravebot_agent::home::create_directory(&directory).is_err() {
-        return;
+        return false;
     }
     let path = directory.join(CACHE_FILE);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let temporary = directory.join(CACHE_TEMPORARY);
     let contents = merged(&existing, install, record);
-    if bravebot_agent::home::write_file(&temporary, contents.as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, path);
-    }
+    bravebot_agent::home::write_file(&temporary, contents.as_bytes()).is_ok()
+        && std::fs::rename(&temporary, path).is_ok()
 }
 
 /// This installation's record, with the other installation's kept as it stood.

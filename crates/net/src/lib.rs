@@ -379,6 +379,8 @@ pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: Vec<(String, String)>,
+    /// Headers attached only when the request target matches the socket of [`Request::url`].
+    pub socket_headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
     /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
     pub reply: Option<ReplyBound>,
@@ -411,6 +413,7 @@ impl Request {
             method: Method::Get,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: None,
             reply: None,
             patient_on_this_machine: false,
@@ -422,6 +425,7 @@ impl Request {
             method: Method::Post,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: Some(body),
             reply: None,
             patient_on_this_machine: false,
@@ -430,6 +434,15 @@ impl Request {
 
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Add a header that is only sent when the target URL matches the socket of [`Request::url`].
+    ///
+    /// If a redirect hop leaves that socket, these headers are not sent, so credentials
+    /// or server-scoped headers never leak to an unintended destination.
+    pub fn socket_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.socket_headers.push((name.into(), value.into()));
         self
     }
 
@@ -828,19 +841,29 @@ fn send(
     url: &str,
     patient: bool,
 ) -> Result<Sent, EgressError> {
+    let declared_socket = bravebot_core::url::socket_of(&request.url);
+    let current_socket = bravebot_core::url::socket_of(url);
+    let on_declared_socket = declared_socket.is_some() && declared_socket == current_socket;
+
+    let headers = request
+        .headers
+        .iter()
+        .filter(|(name, _)| on_declared_socket || !name.eq_ignore_ascii_case("authorization"))
+        .chain(request.socket_headers.iter().filter(|_| on_declared_socket));
+
     // GET and POST builders have different types in ureq, so the header loop is
     // repeated rather than abstracted over them.
     let result = match request.method {
         Method::Get => {
             let mut builder = agent.get(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             within(builder, timeouts, request.reply, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             let builder = within(builder, timeouts, request.reply, patient);
@@ -1388,8 +1411,8 @@ mod tests {
         });
 
         let tmp = tempfile::tempdir().expect("a scratch directory");
-        let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
+        let dir = tmp.path().join(bravebot_diag::DIRECTORY);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
 
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "fetch a page");

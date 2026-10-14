@@ -75,6 +75,7 @@ without seeing it. The `instruction` comes from the planner and must not
 be private.
 
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
+`verified-by: bravebot_agent::turn::a_planner_shown_private_content_cannot_instruct_a_processor`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner

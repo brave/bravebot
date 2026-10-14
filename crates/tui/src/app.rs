@@ -640,8 +640,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
 /// turn ends and stops at a command, so without this the line behind one would wait for a key press
 /// that nobody is going to make.
 fn queued_next(session: &mut Session) -> Option<Action> {
-    // The first prompt of a session a handoff has just begun, which nobody will press anything to
-    // send: Enter on the brief already did.
+    // The first prompt of a session a handoff or `-i` has just begun, which nobody will press
+    // anything to send: Enter on the brief, or the command line, already did.
     if let Some(prompt) = session.start_handed_over() {
         return Some(Action::Submit(prompt));
     }
@@ -1222,6 +1222,9 @@ pub enum Start {
     /// A new session, with nothing behind it.
     #[default]
     Fresh,
+    /// A new session that sends this prompt as its first turn once the questions it opens with are
+    /// answered, as the person's own line (CLI-31).
+    Sending(String),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
@@ -1784,6 +1787,36 @@ fn with_standing<R>(
     })
 }
 
+/// Write a compaction down now rather than at the end of the next turn: the shortening is the
+/// change, and a session that compacted and then slept should resume compacted.
+///
+/// Nothing where no turn has been had and nothing is on disk, as with closing a directory: the
+/// conversation is empty, so nothing was shortened, and a session opened and abandoned should leave
+/// no record.
+fn save_compacted(
+    session: &Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    conversation: &Conversation,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+    events: &[Stamped],
+) {
+    if session.turns == 0 && stored.resumable().is_none() {
+        return;
+    }
+    let title = stored.title().to_string();
+    with_standing(
+        session,
+        conversation,
+        trust,
+        programs,
+        workspace,
+        |standing| stored.save(&title, standing),
+    );
+    stored.append_audit(session.turns, events);
+}
+
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
 ///
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
@@ -2019,13 +2052,17 @@ fn begin_session(
         Start::Resuming(record) => record.agent.clone(),
         _ => None,
     };
+    let first_turn = match &start {
+        Start::Sending(prompt) => Some(prompt.clone()),
+        _ => None,
+    };
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2243,6 +2280,14 @@ fn begin_session(
         settings.agent(),
     ) {
         return Err(Ended::Refused(refused));
+    }
+
+    // Held rather than sent: the loop's first pass sends it, and the loop runs only once this has
+    // returned with every startup question answered. No unit test reaches this call, because this
+    // function needs a real terminal; a scripted session (`contrib/drive_tui.py`) started with `-i`
+    // checks it.
+    if let Some(prompt) = first_turn {
+        session.hand_over_from_the_command_line(&prompt);
     }
 
     Ok(Begun {
@@ -2465,14 +2510,15 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Undo => {
+                let (trust, programs, language_servers) = answers.what_a_rewind_takes_back();
                 rewind(
                     &mut session,
                     &mut conversation,
-                    &mut answers.trust,
-                    &mut answers.programs,
+                    trust,
+                    programs,
                     &mut stored,
                     &workspace,
-                    &mut answers.servers,
+                    language_servers,
                     1,
                 );
                 needs_draw = true;
@@ -2482,16 +2528,20 @@ fn event_loop(
                     list_rewind_points(&mut session);
                 } else {
                     match turns.parse::<usize>() {
-                        Ok(steps) if steps > 0 => rewind(
-                            &mut session,
-                            &mut conversation,
-                            &mut answers.trust,
-                            &mut answers.programs,
-                            &mut stored,
-                            &workspace,
-                            &mut answers.servers,
-                            steps,
-                        ),
+                        Ok(steps) if steps > 0 => {
+                            let (trust, programs, language_servers) =
+                                answers.what_a_rewind_takes_back();
+                            rewind(
+                                &mut session,
+                                &mut conversation,
+                                trust,
+                                programs,
+                                &mut stored,
+                                &workspace,
+                                language_servers,
+                                steps,
+                            )
+                        }
                         _ => session.note(t!(session_rewind_needs_a_number)),
                     }
                 }
@@ -2793,19 +2843,15 @@ fn event_loop(
                     &answers.trust,
                     &focus,
                 )?;
-
-                // Written now rather than at the end of the next turn: the shortening is the
-                // change, and a session that compacted and then slept should resume compacted.
-                let title = stored.title().to_string();
-                with_standing(
+                save_compacted(
                     &session,
+                    &mut stored,
                     &conversation,
                     &answers.trust,
                     &answers.programs,
                     &workspace,
-                    |standing| stored.save(&title, standing),
+                    &events,
                 );
-                stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
             action @ (Action::Aside(..) | Action::Recap) => {
@@ -3072,8 +3118,8 @@ fn event_loop(
                         &mut stored,
                     )?;
                     // Taken apart with no `..`, so an answer a turn learns to remember does not
-                    // build until it has a place in `answers`, where `/cd`, `/clear` and `/branch`
-                    // decide it.
+                    // build until it has a place in `answers`, where `/cd`, `/clear`, `/branch`,
+                    // `/undo` and `/rewind` decide it.
                     let Continued {
                         conversation: next,
                         trust,
@@ -4821,91 +4867,13 @@ impl Rules {
     }
 }
 
-/// The answers the event loop itself keeps past the prompt that gave them.
-///
-/// One value so that `/cd`, `/clear` and `/branch` each take it apart with no `..`: a set added here
-/// does not build until each says whether it is kept, reset, rebased or read again. The mode, vetting
-/// and the MCP servers are the `Session`'s, and the directories `/add-dir` opened are the
-/// `Workspace`'s, so no pattern reaches them.
-struct Answers {
-    trust: TrustStore,
-    programs: TrustedPrograms,
-    /// The language servers this session has started, LSP-8. Held here rather than inside a turn
-    /// because the process is the session's: one built per turn would be shut down at the end of
-    /// the turn that started it, so the next message would ask the same person about the same
-    /// language and wait for a second index of the same tree. `None` until the first turn builds
-    /// one, and again after `/clear`, which ends the session the approval belonged to, and after
-    /// `/cd`, which leaves the tree it was approved for.
-    servers: Option<LanguageServers>,
-    /// Every run prompt this session has drawn, so a second prompt for one binary under other
-    /// arguments can say that a settings file is what ends the asking. It grants nothing and is not
-    /// written down anywhere: a session that ends forgets what it asked, which is the same lifetime
-    /// the list of programs it vouched for has.
-    asked_about: AskedAbout,
-    /// Every file this session has agreed the planner may be given despite the credential scan.
-    /// The same lifetime, except that `/cd` drops it: an answer is kept under the file's name from
-    /// the working directory, which after a move names another file.
-    exposed: bravebot_core::credentials::Exposed,
-    rules: Rules,
-}
-
-impl Answers {
-    /// What a session holds on opening, before any turn has asked anything.
-    fn opening(trust: TrustStore, programs: TrustedPrograms, rules: Rules) -> Self {
-        Self {
-            trust,
-            programs,
-            servers: None,
-            asked_about: AskedAbout::new(),
-            exposed: bravebot_core::credentials::Exposed::new(),
-            rules,
-        }
-    }
-
-    /// The map, the programs vouched for and the rules are the record's, so the copy `/branch`
-    /// carries on in holds them. A server approved, a run prompt drawn and a file agreed to hold a
-    /// secret were answers given to the session the copy was made from, and `--resume` of the copy
-    /// would start without them.
-    fn forget_what_no_record_keeps(&mut self) {
-        let Answers {
-            trust: _,
-            programs: _,
-            rules: _,
-            servers,
-            asked_about,
-            exposed,
-        } = self;
-        *servers = None;
-        *asked_about = AskedAbout::new();
-        *exposed = bravebot_core::credentials::Exposed::new();
-    }
-
-    /// Forget what the session agreed to, for one beginning again in this process (`/clear`).
-    fn forget_what_was_agreed(&mut self) {
-        let Answers {
-            // Replaced by the `/clear` arm before it calls this: the map the new session was asked
-            // for, TRUST-6, and the rules read again for the root it opens in, PERM-15.
-            trust: _,
-            rules: _,
-            programs,
-            servers,
-            asked_about,
-            exposed,
-        } = self;
-        // A new session vouches for no program, on the same reasoning as the map: the list is a
-        // standing permission, and this begins a session that was never asked.
-        *programs = TrustedPrograms::new();
-        // The servers go with it, LSP-8: what was approved was a process for the session, so
-        // dropping the set shuts them down and the session beginning here is asked again before
-        // one starts.
-        *servers = None;
-        // And nothing has been asked about, since the questions this list holds were put in a
-        // session that is over.
-        *asked_about = AskedAbout::new();
-        // And nothing agreed to be shown, and no file agreed to hold a secret, for the same reason.
-        *exposed = bravebot_core::credentials::Exposed::new();
-    }
-}
+/// The answers the event loop itself keeps past the prompt that gave them, with the rules it reads
+/// for the root it is in. `/cd`, `/clear`, `/branch`, `/undo` and `/rewind` each take it apart with
+/// no `..`, so a set added to [`bravebot_agent::answers::Answers`] does not build until each says
+/// whether it is kept, reset, rebased or read again. The mode, vetting and the MCP servers are the
+/// `Session`'s, and the directories `/add-dir` opened are the `Workspace`'s, so no pattern reaches
+/// them.
+type Answers = bravebot_agent::answers::Answers<Rules>;
 
 /// The directories the names in a settings file would open, in the order they were named.
 ///
@@ -5039,7 +5007,7 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
+        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -5264,17 +5232,21 @@ fn opening_trust(
 
 /// A key press while a command runs from shell mode.
 ///
-/// A scroller left open when the command began (a queued command line begins one as the turn ends,
-/// and nothing closes a view then) answers the press first, so `q`, Escape, Ctrl-O and Ctrl-C close
-/// it and the press that reaches the command is the next one (SCROLL-1). Otherwise a running
-/// command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a turn: the
-/// way out is the press after that, at the box. Every other key waits. A command is brief, and
-/// taking a prompt here would leave it half-typed when the output lands on top of it.
+/// A view left open when the command began answers the press first, since a queued command line
+/// begins one as the turn ends and nothing closes a view then. The delegate view takes every key
+/// (WATCH-9) and the scroller its own (SCROLL-1), so Ctrl-C and Escape are theirs while either is
+/// open, and the first press after it closes is the one that reaches the command. Otherwise a
+/// running command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a
+/// turn: the way out is the press after that, at the box. Every other key waits. A command is
+/// brief, and taking a prompt here would leave it half-typed when the output lands on top of it.
 fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     if key.kind == KeyEventKind::Release {
         return;
     }
-    if session.scrolling() {
+    if session.watching().is_some() {
+        let action = watching_key(session, key);
+        act_while_working(session, action, crate::clipboard::paste);
+    } else if session.scrolling() {
         let action = scroller_key(session, key);
         act_while_working(session, action, crate::clipboard::paste);
     } else if stops_a_command(session, key) {
@@ -5930,6 +5902,7 @@ fn manifest_animated(
         .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .asking_about_unconfined(true)
         .with_sandbox_mode(session.sandbox_mode());
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
@@ -6193,13 +6166,21 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     }
 }
 
+/// Whether a queued command line ends the goal, or sets, pauses or clears one: `/exit`, `/clear`
+/// and `/goal` in any form.
+fn ends_or_changes_a_goal(line: &str) -> bool {
+    let line = line.trim();
+    line == EXIT_COMMAND || line == CLEAR_COMMAND || argument_to(line, GOAL_COMMAND).is_some()
+}
+
 /// What goes out once a turn has ended, and whose line it is, with `judge` being what puts the goal
 /// to a check.
 ///
 /// Nothing waiting goes out after somebody has asked to leave. A prompt the person queued goes
 /// before the goal is judged: their own prompts are the session, and a condition judged before they
-/// have been sent would be judged against an exchange that is missing them. The sentence a goal
-/// carries the work on with is this program's, so a `@path` inside it names no file.
+/// have been sent would be judged against an exchange that is missing them. A command the person
+/// queued that ends or changes the goal is carried out before it is judged too (GOAL-10). The
+/// sentence a goal carries the work on with is this program's, so a `@path` inside it names no file.
 fn next_after_a_turn(
     session: &mut Session,
     judge: impl FnOnce(&mut Session) -> io::Result<Option<String>>,
@@ -6209,6 +6190,12 @@ fn next_after_a_turn(
     }
     if let Some(queued) = session.send_queued() {
         return Ok(Some((queued, Wrote::ThePerson)));
+    }
+    // The outer loop carries out what is left of the queue, and a command among it that ends or
+    // changes the goal has to run before the goal sends the work back, or it waits on up to ten
+    // more rounds. Any other command leaves the goal as it was, so it is judged as usual.
+    if session.commands_waiting().any(ends_or_changes_a_goal) {
+        return Ok(None);
     }
     Ok(judge(session)?.map(|prompt| (prompt, Wrote::TheDriver)))
 }
@@ -6505,6 +6492,7 @@ fn run_turn_animated(
         .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .asking_about_unconfined(true)
         .with_sandbox_mode(session.sandbox_mode())
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
@@ -7508,7 +7496,22 @@ struct Carried {
 
 /// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
 fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) {
+    // Stopping a turn stops the loop it was part of, and stops one the person was not part way
+    // through: the key means "stop what is happening", and a schedule that survived it would send
+    // the next prompt as though nothing had been said (LOOP-11).
+    session.stop_loop();
+    // And the watch whose fire this turn was, since stopping a fire's turn is the most exact way
+    // anybody has to say which watch they are finished with: they are reading its prompt when they
+    // press the key. A turn that was not a fire ends no watch, because that press is a person
+    // steering their own work.
+    session.stop_firing_watch();
+    // Not the goal, which outlives one turn by design. A stopped turn is recorded as failed, so it
+    // is not judged and the work is not sent straight back, and the person who stops a turn going
+    // the wrong way keeps the condition they set: the key means "stop this", and a second press
+    // with nothing running takes it off.
     session.stopped(attempts);
+    // A fire is a whole turn, so the gap to the next fire is measured from here.
+    session.watch_turn_ended();
     if !session.is_quitting() {
         session.restore(prompt);
     }
@@ -7631,26 +7634,12 @@ fn fold_outcome(
             }
         }
         Err(error) => {
-            // Stopping a turn stops the loop it was part of, and stops one the person was not
-            // part way through: the key means "stop what is happening", and a schedule that
-            // survived it would send the next prompt as though nothing had been said.
-            if matches!(error, turn::TurnError::Cancelled { .. }) {
-                session.stop_loop();
-                // And the watch whose fire this turn was, since stopping a fire's turn is the
-                // most exact way anybody has to say which watch they are finished with: they are
-                // reading its prompt when they press the key. A turn that was not a fire ends no
-                // watch, because that press is a person steering their own work.
-                session.stop_firing_watch();
-                // Not the goal, which outlives one turn by design. A stopped turn is recorded as
-                // failed, so it is not judged and the work is not sent straight back, and the
-                // person who stops a turn going the wrong way keeps the condition they set: the
-                // key means "stop this", and a second press with nothing running takes it off.
-            } else {
-                // Any other failure is a tick that ended, and a self-paced loop that was told
-                // nothing falls back to the driver's own wait. A loop must not end because one
-                // request failed, and must not run forever on failures either.
-                session.loop_turn_ended(None);
-            }
+            // A cancelled turn never arrives here: `finish_turn` hands it to
+            // `finish_cancelled_turn`, which ends the loop (LOOP-11). Any other failure is a tick
+            // that ended, and a self-paced loop that was told nothing falls back to the driver's
+            // own wait. A loop must not end because one request failed, and must not run forever
+            // on failures either.
+            session.loop_turn_ended(None);
 
             // The trail is kept on failure too: a refusal is exactly when a user wants
             // to see what happened.
@@ -9292,6 +9281,120 @@ mod tests {
             goal_check_key(&mut session, released(ctrl('c')));
             assert!(session.goal().is_some(), "the release took the goal off");
             assert!(!session.is_quitting(), "the release ended the session");
+        }
+
+        /// A command line queued behind a turn begins as the turn ends, and nothing closes the view
+        /// then, so a person reading a delegate when the turn finished is still reading it while
+        /// the command runs. The view is on the second of two delegates, so there is a list behind
+        /// it.
+        fn watched_under_a_running_command() -> (Session, Cancel) {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            let reader = spawn(&mut session, "reader", "find the parser");
+            let checker = spawn(&mut session, "checker", "run the build");
+            handle_key_while_working(&mut session, ctrl('l'));
+            session.open_watched();
+            session.delegate_finished(reader, "answered".to_string(), false, None);
+            session.delegate_finished(checker, "built".to_string(), false, None);
+            session.complete("an answer", Vec::new(), 0);
+            session.begin_command();
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("checker"),
+                "the view was not on a delegate when the command began"
+            );
+            (session, Cancel::new())
+        }
+
+        /// The two keys that close the view from either level close it from a delegate with a
+        /// list behind it, and the command they did not reach goes on.
+        #[test]
+        fn ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command() {
+            for closing in [ctrl('c'), ctrl('l')] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, closing, &cancel);
+
+                assert!(
+                    session.watching().is_none(),
+                    "{closing:?} left the view open"
+                );
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{closing:?} stopped the command as well as closing the view"
+                );
+            }
+        }
+
+        /// Escape and `q` are read against the nearest level while a command runs as they are
+        /// mid-turn: back to the list from a delegate, and out from the list.
+        #[test]
+        fn escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close() {
+            for leaving in [key(KeyCode::Esc), key(KeyCode::Char('q'))] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, leaving, &cancel);
+                assert!(
+                    session.listing_delegates(),
+                    "{leaving:?} did not go back to the list from a delegate"
+                );
+
+                command_key(&mut session, leaving, &cancel);
+                assert!(
+                    session.watching().is_none(),
+                    "{leaving:?} did not close the list"
+                );
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{leaving:?} stopped the command from inside the view"
+                );
+            }
+        }
+
+        /// The press that closes the view is spent doing so, and its release is not a press, so
+        /// the next press is the one that stops the command.
+        #[test]
+        fn the_press_after_the_view_closes_stops_the_command() {
+            for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+                let (mut session, cancel) = watched_under_a_running_command();
+
+                command_key(&mut session, ctrl('c'), &cancel);
+                assert!(session.watching().is_none(), "the view did not close");
+                assert!(
+                    !cancel.is_cancelled(),
+                    "the press that closed the view stopped the command"
+                );
+                command_key(&mut session, released(ctrl('c')), &cancel);
+                assert!(
+                    !cancel.is_cancelled(),
+                    "the release of the press that closed the view stopped the command"
+                );
+
+                command_key(&mut session, stopping, &cancel);
+                assert!(cancel.is_cancelled(), "{stopping:?} did not reach it");
+            }
+        }
+
+        /// The view is moved through with the keys it answers mid-turn, since somebody reading a
+        /// delegate when the command began is still reading.
+        #[test]
+        fn the_view_left_open_under_a_running_command_still_moves_between_delegates() {
+            let (mut session, cancel) = watched_under_a_running_command();
+
+            command_key(&mut session, key(KeyCode::Char('p')), &cancel);
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("reader"),
+                "p did not move to the previous delegate"
+            );
+
+            command_key(&mut session, key(KeyCode::Char('n')), &cancel);
+            assert_eq!(
+                session.watched_delegate().map(|d| d.kind.as_str()),
+                Some("checker"),
+                "n did not move to the next delegate"
+            );
+            assert!(!cancel.is_cancelled());
         }
 
         /// Both keys close, and a person who reached for the one they close every other panel
@@ -15595,6 +15698,33 @@ mod tests {
         assert_eq!(queued_next(&mut next), None, "it was sent twice");
     }
 
+    /// CLI-31. A prompt from the command line is drawn as the person's own line, so what a terminal
+    /// draws as nothing is taken out of it and counted, as from a paste. Sent as it came, tag
+    /// characters spelling an instruction would reach the planner as words nobody saw. A file
+    /// written on Windows gives `\r\n`, which arrives as the line break a paste gives. The prompt
+    /// goes once, as the first turn, with nothing pressed.
+    #[test]
+    fn a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once() {
+        let mut session = Session::new("none");
+        session.hand_over_from_the_command_line("fix it\u{E0068}\u{E0069}\r\nthen the suite");
+        assert_eq!(
+            last_note(&session),
+            t!(cli_prompt_invisible_removed, count = 2),
+            "the removal was not counted"
+        );
+
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("fix it\nthen the suite".to_string()))
+        );
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.speaker),
+            Some(crate::state::Speaker::User),
+            "the prompt is not in the transcript as the person's"
+        );
+        assert_eq!(queued_next(&mut session), None, "it was sent twice");
+    }
+
     /// Each way `/handoff` is refused says so and asks for nothing. Dropping the goal check, the
     /// turn check or the record check would send a request for a brief that has nothing to link
     /// back to, or nothing to be written for.
@@ -16485,6 +16615,65 @@ mod tests {
         assert_eq!(
             sending, None,
             "a line went out after the person asked to leave"
+        );
+    }
+
+    /// GOAL-10: `/exit` and `/clear` typed while a turn runs end the goal, so the goal does not
+    /// send the work back before they are carried out.
+    #[test]
+    fn a_goal_is_not_judged_while_a_command_waits_in_the_queue() {
+        for command in ["/exit", "/clear", "/goal cargo test exits 1", "/goal clear"] {
+            let mut session = Session::new("none");
+            session.start_goal("cargo test exits 0".to_string());
+            for c in "fix the build".chars() {
+                session.type_char(c);
+            }
+            session.submit();
+            for c in command.chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_command(), "{command} was not queued");
+            session.complete("done", Vec::new(), 0);
+
+            let mut judged = false;
+            let sending = next_after_a_turn(&mut session, |_| {
+                judged = true;
+                Ok(Some("carry on".to_string()))
+            })
+            .expect("judging cannot fail here");
+
+            assert!(!judged, "the goal was judged with {command} waiting");
+            assert_eq!(sending, None, "work went out with {command} waiting");
+            assert!(
+                session.take_queued_command().is_some(),
+                "{command} was not left for the loop to carry out"
+            );
+        }
+    }
+
+    /// A queued command that leaves the goal alone does not stop the goal being judged, or the goal
+    /// would sit idle after `/help`.
+    #[test]
+    fn a_goal_is_still_judged_with_a_command_waiting_that_leaves_it_alone() {
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+        for c in "fix the build".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        for c in "/help".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue_command(), "/help was not queued");
+        session.complete("done", Vec::new(), 0);
+
+        let sending = next_after_a_turn(&mut session, |_| Ok(Some("carry on".to_string())))
+            .expect("judging cannot fail here");
+
+        assert_eq!(
+            sending,
+            Some(("carry on".to_string(), Wrote::TheDriver)),
+            "a harmless queued command held the goal still"
         );
     }
 
@@ -24902,6 +25091,85 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// SESSION-19: undoing a turn takes back the program vouched for in it and stops the servers.
+    /// It keeps a file agreed to be shown or to hold a secret, which CRED-13 and CRED-15 give the
+    /// session's lifetime, and the run prompts drawn, which grant nothing.
+    #[test]
+    fn undoing_a_turn_takes_back_its_programs_and_keeps_the_files_agreed_to() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-answers");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), &root);
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+
+        let prompt = "run the checks";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &stored,
+        );
+        session.rewind.open(point, prompt.to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        give_answers(&mut answers, &root);
+        let key = root.join("deploy/key.pem");
+        answers.exposed.allow_creating(&key);
+        conversation.push(Message::assistant("done"));
+        session.complete("done", vec![], 10);
+        session.record_turn(start, &conversation);
+        let asked_about = answers.asked_about.clone();
+
+        let (trust, programs, servers) = answers.what_a_rewind_takes_back();
+        rewind(
+            &mut session,
+            &mut conversation,
+            trust,
+            programs,
+            &mut stored,
+            &workspace,
+            servers,
+            1,
+        );
+
+        assert_eq!(session.turns, 0, "the turn was not undone");
+        assert_eq!(
+            answers.programs,
+            TrustedPrograms::new(),
+            "the rewind kept a program vouched for in the turn it undid"
+        );
+        assert!(
+            answers.servers.is_none(),
+            "the rewind kept the servers running"
+        );
+        assert!(
+            answers.exposed.holds(".env"),
+            "the rewind forgot a file agreed to be shown"
+        );
+        assert!(
+            answers.exposed.allows_creating(&key),
+            "the rewind forgot a file agreed to hold a secret"
+        );
+        assert_eq!(
+            answers.asked_about, asked_about,
+            "the rewind forgot the run prompts drawn"
+        );
+    }
+
     /// SESSION-31, CHECKOUT-16: a fork carries no checkout, so a branch while the session keeps one
     /// is refused, naming it, and nothing is copied, ended or forgotten.
     #[test]
@@ -25118,6 +25386,123 @@ mod tests {
             t!(session_branch_nothing_written)
         );
         assert!(bravebot_session::sessions::list(&root).is_empty());
+    }
+
+    /// `/compact` before anything was asked has nothing to shorten. A record written then is a
+    /// session nobody asked anything in, offered for resuming as it ends and listed in the picker,
+    /// and the prompt that follows has to be the one that names the session (SESSION-4).
+    #[test]
+    fn compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-first");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        save_compacted(
+            &session,
+            &mut stored,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            &[],
+        );
+        assert_eq!(stored.resumable(), None, "the compaction wrote a record");
+        assert!(
+            sessions::list(&root).is_empty(),
+            "the compaction left a session in the picker"
+        );
+
+        // The first turn, written as the turn arm writes it.
+        let prompt = "fix the parser";
+        let start = conversation.recounted().len();
+        type_line(&mut session, prompt);
+        session.submit().expect("the prompt is sent");
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user(prompt));
+        conversation.push(Message::assistant("fixed"));
+        session.complete("fixed", vec![], 10);
+        session.record_turn(start, &conversation);
+        with_standing(
+            &session,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            |standing| stored.save(prompt, standing),
+        );
+
+        assert_eq!(
+            sessions::load(&root, stored.id())
+                .expect("the turn wrote a record")
+                .title,
+            prompt
+        );
+    }
+
+    /// A `!` command writes a record before the first turn, and a compaction after it changes what
+    /// that record has to hold: a session resumed from the record as the command left it would
+    /// carry the conversation the person had just shortened.
+    #[test]
+    fn a_compaction_before_the_first_turn_is_written_where_a_record_is_already_on_disk() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-after-command");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(&root);
+        let programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // What `!ls` leaves: its output in the conversation and a record on disk, with no turn.
+        conversation.push(Message::user("I ran ls"));
+        conversation.push(Message::user("Cargo.toml\nsrc"));
+        with_standing(
+            &session,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            |standing| stored.save("ls", standing),
+        );
+        assert_eq!(session.turns, 0);
+
+        conversation.compacted(1, "the person listed the directory");
+        save_compacted(
+            &session,
+            &mut stored,
+            &conversation,
+            &trust,
+            &programs,
+            &workspace,
+            &[],
+        );
+
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        assert_eq!(
+            record.conversation.archive.len(),
+            1,
+            "the record holds the conversation as it was before it was shortened"
+        );
+        assert_eq!(record.title, "ls");
     }
 
     /// `/rename` gives up every rewind point and then writes the record, so the session it wrote
@@ -26502,10 +26887,71 @@ mod tests {
         );
     }
 
-    /// Any turn cancelled while a loop runs ends the loop, and says so (LOOP-11), whether or not it
-    /// was a tick: this one is the person's own prompt typed in the middle of one.
+    /// Cancel the turn in flight the way the program does: through `finish_turn`, which is where a
+    /// stopped turn goes, and not through the fold a finished one goes to.
+    fn stop_through_finish_turn(session: &mut Session, text: &str) {
+        finish_turn(
+            session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text,
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: None }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+        );
+    }
+
+    /// Any turn cancelled while a loop runs ends the loop, and says so (LOOP-11): here the tick
+    /// itself is the turn in flight. Left running, the loop would be neither due nor ended, and
+    /// the next line the person typed would go out as a tick of it.
     #[test]
-    fn stopping_a_turn_ends_the_loop_and_says_so() {
+    fn stopping_a_tick_ends_the_loop_and_says_so() {
+        let mut session = Session::new("none");
+        session.start_loop(
+            crate::loops::request("5m watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(
+            session.status,
+            Status::Working,
+            "the first tick is not in flight"
+        );
+
+        stop_through_finish_turn(&mut session, "watch the build");
+
+        assert!(
+            session.looping().is_none(),
+            "the stop left the loop running"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.text == t!(loop_stopped))
+                .count(),
+            1,
+            "the ending was not announced exactly once"
+        );
+    }
+
+    /// And so does the person's own prompt typed in the middle of a loop, which is not a tick.
+    #[test]
+    fn stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so() {
         let mut session = Session::new("none");
         session.start_loop(
             crate::loops::request("5m watch the build"),
@@ -26513,38 +26959,16 @@ mod tests {
             Vec::new(),
         );
         session.complete("done", Vec::new(), 0);
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
+        session.loop_turn_ended(None);
+        assert!(session.looping().is_some(), "the loop ended with its tick");
+        type_line(&mut session, "something else");
+        session.submit().unwrap();
 
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "something else");
 
         assert!(
             session.looping().is_none(),
-            "the stop left the loop running"
+            "stopping the person's own turn left the loop running"
         );
         assert!(
             session
@@ -26568,34 +26992,7 @@ mod tests {
             })
             .expect("a fire");
         assert!(session.watch_is_firing());
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
-
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "");
 
         assert!(
             session.watches().is_empty(),
@@ -26618,34 +27015,7 @@ mod tests {
     fn stopping_a_turn_leaves_the_goal_set() {
         let mut session = Session::new("none");
         session.start_goal("cargo test exits 0".to_string());
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
-
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "");
 
         assert_eq!(
             session.goal().map(crate::goals::Running::condition),

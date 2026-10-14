@@ -397,6 +397,17 @@ def unused(count):
     return "".join(f"pub fn unused_number_{i}() {{}}\n" for i in range(count))
 
 
+class Labels(unittest.TestCase):
+    def test_cleanup_uses_refactor_and_defects_use_bug_with_the_same_area_and_no_axes(self):
+        """Cleanup and defect findings retain their area without acquiring triage labels."""
+        manifest = {"candidates": {"U1": {"path": "agents/tool.py"}}}
+        for defect, kind in ((False, "refactor"), (True, "bug")):
+            for area, expected_area in (("trust", "area/trust"), ("", "infrastructure")):
+                with self.subTest(bug=defect, area=area):
+                    finding = {"candidates": ["U1"], "bug": defect, "area": area}
+                    self.assertEqual(m.labels_for(finding, manifest), [kind, expected_area])
+
+
 class Pipeline(unittest.TestCase):
     def prepared(self, root, count=3):
         work = root / ".work"
@@ -461,7 +472,7 @@ class Pipeline(unittest.TestCase):
         self.assertIn("0 findings", out)
         self.assertIn("U2 unclear", out)
 
-    def test_drafts_carry_the_kind_the_area_and_the_assignee(self):
+    def test_drafts_use_refactor_for_cleanup_bug_for_defects_and_keep_area_and_assignee(self):
         files = {"crates/a/src/lib.rs": unused(1), "contrib/tool.py": "def unused_tool():\n    pass\n"}
         with tree(files) as root:
             manifest, work = self.prepared(root)
@@ -484,10 +495,12 @@ class Pipeline(unittest.TestCase):
             _, text, _ = quiet(m.main, ["draft", "--work-dir", str(work)])
 
         self.assertEqual(code, 0)
-        self.assertEqual(
-            [d["labels"] for d in drafts],
-            [["maintenance", "area/trust"], ["maintenance", "infrastructure"], ["bug"], ["maintenance"]],
-        )
+        expected_labels = [["refactor", "area/trust"], ["refactor", "infrastructure"], ["bug"], ["refactor"]]
+        self.assertEqual([d["labels"] for d in drafts], expected_labels)
+        for entry, labels in zip(drafts, expected_labels):
+            self.assertIn(
+                f"      {' '.join(labels)}, assignee netzenbot, body {entry['body_file']}", text
+            )
         self.assertEqual({d["assignee"] for d in drafts}, {"netzenbot"})
         self.assertEqual(drafts[0]["title"], "Delete unused_number_0")
         self.assertEqual([d["title_too_long"] for d in drafts], [False, False, False, True])

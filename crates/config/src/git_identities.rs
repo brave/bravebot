@@ -80,9 +80,7 @@ impl Identities {
             return;
         }
         for (name, key) in entries {
-            let address = name
-                .split_once('/')
-                .and_then(|(host, owner)| Address::spelled(host, owner));
+            let address = Address::from_entry_name(name);
             let (Some(address), Some(key)) = (address, key.as_str()) else {
                 note(format!("{BLOCK}.{IDENTITIES_KEY}.{name}"));
                 continue;

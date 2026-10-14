@@ -23,6 +23,7 @@ count-turns = { $count ->
 cli-tagline = bravebot { $version }: a general-purpose agent resistant to prompt injection
 cli-usage-heading = Usage:
 cli-usage-interactive = Start an interactive session
+cli-usage-interactive-prompt = Start an interactive session and send the prompt as its first turn
 cli-usage-plain = Start a session in lines, taking nothing from the terminal
 cli-usage-task = Run a single task
 cli-usage-piped = ...with piped input, never trusted
@@ -155,6 +156,7 @@ cli-option-tools = Offer the agent only these tools, comma separated. It cannot 
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
+cli-option-interactive = Open the interactive session and send this prompt as its first turn
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
@@ -250,13 +252,21 @@ cli-bypass-unreachable =
     that mode unreachable here. Remove it there, or run without the flag.
 cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
 # The file that holds the floor is named, and the file that asked when there was one, because a
-# refusal that names neither sends somebody looking for a fault in the program.
+# refusal that names neither sends somebody looking for a fault in the program. $looser is one of the
+# sandbox-looser- sentences. The pin is the mode suggested, since no mode is stricter than a pin of
+# strict or of read-only.
 cli-sandbox-refused-flag =
     --sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a run may
-    be stricter than that but not looser. Run with --sandbox { $pinned } or stricter, or without the flag.
+    read and write no more than that. { $looser } Run with --sandbox { $pinned }, or without the flag.
 cli-sandbox-refused-file =
     sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } sets sandbox.mode to { $pinned },
-    and a run may be stricter than that but not looser. Change it there, or remove it.
+    and a run may read and write no more than that. { $looser } Change it to { $pinned } there, or
+    remove it.
+# Why a mode is looser than the managed file's sandbox.mode pin. The modes are not a line, so a
+# refusal says which of reading and writing the asked mode does more of.
+sandbox-looser-reads = { $asked } reads more of the machine than { $pinned }.
+sandbox-looser-writes = { $asked } writes more than { $pinned }.
+sandbox-looser-both = { $asked } reads more of the machine and writes more than { $pinned }.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
     with no sandbox is not held to that. Run with --sandbox workspace-write or stricter, or without the flag.
@@ -296,6 +306,23 @@ cli-no-such-session = no session { $id } in this directory
 cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
+cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
+# Said where something follows the prompt of -i. The session it opens takes the flags every way of
+# starting takes, which are already out of the line by then; what is left describes a one-shot run.
+cli-interactive-takes-nothing-else =
+    -i takes one prompt, quoted where it has spaces, and nothing after it, so '{ $argument }' is
+    refused. --model, --effort, --file and the other options for a task go with a one-shot run (-p).
+# Said where -i came after a task's own options rather than first.
+cli-interactive-not-with-a-task =
+    -i opens a session and comes first, followed by its prompt. --model, --effort, --file and the
+    other options for a task go with a one-shot run (-p).
+# Said where -i came after another way of starting a session, such as --resume or --fork.
+cli-interactive-not-with-another-start = -i opens a new session and comes first, so it does not go with { $flag }.
+# Said where -i was given with something other than a terminal on stdin or stdout, where there is
+# nothing to draw the session on and nobody to watch the task.
+cli-interactive-needs-a-terminal =
+    -i opens a session on this terminal, so its input and output must be one. Use -p to run the
+    task with nobody watching.
 cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
 cli-piped-input-too-large =
@@ -627,6 +654,13 @@ doctor-settings-mcp-declared =
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
     other modes are read from ~/.bravebot/settings.json and from the file --settings names only
+# A `strict` from a file inside the workspace that is not obeyed, because the person's own file or the
+# managed file chose a mode `strict` is looser than. `strict` writes the session's directories and
+# `read-only` does not.
+doctor-settings-sandbox-strict-ignored =
+    sandbox.mode strict in { $path } is not obeyed: strict lets programs write the session's
+    directories, which { $mode } from { $held } does not, and a file inside the workspace may not
+    loosen the mode
 doctor-settings-sandbox-unreadable =
     sandbox.mode in { $path } is not strict, read-only, workspace-write or off, so it is read as absent and the default applies
 doctor-sandbox-mode = sandbox mode
@@ -1031,6 +1065,8 @@ mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
     a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
+mcp-bearer-env-needs-a-name = --bearer-env needs the name of an environment variable
+mcp-header-env-needs-a-pair = --header-env needs <HEADER>=<ENVIRONMENT_VARIABLE>
 mcp-env-needs-a-name = -e needs NAME=value, or the name of a variable read from your environment
 mcp-env-after-the-alias =
     -e and --env come after the alias, as in add weather -e KEY=value -- weather-mcp
@@ -1067,6 +1103,7 @@ mcp-problem-directory = the directory is not an absolute path
 mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
+mcp-problem-header = { $name } is not a valid HTTP header token
 mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
 mcp-problem-tool = { $name } is not a tool name
@@ -1086,6 +1123,8 @@ mcp-no-state-directory =
 mcp-not-written = { $path } could not be written ({ $error })
 mcp-declared = declared { $alias } in { $path }
 mcp-variables = variables: { $names }
+# HTTP headers sent from environment variables, shown as "Header: $VAR"
+mcp-headers = headers: { $headers }
 # A variable given its value at add, which is kept in mcp.json and is never shown.
 mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
@@ -1631,6 +1670,9 @@ run-not-sandboxed = this is not sandboxed: it runs with the access your own shel
 # directories it is held to and by one sentence for each toolchain and credential a stage brings.
 run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
 run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
+# The two above, where the platform cannot hold a `.git` back from a program that is not git.
+run-confined-git = its files are confined to these directories, the system temporary directory and the system files every program needs, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
+run-confined-machine-git = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine
@@ -1641,6 +1683,8 @@ run-carries-docker = { $program } also reads your docker credentials in ~/.docke
 run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
 run-carries-identity = { $program } has ssh offer the key { $path } first, which your git.identities names for the owner of this address, and after it only keys your ssh configuration names
+run-carries-identity-chosen = { $program } has ssh offer the key { $path } first, which you chose for { $owner } on { $date }, and after it only keys your ssh configuration names
+run-carries-identity-chosen-default = { $program } leaves the key to ssh, which offers your keys in order, as you chose for { $owner } on { $date }
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
@@ -1650,7 +1694,7 @@ run-carries-remembered = { $sentence } (remembered for this command, allowed { $
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
 # The /reach command: what it lists, what it says it did, and why it did nothing.
-reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one. /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
 reach-none = no reach is remembered for any command
 reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
 reach-access-reads = reads
@@ -1670,6 +1714,12 @@ reach-refused-workspace = this directory cannot be told apart from another made 
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }
+reach-key-none = no ssh key is chosen for any owner
+reach-key-listed = { $number }. { $owner }: { $key }, chosen { $date }
+reach-key-default = whichever key ssh tries first
+reach-key-usage = /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
+reach-key-refused-number = no key is numbered { $number }
+reach-key-removed = forgotten: the key for { $owner }. The next run prompt for a git command that reaches it asks again, where it could offer more than one key.
 run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
@@ -1712,6 +1762,12 @@ run-keep-reach-where = it is written down here:
 run-keep-reach-undo = /reach lists what is remembered, and /reach remove <number> forgets one
 run-keep-reach = remember the reach
 run-keep-reach-always = remember it for every session
+run-key-choice-explained = { $first }-{ $last }: run it, and from now on have ssh offer that key first whenever git reaches { $owner }:
+run-key-choice-default = leave the key to ssh, which offers your keys in order, and stop asking
+run-key-choice-yes = y runs it with whichever key ssh tries first, and asks again next time
+run-key-choice-undo = /reach keys lists the keys chosen, and /reach keys remove <number> forgets one
+run-key-choose = offer that key
+run-key-leave = leave it to ssh
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
@@ -3050,6 +3106,10 @@ paste-invisible-removed = { $count ->
     [one] removed { $count } invisible character from that paste
    *[other] removed { $count } invisible characters from that paste
     }
+cli-prompt-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the prompt -i gave
+   *[other] removed { $count } invisible characters from the prompt -i gave
+    }
 drop-name-not-written =
     a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
@@ -3323,6 +3383,14 @@ skill-model-substituted = { $skill } asked for { $model } and was answered by a 
 # settings deny reading, so it was left out of the turn. The source is its workspace-relative path
 # and stays as it is. "deny" is the name of the settings list the rule sits in.
 source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
+# Skills in the person's own ~/.bravebot/skills that were not loaded, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write, and no
+# skill directory of the project offered them in their place. ~/.bravebot/skills stays as it is.
+home-skills-reached-through-the-workspace =
+    { $count ->
+        [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.
@@ -3459,8 +3527,8 @@ session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
 session-sandbox-refused-mode =
-    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may be
-    stricter than that but not looser.
+    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
+    read and write no more than that. { $looser }
 session-sandbox-refused-network =
     /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
     no sandbox is not held to that. Use /sandbox workspace-write, read-only or strict.
@@ -3484,3 +3552,4 @@ doctor-push-not-recognised = no account on { $host } has this key (Permission de
 doctor-push-unanswered = { $host } gave no answer for this key
 doctor-push-chosen = Chosen
 doctor-push-chosen-by = git.identities names this key for the owner
+doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it

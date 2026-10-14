@@ -296,12 +296,31 @@ mod tests {
         assert_eq!(best("fr_FR.UTF-8@euro", &SHIPPED), Some(2));
     }
 
+    /// A modifier can come straight after the territory with no encoding before it. Left on, it
+    /// spoils the exact match and the request widens to whichever catalog of the language comes
+    /// first, which for `fr_FR@euro` is the Canadian one.
+    #[test]
+    fn a_modifier_with_no_encoding_before_it_is_not_part_of_the_tag() {
+        assert_eq!(best("fr_FR@euro", &SHIPPED), Some(2));
+    }
+
     /// `C` is POSIX for "do not localise anything", not a request for a language called C.
     #[test]
     fn the_posix_locale_asks_for_no_catalog() {
         assert_eq!(best("C", &SHIPPED), None);
         assert_eq!(best("POSIX", &SHIPPED), None);
         assert_eq!(best("", &SHIPPED), None);
+    }
+
+    /// No shipped catalog's language is `C` or `POSIX`, so against the real set a request for
+    /// either finds nothing whether or not it is read as a language. A set holding such tags is
+    /// the one where the two readings differ.
+    #[test]
+    fn the_posix_locale_is_not_read_as_a_language_even_where_a_tag_spells_it() {
+        let named = ["c", "posix", "en-US"];
+        assert_eq!(best("C", &named), None);
+        assert_eq!(best("C.UTF-8", &named), None);
+        assert_eq!(best("POSIX", &named), None);
     }
 
     /// Counts come from lengths, from indices, and from parsed numbers, and no call site should

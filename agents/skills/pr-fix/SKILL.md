@@ -102,7 +102,9 @@ of its commits unsigned than it has now.
    manifest changed. A file no rule names (`ui/`, website, prose) runs nothing and leaves the
    checks to CI. Pass make targets as `--target check-spec` to run those instead; do not widen it to `check-all-local`,
    which CI repeats.
-7. `... push <pr>`. If it pushed, `... review <pr>` asks netzenbot-reviewer to review the new head,
+7. `... push <pr>`. When GitHub refuses the push because ssh offered a key without access, it
+   retries once with each other key `ssh-add -L` lists and reports the one that worked. With no
+   usable key it prints GitHub's refusal. If it pushed, `... review <pr>` asks netzenbot-reviewer to review the new head,
    since a review it already gave covers the old one. If it printed `nothing to push` and steps 3
    and 4 found nothing to change (no failing check, no open thread, no review asking for changes),
    the pull request needs only a new review: run `... review <pr>` anyway. Then `... ci <pr> --wait`, which returns as soon as a check fails or after

@@ -848,14 +848,14 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     );
 }
 
-/// A program that fails for a module its Python lacks is otherwise handed back to the person as a
-/// request to install a newer Python or edit the program. An installed package often provides the
-/// module under another name, and a module of the missing name in a directory inside the session's
-/// own, named on that one line's `PYTHONPATH`, runs the program with nothing on the machine changed.
-/// Where no package provides it, the planner says what is missing. The road is two `run`s, so it is
-/// said to the person's turn and kept out of the block a reader, which has no `run`, is given.
+/// A program that fails for something this machine lacks is otherwise handed back to the person as
+/// a request to install it or edit the program. Something installed often stands in for it, and
+/// what connects the two, written in a directory inside the session's own and named on that one
+/// line's search path, runs the program with nothing on the machine changed. Where nothing stands
+/// in, the planner says what is missing. The road is two `run`s, so it is said to the person's turn
+/// and kept out of the block a reader, which has no `run`, is given.
 #[test]
-fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
+fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
     let tree = Scratch::new("stand-in-module");
     let project = tree.directory("project");
     let own = tree.directory("session");
@@ -878,10 +878,12 @@ fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
 
     for said in [
         "with a line that only reads",
+        "run by the same interpreter or runtime the program uses",
         "in a new directory inside the scratch directory",
-        "`PYTHONPATH=` and that directory's path",
+        "a search path the program reads from its environment in addition to its own",
         "in single quotes",
-        "say which module is missing",
+        "try it before asking the person",
+        "say what is missing",
     ] {
         assert!(
             preamble.for_a_person.contains(said),
@@ -889,11 +891,73 @@ fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
             preamble.for_a_person
         );
     }
-    assert!(
-        !preamble.text.contains("PYTHONPATH"),
-        "a delegate was told a road that needs `run`: {}",
-        preamble.text
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.text.contains(said),
+            "a delegate was told a road that needs `run`, by `{said}`: {}",
+            preamble.text
+        );
+    }
+}
+
+/// The road holds for anything a program can be missing, so the paragraph describes no case. A case
+/// written into it reads as the case it is for, and a program that fails another way is left at
+/// the error. A code span is how a program, module or variable would be written into this text,
+/// and an introduced example is how a case would be, so neither may appear.
+#[test]
+fn the_stand_in_road_names_no_language_or_variable() {
+    let tree = Scratch::new("stand-in-names-nothing");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    let start = preamble
+        .for_a_person
+        .find("When a program fails because something it needs is missing")
+        .expect("the paragraph is there to read");
+    let paragraph = &preamble.for_a_person[start..];
+    let paragraph = &paragraph[..paragraph.find('\n').unwrap_or(paragraph.len())];
+    for described in ["`", "such as", "for example", "for instance", "e.g."] {
+        assert!(
+            !paragraph.contains(described),
+            "the paragraph describes a case with `{described}`: {paragraph}"
+        );
+    }
+    // Compared in lower case, by the start of a word, so a variable named after a language is
+    // found as the language is, and by its underscore, so any other is.
+    for word in paragraph.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        let word = word.to_lowercase();
+        assert!(
+            !word.contains('_'),
+            "the paragraph names a variable, `{word}`: {paragraph}"
+        );
+        for language in [
+            "python", "perl", "ruby", "node", "java", "rust", "lua", "php",
+        ] {
+            assert!(
+                !word.starts_with(language),
+                "the paragraph names a language, `{word}`: {paragraph}"
+            );
+        }
+    }
 }
 
 /// A session that could not be given one has nowhere of its own to write, and a planner told
@@ -930,11 +994,17 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
             preamble.text
         );
     }
-    assert!(
-        !preamble.for_a_person.contains("PYTHONPATH"),
-        "a session with no directory of its own was told to write a module in one: {}",
-        preamble.for_a_person
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.for_a_person.contains(said),
+            "a session with no directory of its own was told to write a stand-in in one, by \
+             `{said}`: {}",
+            preamble.for_a_person
+        );
+    }
 }
 
 /// A condition waiting on something outside the session is the case a goal handles worst if the

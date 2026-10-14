@@ -2,7 +2,7 @@
 // Only the model server and the OS file-picker result are substituted.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -340,6 +340,48 @@ try {
     await page.setViewportSize({ width: 1350, height: 900 })
   }
   console.log('PASS: processor remarks and real rejected/approved file writes')
+
+  // 7b: Open in default app asks about a file the system may run, through the real IPC handler. The
+  // dialog and the shell are replaced first, since an unanswered question or a launched app would
+  // land on the screen of whoever runs this.
+  writeFileSync(join(project, 'tool.command'), '#!/bin/sh\ntouch ran\n')
+  await app.evaluate(({ dialog, shell }) => {
+    const probe = globalThis.openProbe = { asked: [], opened: [], shown: [], answer: 'Cancel' }
+    probe.dialog = dialog.showMessageBox = async (...args) => {
+      const options = args.at(-1)
+      probe.asked.push({ parented: args.length === 2 && typeof args[0]?.id === 'number', buttons: options.buttons, detail: options.detail })
+      return { response: options.buttons.indexOf(probe.answer), checkboxChecked: false }
+    }
+    probe.openPath = shell.openPath = async path => { probe.opened.push(path); return '' }
+    probe.showItemInFolder = shell.showItemInFolder = path => { probe.shown.push(path) }
+  })
+  assert(await app.evaluate(({ dialog, shell }) => dialog.showMessageBox === globalThis.openProbe.dialog && shell.openPath === globalThis.openProbe.openPath && shell.showItemInFolder === globalThis.openProbe.showItemInFolder), 'the dialog and the shell are replaced')
+  if (await page.locator('.fold-toggle.right').getAttribute('aria-expanded') === 'false') await page.locator('.fold-toggle.right').click()
+  await page.getByRole('tab', { name: 'Files', exact: true }).click()
+  await page.getByRole('button', { name: 'Read the folder again' }).click()
+  const openFromFiles = async (name, answer, settled) => {
+    await app.evaluate((_, answer) => { globalThis.openProbe.answer = answer }, answer)
+    await page.locator('.tree-list[role="tree"] > li > .tree-row').filter({ has: page.getByText(name, { exact: true }) }).dblclick()
+    const preview = page.getByRole('dialog', { name: `Preview ${name}` })
+    await preview.getByRole('button', { name: 'Open in default app' }).click()
+    await until(async () => settled(await app.evaluate(() => globalThis.openProbe)), `Open in default app on ${name}`)
+    await preview.getByRole('button', { name: 'Done', exact: true }).click()
+    await preview.waitFor({ state: 'hidden' })
+    return app.evaluate(() => globalThis.openProbe)
+  }
+  const target = name => realpathSync(join(project, name))
+  let probe = await openFromFiles('tool.command', 'Cancel', p => p.asked.length === 1)
+  assert.equal(probe.asked[0].parented, true)
+  assert.deepEqual(probe.asked[0].buttons, ['Open', 'Show in folder', 'Cancel'])
+  assert.match(probe.asked[0].detail, /^"tool\.command" .* outside the sandbox\./)
+  probe = await openFromFiles('tool.command', 'Open', p => p.opened.length === 1)
+  assert.equal(probe.asked.length, 2)
+  probe = await openFromFiles('notes.txt', 'Cancel', p => p.opened.length === 2)
+  // Cancel is silent in the window, so what it reached is read once the later answers have run: a
+  // Cancel that opened or showed the file would have left a third entry.
+  assert.equal(probe.asked.length, 2, 'a text file is not asked about')
+  assert.deepEqual([probe.opened, probe.shown], [[target('tool.command'), target('notes.txt')], []])
+  console.log('PASS: Open in default app asks about a program, and opens a document without asking')
 
   // 8: settings narrow layout and cleanup assertions.
   await page.setViewportSize({ width: 560, height: 780 })

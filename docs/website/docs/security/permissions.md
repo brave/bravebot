@@ -182,11 +182,15 @@ set is empty at the start of every session. What holds is the label on the outpu
 the binary.
 :::
 
-On Linux and macOS a program's files are confined to the directories the session was opened on, its
-scratch directory and the system temporary directory, plus what its own command brings: the credentials a `git push` needs, never a private key,
-or a toolchain's cache. The run prompt lists them. A path outside them is refused by the system, so a
-`cat ~/notes.txt` fails until you add the directory. On Windows programs are not confined and run with
-the access your own shell would give them. The set of programs someone might ask for cannot be listed
+On Linux and macOS a program can read the machine except the places that hold a credential, and
+writes only the directories the session was opened on, its scratch directory, the system temporary
+directory and the toolchain caches, plus what its own command brings: the credentials a `git push`
+needs, never a private key. The run prompt lists them. Under the `strict` sandbox mode it reads only
+those directories, the system files every program needs and what its command brings, and a path
+outside them is refused by the system, so a `cat ~/notes.txt` fails until you add the directory. On
+Windows a program runs in a container that reaches only those directories, what its command brings,
+the system and program directories and git's configuration files, in every mode but `off`. The set
+of programs someone might ask for cannot be listed
 in advance, so the profile follows the command and not a list. A profile bounds files and not the
 environment. The one exception to what a program is handed is bravebot's **own** credentials, which
 are withheld from every program it runs: you approve an argv, never an environment, so a credential
@@ -310,7 +314,9 @@ transcript when you press the key.
 and what it prints is what the next round reads. A mode named for edits that also stopped asking
 about programs would be granting the larger thing quietly. It does accept a write to any path the
 workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
-the settings file is what narrows that.
+the settings file is what narrows that. Under the sandbox mode `read-only`
+([confinement](security.md#confinement)) the agent's file tools write nothing, in this mode or in
+bypassing.
 
 **A write that would create a credential is still put to you.** A file that is one rare value and
 nothing else is how a generated key reaches a tree, so a write the credential scan finds such a value

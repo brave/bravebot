@@ -694,7 +694,7 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
 /// Two levels, and the key that leaves is read against the nearer one: from a delegate it goes
 /// back to the list, and from the list it closes. The chord that opened it and Ctrl-C leave the
 /// mode outright from either, because a person who wants out of a mode wants out of the mode.
-fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
+pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     // Ctrl alone: a settings file can give Ctrl-Alt-U to an action, and that is not the view's key.
     let ctrl = key.modifiers == KeyModifiers::CONTROL;
     let listing = session.listing_delegates();

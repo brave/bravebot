@@ -738,3 +738,94 @@ fn a_longer_bound_lets_a_slow_reply_through() {
     assert_eq!(result.label(), Label::untrusted_private());
     assert!(policy.finish());
 }
+
+type RecordedRequest = (Vec<(String, String)>, String);
+
+fn serve_recording_headers(responses: Vec<String>) -> (String, mpsc::Receiver<RecordedRequest>) {
+    let host = "127.0.0.1";
+    let listener = TcpListener::bind((host, 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        for response in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+
+            let mut headers = Vec::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                    break;
+                }
+                if header == "\r\n" || header == "\n" {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                    headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+            let _ = sender.send((headers, String::from_utf8_lossy(&body).to_string()));
+
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://{host}:{port}"), receiver)
+}
+
+#[test]
+fn configured_headers_are_attached_to_requests() {
+    let (url, received) = serve_recording_headers(vec![json_response(INIT_OK)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url).with_headers([
+        (
+            "Authorization".to_string(),
+            "Bearer secret-token".to_string(),
+        ),
+        ("X-Api-Key".to_string(), "custom-key".to_string()),
+    ]);
+
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake succeeds");
+
+    let (headers, body) = received.recv().expect("handshake received");
+    assert!(body.contains("\"initialize\""));
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer secret-token"),
+        "authorization header must be sent: {headers:?}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k == "x-api-key" && v == "custom-key"),
+        "x-api-key header must be sent: {headers:?}"
+    );
+}

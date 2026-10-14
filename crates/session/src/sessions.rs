@@ -1575,6 +1575,9 @@ pub struct Continuation<'a> {
     pub ends: usize,
     /// Where the prompt entered the recounted conversation, where the turn said.
     pub prompt_at: Option<usize>,
+    /// The turns a rewind can go back to once this one is added, oldest first: the record's own
+    /// and the one opened before this turn.
+    pub rewind: &'a [RewindPoint],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -1948,12 +1951,18 @@ impl Handle {
         for point in standing.rewind {
             self.retain_rewind_coverage(&point.coverage);
         }
-        if self.title.is_empty() {
+        // A prompt with nothing in it titles the record without settling the session's name, so the
+        // first prompt that says something still names it (SESSION-4).
+        if self.title.is_empty() && !first_prompt.trim().is_empty() {
             self.title = title_from(first_prompt);
         }
 
         let Some(directory) = self.directory() else {
             return;
+        };
+        let title = match self.title.is_empty() {
+            true => title_from(first_prompt),
+            false => self.title.clone(),
         };
 
         let record = Record {
@@ -1964,7 +1973,7 @@ impl Handle {
             issue: self.issue.clone(),
             pull_request: self.pull_request.clone(),
             handed_off_from: self.handed_off_from.clone(),
-            title: self.title.clone(),
+            title,
             started: self.started,
             updated: now(),
             turns: standing.turns,
@@ -2032,9 +2041,14 @@ impl Handle {
     /// Add one turn to the record this session was resumed from, and write it back.
     ///
     /// Everything the turn did not touch is written as it was read: the asides, the task lists, the
-    /// timings, the rewind points, the vouched-for programs and the checkouts. A front end that
-    /// rebuilt the record from the pieces it holds would have to hold all of them, and a one-shot
-    /// run holds none, so rebuilding would erase what an interactive session recorded.
+    /// timings, the vouched-for programs and the checkouts. A front end that rebuilt the record
+    /// from the pieces it holds would have to hold all of them, and a one-shot run holds none, so
+    /// rebuilding would erase what an interactive session recorded.
+    ///
+    /// The rewind points are replaced by `next.rewind` ([SESSION-19](sessions.md#SESSION-19)).
+    /// Left as read, the newest would be the one opened before the record's previous turn, and an
+    /// undo would take the conversation back past both turns while putting back only the earlier
+    /// one's files.
     ///
     /// Whether the turn is entered in the display history follows the record: one that keeps a
     /// history gains the turn, and one that never kept one is not given boundaries now
@@ -2061,6 +2075,14 @@ impl Handle {
         record.model = Some(next.model.to_string());
         record.conversation = next.conversation.clone();
         record.trust = Some(stored_rules(next.trust));
+        // Read before the points are replaced: an older record carries the warning only in them.
+        let warned = record.server_children_may_run();
+        record.rewind = next
+            .rewind
+            .iter()
+            .map(|point| StoredRewind::of(point, &self.project))
+            .collect();
+        record.server_children_may_run = warned || record.server_children_may_run();
         record.updated = now();
         record.branch = self.branch.clone();
         record.build = Some(self.build.clone());
@@ -2951,6 +2973,23 @@ mod tests {
         assert_eq!(title_from("   \n\n"), "untitled");
     }
 
+    /// The cut counts characters, so a title of wider characters is as long as one in ASCII and is
+    /// never split inside a character, and a title of exactly the longest length is not cut.
+    #[test]
+    fn a_title_is_cut_after_sixty_characters_rather_than_bytes() {
+        let sixty = "x".repeat(60);
+        assert_eq!(
+            title_from(&sixty),
+            sixty,
+            "a title of the longest length was cut"
+        );
+        assert_eq!(title_from(&"x".repeat(61)), format!("{sixty}…"));
+
+        // One byte, then two-byte characters, so a cut at sixty bytes lands inside a character.
+        let accented = format!("a{}", "é".repeat(99));
+        assert_eq!(title_from(&accented), format!("a{}…", "é".repeat(59)));
+    }
+
     /// The phrasing itself is tested where it lives; what matters here is that a stored time
     /// becomes an age rather than being read as one.
     #[test]
@@ -3830,6 +3869,7 @@ mod tests {
             begins: 0,
             ends: 0,
             prompt_at: None,
+            rewind: &[],
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
@@ -5041,6 +5081,54 @@ mod tests {
         );
     }
 
+    /// A save with nothing asked yet, as a desktop turn the person did not type makes, still writes
+    /// a titled record. The name is the first prompt that says something, and a later prompt does
+    /// not replace it (SESSION-4).
+    #[test]
+    fn a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-blank-first-prompt");
+        let empty = bravebot_agent::Conversation::new().snapshot();
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let trust = TrustStore::new("/work");
+        let programs = TrustedPrograms::default();
+        let standing = |turns| Standing {
+            history: None,
+            conversation: &empty,
+            turns,
+            tokens: 0,
+            spend: &spend,
+            timing: &timing,
+            model: None,
+            todos: &todos,
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+        };
+        let recorded = |handle: &Handle| load(&root, handle.id()).expect("the record").title;
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.save(" \n", standing(0));
+        assert_eq!(recorded(&handle), "untitled");
+
+        handle.save("fix the parser\nit drops commas", standing(1));
+        assert_eq!(recorded(&handle), "fix the parser");
+        assert_eq!(handle.title(), "fix the parser");
+
+        handle.save("and the lexer", standing(2));
+        assert_eq!(
+            recorded(&handle),
+            "fix the parser",
+            "a later prompt renamed the session"
+        );
+    }
+
     /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
     /// dropping it would make the next prompt rename a session that had already been named.
     #[test]
@@ -5411,6 +5499,7 @@ mod tests {
                 begins: 2,
                 ends: 4,
                 prompt_at: Some(3),
+                rewind: &[],
             },
         );
 
@@ -5463,12 +5552,67 @@ mod tests {
                 begins: 0,
                 ends: 2,
                 prompt_at: Some(0),
+                rewind: &[],
             },
         ));
 
         let after = load(&root, handle.id()).expect("the record is still there");
         assert_eq!(after.turns, 2);
         assert!(after.history.is_none());
+    }
+
+    /// SESSION-19: a record written before the language-server warning was kept beside the points
+    /// carries it only in them, and a continuation replaces them. The warning moves out first, or
+    /// every later undo would leave unmentioned a server's children that may still be writing.
+    #[test]
+    fn continuing_a_record_keeps_a_server_warning_only_its_replaced_points_carried() {
+        use bravebot_agent::rewind::CoverageGap;
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-continue-record-server-warning");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let mut record = load(&root, handle.id()).expect("the record was written");
+        let mut warned = a_stored_point(vec![]);
+        warned.coverage = Some(StoredCoverage {
+            version: 2,
+            paths: Vec::new(),
+            gaps: Some([CoverageGap::LanguageServer].into()),
+        });
+        record.rewind = vec![warned];
+        record.server_children_may_run = false;
+        let directory = handle.directory().expect("a sessions directory");
+        assert!(handle.write(&directory, &record));
+        let record = load(&root, handle.id()).expect("the record is still there");
+        assert!(!record.server_children_may_run && record.server_children_may_run());
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let replacing = [a_stored_point(vec![]).into_point(&root)];
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert!(resumed.save_continuation(
+            record,
+            Continuation {
+                conversation: &snapshot,
+                prompt: "next",
+                tokens: 1,
+                model: "m",
+                trust: &TrustStore::new("/work"),
+                begins: 0,
+                ends: 2,
+                prompt_at: Some(0),
+                rewind: &replacing,
+            },
+        ));
+
+        let after = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(after.rewind.len(), 1);
+        assert!(
+            !after.rewind[0]
+                .coverage_gaps()
+                .contains(&CoverageGap::LanguageServer)
+        );
+        assert!(after.server_children_may_run);
     }
 
     /// A host that owns its records puts them in a directory of its own, so a terminal or a window

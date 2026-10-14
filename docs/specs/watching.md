@@ -221,8 +221,9 @@ list from a delegate, and close the mode from the list or where there is no list
 Ctrl-L and Ctrl-C close it from either level and do nothing else. Escape and Ctrl-C reach the mode
 before they reach the turn: the turn in flight goes on, and the press that reaches it is the next
 one. A summary, an aside and a goal check are read the same way, each being a request the view can
-be open over. A goal armed behind a check is not touched either, since the press that closes the
-view is not a press about it.
+be open over. So is a command line that waited in the queue, which begins as the turn ends with the
+view still open, and the press that closes the view does not stop it. A goal armed behind a check
+is not touched either, since the press that closes the view is not a press about it.
 
 There is no key for talking to a delegate and no box for it. A delegate is given one task, has
 nobody to ask, and takes no line typed mid-turn.
@@ -246,6 +247,10 @@ watching is also the mode most likely to be open while something is going wrong.
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
+`verified-by: bravebot_tui::app::ctrl_c_and_ctrl_l_close_the_view_left_open_under_a_running_command`
+`verified-by: bravebot_tui::app::escape_and_q_under_a_running_command_go_back_to_the_list_before_they_close`
+`verified-by: bravebot_tui::app::the_press_after_the_view_closes_stops_the_command`
+`verified-by: bravebot_tui::app::the_view_left_open_under_a_running_command_still_moves_between_delegates`
 `verified-by: bravebot_tui::app::x_stops_the_delegate_the_view_is_on_and_no_other`
 `verified-by: bravebot_tui::app::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
 `verified-by: bravebot_tui::app::a_chord_on_x_does_not_stop_a_delegate`
@@ -258,10 +263,10 @@ A delegate finishing leaves the view on it. A delegate starting does not take th
 somebody reading an older one. Nor does anything else that happens without a press: a turn the
 queue starts as the one before it ends, a tick of a loop coming due, a watch firing, a goal sending
 the work back, a command line that waited being run, and what that command printed each leave an
-open view where its reader put it. Where no view is open the tail is where the session's own view
-belongs, so every one of those still takes the transcript there. A delegate starting is the running
-turn adding to the transcript, which [VIEW-1](terminal-transcript.md#VIEW-1) holds a scrolled-back
-view through.
+open view where its reader put it, and the scroller where its reader put it too. Where neither is
+open the tail is where the session's own view belongs, so every one of those still takes the
+transcript there. A delegate starting is the running turn adding to the transcript, which
+[VIEW-1](terminal-transcript.md#VIEW-1) holds a scrolled-back view through.
 
 **Why.** Several delegates report at once, so a view that followed the newest event would move
 under the reader several times a second, and the run somebody opened would be the one run they
@@ -282,6 +287,7 @@ the one that opened the view they are in.
 `verified-by: bravebot_tui::state::a_watch_firing_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::a_queued_command_line_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::a_goal_sending_the_work_back_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::what_starts_without_a_press_leaves_an_open_scroller_where_its_reader_put_it`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key
@@ -579,6 +585,8 @@ earlier rows saying the job was running after it had ended.
 `verified-by: bravebot_tui::state::a_jobs_row_stops_adding_lines_at_a_gap_and_at_what_one_look_keeps`
 `verified-by: bravebot_tui::render::a_delegates_job_says_whose_it_is_and_the_turns_does_not`
 `verified-by: bravebot_tui::state::a_job_printing_status_shaped_lines_changes_no_row_mark_or_count`
+`verified-by: bravebot_tui::state::a_look_at_a_job_with_no_row_of_its_own_adds_no_row`
+`verified-by: bravebot_tui::kept_jobs_tests::a_job_stopped_between_turns_keeps_its_one_row_through_the_next_turns_report`
 `verified-by: bravebot_agent::turn::a_background_job_is_announced_when_it_starts_and_its_finish_carries_its_name`
 `verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
 

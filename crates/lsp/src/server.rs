@@ -1753,7 +1753,7 @@ mod tests {
         let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().expect("a scratch directory");
         let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(level, Some(dir.join("logs")));
+        bravebot_diag::configure(level, Some(dir.clone()));
         let launched = Server::launch(Language::Rust, program, &dir, &dir.join("cache"), &[]);
         let worked = launched.is_ok();
         drop(launched);

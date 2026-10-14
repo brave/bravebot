@@ -30,13 +30,18 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise.
+reference, the path otherwise. A write call the permission mode refuses before the tool runs
+([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
+refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
+sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under
+`sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
+that writes, and a `run` line it refuses for redirecting output into a file.
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
-isolation argument was not `checkout`, a reader asked for one, the run already works in one, no
-state directory, the checkouts would sit inside the working directory, an opened directory holds
-the working directory, an opened directory holds the checkouts, the directory for checkouts is
+isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
+sandbox mode is `read-only`, no state directory, the checkouts would sit inside the working
+directory, an opened directory holds the working directory, an opened directory holds the checkouts, the directory for checkouts is
 unusable, or the repository was refused), the directory a person opened where that was the cause,
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
@@ -60,6 +65,12 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
 `verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
+`verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::manifest::a_plan_refused_by_plan_mode_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
+`verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
+`verified-by: bravebot_agent::turn::under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -187,14 +198,14 @@ and one for fitting that to the tool set. A refusal is as much a record as a per
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
 
 <a id="TRACE-7"></a>
-### TRACE-7: the trail names the mode a turn began in and what answered each prompt
+### TRACE-7: the trail names the mode a turn or a manifest run began in and what answered each prompt
 
-Each turn records the permission mode it began with ([permission-modes.md](permission-modes.md)) by
-its name, before any tool is called. When the policy decides a command or a write is to be put to
-the person, a second entry under `approval` says what answered: the mode that answered in their
-place and so drew nothing, or no mode, which leaves it to whatever confirms (a person, or nothing that
-can ask). The entries before it that end in "asking" say what the policy decided, and they read as
-a person having been asked.
+Each turn and each manifest run ([manifest.md](manifest.md)) records the permission mode it began
+with ([permission-modes.md](permission-modes.md)) by its name, before any tool is called. When the
+policy decides a command or a write is to be put to the person, a second entry under `approval`
+says what answered: the mode that answered in their place and so drew nothing, or no mode, which
+leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
+in "asking" say what the policy decided, and they read as a person having been asked.
 
 Other prompts a mode answers, such as a fetch or a server start, are not named here.
 
@@ -208,6 +219,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 
 `verified-by: bravebot_agent::turn::a_turn_records_the_mode_it_began_with`
 `verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
+`verified-by: bravebot_agent::manifest::a_manifest_run_records_the_mode_it_began_with`
+`verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why
