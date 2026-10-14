@@ -2472,6 +2472,8 @@ function Card({
             <VettingVerdict vetting={request.vetting} />
           </div>
 
+          <VettingReason vetting={request.vetting} />
+
           <p className="permission-scope" data-deciding="all">
             The model will read each tool’s name, its arguments and what the server says about
             it, exactly as shown here. The descriptions are the server’s own text. Say no if one

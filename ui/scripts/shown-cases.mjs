@@ -140,10 +140,10 @@ export const CASES = {
     kind: 'mcp-tools',
     event: 'mcp-tools.request',
     request: {
-      request: 112, alias: 'zqt31', refused: 0, changed: false, vetting: { verdict: 'safe' },
+      request: 112, alias: 'zqt31', refused: 0, changed: false, vetting: { verdict: 'safe', reason: `zqt32 ${filler(80)}` },
       tools: range(30).map((n) => ({ name: n === 0 ? 'zqt01' : n === 29 ? 'zqt30' : `tool_${n}`, arguments: ['path'], description: 'Reads a file.' })),
     },
-    tokens: ['zqt01', 'zqt30', 'zqt31'],
+    tokens: ['zqt01', 'zqt30', 'zqt31', 'zqt32'],
     standing: [],
   },
   'mcp-call': {

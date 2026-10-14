@@ -211,7 +211,7 @@ const CARDS = {
   },
   // SERVERS-8: a tool's description is the server's own text, released for a person to read.
   'mcp-tools': {
-    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe' } }),
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
     marks: 'class="mcp-tool-description"',
   },
   'mcp-call': {
