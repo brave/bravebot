@@ -975,20 +975,15 @@ fn opening_trust<R: BufRead, W: Write>(
     };
     let trust = bravebot_tui::trust_prompt::trust_for(answer, root)?;
 
-    if let (bravebot_tui::trust_prompt::Answer::Trust, Some((store, identity))) = (answer, &keeping)
-    {
+    let yes = answer == bravebot_tui::trust_prompt::Answer::Trust;
+    if let Some(kept) = bravebot_agent::trusted::keep_a_yes(keeping.as_ref(), yes, session) {
         let directory = root.display().to_string();
-        asking.say(&match store.keep(identity, session, seconds_now()) {
-            true => t!(
-                cli_plain_trust_kept,
-                directory = directory,
-                path = store.path().display().to_string()
-            ),
-            false => t!(
-                session_trust_not_kept,
-                directory = directory,
-                path = store.path().display().to_string()
-            ),
+        let path = keeping.as_ref().map_or(String::new(), |(store, _)| {
+            store.path().display().to_string()
+        });
+        asking.say(&match kept {
+            true => t!(cli_plain_trust_kept, directory = directory, path = path),
+            false => t!(session_trust_not_kept, directory = directory, path = path),
         });
         return Some(trust);
     }
@@ -998,13 +993,6 @@ fn opening_trust<R: BufRead, W: Write>(
         false => t!(session_not_trusting).to_string(),
     });
     Some(trust)
-}
-
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
 }
 
 /// The one thing that reads what the person types, and the one thing that writes what is not the
@@ -2315,12 +2303,12 @@ mod tests {
     }
 
     /// Where no record can be found for the directory, a yes trusts this session and the lines say
-    /// the answer cannot be kept, so the next session's question is not a surprise. Nothing is
-    /// written.
+    /// the answer cannot be kept, so the next session's question is not a surprise. With no record
+    /// there is nothing to write to, which the shared helper's own tests pin.
     #[test]
     fn a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so() {
         let scratch = Remembering::new("plain-nothing-to-keep");
-        let (home, root) = (&scratch.home, &scratch.root);
+        let root = &scratch.root;
 
         let (trust, said) = opening_keeping_in("y\n", root, |_| None, |_| None);
 
@@ -2339,10 +2327,6 @@ mod tests {
         assert!(
             !said.contains("later sessions started here will not ask"),
             "the session said a yes was kept: {said}"
-        );
-        assert!(
-            !home.join("trusted").exists(),
-            "a record was written where none was offered"
         );
     }
 

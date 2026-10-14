@@ -1698,12 +1698,7 @@ impl Bridge {
         // The question is answered, so what it offered is spent. Offered only where the answer may
         // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
-        let kept = match keeping {
-            Some((store, identity)) if trusted => {
-                Some(store.keep(&identity, &named, seconds_now()))
-            }
-            _ => None,
-        };
+        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named);
 
         Ok(json!({ "trusted": trusted, "kept": kept }))
     }
@@ -2933,13 +2928,6 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
             ),
         )),
     }
-}
-
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
 }
 
 #[cfg(test)]

@@ -5082,30 +5082,6 @@ fn honoured(root: &std::path::Path) -> Option<bravebot_agent::trusted::Honoured>
     )
 }
 
-/// Write a yes down in `record` for later sessions (TRUST-23), and say whether it was written, or
-/// `None` where nothing is kept: a no, or a yes with no record to write it in.
-///
-/// Separated from [`opening_trust`] so it can be tested without a terminal.
-fn keep_a_yes(
-    answer: crate::trust_prompt::Answer,
-    record: Option<&(
-        bravebot_agent::trusted::Store,
-        bravebot_agent::trusted::Identity,
-    )>,
-    session: &str,
-    at: u64,
-) -> Option<bool> {
-    let (store, identity) = record?;
-    (answer == crate::trust_prompt::Answer::Trust).then(|| store.keep(identity, session, at))
-}
-
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-}
-
 /// Withdraw every answer kept about `root` inside `home`, and say what became of it (TRUST-24).
 ///
 /// Whichever directory was at the path when each was given: a person taking the answer back means
@@ -5213,7 +5189,8 @@ fn opening_trust(
             if !carried.is_empty() {
                 session.paste_text(&carried);
             }
-            if let Some(kept) = keep_a_yes(answer, record.as_ref(), id, seconds_now()) {
+            let yes = answer == crate::trust_prompt::Answer::Trust;
+            if let Some(kept) = bravebot_agent::trusted::keep_a_yes(record.as_ref(), yes, id) {
                 session.note(match kept {
                     true => t!(session_trust_kept, directory = where_it_is),
                     false => t!(
@@ -24023,12 +24000,11 @@ mod tests {
     }
 
     /// TRUST-23: a yes is the answer that is kept. The next session started in the directory finds
-    /// it and is not asked, and the map it opens with is the tree trusted. Asked of the answer the
-    /// question gave rather than of a store written to directly, since a `keep_a_yes` that wrote
-    /// nothing would pass a test that called `keep` itself.
+    /// it and is not asked, and the map it opens with is the tree trusted. The write is the shared
+    /// helper's, which the agent crate tests; what is asked here is that the terminal's opening
+    /// takes what it wrote.
     #[test]
     fn a_yes_is_kept_and_the_next_session_there_is_not_asked() {
-        use crate::trust_prompt::Answer;
         use bravebot_agent::PermissionMode;
 
         let Some((home, root, record)) = a_record_to_keep_in("bravebot-app-yes-kept") else {
@@ -24036,7 +24012,7 @@ mod tests {
         };
 
         assert_eq!(
-            keep_a_yes(Answer::Trust, Some(&record), "1-2", 7),
+            bravebot_agent::trusted::keep_a_yes(Some(&record), true, "1-2"),
             Some(true),
             "a yes with a record was not written"
         );
@@ -24044,7 +24020,6 @@ mod tests {
         let kept = bravebot_agent::trusted::honoured(Some(&home), None, &root)
             .expect("the next session here would be asked after a yes")
             .kept;
-        assert_eq!(kept.at, 7);
         match opening_for(Beginning::New, PermissionMode::Ask, &root, || {
             Some(kept.clone())
         }) {
@@ -24059,8 +24034,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
     }
 
-    /// TRUST-23: a no is never kept, and neither is leaving. The next session started there asks,
-    /// since a no grants nothing and asking again is how a person changes their mind.
+    /// TRUST-23: a no is never kept. The next session started there asks, since a no grants nothing
+    /// and asking again is how a person changes their mind. What the terminal adds to the shared
+    /// helper is the reading of its answer: only `Answer::Trust` is a yes, so declining and leaving
+    /// both reach it as a no.
     #[test]
     fn a_no_is_not_kept_and_the_next_session_there_is_asked() {
         use crate::trust_prompt::Answer;
@@ -24071,8 +24048,9 @@ mod tests {
         };
 
         for answer in [Answer::Decline, Answer::Leave] {
+            let yes = answer == Answer::Trust;
             assert_eq!(
-                keep_a_yes(answer, Some(&record), "1-2", 7),
+                bravebot_agent::trusted::keep_a_yes(Some(&record), yes, "1-2"),
                 None,
                 "{answer:?} was kept"
             );
@@ -24086,17 +24064,6 @@ mod tests {
             Opening::Ask
         ));
         let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
-    }
-
-    /// TRUST-23: a yes where there is no record to write it in, which is an incognito session, a
-    /// home directory or a filesystem that cannot tell directories apart, trusts the session and
-    /// keeps nothing, so the question says the next session asks.
-    #[test]
-    fn a_yes_with_no_record_to_write_keeps_nothing() {
-        assert_eq!(
-            keep_a_yes(crate::trust_prompt::Answer::Trust, None, "1-2", 7),
-            None
-        );
     }
 
     /// Bypassing every permission answers before the kept record is read, so the session says the

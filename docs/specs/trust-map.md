@@ -1254,7 +1254,10 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::running::a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted`
 `verified-by: bravebot_tui::app::a_yes_is_kept_and_the_next_session_there_is_not_asked`
 `verified-by: bravebot_tui::app::a_no_is_not_kept_and_the_next_session_there_is_asked`
-`verified-by: bravebot_tui::app::a_yes_with_no_record_to_write_keeps_nothing`
+`verified-by: bravebot_agent::trusted::a_yes_is_written_and_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::a_no_and_a_yes_with_no_record_write_nothing`
+`verified-by: bravebot_agent::trusted::a_yes_that_cannot_be_written_says_so`
+`verified-by: bravebot_agent::incognito::a_yes_is_offered_no_record_to_be_kept_in`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_that_keeps_a_yes_names_the_record_it_writes`
 `verified-by: bravebot_tui::trust_prompt::y_trusts_nothing_until_the_record_it_keeps_has_been_on_the_screen`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_that_cannot_keep_a_yes_says_so`
