@@ -797,6 +797,13 @@ class Tree(unittest.TestCase):
         with self.assertRaisesRegex(pf.Problem, "hooks.md"):
             pf.checked_commit(self.root)
 
+    def test_a_refusal_names_a_worktree_for_this_skill_inside_the_clone(self):
+        (self.root / "docs" / "specs" / "hooks.md").write_text("edited\n")
+        with self.assertRaises(pf.Problem) as refused:
+            pf.checked_commit(self.root)
+        self.assertIn("git worktree add --detach .worktrees/peer-gaps main", str(refused.exception))
+        self.assertNotIn("../", str(refused.exception))
+
     def test_pending_writes_a_prompt_per_unit_from_the_real_templates(self):
         pf.pa.tracker = lambda path: path.write_text("12\topen\tAdd session forking\n") or 1
         write_ledger = {"peer:codex": {"verdict": "reviewed", "issue": "-", "commit": "c", "date": datetime.date.today().isoformat(), "reason": ""},
