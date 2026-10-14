@@ -6166,13 +6166,21 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     }
 }
 
+/// Whether a queued command line ends the goal, or sets, pauses or clears one: `/exit`, `/clear`
+/// and `/goal` in any form.
+fn ends_or_changes_a_goal(line: &str) -> bool {
+    let line = line.trim();
+    line == EXIT_COMMAND || line == CLEAR_COMMAND || argument_to(line, GOAL_COMMAND).is_some()
+}
+
 /// What goes out once a turn has ended, and whose line it is, with `judge` being what puts the goal
 /// to a check.
 ///
 /// Nothing waiting goes out after somebody has asked to leave. A prompt the person queued goes
 /// before the goal is judged: their own prompts are the session, and a condition judged before they
-/// have been sent would be judged against an exchange that is missing them. The sentence a goal
-/// carries the work on with is this program's, so a `@path` inside it names no file.
+/// have been sent would be judged against an exchange that is missing them. A command the person
+/// queued that ends or changes the goal is carried out before it is judged too (GOAL-10). The
+/// sentence a goal carries the work on with is this program's, so a `@path` inside it names no file.
 fn next_after_a_turn(
     session: &mut Session,
     judge: impl FnOnce(&mut Session) -> io::Result<Option<String>>,
@@ -6182,6 +6190,12 @@ fn next_after_a_turn(
     }
     if let Some(queued) = session.send_queued() {
         return Ok(Some((queued, Wrote::ThePerson)));
+    }
+    // The outer loop carries out what is left of the queue, and a command among it that ends or
+    // changes the goal has to run before the goal sends the work back, or it waits on up to ten
+    // more rounds. Any other command leaves the goal as it was, so it is judged as usual.
+    if session.commands_waiting().any(ends_or_changes_a_goal) {
+        return Ok(None);
     }
     Ok(judge(session)?.map(|prompt| (prompt, Wrote::TheDriver)))
 }
@@ -16601,6 +16615,65 @@ mod tests {
         assert_eq!(
             sending, None,
             "a line went out after the person asked to leave"
+        );
+    }
+
+    /// GOAL-10: `/exit` and `/clear` typed while a turn runs end the goal, so the goal does not
+    /// send the work back before they are carried out.
+    #[test]
+    fn a_goal_is_not_judged_while_a_command_waits_in_the_queue() {
+        for command in ["/exit", "/clear", "/goal cargo test exits 1", "/goal clear"] {
+            let mut session = Session::new("none");
+            session.start_goal("cargo test exits 0".to_string());
+            for c in "fix the build".chars() {
+                session.type_char(c);
+            }
+            session.submit();
+            for c in command.chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_command(), "{command} was not queued");
+            session.complete("done", Vec::new(), 0);
+
+            let mut judged = false;
+            let sending = next_after_a_turn(&mut session, |_| {
+                judged = true;
+                Ok(Some("carry on".to_string()))
+            })
+            .expect("judging cannot fail here");
+
+            assert!(!judged, "the goal was judged with {command} waiting");
+            assert_eq!(sending, None, "work went out with {command} waiting");
+            assert!(
+                session.take_queued_command().is_some(),
+                "{command} was not left for the loop to carry out"
+            );
+        }
+    }
+
+    /// A queued command that leaves the goal alone does not stop the goal being judged, or the goal
+    /// would sit idle after `/help`.
+    #[test]
+    fn a_goal_is_still_judged_with_a_command_waiting_that_leaves_it_alone() {
+        let mut session = Session::new("none");
+        session.start_goal("cargo test exits 0".to_string());
+        for c in "fix the build".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        for c in "/help".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue_command(), "/help was not queued");
+        session.complete("done", Vec::new(), 0);
+
+        let sending = next_after_a_turn(&mut session, |_| Ok(Some("carry on".to_string())))
+            .expect("judging cannot fail here");
+
+        assert_eq!(
+            sending,
+            Some(("carry on".to_string(), Wrote::TheDriver)),
+            "a harmless queued command held the goal still"
         );
     }
 
