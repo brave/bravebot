@@ -193,6 +193,7 @@ are asked about separately, and what a delegate is told it can do is what it is 
 `verified-by: bravebot_agent::delegate::each_kind_is_told_what_it_cannot_do`
 `verified-by: bravebot_agent::delegate::every_kind_is_told_the_guidance_the_planner_is_told`
 `verified-by: bravebot_agent::delegate::a_body_cannot_displace_what_a_kind_cannot_do`
+`verified-by: bravebot_agent::delegate::the_guidance_every_planner_gets_comes_before_a_definitions_body`
 `verified-by: bravebot_agent::delegate::a_definition_with_no_body_leaves_the_prompt_as_it_was`
 `verified-by: bravebot_agent::delegate::a_narrowed_delegate_is_told_what_it_holds_rather_than_what_its_kind_holds`
 `verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`

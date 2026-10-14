@@ -65,6 +65,7 @@ picture is the exception and is [READ-5](#READ-5): there is something to do with
 
 `verified-by: bravebot_agent::workspace::a_binary_file_is_reported_as_binary`
 `verified-by: bravebot_agent::workspace::a_paged_read_of_a_binary_file_is_refused`
+`verified-by: bravebot_agent::workspace::a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
 `verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`

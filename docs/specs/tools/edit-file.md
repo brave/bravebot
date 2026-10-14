@@ -93,6 +93,7 @@ nothing of the finding ([CRED-19](../credential-protection.md#CRED-19)).
 `verified-by: bravebot_agent::turn::an_edit_is_not_put_to_the_person_twice_over_a_value_the_planner_wrote`
 `verified-by: bravebot_agent::replace::the_runs_an_excerpt_hands_back_carry_the_line_numbers_of_the_file`
 `verified-by: bravebot_agent::replace::a_cut_excerpt_hands_back_only_the_lines_it_shows`
+`verified-by: bravebot_agent::replace::a_cut_excerpt_says_how_many_lines_it_dropped`
 `verified-by: bravebot_agent::replace::an_excerpt_shows_the_changed_line_with_its_neighbours`
 `verified-by: bravebot_agent::replace::a_long_span_is_cut_in_the_middle_and_says_so`
 `verified-by: bravebot_agent::replace::a_change_of_line_terminator_still_shows_the_line`

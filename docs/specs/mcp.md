@@ -98,6 +98,7 @@ Non-text content is ignored rather than guessed at, and several text parts are j
 
 `verified-by: bravebot_mcp::protocol::tool_result_text_is_joined`
 `verified-by: bravebot_mcp::protocol::non_text_content_is_ignored`
+`verified-by: bravebot_mcp::protocol::a_block_of_another_type_is_ignored_even_when_it_carries_text`
 
 <a id="MCP-7"></a>
 ### MCP-7: the transport is parsed strictly
