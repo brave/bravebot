@@ -730,6 +730,8 @@ fn a_stage_started_through_a_link_sends_the_link() {
         "/w/.venv/bin/python -> /usr/bin/python3.12"
     );
     assert!(value["confinement"].is_null());
+    // The sentence for that null is the catalog's, not one a front end copies.
+    assert_eq!(value["notSandboxed"], bravebot_approval::not_sandboxed());
 }
 
 #[test]

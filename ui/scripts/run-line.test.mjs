@@ -49,10 +49,11 @@ const draw = (entry) =>
   )
 
 /** The run question as the bridge sends it, for a line whose glob the harness expanded. */
-const asked = (line, confinement) =>
+const asked = (line, confinement, notSandboxed) =>
   t.askedRun({
     request: 1,
     confinement,
+    notSandboxed,
     line,
     plan: '/usr/bin/wc -l notes.txt report.txt',
     stages: [
@@ -116,8 +117,9 @@ test('a confined run card names what the programs are held to and does not call 
 })
 
 test('a run the turn does not confine says it is not sandboxed, and a silent bridge says nothing', () => {
-  const unconfined = text(draw(asked('wc -l *.txt', null)))
-  assert.ok(unconfined.includes('This is not sandboxed: it runs with the access your own shell has.'), unconfined)
+  const unconfined = text(draw(asked('wc -l *.txt', null, 'zzthe bridge words this sentence')))
+  assert.ok(unconfined.includes('zzthe bridge words this sentence'), unconfined)
+  assert.ok(!unconfined.includes('This is not sandboxed'), unconfined)
 
   const silent = text(draw(asked('wc -l *.txt', undefined)))
   assert.ok(!silent.includes('sandboxed'), silent)

@@ -2010,8 +2010,8 @@ function Card({
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}
-          {request.confinement === null && (
-            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">This is not sandboxed: it runs with the access your own shell has.</p>
+          {request.confinement === null && !!request.notSandboxed && (
+            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
           )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
