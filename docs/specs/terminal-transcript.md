@@ -157,7 +157,10 @@ because it is one release however many pieces it arrives in.
 ### VIEW-7: where a result went is drawn only where that is not the ordinary answer
 
 A call whose result the planner may read says nothing about it. A result the planner may not read
-says so, and so does a name that was never opened.
+says so on the call, and so does a name that was never opened. The marked block that holds the
+content of a result kept from the planner does not say it again: the heading names the content
+untrusted and the margin marks every row. A block whose content is in no model's context at all, as
+a processor's remark is, says so in its heading, since that is the exception among blocks.
 
 **Why.** Nearly every call reads into the planner's context, and a line under nearly every call
 distinguishes nothing while crowding out the lines that do. What the design turns on is the
@@ -169,6 +172,8 @@ went is still in the audit trail, which is what the record is for.
 
 `verified-by: bravebot_tui::render::the_ordinary_landing_is_not_given_a_line_of_its_own`
 `verified-by: bravebot_tui::render::a_result_the_planner_may_not_read_still_says_so`
+`verified-by: bravebot_tui::render::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: bravebot_cli::progress::a_block_states_its_reach_only_where_that_is_the_exception`
 
 <a id="VIEW-8"></a>
 ### VIEW-8: a note from the session is drawn in one ink of its own

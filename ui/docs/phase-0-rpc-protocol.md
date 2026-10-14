@@ -268,7 +268,7 @@ implementation should have one serialisation function per row and a round-trip t
 Two rules for the enums above:
 
 1. **Serialise the discriminant, not the prose.** `Landing::describe()` and
-   `Reach::describe()` return sentences meant for a screen; they are wording, they will
+   `Reach::note()` return sentences meant for a screen; they are wording, they will
    change, and a client that matches on them is matching on prose. Send the tag. The
    client may render its own words, or call the Rust wording a hint — but the tag is the
    contract.

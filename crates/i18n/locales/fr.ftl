@@ -2759,8 +2759,6 @@ landed-in-the-planner = lu dans le contexte du planificateur
 landed-quarantined =
     pas dans le contexte du planificateur ; seul un processeur isolé peut être envoyé le lire
 landed-reserved = lu par rien : seul son nom est connu
-reach-not-the-planner =
-    pas dans le contexte du planificateur ; un processeur peut être envoyé le lire
 reach-no-model = dans le contexte d'aucun modèle : rien ne peut être envoyé lire ceci
 
 # How many calls a delegate has made, where its block shows only the last few.

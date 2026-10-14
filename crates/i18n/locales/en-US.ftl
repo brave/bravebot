@@ -3276,7 +3276,6 @@ verb-unknown = Tool
 landed-in-the-planner = read into the planner's context
 landed-quarantined = not in the planner's context; only an isolated processor can be sent to read it
 landed-reserved = read by nothing: only its name is known
-reach-not-the-planner = not in the planner's context; a processor can be sent to read it
 reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.

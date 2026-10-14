@@ -253,10 +253,15 @@ pub enum Reach {
 }
 
 impl Reach {
-    pub fn describe(self) -> &'static str {
+    /// The sentence a block's heading adds to "untrusted", where it adds one.
+    ///
+    /// Content kept from the planner is the ordinary reason for a block, and the heading and the
+    /// landing line under the call already say it, so repeating it on every block says nothing
+    /// new. Content in no model's context is the exception and states it.
+    pub fn note(self) -> Option<&'static str> {
         match self {
-            Self::NotThePlanner => t!(reach_not_the_planner),
-            Self::NoModel => t!(reach_no_model),
+            Self::NotThePlanner => None,
+            Self::NoModel => Some(t!(reach_no_model)),
         }
     }
 }

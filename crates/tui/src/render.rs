@@ -502,21 +502,18 @@ pub(crate) fn quarantined_rows(
     // The heading goes through [`marked_rows`] like the content does, because the origin is not
     // the renderer's text: it can be a filename read out of a quarantined listing. So it is
     // neutralised, and a long one continues on another marked row rather than outside the block.
-    let mut lines = marked_rows(
-        margin,
-        &[
-            Span::styled(
-                t!(
-                    quarantined_heading,
-                    origin = &shown.origin,
-                    label = &shown.label
-                ),
-                marked.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  {}", shown.reach.describe()), dim()),
-        ],
-        width,
-    );
+    let mut heading = vec![Span::styled(
+        t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        ),
+        marked.add_modifier(Modifier::BOLD),
+    )];
+    if let Some(note) = shown.reach.note() {
+        heading.push(Span::styled(format!("  {note}"), dim()));
+    }
+    let mut lines = marked_rows(margin, &heading, width);
 
     for line in &shown.preview {
         lines.extend(marked_rows(
@@ -3838,6 +3835,36 @@ mod tests {
                 all.contains("38 more lines"),
                 "what was left out was not said"
             );
+        }
+
+        /// Content kept from the planner is what every block holds, and the heading's `untrusted`
+        /// and the margin already say it, so a sentence on each block says nothing new. Content in
+        /// no model's context is the exception and still says so.
+        #[test]
+        fn a_block_states_its_reach_only_where_that_is_the_exception() {
+            let text = |shown: &Shown| -> String {
+                quarantined_lines(shown, 200)
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let mut shown = Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec!["first line".to_string()],
+                lines: 1,
+            };
+
+            let ordinary = text(&shown);
+            assert!(ordinary.contains("untrusted"), "{ordinary}");
+            assert!(!ordinary.contains("planner"), "{ordinary}");
+            assert!(!ordinary.contains("no model"), "{ordinary}");
+
+            shown.reach = bravebot_agent::report::Reach::NoModel;
+            let unread = text(&shown);
+            assert!(unread.contains("in no model's context"), "{unread}");
         }
 
         fn glimpse(lines: &[&str], total: usize, from_the_end: bool) -> Returned {
