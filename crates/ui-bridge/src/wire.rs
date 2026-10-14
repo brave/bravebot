@@ -7,7 +7,7 @@
 //! Two rules run through all of it.
 //!
 //! **Send the discriminant, not the prose.** [`Landing::describe`] and
-//! [`Reach::describe`] return sentences meant for a screen. They are wording, they will
+//! [`Reach::note`] return sentences meant for a screen. They are wording, they will
 //! change, and a client that matches on them is matching on prose — which is how a
 //! message that merely mentions a refusal becomes one. The tag is the contract; a
 //! front-end may render its own words from it.
