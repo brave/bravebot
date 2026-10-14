@@ -19,6 +19,7 @@ guards:
       - crates/agent/tests/workspace.rs: 36
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
+      - crates/connector/src/lib.rs: 2
       - crates/core/src/policy.rs: 114
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
@@ -41,6 +42,7 @@ guards:
       - crates/agent/tests/workspace.rs: 57
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
+      - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
@@ -331,9 +333,11 @@ settled.
 
 A witness records that bytes moved somewhere they were already allowed to go: a filesystem write,
 an HTTP body, a human's screen, or the standard input of a program a person endorsed
-([run.md](tools/run.md#RUN-3)). Each of those destinations has a gate of its own, one for
-putting content in front of the planner, one for reshaping it for display, and one for reading
-trusted content. A declassification anywhere else is almost certainly a violation.
+([run.md](tools/run.md#RUN-3)). A connector's authority is such a program, named by the person in
+their own connector definition, and what its standard input is given is the HTTP body it becomes.
+Each of those destinations has a gate of its own, one for putting content in front of the planner,
+one for reshaping it for display, and one for reading trusted content. A declassification anywhere
+else is almost certainly a violation.
 
 The copy of a picture a person is asked to open ([VET-4](tools/vet-content.md#VET-4)) is one more
 filesystem write on this list, at a gate of its own for that one file.

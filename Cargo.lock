@@ -239,6 +239,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-connector"
+version = "0.15.0"
+dependencies = [
+ "bravebot-core",
+ "bravebot-sandbox",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bravebot-core"
 version = "0.15.0"
 
