@@ -713,9 +713,15 @@ fn table(
              were already shown by a search or a read; nothing here works out where a name is \
              for you. Answers with the places it found, one per line. Where a definition is in \
              a dependency rather than in this project the line says so, and read_file will not \
-             open it. hover is the one operation that answers with prose, and that prose always \
-             comes back as a reference you cannot read rather than as text, because nothing in a \
-             server's answer says which file wrote it.",
+             open it. hover answers with prose, and that prose always comes back as a reference \
+             you cannot read rather than as text, because nothing in a server's answer says \
+             which file wrote it. diagnostics takes a path and no position and reports what the \
+             server has found wrong with that file: how many errors, the line each starts on, \
+             and how many warnings. Use it after an edit to learn what the edit broke before \
+             running a build. The server's messages come back as a reference you cannot read, \
+             for the same reason as hover. A server that has not reported says so, which is not \
+             the same as a file with no errors, and a report with no errors is not a passing \
+             build: a server can report more once it has finished working.",
             json!({
                 "type": "object",
                 "properties": {
@@ -730,20 +736,22 @@ fn table(
                             "workspaceSymbol",
                             "goToImplementation",
                             "incomingCalls",
-                            "outgoingCalls"
+                            "outgoingCalls",
+                            "diagnostics"
                         ]
                     },
                     "path": {
                         "type": "string",
                         "description": "Workspace-relative path to the file holding the symbol, \
                                         e.g. src/main.rs. Required for every operation but \
-                                        workspaceSymbol."
+                                        workspaceSymbol. For diagnostics, the file to check."
                     },
                     "line": {
                         "type": "integer",
                         "description": "1-based line of the symbol, as a search or a read \
                                         reported it. A line that no longer holds the symbol \
-                                        answers with nothing rather than failing.",
+                                        answers with nothing rather than failing. Not used by \
+                                        diagnostics.",
                         "minimum": 1
                     },
                     "character": {
@@ -1727,6 +1735,22 @@ pub struct Entries {
     pub directories: usize,
 }
 
+/// Content a result carries beside its own text, under a label of its own.
+///
+/// A result is shown or quarantined whole by the label on its text. Where one answer holds both a
+/// part the driver wrote and a part a file or a server chose, the second travels here: the turn
+/// puts it through the same gate as any other result, so the planner reads the first and is handed
+/// a reference to the second.
+#[derive(Debug)]
+pub struct Apart {
+    /// What the planner is told the reference is of. A file's name only where the planner
+    /// proposed it itself, never one that a server or a file supplied.
+    pub origin: String,
+    pub text: Labelled<String>,
+    /// The driver's sentence that introduces whatever the planner is handed in its place.
+    pub introduced_by: &'static str,
+}
+
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
@@ -1761,6 +1785,8 @@ pub struct Output {
     /// the middle stays reachable: a planner that needs it hands the reference to a processor or
     /// writes it to a file rather than running the command again.
     pub whole: Option<Labelled<String>>,
+    /// Content that travels beside `text` under a label of its own.
+    pub apart: Option<Apart>,
     /// Which document a processor's answer is about, where it produced one.
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
@@ -2581,6 +2607,8 @@ struct Produced {
     /// Without it the one case where the cap bites would be the one case with no way back to the
     /// middle short of running the command again.
     whole: Option<Labelled<String>>,
+    /// Content that travels beside `text` under a label of its own.
+    apart: Option<Apart>,
     /// The change a write made, for showing under the line it belongs to.
     changes: Vec<crate::diff::Change>,
     /// Whether those lines are content nobody vouched for.
@@ -2689,6 +2717,7 @@ impl Produced {
             incomplete: false,
             paging: None,
             whole: None,
+            apart: None,
             changes: Vec::new(),
             untrusted: false,
             changed_a_file: false,
@@ -3613,6 +3642,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         incomplete: produced.incomplete,
         paging: produced.paging,
         whole: produced.whole,
+        apart: produced.apart,
         answers_for: produced.answers_for,
         said: produced.said,
         glimpsed: produced.glimpsed,
@@ -10889,11 +10919,21 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     // The server is given the path it can open, which is the resolved one. What the planner is
     // shown is rendered back against the root by the lsp module.
     let root = servers.root().to_path_buf();
+    let file = root.join(&relative);
     let absolute = if relative.is_empty() {
         String::new()
     } else {
-        root.join(&relative).to_string_lossy().into_owned()
+        file.to_string_lossy().into_owned()
     };
+
+    // A file that is not there has nothing to check, and the person should not be asked to start a
+    // server to be told so. Whether a path is a file is a fact about the filesystem, not a byte of
+    // anything in it.
+    if operation == bravebot_lsp::Operation::Diagnostics && !file.is_file() {
+        return Produced::problem(format!(
+            "error: {relative} is not a file, so there is nothing for a language server to check"
+        ));
+    }
 
     let answer = match servers.ask(
         policy,
@@ -10927,15 +10967,28 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         None => None,
     };
 
-    let note = format!(
-        "{}{}",
-        tally(found, "location", "locations"),
-        if answer.partial {
-            ", still indexing"
-        } else {
-            ""
-        }
-    );
+    // LSP-13: a `diagnostics` answer is a sentence of the driver's own, built from severities and
+    // line numbers, and messages the server wrote. The messages are content nobody can attribute,
+    // so they do not join the sentence: they travel beside it and are handed over as a reference.
+    let (text, messages) = if operation == bravebot_lsp::Operation::Diagnostics {
+        (None, text)
+    } else {
+        (text, None)
+    };
+
+    let still = if answer.partial {
+        ", still indexing"
+    } else {
+        ""
+    };
+    let note = match &answer.diagnostics {
+        Some(reported) => format!(
+            "{}, {}{still}",
+            tally(reported.errors.len(), "error", "errors"),
+            tally(reported.warnings, "warning", "warnings"),
+        ),
+        None => format!("{}{still}", tally(found, "location", "locations")),
+    };
 
     match text {
         // Hover text exists, so the result carries it and is labelled by its file. The locations go
@@ -10953,16 +11006,24 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
         // Locations only, which is every operation but hover. The names in it are bytes out of the
         // tree the server indexed, so the kernel labels it from the trust map's entry for each path
-        // and an answer naming a file nobody vouched for is quarantined, as a listing is.
+        // and an answer naming a file nobody vouched for is quarantined, as a listing is. A
+        // `diagnostics` answer names no path the server reported, so it carries no taint.
         None => {
             let label = match crate::lsp::label_for_locations(policy, &answer) {
                 Ok(label) => label,
                 Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
+            let origin = format!("what the language server said about {relative}");
             let mut produced = Produced::new(Labelled::new(described, label), relative, note)
                 .marked_untrusted(!label.is_trusted());
             produced.content = !label.is_trusted();
             produced.incomplete = answer.partial;
+            produced.apart = messages.map(|text| Apart {
+                origin,
+                text,
+                introduced_by: "The messages the language server wrote about this file are \
+                                not shown to you. They are a reference:",
+            });
             produced
         }
     }

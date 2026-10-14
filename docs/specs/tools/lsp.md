@@ -47,9 +47,10 @@ out of files nobody vouched for, and a path is the one thing routing is made of.
 
 `operation`, `path`, `line`, `character` and `query` are all `(T,pub)`. The operation is one of a
 fixed list this repository knows: a definition, the references to a symbol, hover text, the symbols
-in a document, the symbols in the workspace, implementations of a trait, and the two directions of a
-call hierarchy. A name not on the list is refused rather than forwarded, so what the server is asked
-is decided here and never by whatever a request happened to contain.
+in a document, the symbols in the workspace, implementations of a trait, the two directions of a
+call hierarchy, and what the server makes of a file ([LSP-13](#LSP-13)). A name not on the list is
+refused rather than forwarded, so what the server is asked is decided here and never by whatever a
+request happened to contain.
 
 `workspaceSymbol` names no file, and its `query` is the whole of what the server is asked to look
 for. A field that decides that is routing, so it is promoted and recorded the way a path is. It is
@@ -556,9 +557,10 @@ describes, and a write is not that approval. With no server running for the lang
 server configured for it, or in a run that was not granted the capability ([LSP-9](#LSP-9)), the
 result says nothing about the file.
 
-This is not an operation of the `lsp` tool. [LSP-1](#LSP-1)'s list is the set of questions a
-planner may put, and it is unchanged: the planner names no operation here and chooses nothing, so
-there is no routing field to promote.
+This is not an operation of the `lsp` tool. The planner names no operation here and chooses
+nothing, so there is no routing field to promote. A planner that wants the same check for a file it
+did not just write, or after an edit, asks for it with the `diagnostics` operation
+([LSP-13](#LSP-13)).
 
 **What is read.** Only the severity of each diagnostic and the line its range starts on. The
 `message`, the `code`, the `source` and the related information are never deserialised, so
@@ -590,11 +592,11 @@ time after it, since servers publish a quick pass and then refine it. Type error
 build may arrive after the bound, and the wording says a report may be short. A set another run
 holds for the length of a question, a prompt included, is not waited for.
 
-**Why not a read operation.** The planner's alternative is a build, and a build is a `run` a
-person approves. This gives the common case, a syntax or type error in the file just written, in
-the same turn and at the cost of one notice from a server somebody already approved. It does not
-replace a build, and OpenCode's own documentation says language-server feedback is not always a
-net positive; the cost here is a wait of at most the bound per write.
+**Why a write is checked without being asked.** The planner's alternative is a build, and a build
+is a `run` a person approves. This gives the common case, a syntax or type error in the file just
+written, in the same turn and at the cost of one notice from a server somebody already approved. It
+does not replace a build, and OpenCode's own documentation says language-server feedback is not
+always a net positive; the cost here is a wait of at most the bound per write.
 
 `verified-by: bravebot_lsp::protocol::a_diagnostic_carries_a_line_and_a_severity_and_no_prose`
 `verified-by: bravebot_lsp::server::a_running_server_reports_the_notice_that_follows_the_file_it_was_sent`
@@ -605,6 +607,70 @@ net positive; the cost here is a wait of at most the bound per write.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+
+<a id="LSP-13"></a>
+### LSP-13: diagnostics are asked for by file, and come back as lines and one reference
+
+The `diagnostics` operation takes a `path` and no position, and asks what a language server makes of
+that file. The server is sent the file as it now stands, as [LSP-12](#LSP-12) sends it, and the notice
+it publishes in reply is the answer. It is a read and is on the closed list of [LSP-1](#LSP-1). Like
+every operation it starts the server for the file's language when none is running, and that start is
+put to the person under [LSP-5](#LSP-5); a write's check never starts one.
+
+The answer has two parts, on two footings.
+
+**The severities and the lines are structure.** The planner is told how many errors the server found
+and the line each starts on, how many warnings, and how many notes of any other kind, in this
+repository's words and capped as [LSP-12](#LSP-12) caps them. A line and a severity are an integer and
+a fixed enumeration the server reports, which [LSP-3](#LSP-3) already reads as structure for a
+location, so the sentence is given for a file in a tree the trust map does not vouch for as it is for
+one it does. It names no path the server reported, so it carries no taint.
+
+**The messages are content.** A diagnostic's `message`, `code` and `source` are bytes the server
+composed out of the files it indexed, and a message can quote a name defined in another file. The
+file that was queried is not the file that wrote them, so its trust-map entry is not borrowed for
+them, which is the laundering [LSP-3](#LSP-3) rules out for hover text. They are unattributed and
+untrusted. They come back as one reference to the diagnostics the notice held, one entry each,
+beside the sentence, and the planner reads them through `vet_content` or a processor like any other
+quarantined content. An entry starts at the beginning of a line and a line break inside a message
+continues it on an indented line, so a message cannot start an entry of its own. At most 200 entries
+are written and the last line says how many were left out. The messages are carried as a string beside
+the type that holds the lines, and [LSP-12](#LSP-12)'s `Diagnostics` still has nowhere to hold one.
+
+The lines and the messages are read from the same notice, chosen by the rule [LSP-12](#LSP-12) uses:
+this document, at the version just sent or later. Where a `deny` rule covers reading any path the
+messages are withheld, as hover text is ([PERM-7](../permissions.md#PERM-7)), because a message can
+quote a file the rule covers and nothing in it says which; the sentence says they were withheld, so
+that withheld messages are not read as a report that had none. A rule covering the queried file
+refuses the question. A file that is not there is reported as such before a server is started, and
+nobody is asked about one.
+
+**An absent answer is never a clean one.** A server that publishes nothing about the file inside the
+bound is reported as not having reported, in words that cannot be read as "no errors"
+([LSP-6](#LSP-6)'s reason, applied to a file). A report of no errors is worded "no errors reported
+yet" and as nothing stronger, since a server that publishes a quick pass and refines it later has not
+said the file is clean. A report given before the index settled says it may be short
+([LSP-7](#LSP-7)).
+
+**Why the messages are not shown when the lines are.** The lines and severities are numbers the
+driver counts and prints, and nothing in them is a sentence anyone wrote. The messages are sentences,
+and a planner entitled to read one is entitled to read a message a hostile file arranged to be
+produced. The cost is that the planner learns where a file is broken and how badly, and reads why
+only through a processor.
+
+`verified-by: bravebot_lsp::protocol::a_diagnostics_notice_supplies_words_only_where_it_supplies_lines`
+`verified-by: bravebot_lsp::protocol::every_severity_is_named_in_the_words`
+`verified-by: bravebot_lsp::server::the_diagnostics_operation_answers_lines_and_words_from_one_notice`
+`verified-by: bravebot_lsp::server::a_server_that_publishes_nothing_is_no_report_and_not_a_clean_file`
+`verified-by: bravebot_lsp::server::a_report_given_before_the_index_settled_is_partial`
+`verified-by: bravebot_agent::lsp::a_diagnostics_answer_is_counts_and_lines_and_not_its_messages`
+`verified-by: bravebot_agent::lsp::a_diagnostics_question_reports_the_lines_and_hands_back_the_messages_as_a_reference`
+`verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages`
+`verified-by: bravebot_agent::lsp::the_messages_a_diagnostics_question_returns_are_read_only_by_a_processor`
+`verified-by: bravebot_agent::lsp::diagnostics_messages_are_withheld_while_a_rule_covers_reading_a_path`
+`verified-by: bravebot_agent::lsp::diagnostics_for_a_file_that_is_not_there_start_no_server`
+`verified-by: bravebot_lsp::protocol::a_message_cannot_start_an_entry_of_its_own`
+`verified-by: bravebot_lsp::protocol::a_flood_of_diagnostics_is_capped_in_the_words_and_says_so`
 
 ## Known costs
 
@@ -652,6 +718,15 @@ net positive; the cost here is a wait of at most the bound per write.
   discarded. That is the same trade [LSP-2](#LSP-2) makes, where structure is read and prose is
   not, and carrying the sentence under a label instead would put it behind the quarantine hover
   text is behind, where a notice nobody may read tells nobody anything.
+
+- **A server that publishes late, or only when its diagnostics change, can leave a report short or
+  silent.** [LSP-13](#LSP-13) sends the file and reads the notice that follows within a bound. A
+  notice published after the bound waits in the queue, and the next question discards it, because it
+  describes a version of the file that has since been replaced, and then sends the file again as a
+  change that may produce no notice at all. A server that finds the same diagnostics after a change
+  may publish nothing. The answer is then that the server did not report, never that the file is
+  clean, and a planner that retries gets the same answer. A build is the check that does not depend
+  on the server publishing.
 
 - **A server runs the dependency tree's code, and that is the price of the tool working at all.**
   [LSP-5](#LSP-5) grants a server the user's own access, so for Rust `build.rs` and proc macros out of

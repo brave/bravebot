@@ -36,14 +36,20 @@ pub type LspResult<T> = Result<T, LspError>;
 
 /// What one question produced.
 ///
-/// Two fields for two footings, which is LSP-3 in the shape of a struct. `locations` is structure
-/// and travels; `text` is content and is labelled by whoever holds the trust map.
+/// The fields are on two footings, which is LSP-3 in the shape of a struct. `locations` and
+/// `diagnostics` are structure and travel; `text` is content and is labelled by whoever holds the
+/// trust map.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Answer {
     /// Where the server says the thing is. Never carries a byte the file wrote.
     pub locations: Vec<Location>,
-    /// The text at the position, for the operations that report any.
+    /// The text at the position, for the operations that report any. For `diagnostics` it is the
+    /// server's messages about the file, one entry per diagnostic, which are as much content as a
+    /// hover.
     pub text: Option<String>,
+    /// What the server published about the file, for `diagnostics` alone: severities and lines,
+    /// with nowhere for a message to sit (LSP-13).
+    pub diagnostics: Option<Diagnostics>,
     /// Whether the index was still building, so this answer may be short of the truth.
     ///
     /// LSP-7. A fact about the answer rather than a sentence inside it, so it survives quarantine:
@@ -78,6 +84,11 @@ pub enum LspError {
         language: server::Served,
         detail: String,
     },
+    /// The server was sent a file and published nothing about it inside the budget.
+    ///
+    /// Not an answer about the code: a server that says nothing has not said the file is clean, and
+    /// a quick pass it never refines is indistinguishable from silence (LSP-13).
+    NoReport { language: server::Served },
     /// The server did not answer inside the budget.
     TimedOut {
         language: server::Served,
@@ -145,6 +156,12 @@ impl fmt::Display for LspError {
                 "the {} language server sent something unusable: {detail}",
                 language.as_str()
             ),
+            Self::NoReport { language } => write!(
+                f,
+                "the {} language server did not report on this file in time, which does not mean \
+                 it has no errors",
+                language.as_str()
+            ),
             Self::TimedOut { language, method } => write!(
                 f,
                 "the {} language server did not answer {method} in time",
@@ -164,7 +181,7 @@ impl fmt::Display for LspError {
                 f,
                 "'{named}' is not an operation this tool offers; the operations are \
                  goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, \
-                 goToImplementation, incomingCalls and outgoingCalls"
+                 goToImplementation, incomingCalls, outgoingCalls and diagnostics"
             ),
         }
     }
@@ -252,6 +269,7 @@ mod tests {
         assert!(said.contains("not an operation"), "{said}");
         assert!(said.contains("goToDefinition"), "{said}");
         assert!(said.contains("findReferences"), "{said}");
+        assert!(said.contains("diagnostics"), "{said}");
     }
 
     /// No failure may read as a statement about the code. This is the whole of LSP-6's why.
@@ -270,6 +288,9 @@ mod tests {
                 detail: "boom".into(),
             },
             LspError::Exited {
+                language: server::Language::Rust.into(),
+            },
+            LspError::NoReport {
                 language: server::Language::Rust.into(),
             },
             LspError::TimedOut {

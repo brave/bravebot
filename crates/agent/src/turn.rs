@@ -4122,6 +4122,37 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 _ => None,
                             };
 
+                            // Content the result carries beside its own text, under a label of its own.
+                            // It goes through the same gate as a result of its own, so the planner is
+                            // handed what the label allows: the text where it may read it, otherwise a
+                            // reference to it. The person watching is shown what the planner is not.
+                            let apart = match (&presented, &output.apart) {
+                                (Presentation::Visible(_), Some(apart)) => {
+                                    let kept = policy
+                                        .present(
+                                            "tool_result",
+                                            conversation.next_reference(),
+                                            &apart.origin,
+                                            &apart.text,
+                                            conversation.quarantine(),
+                                        )
+                                        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                                    if let Presentation::Quarantined(reference) = &kept {
+                                        let shown =
+                                            preview_for(&mut policy, &output.tool, &apart.text);
+                                        reporter.quarantined(crate::report::Shown {
+                                            origin: apart.origin.clone(),
+                                            reach: crate::report::Reach::NotThePlanner,
+                                            label: reference.label.to_string(),
+                                            lines: shown.lines,
+                                            preview: shown.preview,
+                                        });
+                                    }
+                                    Some(kept)
+                                }
+                                _ => None,
+                            };
+
                             // Nothing to keep from anybody, so no reference to it and no advice about
                             // one. From the size the slot states, which the reference would have put
                             // in front of the planner as "0 bytes" anyway, so no byte is read to decide.
@@ -4231,8 +4262,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                             whole,
                                         });
                                     }
+                                    let beside = match (&apart, &output.apart) {
+                                        (Some(kept), Some(apart)) => format!(
+                                            "\n\n{}\n{}",
+                                            apart.introduced_by,
+                                            kept.for_context()
+                                        ),
+                                        _ => String::new(),
+                                    };
                                     format!(
-                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}",
+                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}",
                                         output.tool
                                     )
                                 }
