@@ -1689,6 +1689,17 @@ impl Workspace {
             .collect()
     }
 
+    /// For starting over inside one process: the paths programs were let reach and the hosts
+    /// answered were the ending session's (SANDBOX-24, SANDBOX-28), so they go with it. A clone
+    /// shares them, which is why a session handed on by `/resume` has to be cleared of them here.
+    pub fn forget_reach_and_hosts(&self) {
+        self.path_reach
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        *self.host_grants.lock().unwrap_or_else(|e| e.into_inner()) = HostGrants::default();
+    }
+
     /// End the grant numbered `number`, counting from one in `path_reach` order.
     pub fn end_path_reach(&self, number: usize) -> Option<PathReach> {
         let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
@@ -5913,6 +5924,45 @@ mod tests {
             Workspace::new(root).expect("workspace")
         };
         assert!(second.path_reach().is_empty());
+    }
+
+    /// SANDBOX-24 and SANDBOX-28: the reach and the host answers belong to the session that was
+    /// asked, so one that ends inside this process takes them with it. A yes and a no are both
+    /// asked about again, and the clone `/resume` hands to the next session sees none of them.
+    #[test]
+    fn a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it() {
+        let workspace = {
+            let root = crate::testutil::scratch_dir("reach-and-hosts-forgotten");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        let handed_on = workspace.clone();
+        let hosts = |names: &[&str]| names.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+        workspace.grant_path_reach(PathBuf::from("/data/in"), true, "reads in".to_string());
+        workspace.grant_hosts(&hosts(&["yes.example"]));
+        workspace.decline_hosts(&hosts(&["no.example"]));
+        assert!(
+            handed_on
+                .unanswered_hosts(&hosts(&["yes.example", "no.example"]))
+                .is_empty(),
+            "the fixture must hold both answers"
+        );
+
+        workspace.forget_reach_and_hosts();
+
+        assert!(
+            handed_on.path_reach().is_empty(),
+            "the next session kept a path programs were let reach"
+        );
+        assert!(
+            handed_on.granted_hosts().is_empty(),
+            "the next session kept a host that was allowed"
+        );
+        assert_eq!(
+            handed_on.unanswered_hosts(&hosts(&["yes.example", "no.example"])),
+            hosts(&["yes.example", "no.example"]),
+            "the next session kept a host answer, a no included"
+        );
     }
 
     /// SANDBOX-24: a host answer is held by the workspace and shared by a clone (a delegate's view).

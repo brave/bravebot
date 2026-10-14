@@ -2702,6 +2702,7 @@ fn event_loop(
                     // own, as a start with `--resume` does.
                     workspace.close_added_directories();
                     workspace.forget_session_checkouts();
+                    workspace.forget_reach_and_hosts();
                     *servers = std::mem::take(&mut session.servers);
                     *switch = Some(Switch {
                         record,
@@ -3008,6 +3009,7 @@ fn event_loop(
                 // and leaving it reachable with nothing vouching for it would outlive its answer.
                 workspace.close_added_directories();
                 workspace.forget_session_checkouts();
+                workspace.forget_reach_and_hosts();
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.
@@ -4504,6 +4506,8 @@ fn branch_session(
                 directory = original.directory.display().to_string()
             ));
             answers.forget_what_no_record_keeps();
+            workspace.forget_reach_and_hosts();
+            session.answers.clear();
             true
         }
         Err(refused) => {
@@ -25177,8 +25181,9 @@ mod tests {
     }
 
     /// SESSION-31: the copy holds what `--resume` of it would. The trust map and the programs
-    /// vouched for are in the record, so they stay; the language servers, the run prompts drawn
-    /// and the files agreed to be shown are in none, so they are asked about again.
+    /// vouched for are in the record, so they stay; the language servers, the run prompts drawn,
+    /// the files agreed to be shown, the paths programs were let reach, the hosts answered and the
+    /// answers to the planner's questions are in none, so they are asked about again.
     #[test]
     fn a_branch_keeps_what_the_record_holds_and_forgets_the_rest() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25189,6 +25194,17 @@ mod tests {
         let (workspace, mut session, mut stored, conversation, mut answers) =
             a_session_to_branch(&root);
         give_answers(&mut answers, &root);
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            false,
+            "reads in".to_string(),
+        );
+        workspace.grant_hosts(&["yes.example".to_string()]);
+        workspace.decline_hosts(&["no.example".to_string()]);
+        session.remember_answer(
+            "pick one: Cache: Which?".into(),
+            bravebot_core::ask::Answer::Chosen(vec![0]),
+        );
         let programs = answers.programs.clone();
 
         assert!(branch_session(
@@ -25217,6 +25233,20 @@ mod tests {
         assert!(
             !answers.exposed.holds(".env"),
             "the copy kept a file agreed to be shown"
+        );
+        assert!(
+            workspace.path_reach().is_empty(),
+            "the copy kept a path programs were let reach"
+        );
+        assert_eq!(
+            workspace.unanswered_hosts(&["yes.example".to_string(), "no.example".to_string()]),
+            ["yes.example".to_string(), "no.example".to_string()],
+            "the copy kept a host answer"
+        );
+        assert_eq!(
+            session.recall_answer("pick one: Cache: Which?"),
+            None,
+            "the copy kept an answer to the planner's question"
         );
     }
 
