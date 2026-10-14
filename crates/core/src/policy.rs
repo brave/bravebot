@@ -1471,6 +1471,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny)
     }
 
+    /// Whether any `deny` rule about reading a path is in force.
+    ///
+    /// For an answer that quotes text without saying which file it came from: with no file to ask
+    /// [`Policy::read_is_denied`] about, the only safe reading is that a rule may cover it.
+    pub fn any_read_is_denied(&self) -> bool {
+        self.permissions.denies_any_read()
+    }
+
     /// Refuse a write a `deny` rule covers, and one outside the files this run's definition lets it
     /// write (DELEGATE-28).
     ///

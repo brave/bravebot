@@ -397,6 +397,52 @@ fn a_turn_includes_requested_file_contents() {
     assert!(body.contains("explain this file"));
 }
 
+/// PERM-7: a file named with `@` or `--file` that a `deny` rule covers is not read, so its text
+/// never reaches the planner, while a file no rule covers still does.
+#[test]
+fn a_named_file_a_deny_rule_covers_is_left_out_of_the_turn() {
+    let scratch = Scratch::new("with-denied-file");
+    std::fs::write(scratch.path.join(".env"), "TOKEN=hunter2-the-secret").unwrap();
+    std::fs::write(scratch.path.join("main.rs"), "fn main() { todo!() }").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("it is a stub"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(.env)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse");
+    let task = Task::new("explain these")
+        .with_file(".env")
+        .with_file("main.rs")
+        .with_permissions(permissions);
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    assert!(
+        outcome.notices.iter().any(|said| said.contains(".env")),
+        "the person was not told the file was left out: {:?}",
+        outcome.notices
+    );
+
+    let body = received.recv().expect("request body");
+    assert!(!body.contains("hunter2"), "a covered file was read: {body}");
+    assert!(body.contains("fn main()"), "an uncovered file was left out");
+}
+
 /// A session named with `@session:<id>` reaches the planner inside the person's own message, and
 /// the trail records the id and the count and none of the words.
 #[test]

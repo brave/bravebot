@@ -422,6 +422,31 @@ pub fn render(location: &Location, root: &Path) -> Rendered {
 /// is one line and there are at most this many of them, which is what makes the cost enumerable.
 const MAX_LOCATIONS: usize = 200;
 
+/// The answer with what a `deny` rule covers taken out of it (PERM-7).
+///
+/// A location in a covered file is dropped, and nothing says how many were, since a count is a
+/// statement about the file. Hover text carries no file: the protocol's answer holds a position
+/// and not the place the prose was written, so where any rule covers reading a path the text is
+/// withheld too, as it cannot be shown to come from a file no rule covers.
+pub(crate) fn without_denied<S: Sink>(
+    mut answer: Answer,
+    root: &Path,
+    workspace: &crate::Workspace,
+    policy: &Policy<'_, S>,
+) -> Answer {
+    answer.locations.retain(|location| {
+        let named = match Path::new(&location.path).strip_prefix(root) {
+            Ok(relative) => relative.to_string_lossy().into_owned(),
+            Err(_) => location.path.clone(),
+        };
+        !workspace.rule_denies_reading(policy, &named)
+    });
+    if policy.any_read_is_denied() {
+        answer.text = None;
+    }
+    answer
+}
+
 /// What the planner is told about an answer.
 ///
 /// The locations are written out plainly. The text, where there is any, is handed to the caller
@@ -1209,5 +1234,64 @@ mod tests {
                 .line()
                 .contains('(')
         );
+    }
+
+    /// PERM-7: a location in a file a `deny` rule covers is left out of an answer, one in a file
+    /// no rule covers stays, and hover text is withheld wherever a read rule exists since it names
+    /// no file to ask about.
+    ///
+    /// One answer with a covered and an uncovered location, so a filter that drops everything
+    /// fails the second assertion and one that drops nothing fails the first.
+    #[test]
+    fn a_location_in_a_denied_file_is_left_out_of_an_answer() {
+        let scratch = crate::testutil::scratch_dir("lsp-denied-location");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("secrets")).unwrap();
+        std::fs::create_dir_all(scratch.join("src")).unwrap();
+        let workspace = crate::Workspace::new(&scratch).expect("workspace");
+        let root = workspace.root().to_path_buf();
+
+        let answer = Answer {
+            locations: vec![
+                location(&root.join("secrets/keys.rs").to_string_lossy(), 12),
+                location(&root.join("src/a.rs").to_string_lossy(), 3),
+            ],
+            text: Some("prose from some file".to_string()),
+            partial: false,
+        };
+
+        let ask = |rules: &[&str]| {
+            let rules: Vec<String> = rules.iter().map(|rule| rule.to_string()).collect();
+            let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &rules,
+                &[],
+                &[],
+                &bravebot_core::permissions::Anchors::none(),
+            );
+            assert!(rejected.is_empty(), "the rule did not parse");
+            let mut sink = RecordingSink::new();
+            let policy = Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                .expect("policy")
+                .with_permissions(permissions);
+            without_denied(answer.clone(), &root, &workspace, &policy)
+        };
+
+        let covered = ask(&["Read(secrets/**)"]);
+        let names: Vec<_> = covered.locations.iter().map(|l| l.path.as_str()).collect();
+        assert_eq!(names, vec![root.join("src/a.rs").to_str().unwrap()]);
+        assert_eq!(
+            covered.text, None,
+            "hover text has no file a rule could clear"
+        );
+
+        let uncovered = ask(&[]);
+        assert_eq!(
+            uncovered.locations.len(),
+            2,
+            "with no rule nothing is left out"
+        );
+        assert!(uncovered.text.is_some(), "with no rule the text stays");
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

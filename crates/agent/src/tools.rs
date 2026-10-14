@@ -10655,6 +10655,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         Err(error) => return Produced::problem(format!("refused: {error}")),
     };
 
+    let answer = crate::lsp::without_denied(answer, &root, tools.workspace, policy);
     let described = crate::lsp::describe(operation, &answer, &root);
     let found = answer.locations.len();
 
