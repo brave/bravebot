@@ -31,7 +31,7 @@ use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
 use bravebot_core::delegate::CheckoutRefusal;
-use bravebot_core::event::Sink;
+use bravebot_core::event::{RecordingSink, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Destination, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
@@ -3408,6 +3408,170 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     call: &ToolCall,
 ) -> Output {
+    dispatch_with(policy, tools, confirmer, reporter, call, None)
+}
+
+/// The most reads of one round that run at the same time (TURN-10).
+pub(crate) const READS_AT_ONCE: usize = 8;
+
+/// The tools that read files, ask no one anything and need nothing but their arguments, which is
+/// what lets one run beside another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    ListFiles,
+    Search,
+}
+
+impl Reading {
+    fn named(tool: &str) -> Option<Self> {
+        match strip_namespace(tool) {
+            "list_files" => Some(Self::ListFiles),
+            "search" => Some(Self::Search),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::ListFiles => "list_files",
+            Self::Search => "search",
+        }
+    }
+
+    fn run<S: Sink>(
+        self,
+        policy: &mut Policy<'_, S>,
+        workspace: &Workspace,
+        arguments: &Value,
+    ) -> Produced {
+        match self {
+            Self::ListFiles => list_files(policy, workspace, arguments),
+            Self::Search => search(policy, workspace, arguments),
+        }
+    }
+}
+
+/// Whether `call` is one [`read_ahead`] can run for this run: a read of the kind above, which this
+/// run offers and the command line has not taken away, with arguments that are JSON.
+pub(crate) fn can_read_ahead(call: &ToolCall, confined_to: Option<&[String]>) -> bool {
+    Reading::named(&call.function.name).is_some_and(|reading| {
+        bravebot_core::tool_set::allows(reading.name())
+            && confined_to.is_none_or(|offered| offered.iter().any(|tool| tool == reading.name()))
+            && call.arguments().is_ok()
+    })
+}
+
+/// A read that ran before the turn reached it, with the decisions it took.
+///
+/// Nothing of it has happened as far as the policy, the trail or the screen are concerned until
+/// [`dispatch_with`] reaches the call it answers: the events wait in `record`, and the result
+/// waits here.
+pub(crate) struct Ahead {
+    reading: Reading,
+    produced: Produced,
+    record: RecordingSink,
+    context: Label,
+}
+
+impl Ahead {
+    /// This read, if the planner's context has met nothing since it ran. A call runs under the
+    /// context the calls before it left, so a read taken under an earlier one is not that call's
+    /// answer, and the call runs for itself.
+    pub(crate) fn if_still_current<S: Sink>(self, policy: &Policy<'_, S>) -> Option<Self> {
+        (self.context == policy.context_label()).then_some(self)
+    }
+
+    fn rejoin<S: Sink>(self, policy: &mut Policy<'_, S>) -> Produced {
+        policy.rejoin(self.record);
+        self.produced
+    }
+}
+
+/// Run the reads in `calls` beside each other, at most `at_once` at a time, each under a branch of
+/// `policy` that records into a buffer of its own. One entry per call, in call order, and `None`
+/// for a call that is not a read of the kind above, whose arguments were not JSON, or that was not
+/// started because `cancel` had been set by the time a thread came to it.
+///
+/// Returns when every started read has finished. Nothing has reached the policy, the trail or a
+/// screen: each [`Ahead`] is handed to [`dispatch_with`] at its call's turn, so events and results
+/// take the order a sequential run gives them.
+pub(crate) fn read_ahead<S: Sink>(
+    policy: &Policy<'_, S>,
+    workspace: &Workspace,
+    calls: &[&ToolCall],
+    at_once: usize,
+    cancel: &bravebot_core::cancel::Cancel,
+) -> Vec<Option<Ahead>> {
+    let context = policy.context_label();
+    let mut records: Vec<RecordingSink> = calls.iter().map(|_| RecordingSink::new()).collect();
+    let mut finished: Vec<Option<Produced>> = calls.iter().map(|_| None).collect();
+    let mut readings: Vec<Option<Reading>> = calls.iter().map(|_| None).collect();
+    {
+        let jobs: Vec<_> = records
+            .iter_mut()
+            .zip(calls)
+            .enumerate()
+            .filter_map(|(index, (record, call))| {
+                let reading = Reading::named(&call.function.name)?;
+                let arguments = call.arguments().ok()?;
+                readings[index] = Some(reading);
+                Some((index, reading, policy.branch(record), arguments))
+            })
+            .collect();
+        let workers = at_once.min(jobs.len());
+        let queue = std::sync::Mutex::new(jobs.into_iter());
+        let done = std::sync::Mutex::new(&mut finished);
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| {
+                    while !cancel.is_cancelled() {
+                        let next = queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .next();
+                        let Some((index, reading, mut branch, arguments)) = next else {
+                            break;
+                        };
+                        let produced = reading.run(&mut branch, workspace, &arguments);
+                        drop(branch);
+                        done.lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)[index] =
+                            Some(produced);
+                    }
+                });
+            }
+        });
+    }
+    records
+        .into_iter()
+        .zip(finished)
+        .zip(readings)
+        .map(|((record, produced), reading)| {
+            Some(Ahead {
+                reading: reading?,
+                produced: produced?,
+                record,
+                context,
+            })
+        })
+        .collect()
+}
+
+/// [`dispatch`], answering a call from a read that already ran where there is one.
+///
+/// The read stands in for the tool's own run, at the place in the call the run would have been,
+/// so everything the call shows and records comes in the order it would have run in. Where the
+/// call is refused before the tool is reached the read is dropped unused, and with it the events
+/// it buffered.
+pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    reporter: &mut R,
+    call: &ToolCall,
+    ahead: Option<Ahead>,
+) -> Output {
+    let mut ahead = ahead;
     // Some models namespace a tool by the group it was offered in: "functions_todo_write" and
     // "functions.todo_write" both mean todo_write, and answering "no such tool" to those spends
     // a round on a typo of our own making. The prefix is stripped before the name is matched
@@ -3522,8 +3686,17 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         }
         "load_tool" if loads_a_tool => load_tool(policy, tools.mcp, &arguments),
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
-        "list_files" => list_files(policy, tools.workspace, &arguments),
-        "search" => search(policy, tools.workspace, &arguments),
+        "list_files" => match ahead
+            .take()
+            .filter(|read| read.reading == Reading::ListFiles)
+        {
+            Some(read) => read.rejoin(policy),
+            None => list_files(policy, tools.workspace, &arguments),
+        },
+        "search" => match ahead.take().filter(|read| read.reading == Reading::Search) {
+            Some(read) => read.rejoin(policy),
+            None => search(policy, tools.workspace, &arguments),
+        },
         "read_git" => read_git(policy, tools, confirmer, &arguments),
         "repo_map" => repo_map(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
@@ -19205,5 +19378,357 @@ mod tests {
         assert_eq!(skill.files, ["vetted/a.md"]);
         assert_eq!(skill.directory.as_deref(), Some(".bravebot/skills/lint"));
         assert!(skill.reach().is_none(), "a project skill was given reach");
+    }
+
+    /// TURN-10: reads of one round that run beside each other.
+    mod reading_together {
+        use super::arguments::{Scratch, told, with_tools};
+        use super::*;
+        use bravebot_core::cancel::Cancel;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::{Event, RecordingSink};
+        use bravebot_core::label::Integrity;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+        use bravebot_core::trust::TrustStore;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        /// Trusted files under `a`, `b`, `c` and the top, and one under `mystery`, which the map
+        /// distrusts, so a result naming it is quarantined.
+        fn fixture(name: &str) -> (Scratch, Workspace) {
+            let scratch = Scratch::new(name);
+            for (path, text) in [
+                ("a/one.txt", "needle in a\n"),
+                ("a/two.txt", "hay\n"),
+                ("b/three.txt", "needle in b\nneedle again\n"),
+                ("c/four.txt", "needle in c\n"),
+                ("loose.txt", "needle at the top\n"),
+                ("mystery/five.txt", "needle in the unvouched directory\n"),
+            ] {
+                let at = scratch.path.join(path);
+                std::fs::create_dir_all(at.parent().expect("a parent")).unwrap();
+                std::fs::write(at, text).unwrap();
+            }
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            (scratch, workspace)
+        }
+
+        fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+            let mut store = TrustStore::new("/work");
+            store.trust(".");
+            store.distrust("mystery");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read several things at once");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                sink,
+            )
+            .expect("policy")
+            .with_trust(store)
+        }
+
+        fn call(tool: &str, arguments: Value) -> ToolCall {
+            serde_json::from_value(json!({
+                "id": tool,
+                "function": {"name": tool, "arguments": arguments.to_string()}
+            }))
+            .expect("a call")
+        }
+
+        fn searches(directories: &[&str]) -> Vec<ToolCall> {
+            directories
+                .iter()
+                .map(|directory| {
+                    call(
+                        "search",
+                        json!({"pattern": "needle", "directory": directory}),
+                    )
+                })
+                .collect()
+        }
+
+        /// Waits until `count` readers are inside at once, or gives up after five seconds and
+        /// counts that, so a read run one after another fails the test and does not hang it.
+        fn wait_for(arrived: &AtomicUsize, count: usize, gave_up: &AtomicUsize) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while arrived.load(Ordering::SeqCst) < count {
+                if Instant::now() >= deadline {
+                    gave_up.fetch_add(1, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        /// What a call left behind that a person or the trail could tell apart.
+        type Answer = (
+            String,
+            String,
+            Label,
+            String,
+            bool,
+            bool,
+            Option<(String, usize, usize)>,
+        );
+
+        /// Dispatches `calls` in order under a fresh policy, either as a sequential run does or
+        /// with the reads taken beforehand. The answers, the trail, and the activity shown.
+        fn dispatched(
+            workspace: &Workspace,
+            calls: &[ToolCall],
+            beforehand: bool,
+        ) -> (Vec<Answer>, Vec<Event>, crate::report::RecordingReporter) {
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut answers = Vec::new();
+            {
+                let mut policy = policy(&mut sink);
+                let mut reads: Vec<Option<Ahead>> = if beforehand {
+                    let named: Vec<&ToolCall> = calls.iter().collect();
+                    read_ahead(&policy, workspace, &named, READS_AT_ONCE, &Cancel::new())
+                } else {
+                    calls.iter().map(|_| None).collect()
+                };
+                assert!(
+                    !beforehand || reads.iter().all(Option::is_some),
+                    "a read was not taken beforehand"
+                );
+                for (call, read) in calls.iter().zip(reads.iter_mut()) {
+                    let output = with_tools(workspace, |tools| {
+                        dispatch_with(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveWrites,
+                            &mut reporter,
+                            call,
+                            read.take(),
+                        )
+                    });
+                    answers.push((
+                        output.tool.clone(),
+                        told(&mut policy, &output.text),
+                        output.text.label(),
+                        output.origin.clone(),
+                        output.incomplete,
+                        output.content,
+                        output.entries.as_ref().map(|entries| {
+                            (entries.origin.clone(), entries.count, entries.directories)
+                        }),
+                    ));
+                }
+            }
+            (answers, sink.events().to_vec(), reporter)
+        }
+
+        /// The regression it rejects: reads taken beforehand answering a round differently from
+        /// a sequential run. The events a branch buffered are emitted where the tool would have
+        /// run, so the trail is the one a sequential run writes; emitted when the read finished
+        /// they would all come before the first call's own lines. The fixture holds the answers
+        /// that differ in kind: trusted text, a quarantined search, a quarantined listing, a
+        /// refused pattern, a missing directory and a count.
+        #[test]
+        fn reads_taken_beforehand_leave_the_trail_the_screen_and_the_answers_a_sequential_run_does()
+        {
+            let (_scratch, workspace) = fixture("ahead-equals-sequential");
+            let calls = vec![
+                call("search", json!({"pattern": "needle", "directory": "a"})),
+                call("list_files", json!({"directory": "b"})),
+                call("search", json!({"pattern": "needle"})),
+                call("list_files", json!({"directory": "mystery"})),
+                call("search", json!({"pattern": "("})),
+                call("list_files", json!({"directory": "nowhere"})),
+                call(
+                    "search",
+                    json!({"pattern": ["needle in c", "hay"], "output": "count"}),
+                ),
+            ];
+
+            let (sequential, trail, screen) = dispatched(&workspace, &calls, false);
+            let (beforehand, trail_beforehand, screen_beforehand) =
+                dispatched(&workspace, &calls, true);
+
+            assert_eq!(beforehand, sequential);
+            assert_eq!(trail_beforehand, trail);
+            assert_eq!(screen_beforehand.started, screen.started);
+            assert_eq!(screen_beforehand.finished, screen.finished);
+            assert_eq!(sequential.len(), calls.len());
+            assert!(
+                sequential.iter().any(|answer| answer.6.is_some()),
+                "the fixture produced no quarantined listing: {sequential:?}"
+            );
+            assert!(
+                sequential.iter().any(|answer| !answer.2.is_trusted()),
+                "the fixture produced no untrusted search: {sequential:?}"
+            );
+        }
+
+        /// The regression it rejects: reads that take turns. Each read holds in its capture until
+        /// three are inside together, so a run one after another never gets there and gives up.
+        #[test]
+        fn the_reads_of_a_round_are_inside_their_captures_at_the_same_time() {
+            let (_scratch, workspace) = fixture("ahead-overlap");
+            let arrived = Arc::new(AtomicUsize::new(0));
+            let gave_up = Arc::new(AtomicUsize::new(0));
+            let (inside, failed) = (arrived.clone(), gave_up.clone());
+            workspace.hold_reads(move |_| {
+                inside.fetch_add(1, Ordering::SeqCst);
+                wait_for(&inside, 3, &failed);
+            });
+            let mut sink = RecordingSink::new();
+            let policy = policy(&mut sink);
+            let calls = [
+                call("search", json!({"pattern": "needle", "directory": "a"})),
+                call("list_files", json!({"directory": "b"})),
+                call("search", json!({"pattern": "needle", "directory": "c"})),
+            ];
+            let named: Vec<&ToolCall> = calls.iter().collect();
+
+            let read = read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+
+            assert_eq!(read.iter().flatten().count(), 3);
+            assert_eq!(arrived.load(Ordering::SeqCst), 3);
+            assert_eq!(
+                gave_up.load(Ordering::SeqCst),
+                0,
+                "a read waited for the others and they never came"
+            );
+        }
+
+        /// The regression it rejects: a limit that is not kept, whether no limit or a thread per
+        /// call. Eight calls under a limit of four: each read waits until four are inside, then
+        /// stays long enough for a fifth to arrive if the limit were not held.
+        #[test]
+        fn no_more_reads_run_at_once_than_the_limit() {
+            let (_scratch, workspace) = fixture("ahead-limit");
+            let inside = Arc::new(AtomicUsize::new(0));
+            let highest = Arc::new(AtomicUsize::new(0));
+            let gave_up = Arc::new(AtomicUsize::new(0));
+            let (now, most, failed) = (inside.clone(), highest.clone(), gave_up.clone());
+            workspace.hold_reads(move |_| {
+                let here = now.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(here, Ordering::SeqCst);
+                wait_for(&now, 4, &failed);
+                std::thread::sleep(Duration::from_millis(200));
+                most.fetch_max(now.load(Ordering::SeqCst), Ordering::SeqCst);
+                now.fetch_sub(1, Ordering::SeqCst);
+            });
+            let mut sink = RecordingSink::new();
+            let policy = policy(&mut sink);
+            let calls = searches(&["a", "b", "c", "a", "b", "c", "a", "b"]);
+            let named: Vec<&ToolCall> = calls.iter().collect();
+
+            let read = read_ahead(&policy, &workspace, &named, 4, &Cancel::new());
+
+            assert_eq!(read.iter().flatten().count(), 8);
+            assert_eq!(gave_up.load(Ordering::SeqCst), 0, "four never ran together");
+            assert_eq!(highest.load(Ordering::SeqCst), 4);
+        }
+
+        /// The regression it rejects: threads that start a read after the person cancelled. One
+        /// thread takes the reads in turn and the first cancels, so the others are never started.
+        #[test]
+        fn a_cancel_stops_the_reads_not_yet_started() {
+            let (_scratch, workspace) = fixture("ahead-cancel");
+            let cancel = Cancel::new();
+            let started = Arc::new(AtomicUsize::new(0));
+            let (counted, stopping) = (started.clone(), cancel.clone());
+            workspace.hold_reads(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                stopping.cancel();
+            });
+            let mut sink = RecordingSink::new();
+            let policy = policy(&mut sink);
+            let calls = searches(&["a", "b", "c"]);
+            let named: Vec<&ToolCall> = calls.iter().collect();
+
+            let read = read_ahead(&policy, &workspace, &named, 1, &cancel);
+
+            assert_eq!(started.load(Ordering::SeqCst), 1);
+            assert!(read[0].is_some());
+            assert!(read[1].is_none() && read[2].is_none());
+        }
+
+        /// The regression it rejects: a read taken beforehand that captures bytes while an effect
+        /// is entering. The test holds an effect's entry, which a capture must wait for.
+        #[test]
+        fn reads_taken_beforehand_wait_for_an_effect_entering_a_file() {
+            let (_scratch, workspace) = fixture("ahead-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let calls = searches(&["a", "b"]);
+            let named: Vec<&ToolCall> = calls.iter().collect();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let taken =
+                        read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+                    done.send(taken.iter().flatten().count()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a read captured bytes while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(2));
+            });
+        }
+
+        /// The regression it rejects: using a read after the planner's context met something
+        /// untrusted, which the call it answers would have been refused under.
+        #[test]
+        fn a_read_is_used_only_while_the_context_is_what_it_ran_under() {
+            let (_scratch, workspace) = fixture("ahead-context");
+            let mut sink = RecordingSink::new();
+            let policy = policy(&mut sink);
+            let calls = searches(&["a", "b"]);
+            let named: Vec<&ToolCall> = calls.iter().collect();
+            let mut read = read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+
+            let mut later_sink = RecordingSink::new();
+            let later = self::policy(&mut later_sink).resuming(Integrity::Untrusted);
+
+            assert!(read[0].take().unwrap().if_still_current(&policy).is_some());
+            assert!(read[1].take().unwrap().if_still_current(&later).is_none());
+        }
+
+        /// The regression it rejects: a read of a tool the run does not offer, a tool that asks a
+        /// question, or a call whose arguments are not JSON being run beforehand.
+        #[test]
+        fn only_a_read_the_run_offers_is_taken_beforehand() {
+            let both = ["list_files".to_string(), "search".to_string()];
+            let only_reading = ["read_file".to_string()];
+            let search = call("search", json!({"pattern": "x"}));
+            let namespaced = call("functions_list_files", json!({}));
+            let not_json: ToolCall = serde_json::from_value(json!({
+                "id": "x",
+                "function": {"name": "search", "arguments": "{not json"}
+            }))
+            .unwrap();
+
+            assert!(can_read_ahead(&search, None));
+            assert!(can_read_ahead(&search, Some(&both)));
+            assert!(can_read_ahead(&namespaced, None));
+            assert!(!can_read_ahead(&search, Some(&only_reading)));
+            assert!(!can_read_ahead(&not_json, None));
+            for asks_or_acts in [
+                "read_file",
+                "read_git",
+                "lsp",
+                "write_file",
+                "run",
+                "fetch_url",
+            ] {
+                assert!(
+                    !can_read_ahead(&call(asks_or_acts, json!({})), None),
+                    "{asks_or_acts}"
+                );
+            }
+        }
     }
 }

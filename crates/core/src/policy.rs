@@ -20,7 +20,7 @@
 use crate::ask::{self, Answer};
 use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
-use crate::event::{Event, Principle, Role, Sink};
+use crate::event::{Event, Principle, RecordingSink, Role, Sink};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::slot::SlotId;
 use crate::trust::TrustStore;
@@ -135,7 +135,7 @@ type Gated<T> = Result<T, Denial>;
 /// Every value is `(T,pub)` by construction: [`Routing::insert`] only accepts a
 /// trusted-public [`Labelled`], so untrusted content cannot enter routing even by
 /// mistake.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Routing {
     fields: BTreeMap<String, String>,
 }
@@ -190,7 +190,7 @@ struct Grant {
 }
 
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ReleasePlan {
     sources: BTreeSet<SlotId>,
 }
@@ -279,7 +279,8 @@ pub enum AfterRepeatedCall {
 
 /// The reference monitor for exactly one turn.
 ///
-/// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn.
+/// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
+/// there is, [`Policy::branch`], records into a buffer of its own and is not a second turn.
 pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
@@ -1119,6 +1120,73 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let authority = self.file_authority();
         let guard = authority.capture();
         capture(self, &guard)
+    }
+
+    /// [`Policy::capture_files`] for a capture that only reads, which other such captures run
+    /// beside.
+    ///
+    /// The closure is given no handle to enter an effect, so it cannot change a file decision.
+    /// It is still held against every effect, so the bytes it reads and the label it assigns them
+    /// belong to one state of the map. The closure must not prompt, call a model, or wait for a
+    /// process or delegate.
+    pub fn capture_files_shared<R>(&mut self, capture: impl FnOnce(&mut Self) -> R) -> R {
+        let authority = self.file_authority();
+        let _guard = authority.capture_shared();
+        capture(self)
+    }
+
+    /// A policy that decides as this one does and records what it decides in `record`, for work
+    /// that runs beside other work on another thread.
+    ///
+    /// Everything this policy holds is copied, and the file authority is shared, so a decision the
+    /// map makes is the one the map makes for this policy. Nothing the branch does reaches this
+    /// policy until [`Policy::rejoin`]: its events stay in `record`, and its denials are not
+    /// counted here. Only the events and the denials rejoin. A branch may therefore run only what
+    /// leaves the rest of the policy as it found it, which is a gate that reads. One that records
+    /// a grant, an answer or a loaded skill would lose it.
+    pub fn branch<'b>(&self, record: &'b mut RecordingSink) -> Policy<'b, RecordingSink> {
+        Policy {
+            routing: self.routing.clone(),
+            release: self.release.clone(),
+            capabilities: self.capabilities.clone(),
+            grants: self.grants.clone(),
+            sink: record,
+            denials: 0,
+            trust: self.trust.clone(),
+            root: self.root.clone(),
+            scratch: self.scratch.clone(),
+            skill_reach: self.skill_reach.clone(),
+            backslash_separates: self.backslash_separates,
+            programs: self.programs.clone(),
+            asked: self.asked.clone(),
+            remembered: self.remembered.clone(),
+            permissions: self.permissions.clone(),
+            delegates: self.delegates.clone(),
+            at: self.at,
+            named_out_delegating: self.named_out_delegating,
+            write_limits: self.write_limits.clone(),
+            spawned: self.spawned,
+            tree: self.tree.clone(),
+            vouch_asked: self.vouch_asked.clone(),
+            exposed: self.exposed.clone(),
+            fetching: self.fetching.clone(),
+            calling_server: self.calling_server.clone(),
+            calling_socket: self.calling_socket.clone(),
+            server_hop: self.server_hop.clone(),
+            context: self.context,
+            holds: self.holds,
+        }
+    }
+
+    /// Take back what a [`Policy::branch`] recorded: its events, emitted here in the order it
+    /// took them, and the refusals among them counted.
+    pub fn rejoin(&mut self, record: RecordingSink) {
+        for event in record.into_events() {
+            if matches!(event, Event::GateBlocked { .. }) {
+                self.denials += 1;
+            }
+            self.sink.emit(event);
+        }
     }
 
     /// Say which directory this turn runs in.
@@ -17142,5 +17210,107 @@ five
             "an unvouched pre-image is left unread, not denied: {:?}",
             sink.events()
         );
+    }
+
+    /// A branch decides what the policy it came from would: the context the planner has met, the
+    /// rules in force, the capabilities held. One that began from nothing would pass a read in a
+    /// context the policy refuses it in.
+    #[test]
+    fn a_branch_decides_what_the_policy_it_came_from_would() {
+        for met in [Integrity::Trusted, Integrity::Untrusted] {
+            let mut sink = RecordingSink::new();
+            let policy = Policy::begin(
+                routing_with("task", "read"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap()
+            .with_permissions(permissions(&["Read(//work/secret.txt)"], &[], &[]))
+            .resuming(met);
+            let mut record = RecordingSink::new();
+            let mut branch = policy.branch(&mut record);
+
+            let proposed = delegates::argument("src");
+            assert_eq!(
+                branch
+                    .promote_confined_read("search", "directory", &proposed)
+                    .is_ok(),
+                met == Integrity::Trusted,
+                "context {met:?}"
+            );
+            assert_eq!(branch.context_integrity(), met);
+            assert!(branch.before_capability(Capability::FileRead).is_ok());
+            assert!(branch.before_capability(Capability::ShellExec).is_err());
+            assert!(branch.read_is_denied("/work/secret.txt"));
+            assert!(!branch.read_is_denied("/work/other.txt"));
+        }
+    }
+
+    /// A branch shares the map rather than copying it, so a decision made after the branch began
+    /// is the one it reads. A snapshot would read a path as trusted after a write had made it
+    /// untrusted.
+    #[test]
+    fn a_branch_reads_the_file_decisions_made_after_it_began() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        let policy = open_policy(&mut sink).with_trust(store);
+        let authority = policy.file_authority();
+        let mut record = RecordingSink::new();
+        let branch = policy.branch(&mut record);
+        assert!(!branch.read_is_quarantined("src/a.rs"));
+
+        authority.publish("src/a.rs", Integrity::Untrusted);
+
+        assert!(branch.read_is_quarantined("src/a.rs"));
+        assert!(!branch.read_is_quarantined("src/b.rs"));
+    }
+
+    /// What a branch decides stays in its own record until the policy takes it back, and then
+    /// arrives in the order the branch took it, with its refusals counted. A branch that wrote to
+    /// the policy's sink would interleave with its siblings; one that was not counted would leave a
+    /// turn that was refused reading as clean.
+    #[test]
+    fn what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order() {
+        let run = |rejoin: bool| {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "read"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            policy.before_capability(Capability::FileRead).unwrap();
+            let (mut first, mut second) = (RecordingSink::new(), RecordingSink::new());
+            {
+                let mut a = policy.branch(&mut first);
+                a.before_capability(Capability::FileRead).unwrap();
+                let _ = a.before_capability(Capability::ShellExec);
+                let mut b = policy.branch(&mut second);
+                let _ = b.before_capability(Capability::WebFetch);
+            }
+            let (first_events, second_events) = (first.events().to_vec(), second.events().to_vec());
+            if rejoin {
+                policy.rejoin(first);
+                policy.rejoin(second);
+            }
+            let clean = policy.finish();
+            (sink.events().to_vec(), clean, first_events, second_events)
+        };
+
+        let (alone, alone_clean, first, second) = run(false);
+        let (joined, joined_clean, ..) = run(true);
+
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(second.len(), 1, "{second:?}");
+        assert!(
+            alone_clean,
+            "a refusal in a branch counted before it rejoined"
+        );
+        assert!(!joined_clean, "a refusal in a branch was not counted");
+        assert_eq!(joined[..alone.len()], alone[..]);
+        assert_eq!(joined[alone.len()..], [first, second].concat()[..]);
     }
 }

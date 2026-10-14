@@ -442,6 +442,8 @@ enum Reach {
 pub struct Workspace {
     #[cfg(test)]
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
+    #[cfg(test)]
+    while_reading: Arc<Mutex<Option<ReadingHook>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -967,6 +969,19 @@ struct WriteInterruption {
     resume: std::sync::mpsc::Receiver<bool>,
 }
 
+/// Called with the directory a listing or a search has opened its capture on, so a test can hold
+/// that read there until the others it runs beside have arrived.
+#[cfg(test)]
+#[derive(Clone)]
+struct ReadingHook(Arc<dyn Fn(&str) + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for ReadingHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReadingHook")
+    }
+}
+
 /// What a path held before a turn wrote to it.
 ///
 /// Carried, never read. The driver hands the bytes back to the path they came from and has no
@@ -1194,6 +1209,8 @@ impl Workspace {
         Ok(Self {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            while_reading: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -3033,6 +3050,25 @@ impl Workspace {
         Ok(resolved)
     }
 
+    /// Run `hook` with the directory, inside the capture of every listing and search from here on.
+    #[cfg(test)]
+    pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *self.while_reading.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(ReadingHook(Arc::new(hook)));
+    }
+
+    #[cfg(test)]
+    fn hold_while_reading(&self, directory: &str) {
+        let hook = self
+            .while_reading
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(ReadingHook(hook)) = hook {
+            hook(directory);
+        }
+    }
+
     #[cfg(test)]
     fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
         let synchronization_failed = |detail: &str| WorkspaceError::Io {
@@ -3781,7 +3817,7 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -3793,6 +3829,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             let glob =
                 match pattern {
@@ -4090,7 +4129,7 @@ impl Workspace {
             context.min(MAX_SEARCH_CONTEXT)
         };
         let offset = if output.summarises() { 1 } else { offset };
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
                 policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -4105,6 +4144,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             if patterns.is_empty() {
                 return Err(WorkspaceError::Invalid {
