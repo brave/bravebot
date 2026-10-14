@@ -2781,7 +2781,8 @@ no profile, as under the mode `off` ([SANDBOX-22](#SANDBOX-22)), and the next li
 session's mode again. It is for the line that has to write where a credential scope reads and never
 writes ([SANDBOX-16](#SANDBOX-16)), such as `docker login` into `~/.docker/config.json` or
 `aws sso login` into `~/.aws/sso/cache`, which `request_path` and `allowWrite` refuse for the same
-reason ([SANDBOX-28](#SANDBOX-28), [SANDBOX-25](#SANDBOX-25)). A value that is not a boolean is an
+reason ([SANDBOX-28](#SANDBOX-28), [SANDBOX-25](#SANDBOX-25)), and for the line that redirects its
+output into a file outside the workspace, which a person asked for and the file tools refuse. A value that is not a boolean is an
 error and nothing runs. `unconfined` with `scopes` is an error, since a line with no profile has
 none to add to.
 
@@ -2801,6 +2802,21 @@ none to add to.
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
   The sentence does not suggest the argument: the planner learns it from the `run` description.
 - **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
+- **A redirection may leave the workspace.** `printf 'howdy\n' > ../hello.txt` writes the file when
+  the person approves the line. The confinement that keeps a redirection's destination inside the
+  workspace and the directories opened beside it ([CMDLINE-5](tools/command-line.md#CMDLINE-5))
+  stands for a line that has a profile, since this process opens the destination in place of a
+  confined stage; a line with none has nothing for it to hold back. The prompt lists the
+  destination, a `deny` rule on it still refuses the line, and the file tools stay confined
+  ([TRUST-10](trust-map.md#TRUST-10)). Under `off` the same holds for every line, since the mode has
+  no profile to remove and so cannot accept this request.
+- **The planner is told, where the session accepts it.** A write the file tools refuse for leaving
+  the workspace, a redirection refused for the same reason, and a `request_path` for writing that
+  is refused unasked each name this argument as the route, and say the person is asked. They name
+  it only where the request would be accepted and the front end can ask about it, which the
+  terminal interface and a session in lines can, and the desktop and a run with nobody to ask
+  cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
+  an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
 - The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
@@ -2812,9 +2828,20 @@ routing field is the boolean beside the command line the person already reads, a
 with no sandbox" is a sentence a person can approve on its own. Asking every time and remembering
 nothing keeps the request from becoming a standing allowance approved for a different line.
 
+A file outside the workspace is the same request. The person saw the line and the file it writes,
+and a program in that line could write the file with no redirection at all, so refusing the
+redirection protected nothing and left a person who asked for `../hello.txt` with no route that
+ended in a prompt. The planner is pointed at the argument because it has no other way to learn it
+when the file tools refuse the path.
+
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
+`verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
+`verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`

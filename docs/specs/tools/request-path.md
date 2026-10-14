@@ -50,13 +50,18 @@ project file or permission rule grants one in advance.
 
 `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
 credential location and any path holding a wildcard are refused whatever the person would answer.
-The result says so without asking.
+The result says so without asking, says what is true of the path that made it refuse (it holds
+credentials, a write there could leave code that runs later, it is too broad, or the person's own
+deny list covers it) and not which setting decided it, and for a request to write points at the
+`run` argument that lets the person approve one line ([SANDBOX-29](../sandboxing.md#SANDBOX-29))
+where the session would accept it.
 
 **Why.** Asking about a path no answer can grant teaches the person to say no to a question the
 program should not have put.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
+`verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 
 <a id="PATHREQ-4"></a>
 ### PATHREQ-4: a person's yes is reach and not trust, and it is recorded

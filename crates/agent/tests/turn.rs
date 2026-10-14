@@ -19959,6 +19959,7 @@ fn two_runs<C: bravebot_agent::Confirmer + Send>(
         ))
         .with_permission_mode(permission)
         .with_confined_runs(true)
+        .asking_about_unconfined(true)
         .with_sandbox_mode(mode);
     let mut sink = RecordingSink::new();
     let outcome = turn::resume(
@@ -20044,6 +20045,225 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
         "{}",
         result.trail
     );
+}
+
+/// A line redirecting into the marker `tag` of the test `name`, outside every directory the session
+/// holds. The redirection is opened by this process and not by the program, so it is the harness's
+/// own confinement that decides it and not the profile.
+fn redirecting_to_the_marker(name: &str, tag: &str) -> String {
+    let marker = outside_the_session(&format!("{name}-{tag}"));
+    let _ = std::fs::remove_file(&marker);
+    format!("printf x > {}", marker.display())
+}
+
+/// SANDBOX-29, CMDLINE-5: an approved `unconfined` line may redirect into a file outside the
+/// workspace, because its programs have no profile to get past and the person is shown the file
+/// before it runs. The next line, which asks for nothing, is refused the same redirection before
+/// anybody is asked, and the planner is told which argument would have made it. The regressions it
+/// rejects are a redirection refused before the person is asked (the first file is absent), an
+/// approval that sticks (the second file is present), a refused line put to the person anyway, and a
+/// refusal that leaves the planner with no route to the file (the pointer is missing).
+#[test]
+fn an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unconfined-redirect";
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = two_runs(
+        name,
+        serde_json::json!({
+            "command": redirecting_to_the_marker(name, "first"),
+            "unconfined": true,
+        }),
+        serde_json::json!({ "command": redirecting_to_the_marker(name, "second") }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    let (first_wrote, second_wrote) = (result.first_wrote, result.second_wrote);
+    clear_the_markers(name);
+    assert!(first_wrote, "the approved line could not open its file");
+    assert!(
+        !second_wrote,
+        "the next line was left able to leave the workspace"
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "the refused line was put to the person");
+    assert!(seen[0].unconfined);
+    assert!(
+        seen[0]
+            .plan
+            .writes
+            .iter()
+            .any(|path| path.ends_with("sandbox-mode-unconfined-redirect-first")),
+        "the prompt did not list the file the line writes: {:?}",
+        seen[0].plan.writes
+    );
+    assert!(
+        result.third.contains("resolves outside the workspace"),
+        "{}",
+        result.third
+    );
+    assert!(
+        result.third.contains("'unconfined': true"),
+        "the refusal did not say what would make the write possible: {}",
+        result.third
+    );
+}
+
+/// SANDBOX-22, CMDLINE-5: under `off` nothing holds a program back, so a redirection this process
+/// opens for it reaches nothing it could not, and a line may redirect outside the workspace with
+/// no request. The control is the same two lines under `workspace-write`, where neither lands.
+/// `strict` is the second control: it keeps the profile whatever a planner would rather, so it
+/// refuses the redirection and does not point at an argument it would refuse. The regression it
+/// rejects is `off` leaving a session with no way to write the file at all, since `unconfined` is
+/// not accepted there.
+#[test]
+fn a_line_under_off_may_redirect_into_a_file_outside_the_workspace() {
+    if cannot_confine_here() {
+        return;
+    }
+    let lines = |name: &str| {
+        (
+            serde_json::json!({ "command": redirecting_to_the_marker(name, "first") }),
+            serde_json::json!({ "command": redirecting_to_the_marker(name, "second") }),
+        )
+    };
+
+    let name = "off-redirect";
+    let (first, second) = lines(name);
+    let off = two_runs(
+        name,
+        first,
+        second,
+        bravebot_sandbox::SandboxMode::Off,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+    );
+    let off_wrote = (off.first_wrote, off.second_wrote);
+    clear_the_markers(name);
+    assert_eq!(off_wrote, (true, true), "off held a redirection back");
+
+    for (mode, pointed) in [
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, true),
+        (bravebot_sandbox::SandboxMode::Strict, false),
+    ] {
+        let name = format!("held-redirect-{}", mode.name());
+        let (first, second) = lines(&name);
+        let held = two_runs(
+            &name,
+            first,
+            second,
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            no_programs,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        );
+        let wrote = (held.first_wrote, held.second_wrote);
+        clear_the_markers(&name);
+        assert_eq!(
+            wrote,
+            (false, false),
+            "{} let a redirection leave",
+            mode.name()
+        );
+        assert_eq!(
+            held.third.contains("'unconfined': true"),
+            pointed,
+            "{}: {}",
+            mode.name(),
+            held.third
+        );
+    }
+}
+
+/// SANDBOX-29: a write the file tools refuse for leaving the workspace names the `run` argument that
+/// could make it, and only where the session would accept that argument and the front end can ask
+/// about it: a mode that keeps the profile is never pointed at it, and neither is a window, which
+/// refuses the request without asking. The regression it rejects is the dead end a person met,
+/// where the planner was told only to ask for `/add-dir` and went looking for another route, and
+/// its mirror, a planner sent to a route its front end turns down.
+#[test]
+fn a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("write-outside");
+    let call = [(
+        "write_file",
+        serde_json::json!({ "path": "../escaped-by-write-file.txt", "contents": "howdy\n" }),
+    )];
+    for (mode, front_end_asks, pointed) in [
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, true, true),
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, false, false),
+        (bravebot_sandbox::SandboxMode::Strict, true, false),
+    ] {
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(front_end_asks);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let turn = path_turn(
+            &format!("write-outside-{}-{front_end_asks}", mode.name()),
+            &places,
+            &call,
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(true);
+        let said = message_from(&turn.results[0], "Result of write_file");
+        assert!(said.contains("resolves outside the workspace"), "{said}");
+        assert_eq!(
+            said.contains("'unconfined': true"),
+            pointed,
+            "{} (front end asks: {front_end_asks}): {said}",
+            mode.name()
+        );
+    }
+}
+
+/// SANDBOX-28, SANDBOX-29: a path that cannot be lent says why, so the planner does not try the
+/// directory above, then the file, then another tool; and a request to write points at the line
+/// that can make the write. A request to read has no such line. The regression it rejects is the
+/// one sentence that named nothing.
+#[test]
+fn a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("refused-why");
+    for (write, pointed) in [(true, true), (false, false)] {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn(
+            &format!("path-refused-why-{write}"),
+            &places,
+            &[asking_for(std::path::Path::new("~/.ssh"), write)],
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        let said = path_result(&turn.results[0]);
+        assert!(said.starts_with("refused"), "{said}");
+        assert!(
+            said.contains("because"),
+            "the refusal gave no reason: {said}"
+        );
+        assert_eq!(
+            said.contains("'unconfined': true"),
+            pointed,
+            "write {write}: {said}"
+        );
+    }
 }
 
 /// SANDBOX-29: a vouched line that asks to run unconfined is put to the person anyway, with no
@@ -50927,6 +51147,13 @@ struct PathPlaces {
     beside: PathBuf,
 }
 
+thread_local! {
+    /// Whether the front end a [`path_turn`] stands in for can put a line with no sandbox to a
+    /// person: the terminal can, a window cannot. Read when the task is built, on the test's thread.
+    static FRONT_END_CAN_ASK_ABOUT_UNCONFINED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(true) };
+}
+
 impl PathPlaces {
     fn new(name: &str) -> Self {
         let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -51011,6 +51238,7 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         .with_profile(Some(places.home.clone()))
         .with_permission_mode(permission)
         .with_confined_runs(true)
+        .asking_about_unconfined(FRONT_END_CAN_ASK_ABOUT_UNCONFINED.get())
         .with_sandbox_mode(mode);
     if let Some(permissions) = permissions {
         task = task.with_permissions(permissions);
