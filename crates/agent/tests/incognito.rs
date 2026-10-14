@@ -481,6 +481,62 @@ fn a_memory_left_untrusted_is_still_recorded() {
     );
 }
 
+/// MEMORY-5, INCOG-8: a write of model output into a memory, made while incognito is engaged,
+/// records the memory in the state directory before it lands and leaves it untrusted for the
+/// session's own reads. The record is kept there by the write path itself, which is the route a
+/// session takes, and not only by the record's own method.
+#[test]
+fn an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded() {
+    use bravebot_agent::workspace::{Workspace, key_of};
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::label::Label;
+    use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+    use bravebot_core::trust::TrustStore;
+    use bravebot_core::value::Labelled;
+
+    let scratch = Scratch::new("writes-untrusted-memory");
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture is meant to run as an incognito session"
+    );
+    let root = scratch.home.join("work");
+    std::fs::create_dir_all(&root).expect("create the working directory");
+    let workspace = Workspace::new(&root)
+        .expect("workspace")
+        .keeping_memories(Some(scratch.home.clone()));
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "edit a file");
+    let mut sink = RecordingSink::new();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(workspace.root());
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(".bravebot/memory/notes.md".to_string()),
+            &Labelled::new("NOTES".to_string(), Label::untrusted_public()),
+        )
+        .expect("an incognito session was refused a write to a memory");
+
+    let directory = key_of(workspace.root());
+    assert_eq!(
+        bravebot_agent::memory::Record::new(&scratch.home, &directory).paths(),
+        vec![format!("{directory}/.bravebot/memory/notes.md")],
+        "an incognito session's write left a memory untrusted and recorded nothing"
+    );
+}
+
 /// One reply as the SSE stream the turn loop reads: `content`, or a call to `spawn_agent`.
 fn sse(content: Option<&str>, spawn: Option<&str>) -> String {
     let mut frames = vec![serde_json::json!({"choices": [{"delta": {"role": "assistant"}}]})];
