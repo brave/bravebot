@@ -3,9 +3,10 @@
 What Brave builds, in what order, and what the user has to do. The normative spec that states what
 must be true follows separately.
 
-**We adopt [Brave Vault](https://github.com/brave-experiments/brave-vault)'s model and its grant
-machinery, and build the broker in this repository, hardened, with bravebot one of its agents.
-Brave Vault is the prototype the design was tried on, and is not ported.**
+**We adopt the design of [Brave Vault](https://github.com/brave-experiments/brave-vault), its model
+and its grant machinery, and build the broker in this repository, hardened, with bravebot one of its
+agents. Brave Vault is the prototype the design was tried on: where this document says what Brave
+Vault does, it describes the design the broker takes, and none of Brave Vault's code is ported.**
 
 **The broker is the authority, and it is the performer.** Those are the spec's words for the thing
 this document calls the broker, and nothing else in here is either.
@@ -173,7 +174,7 @@ Three things follow, and they shape everything downstream.
 
 ## The store
 
-Brave Vault owns this and we do not add a second one. Its own storage, moved into the
+The broker owns this, as Brave Vault does, and we do not add a second one. Its storage, in the
 `_bravevault` account, is the answer on all three platforms. Being the one process that holds every
 credential, at rest and in use, it is also the one that owes
 [CRED-23](../specs/credential-protection.md#CRED-23): buffers cleared as they are dropped, and its
@@ -280,7 +281,7 @@ is already counted in the residual: it requires the helper to be running.
 
 ## The agent-facing API
 
-Brave Vault's existing shape, with two additions and one restriction.
+Brave Vault's shape, which the broker keeps, with two additions and one restriction.
 
 ```
 enroll  --label bravebot                                 # once, confirmed in the app
@@ -315,7 +316,7 @@ enrolment, discards the design. The tests below are what carry that rule.
 
 ## Grants
 
-Brave Vault's grants gain two properties.
+The broker's grants are Brave Vault's, with two properties added.
 
 **Lifetimes** are `once`, `task`, `session` and `never`. They are the broker's own, not a set
 bravebot already has: its run prompt separates running once from running always
@@ -759,7 +760,7 @@ are real.**
 
 | phase | lands | buys |
 | --- | --- | --- |
-| 1 | vault hardening: key derivation from a real password held in a store that unlocks without a session, `BRAVE_SERVICES_KEY` out of the environment and into that store, scrubbed from every child the broker spawns, and no release-build path that reads a secret from the environment at all; broker moved to `_bravevault`; UI helper split into the person's session; peer verification on three platforms | a broker that can hold a secret at all. Nothing above is optional and nothing below is safe without it |
+| 1 | broker hardening: key derivation from a real password held in a store that unlocks without a session, `BRAVE_SERVICES_KEY` out of the environment and into that store, scrubbed from every child the broker spawns, and no release-build path that reads a secret from the environment at all; broker moved to `_bravevault`; UI helper split into the person's session; peer verification on three platforms | a broker that can hold a secret at all. Nothing above is optional and nothing below is safe without it |
 | 2 | bravebot enrols with the restricted action set, bound to the verified binary; `Grant` type; tier reported everywhere | a working handle, whose ceiling is `perform` and `placeholder` and nothing else |
 | 3 | service-token item type; `perform`; `send_mail`; PKCE with the verifier on the broker; envelope equality; a verified helper session required to redeem a standing grant; **and its bounds in the same phase**: lifetimes, caps in bytes and requests, trail integrity | email send at Delegated, bounded on the day it ships |
 | 4 | `placeholder` and egress substitution, local certificate authority, position binding, SigV4 re-signing | `git push` over HTTPS and arbitrary HTTP without holding tokens |
@@ -775,8 +776,8 @@ is last on purpose.
 
 **Build the broker in this repository, before phase 1**
 ([#852](https://github.com/brave/bravebot/issues/852)). Both sides are ours: bravebot and the
-broker. The broker, `bravevault-brokerd`, and its UI helper are built here, signed by the release
-job, and versioned with the protocol bravebot's client crate speaks. Brave Vault, in
+broker. The broker, `bravevault-brokerd`, and its UI helper are to be built here, signed by the
+release job, and versioned with the protocol bravebot's client crate speaks. Brave Vault, in
 `brave-experiments`, stays the prototype the design and the connector contract were tried on: it has
 no releases, no tags and a hardcoded vault password, and none of it is ported.
 

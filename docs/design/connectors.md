@@ -373,9 +373,9 @@ scopes and the hosts recorded at sign-in. Access tokens from a refresh are held 
 - **Flows.** A definition signs in by OAuth (`pkce-loopback`), as a confidential client or as a
   public one that sends no secret, on a loopback callback whose host and, where the provider matches
   the redirect exactly, port the definition names. A service reached with an API key (`key`) has the
-  key in the vault's copy, sent only in the header the definition names and only to its hosts. A
-  public service (`none`) is called with no credential, and a `local` definition reads only data
-  the vault already holds, such as the bookmarks it decoded from the person's sync chain.
+  key held in the vault's sealed store, sent only in the header the definition names and only to its
+  hosts. A public service (`none`) is called with no credential, and a `local` definition reads only
+  data the vault already holds, such as the bookmarks it decoded from the person's sync chain.
 - **Sign-in, on first use.** With no credential, the vault opens the service's authorize page,
   receives the code and its `state` on its `127.0.0.1` listener, checks `state`, exchanges the code
   with the PKCE verifier, asks the service which account signed in (`whoami`), and stores the
@@ -388,11 +388,10 @@ scopes and the hosts recorded at sign-in. Access tokens from a refresh are held 
   `granted_separators` and `granted_prefix` say how the answer writes the rest, and an absent or
   empty `scope` is accepted. A refresh is not checked.
 - **Host pinning.** The access token goes only to the `base` host and the hosts `also` names, over
-  HTTPS on port 443, and to the
-  `whoami` host for that one call at sign-in. A refresh goes only to a recorded token endpoint. The
-  HTTP client follows no redirects. GitHub's tokens carry no audience, so host pinning stands in for
-  the audience binding the MCP authorization spec[^mcp-auth] and the OAuth security BCP[^bcp] ask
-  for.
+  HTTPS on port 443, and to the `whoami` host for that one call at sign-in. A refresh goes only to a
+  recorded token endpoint. The HTTP client follows no redirects. GitHub's tokens carry no audience,
+  so host pinning stands in for the audience binding the MCP authorization spec[^mcp-auth] and the
+  OAuth security BCP[^bcp] ask for.
 - **Same client only.** A stored credential is used only if it came from the definition's client id.
 - **Refresh.** A refresh uses the stored secret. A rotated refresh token is held in memory until
   saved. `invalid_grant`, or a code the definition's `sign_in_again` lists (GitHub's
@@ -753,11 +752,10 @@ in `…`, and `// …` stands for keys left out. GitHub's definition, trimmed th
 
 In the prototype, brave-vault's `scripts/install-connector.sh` writes the two halves to the places
 in the table under [Connector definition language](#connector-definition-language). Neither copy
-holds a credential: an OAuth client's secret or an API key is added in the vault app and held in
-its sealed store, and a definition file carrying either is refused. brave-vault's README, under
-Connectors, covers
-registering the OAuth clients and the rest of setting up. The broker is to ship definitions signed
-by Brave instead ([Broker requirements](#broker-requirements)).
+holds a credential: an OAuth client's secret or an API key is added in the vault app and held in its
+sealed store, and a definition file carrying either is refused. brave-vault's README, under
+Connectors, covers registering the OAuth clients and the rest of setting up. The broker is to ship
+definitions signed by Brave instead ([Broker requirements](#broker-requirements)).
 
 The install script also computes the `definition_id`, the SHA-256 of the canonical definition
 without its client id, and writes it into bravebot's copy. bravebot refuses a copy whose
@@ -956,10 +954,10 @@ refuses a tool whose input schema changed since the definition was written.
 - A service may still need basic client authentication, a per-credential base URL (Jira), GraphQL
   (Linear), offset paging, per-placeholder encoding, or an MCP server that keeps a session; none is
   supported yet.
-- The booking keys are the business's, not the person's: in the prototype they sit in the vault's
-  copy, and Duffel books against the account's balance. In production they belong in a Brave
-  service, and the traveller pays with their own card on the provider's payment page, the supplier
-  or the provider being merchant of record.
+- The booking keys are the business's, not the person's: in the prototype they are held in the
+  vault's sealed store, and Duffel books against the account's balance. In production they belong in
+  a Brave service, and the traveller pays with their own card on the provider's payment page, the
+  supplier or the provider being merchant of record.
 
 Gaps in the implementation itself are in
 [Implementation gaps](connectors-reference.md#implementation-gaps).
