@@ -18,6 +18,7 @@ import io
 import json
 import os
 import re
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -2266,6 +2267,109 @@ def test_answers_registered():
         audit.mechanics.changed_files = was
 
 
+def test_the_stop_hook():
+    """A task that ends with the register broken is sent back, and one that never went near it is not.
+
+    The hook decides two things a session depends on: whether the working tree's diff is one the
+    check is worth running for, and what to say when it fails. A hook that never blocks and one that
+    blocks forever both read as a quiet failure, so each is run against the input that tells it apart
+    from the other.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    check("a tree the pass finds nothing in is let stop", audit.stop_response({}, []) is None)
+    check("a warning alone is let stop", audit.stop_response({}, [only_warned]) is None)
+    blocked = audit.stop_response({}, [only_warned, broken])
+    check(
+        "an error blocks the stop and hands the session the finding to fix",
+        blocked is not None
+        and blocked.get("decision") == "block"
+        and "a set nobody listed" in blocked["reason"]
+        and "an entry outliving its member" not in blocked["reason"],
+        str(blocked),
+    )
+    again = audit.stop_response({"stop_hook_active": True}, [broken])
+    check(
+        "a stop after a block is let through with the finding shown, so a session that cannot fix it ends",
+        again is not None and "decision" not in again and "a set nobody listed" in again["systemMessage"],
+        str(again),
+    )
+
+    specs = with_cwd(ROOT, audit.load_specs)
+    for touched, wanted in [
+        ("crates/agent/src/answers.rs", True),
+        ("crates/ui-bridge/src/running.rs", True),
+        ("crates/cli/src/plain.rs", True),
+        ("crates/tui/src/app.rs", True),
+        ("crates/tui/src/confirm.rs", True),
+        ("docs/specs/prompting.md", True),
+        ("crates/core/src/label.rs", False),
+        ("README.md", False),
+    ]:
+        check(
+            f"a working tree that touches {touched} "
+            + ("is checked" if wanted else "is not checked"),
+            audit.touches_kept_answers({touched}, specs) == wanted,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def git(*arguments):
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *arguments],
+                cwd=tmp,
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        for name in ("edited.txt", "moved.txt", "same.txt"):
+            (Path(tmp) / name).write_text("before\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "start")
+        none_yet = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "a clean tree with no default branch to measure from has changed nothing",
+            none_yet == [],
+            str(none_yet),
+        )
+        git("update-ref", "refs/remotes/upstream/main", "HEAD")
+        (Path(tmp) / "committed.txt").write_text("kept\n", encoding="utf-8")
+        git("add", "committed.txt")
+        git("commit", "-q", "-m", "a change the session already committed")
+        (Path(tmp) / "edited.txt").write_text("after\n", encoding="utf-8")
+        git("mv", "moved.txt", "renamed.txt")
+        (Path(tmp) / "staged.txt").write_text("new\n", encoding="utf-8")
+        git("add", "staged.txt")
+        (Path(tmp) / "deep").mkdir()
+        (Path(tmp) / "deep" / "untracked.txt").write_text("new\n", encoding="utf-8")
+        got = sorted(with_cwd(tmp, audit.uncommitted_files))
+        check(
+            "the working tree's diff is the edited, staged, untracked and both ends of a renamed path",
+            got == sorted(["edited.txt", "moved.txt", "renamed.txt", "staged.txt", "deep/untracked.txt"]),
+            str(got),
+        )
+        whole = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "the branch's changes are those and what it has already committed since the default branch",
+            whole == sorted(got + ["committed.txt"]),
+            str(whole),
+        )
+
+    wired = json.loads((ROOT / "agents" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        hook.get("command", "")
+        for entry in wired.get("hooks", {}).get("Stop", [])
+        for hook in entry.get("hooks", [])
+    ]
+    check(
+        "the Stop hook in agents/settings.json runs this script in the mode that answers it",
+        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        str(commands),
+    )
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -2739,6 +2843,7 @@ def main():
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
         test_answers_registered,
+        test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,

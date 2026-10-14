@@ -81,3 +81,39 @@ A hand-written file in a discovery directory is left alone, settings included, a
 says so in one line of output. That is the right answer for a skill and worth knowing about
 here: keep your own `.claude/settings.json` and you get none of this, so copy the block above
 into it.
+
+## Checking the register when a task ends
+
+`agents/settings.json` also holds a `Stop` hook for Claude Code:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py\" --stop-hook",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+When a task ends, the hook lists what the branch has changed since it left `upstream/main`, or
+`origin/main` without one: its commits, and the working tree's staged, unstaged and untracked
+files. It does nothing unless one is a file where an answer is kept, asked for or registered: the
+files `approval-binding` is selected by, the prompting spec and the files it governs. Otherwise it
+runs the mechanical half of `make check-security`, about five seconds. A failure blocks the stop and
+hands the findings back to the session to fix. A stop that follows a block is let through with the
+findings shown to the person, so a session that cannot fix one still ends. CI runs the same check as
+the required `Security` context, and is the check on a tree the hook never saw.
+
+The same file is linked as `.bravebot/settings.json`, where the `hooks` key does nothing: bravebot
+reads hooks only from `hooks.json` in its state directory, and `bravebot doctor` names the key as
+one nothing reads. Codex and Cursor do not read the hook, so CI is the only check on work done in
+them.

@@ -182,7 +182,9 @@ only for whoever remembers to run this. It is the deterministic half of the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
 check contexts, the trust specs, the confirmer, the remembered answers
-(`crates/agent/src/answers.rs`), or `docs/specs/prompting.md`.
+(`crates/agent/src/answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical half
+itself when a task ends on a branch that changes a file where an answer is kept
+([agent-configuration.md](agent-configuration.md#checking-the-register-when-a-task-ends)).
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances
