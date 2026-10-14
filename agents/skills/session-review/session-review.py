@@ -57,6 +57,7 @@ IMPORTED = "claude-code-"
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 KINDS = ("bug", "enhancement")
+SESSION_ANALYSIS = "session-analysis"
 PROBLEM_TEXT = ("title", "what_happens", "code_path", "reproduce", "fix", "evidence")
 VERIFY_VERDICTS = ("confirmed", "fixed", "known", "not-a-defect")
 
@@ -383,7 +384,7 @@ def scrub(text, manifest, session):
 
 
 def labels_for(fields):
-    labels = [fields["kind"]]
+    labels = [fields["kind"], SESSION_ANALYSIS]
     area = str(fields.get("area") or "").strip().removeprefix("area/")
     if area in pa.AREAS:
         labels.append(f"area/{area}")

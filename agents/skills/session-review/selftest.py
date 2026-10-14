@@ -243,7 +243,7 @@ class Work(unittest.TestCase):
             quiet(sr.draft, self.args())
         drafts = json.loads((self.work / "drafts.json").read_text())
         self.assertEqual(len(drafts), 1)
-        self.assertEqual(drafts[0]["labels"], ["area/interface", "bug"])
+        self.assertEqual(drafts[0]["labels"], ["area/interface", "bug", "session-analysis"])
         self.assertNotIn("\u2014", drafts[0]["title"])
         body = Path(drafts[0]["body_file"]).read_text()
         self.assertNotIn("\u2014", body)
@@ -261,6 +261,19 @@ class Work(unittest.TestCase):
                 labels = sr.labels_for(dict(PROBLEM, kind=kind, area=area))
                 self.assertEqual(labels[0] if not area or area == "nonsense" else labels[1], kind)
                 self.assertFalse([l for l in labels if l.split("/")[0] in ("importance", "urgency", "size", "severity", "security")])
+
+    def test_every_draft_carries_session_analysis_whatever_its_kind_and_area(self):
+        wanted = {
+            ("bug", "trust"): ["area/trust", "bug", "session-analysis"],
+            ("bug", ""): ["bug", "session-analysis"],
+            ("bug", "nonsense"): ["bug", "session-analysis"],
+            ("enhancement", "trust"): ["area/trust", "enhancement", "session-analysis"],
+            ("enhancement", ""): ["enhancement", "session-analysis"],
+            ("enhancement", "nonsense"): ["enhancement", "session-analysis"],
+        }
+        for (kind, area), labels in wanted.items():
+            with self.subTest(kind=kind, area=area):
+                self.assertEqual(sr.labels_for(dict(PROBLEM, kind=kind, area=area)), labels)
 
     def test_a_session_is_marked_only_once_every_problem_in_it_is_settled(self):
         self.analysis("a", [PROBLEM, PROBLEM])
