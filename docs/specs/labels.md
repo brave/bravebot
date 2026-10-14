@@ -35,7 +35,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools.rs: 36
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -526,7 +526,8 @@ what catches it.
 
 Where released content leaves this process for a surface to draw, the label it was released under
 travels with it, as the label rather than as a word composed at the boundary. Every carrier of such
-content states one: a preview of quarantined bytes, and a remark accompanying a write. The boundary
+content states one: a preview of quarantined bytes, the bytes a person is asked to read in a
+prompt, the sentence a check wrote about them, and a remark accompanying a write. The boundary
 neither reads the content nor decides the label, so what arrives is what the gate released, and a
 carrier added later states one too.
 
@@ -552,6 +553,9 @@ arrives at all.
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
 `verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
+`verified-by: bravebot_ui_bridge::wire::an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_under`
+`verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
+`verified-by: bravebot_agent::turn::a_prompt_to_read_output_carries_the_label_the_slot_was_released_under`
 `verified-by: bravebot_agent::turn::the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries`
 
 ## Known costs

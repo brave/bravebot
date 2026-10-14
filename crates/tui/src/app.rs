@@ -13864,6 +13864,8 @@ mod tests {
                 truncated: false,
                 verdict: bravebot_core::vetting::Verdict::Safe,
                 reason: None,
+                label: String::new(),
+                reason_label: None,
             }
         )));
         assert!(manifest_step_asks(&ToMain::Exposure(

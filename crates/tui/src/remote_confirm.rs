@@ -801,6 +801,8 @@ mod tests {
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 

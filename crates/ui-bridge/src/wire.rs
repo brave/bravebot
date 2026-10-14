@@ -556,7 +556,8 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "reference": request.reference,
         "lines": request.lines,
         "output": request.output,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "label": request.label,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
         "summary": request.summary(),
     })
 }
@@ -571,8 +572,9 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "request": id,
         "path": request.path,
         "preview": request.preview,
+        "label": request.label,
         "truncated": request.truncated,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
     })
 }
 
@@ -741,7 +743,7 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "tools": tools,
         "refused": request.refused,
         "withheld": request.withheld,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "vetting": vetting(request.verdict, request.reason.as_deref(), None),
     })
 }
 
@@ -944,9 +946,14 @@ pub fn fitted(answers: Vec<Answer>, asking: &Asking) -> Vec<Answer> {
         .collect()
 }
 
-/// Advice for the person, never an approval or planner input.
-fn vetting(verdict: bravebot_core::vetting::Verdict, reason: Option<&str>) -> Value {
-    json!({ "verdict": verdict.word(), "reason": reason, "detail": match verdict {
+/// Advice for the person, never an approval or planner input. The reason carries the label it was
+/// released under (LABEL-10).
+fn vetting(
+    verdict: bravebot_core::vetting::Verdict,
+    reason: Option<&str>,
+    label: Option<&str>,
+) -> Value {
+    json!({ "verdict": verdict.word(), "reason": reason, "label": label, "detail": match verdict {
         bravebot_core::vetting::Verdict::Inconclusive(detail) => Some(detail), _ => None,
     } })
 }
@@ -960,6 +967,6 @@ pub fn vet_request(id: u64, request: &VetRequest) -> Value {
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "summary": request.summary(), "content": request.content, "lines": request.lines, "picture": picture,
-        "vetting": vetting(request.verdict, request.reason.as_deref()) })
+        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines, "picture": picture,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()) })
 }
