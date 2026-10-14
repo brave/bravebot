@@ -166,12 +166,12 @@ def main_ref(root):
 
 
 def checked_commit(
-    root, ledger=LEDGER, verb="vet", worktree="bravebot-advisories", why="a verdict has to be about main"
+    root, ledger=LEDGER, verb="vet", worktree="advisories", why="a verdict has to be about main"
 ):
     """The main commit this tree is, refusing a tree that differs from it anywhere but the ledger."""
     ref = main_ref(root)
     tip = git(root, "rev-parse", ref)
-    remedy = f"fetch, then {verb} a tree at {ref}:\n  git worktree add --detach ../{worktree} {ref}"
+    remedy = f"fetch, then {verb} a tree at {ref} (run in the main clone):\n  git worktree add --detach .worktrees/{worktree} {ref}"
     if run(["git", "-C", str(root), "merge-base", "--is-ancestor", tip, "HEAD"]).returncode != 0:
         raise Problem(f"HEAD does not contain {ref} ({tip[:12]}); {remedy}")
     changed = [p for p in git(root, "diff", "--name-only", tip, "--").splitlines() if p != ledger]

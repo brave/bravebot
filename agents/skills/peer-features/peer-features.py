@@ -139,7 +139,7 @@ def write_ledger(path, entries):
 def checked_commit(root):
     """The main commit this tree is, refusing a tree that differs from it anywhere but the ledger."""
     return pa.checked_commit(
-        root, LEDGER, verb="review", worktree="bravebot-peer-gaps", why="what bravebot lacks has to be read off main"
+        root, LEDGER, verb="review", worktree="peer-gaps", why="what bravebot lacks has to be read off main"
     )
 
 

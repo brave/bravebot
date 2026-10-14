@@ -503,6 +503,23 @@ class Tree(unittest.TestCase):
         with self.assertRaisesRegex(pa.Problem, "does not contain main"):
             pa.checked_commit(self.root)
 
+    def test_a_refusal_names_a_worktree_inside_the_clone_in_both_places_it_refuses(self):
+        command = "git worktree add --detach .worktrees/advisories main"
+        self.git("checkout", "-q", "-b", "work")
+        (self.root / "code.rs").write_text("fn main() { edited }\n")
+        with self.assertRaises(pa.Problem) as differs:
+            pa.checked_commit(self.root)
+        self.git("checkout", "-q", "--", "code.rs")
+        self.git("checkout", "-q", "main")
+        (self.root / "code.rs").write_text("fn main() { newer }\n")
+        self.git("commit", "-q", "-am", "newer")
+        self.git("checkout", "-q", "HEAD~1")
+        with self.assertRaises(pa.Problem) as behind:
+            pa.checked_commit(self.root)
+        for refusal in (differs, behind):
+            self.assertIn(command, str(refusal.exception))
+            self.assertNotIn("../", str(refusal.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
