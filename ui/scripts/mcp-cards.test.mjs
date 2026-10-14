@@ -68,7 +68,6 @@ const tools = (overrides = {}) =>
     alias: 'weather',
     tools: [{ name: 'weather:get_forecast', arguments: ['city (string, required)'], description: 'the forecast for a city' }],
     refused: 0,
-    changed: false,
     vetting: { verdict: 'safe' },
     ...overrides,
   })
@@ -152,8 +151,7 @@ test('the tools card draws each tool and its description as the server wrote it,
   assert.deepEqual(buttons(markup), ['Continue without them', 'Offer these tools'])
 })
 
-test('a list that changed, or holds tools that cannot be offered, says so', () => {
-  assert.ok(draw(tools({ changed: true })).includes('not the list you approved before'))
+test('a list that holds tools that cannot be offered says so', () => {
   assert.ok(draw(tools({ refused: 2 })).includes('2 more tools are not listed'))
   assert.ok(draw(tools({ refused: 1 })).includes('1 more tool is not listed'))
 })

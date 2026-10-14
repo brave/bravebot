@@ -1054,43 +1054,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, label))
     }
 
-    /// Give the planner a server's tool list where it is the list a person vouched for before.
-    ///
-    /// The comparison is here because it is a decision taken from the server's bytes, and this
-    /// module is the one place allowed to take one. `digest` is how the list's record was spelled
-    /// when it was written, a plain function so it can carry nothing in with it. A list that is
-    /// not the one recorded comes back as it was, to be put to the person again: a package run at
-    /// `@latest` whose tools changed asks again, and one whose tools did not asks nothing.
-    pub fn promote_a_recorded_tool_list(
-        &mut self,
-        alias: &str,
-        list: Labelled<String>,
-        recorded: &str,
-        digest: fn(&str) -> String,
-    ) -> Result<Labelled<String>, Labelled<String>> {
-        let was = list.label();
-        let proof = Declassification::authorise("a tool list, compared with the one vouched for");
-        let text = list.declassify(&proof);
-        if digest(&text) != recorded {
-            self.allow(
-                "mcp_tools",
-                format!(
-                    "the tools {alias} offers are not the list the user vouched for before, asking"
-                ),
-            );
-            return Err(Labelled::new(text, was));
-        }
-        let label = Label::trusted_public();
-        self.allow(
-            "mcp_tools",
-            format!(
-                "the tools {alias} offers were {was}; they are the list the user vouched for \
-                 before, so the planner is offered them at {label}"
-            ),
-        );
-        Ok(Labelled::new(text, label))
-    }
-
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
@@ -1932,55 +1895,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(value, label)
     }
 
-    /// Label the output of a program, from what it is and what went into it.
-    ///
-    /// Two cases, and which one applies is decided here rather than by the caller.
-    ///
-    /// An **opaque** program gets `(U,priv)`. Nothing can establish what it did, so nothing better
-    /// than the pessimistic label holds. This is the default and covers everything not in
-    /// [`crate::pure::FILTERS`].
-    ///
-    /// A **side-effect-free filter** passes its input's label through. `wc -l` reading stdin cannot
-    /// do anything but count what it was given, so its output is a function of its input and carries
-    /// the input's label. With no input at all, as with `pwd`, the output is a function of state the
-    /// user established and is trusted.
-    ///
-    /// **This is not an upgrade.** It is the first label the output ever receives, assigned from
-    /// provenance the kernel tracked, exactly as [`Policy::label_model_output`] is. Nothing
-    /// relabels: an untrusted input yields an untrusted result, and there is no argument or
-    /// declaration that makes a filter's output better than what it consumed.
-    ///
-    /// Eligibility is judged from `(program, args)`, which are trusted by the time they reach here,
-    /// since argv is routing and has either been promoted or endorsed. So this is a comparison on
-    /// trusted data, which the rule permits. It is nonetheless the most consequential such comparison in
-    /// the kernel, because a gap in the table means untrusted bytes labelled trusted.
-    pub fn label_command_output(
-        &mut self,
-        program: &str,
-        args: &[String],
-        stdin: Option<Label>,
-    ) -> Label {
-        if !crate::pure::is_pure_filter(program, args) {
-            let label = Label::untrusted_private();
-            self.allow(
-                "provenance",
-                format!("{program}: output labelled {label}, since what it did is unknown"),
-            );
-            return label;
-        }
-
-        // A filter with no input produces a function of nothing an attacker influenced.
-        let label = stdin.unwrap_or_else(Label::trusted_public);
-        self.allow(
-            "provenance",
-            format!(
-                "{program}: output labelled {label}, carried through a filter that only transforms \
-                 its input"
-            ),
-        );
-        label
-    }
-
     /// Label what a command the user typed themselves printed.
     ///
     /// Shell mode is the user working in their own workspace, so the command is theirs in the way
@@ -1994,7 +1908,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the bytes may have come out of the workspace and running a command does not publish them.
     ///
     /// **This is not an upgrade.** It is the first label these bytes ever receive, assigned from
-    /// provenance the driver knows, exactly as [`Policy::label_command_output`] and
+    /// provenance the driver knows, exactly as [`Policy::before_plan`] and
     /// [`Policy::label_user_configuration`] are. Nothing here relabels a value that already had a
     /// label.
     ///
@@ -2028,7 +1942,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// **This is not an upgrade.** It is the first label these bytes ever receive, assigned from
     /// provenance the driver knows, exactly as [`Policy::label_model_output`] and
-    /// [`Policy::label_command_output`] are. Nothing here relabels a value that already had a
+    /// [`Policy::before_plan`] are. Nothing here relabels a value that already had a
     /// label, and nothing here may be pointed at a path outside that directory: a file from the
     /// workspace is labelled by the trust map, through `Workspace::read`, and asking this instead
     /// would be laundering it.
@@ -9828,26 +9742,6 @@ five
         );
     }
 
-    /// A list asks nothing where it is the one somebody vouched for before, and a list that is not
-    /// comes back as it was, still quarantined, to be put to them again.
-    #[test]
-    fn a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for() {
-        let mut sink = RecordingSink::new();
-        let mut policy = open_policy(&mut sink);
-        let listed = |text: &str| Labelled::new(text.to_string(), Label::untrusted_public());
-        let spelled: fn(&str) -> String = |text| text.to_uppercase();
-
-        let same = policy
-            .promote_a_recorded_tool_list("weather", listed("[\"a\"]"), "[\"A\"]", spelled)
-            .expect("the list recorded");
-        assert_eq!(same.label(), Label::trusted_public());
-
-        let changed = policy
-            .promote_a_recorded_tool_list("weather", listed("[\"b\"]"), "[\"A\"]", spelled)
-            .expect_err("a list nobody vouched for");
-        assert_eq!(changed.label(), Label::untrusted_public());
-    }
-
     /// The check a yes to a tool list is put behind reads the list as it will be drawn, and says
     /// where it came from in the driver's words rather than the server's.
     #[test]
@@ -14359,95 +14253,70 @@ five
     mod command_output {
         use super::*;
 
-        fn policy_with<'s>(sink: &'s mut RecordingSink) -> Policy<'s, RecordingSink> {
-            Policy::begin(
-                routing_with("task", "run something"),
-                ReleasePlan::new(),
-                all_capabilities(),
-                sink,
-            )
-            .expect("policy")
-        }
-
-        fn args(list: &[&str]) -> Vec<String> {
-            list.iter().map(|a| a.to_string()).collect()
+        fn printed_by(program: &str, args: &[&str], stdin: Option<Label>) -> Label {
+            let mut sink = RecordingSink::new();
+            let mut policy = in_a_project(&mut sink, &[]);
+            let mut plan = plan_of(vec![step_named(program, args)]);
+            plan.stdin = stdin;
+            label_of(&mut policy, &plan)
         }
 
         /// An unrecognised program tells us nothing, so its output gets the pessimistic label
-        /// whatever was fed in.
+        /// whatever was fed in. This is the label a real run is given, by `before_plan`.
         #[test]
         fn an_opaque_program_always_yields_untrusted_private_output() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             for stdin in [
                 None,
                 Some(Label::trusted_public()),
                 Some(Label::trusted_private()),
             ] {
                 assert_eq!(
-                    policy.label_command_output("git", &args(&["log"]), stdin),
+                    printed_by("git", &["log"], stdin),
                     Label::untrusted_private(),
                     "git log output was not pessimistically labelled"
                 );
             }
         }
 
-        /// The point of the feature: a filter's output is a function of its input, so a trusted input
-        /// yields a readable result.
+        /// A filter's output is a function of its input, so a trusted input yields a trusted
+        /// result. Private, since a line that ran is never published by running.
         #[test]
-        fn a_filter_passes_a_trusted_label_through() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            assert_eq!(
-                policy.label_command_output("wc", &args(&["-l"]), Some(Label::trusted_private())),
-                Label::trusted_private()
-            );
+        fn a_filter_fed_a_trusted_label_prints_trusted_private_output() {
+            for stdin in [Label::trusted_public(), Label::trusted_private()] {
+                assert_eq!(
+                    printed_by("wc", &["-l"], Some(stdin)),
+                    Label::trusted_private(),
+                    "{stdin}"
+                );
+            }
         }
 
-        /// And the direction that matters more: a filter never improves what it consumed.
+        /// A filter never improves what it consumed: an untrusted input prints untrusted output.
         #[test]
-        fn a_filter_passes_an_untrusted_label_through_unchanged() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            for label in [Label::untrusted_public(), Label::untrusted_private()] {
+        fn a_filter_fed_an_untrusted_label_prints_untrusted_output() {
+            for stdin in [Label::untrusted_public(), Label::untrusted_private()] {
                 assert_eq!(
-                    policy.label_command_output("wc", &args(&["-l"]), Some(label)),
-                    label,
-                    "a filter upgraded its input's label"
+                    printed_by("wc", &["-l"], Some(stdin)),
+                    Label::untrusted_private(),
+                    "a filter upgraded its input's label: {stdin}"
                 );
             }
         }
 
         /// A filter taking no input produces a function of nothing an attacker influenced, which is
-        /// what makes `pwd` useful.
+        /// what makes `pwd` useful. It is private all the same: a run is not a release.
         #[test]
-        fn a_filter_with_no_input_yields_trusted_output() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            assert_eq!(
-                policy.label_command_output("pwd", &args(&[]), None),
-                Label::trusted_public()
-            );
+        fn a_filter_with_no_input_prints_trusted_private_output() {
+            assert_eq!(printed_by("pwd", &[], None), Label::trusted_private());
         }
 
         /// The interpreters must not get pass-through, since they can write files and run commands
         /// from an argument. This is the case a mistake would be worst.
         #[test]
         fn interpreters_get_no_pass_through_even_on_trusted_input() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             for program in ["sed", "awk", "bash"] {
                 assert_eq!(
-                    policy.label_command_output(
-                        program,
-                        &args(&["x"]),
-                        Some(Label::trusted_public())
-                    ),
+                    printed_by(program, &["x"], Some(Label::trusted_public())),
                     Label::untrusted_private(),
                     "{program} was granted label pass-through"
                 );
@@ -14458,24 +14327,13 @@ five
         /// label would then describe stdin while the data came from disk.
         #[test]
         fn an_eligible_program_reading_a_file_gets_no_pass_through() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             assert_eq!(
-                policy.label_command_output(
-                    "grep",
-                    &args(&["-r", "secret"]),
-                    Some(Label::trusted_public())
-                ),
+                printed_by("grep", &["-r", "secret"], Some(Label::trusted_public())),
                 Label::untrusted_private(),
                 "grep recursing the filesystem was granted pass-through"
             );
             assert_eq!(
-                policy.label_command_output(
-                    "head",
-                    &args(&["-1", "/etc/hosts"]),
-                    Some(Label::trusted_public())
-                ),
+                printed_by("head", &["-1", "/etc/hosts"], Some(Label::trusted_public())),
                 Label::untrusted_private()
             );
         }
@@ -14486,14 +14344,17 @@ five
         fn the_labelling_decision_is_recorded() {
             let mut sink = RecordingSink::new();
             {
-                let mut policy = policy_with(&mut sink);
-                policy.label_command_output("wc", &args(&["-l"]), Some(Label::trusted_public()));
+                let mut policy = in_a_project(&mut sink, &[]);
+                let mut plan = plan_of(vec![step_named("wc", &["-l"])]);
+                plan.stdin = Some(Label::trusted_public());
+                label_of(&mut policy, &plan);
             }
             assert!(
                 sink.events().iter().any(|e| matches!(
                     e,
                     Event::GatePassed { gate, detail }
-                        if *gate == "provenance" && detail.contains("wc")
+                        if *gate == "provenance"
+                            && detail.contains(&format!("output labelled {}", Label::trusted_private()))
                 )),
                 "the labelling was not recorded"
             );

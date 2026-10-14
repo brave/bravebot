@@ -493,7 +493,6 @@ fn a_tool_list() -> bravebot_agent::confirm::ToolListRequest {
         tools: Vec::new(),
         refused: 0,
         withheld: 0,
-        changed: false,
         verdict: bravebot_core::vetting::Verdict::Safe,
         reason: None,
     }

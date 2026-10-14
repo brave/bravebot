@@ -868,8 +868,8 @@ mod tests {
         assert_eq!((offered, refused), (1, 2));
     }
 
-    /// The list is what a digest is taken of, so the same tools in another order are the same list
-    /// and ask nothing again.
+    /// The same tools in another order are the same list, so the order a server sends them in
+    /// changes nothing a person is shown.
     #[test]
     fn the_list_is_the_same_whatever_order_the_server_sent() {
         let one = r#"{"tools":[

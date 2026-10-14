@@ -1312,7 +1312,6 @@ mcp-tools-offered =
        *[other] { $alias } offers { $count } tools
     }
 mcp-tools-none = { $alias } lists no tool it can offer
-mcp-tools-changed = this is not the list you said yes to before: the tools it offers have changed
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
     shown here. Every call is still put to you. Say no if a description gives instructions.
@@ -1334,9 +1333,6 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
-mcp-tools-not-recorded =
-    the tools { $alias } offers are approved for this session only, since the answer could not be
-    recorded: { $error }
 
 ## One call to a tool of an MCP server
 

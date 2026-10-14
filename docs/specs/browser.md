@@ -266,8 +266,8 @@ frame by its exact URL, and `open_tab` names the HTTP or HTTPS URL to open. `get
 runs on, and nothing else, so a person can see the extension answer without it telling anything
 about them.
 
-**Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
-that changed with whether the extension was connected would be put to them again each time it did.
+**Why.** A person answers for a server's tool list at the start of a session. A list
+that changed with whether the extension was connected would offer tools they were not shown.
 A name off the list reaching the extension would be a tool nobody vouched for. The question before
 each call shows its arguments, and a URL is one a person can judge there where a tab id is not.
 

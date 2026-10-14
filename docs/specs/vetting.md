@@ -316,7 +316,7 @@ prompt is drawn, not after it is answered:
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | the slot the planner named |
 | [tools/read-output.md](tools/read-output.md) | releases what a program printed to the planner | the slot the planner named |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | **the whole file**, not the preview |
-| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner, and records its digest | **the whole list**, as it is drawn |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner for the session | **the whole list**, as it is drawn |
 
 **Why the whole file.** A vouch prompt shows the head of the file and a yes grants all of it, so a
 check over the preview would report on the part an injection attempt has the least reason to be in.
@@ -454,7 +454,7 @@ same two prompts and no others: a vouch offer is not one of them here either.
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | a safe verdict answers |
 | [tools/read-output.md](tools/read-output.md) | promotes one slot's bytes once | a safe verdict answers |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | still asks |
-| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list for the session, and records it | still asks |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list for the session | still asks |
 
 **Why the line falls there.** It falls on the shape of the grant, not on which tool produced the
 bytes. Both promotions cover one slot's bytes once and leave nothing behind ([CHECK-6](#CHECK-6)),

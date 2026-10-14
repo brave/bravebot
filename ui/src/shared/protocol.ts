@@ -651,15 +651,14 @@ export interface McpTool { name: string; arguments: string[]; description: strin
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model
- * (SERVERS-8). `refused` counts tools the client would not draw, and `changed` says a different
- * list was approved under this declaration before. A yes is remembered for this exact list.
+ * (SERVERS-8). `refused` counts tools the client would not draw. A yes holds for the session
+ * and is not remembered.
  */
 export interface McpToolsRequest {
   request: number
   alias: string
   tools: McpTool[]
   refused: number
-  changed: boolean
   vetting: Vetting
 }
 

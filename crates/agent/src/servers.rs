@@ -9,8 +9,7 @@
 //!
 //! A server's handshake is its `initialize` and then its `tools/list`, and the list is held as the
 //! one labelled text it arrived as: nothing of it reaches the planner until a person has read it at
-//! the start of a turn and said yes, or said yes to the same list under the same declaration before
-//! (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
+//! the start of a turn and said yes (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
 //!
 //! The two questions a session puts while it starts its servers, whether to use one (SERVERS-4) and
 //! whether one moved where its reply pointed (SERVERS-11), go to an [`Asker`]. A [`Person`] at a

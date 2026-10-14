@@ -1,8 +1,8 @@
 //! The tools the MCP server offers, and the extension method each one calls.
 //!
-//! The list is fixed here rather than asked of the extension. A person vouches for a server's tool
-//! list once and BraveBot records a digest of it, so a list that changed with whether the extension
-//! was connected would be put to them again every time it did. Each tool calls the extension method
+//! The list is fixed here rather than asked of the extension. A person answers for a server's tool
+//! list at the start of a session, so a list that changed with whether the extension
+//! was connected would offer tools they were not shown. Each tool calls the extension method
 //! of the same name with the tool's arguments as its parameters, and which of these the extension
 //! answers is its own business: a tool it does not answer fails like any other call.
 //!

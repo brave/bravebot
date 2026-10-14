@@ -472,16 +472,13 @@ pub struct Tools<'a> {
     pub refused: usize,
     /// How many tools were withheld by the server's allow or deny list.
     pub withheld: usize,
-    /// A list was vouched for under this declaration before and this is not it.
-    pub changed: bool,
     /// What the check made of the list.
     pub check: Check,
 }
 
 /// The whole list, each description behind the margin and none of it cut.
 ///
-/// A yes puts exactly this text in front of the planner for every session the list stays the
-/// same, so what is read here has to be all of it. The description is behind the margin because it
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
 /// is the server's words, and the names and arguments are not because the client drew them from a
 /// fixed alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
@@ -493,9 +490,6 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
             count = list.tools.len()
         ),
     }];
-    if list.changed {
-        lines.push(t!(mcp_tools_changed).to_string());
-    }
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
@@ -760,7 +754,6 @@ mod tests {
             tools: &[tool],
             refused: 1,
             withheld: 2,
-            changed: false,
             check: Check::Safe,
         });
         assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));
