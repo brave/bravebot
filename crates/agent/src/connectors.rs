@@ -17,10 +17,6 @@ use bravebot_core::value::Labelled;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The fields every connector step takes whatever its resource, which are not the definition's to
-/// list: which connector, which resource, and the slot a fetch fills.
-const ALWAYS: [&str; 3] = ["connector", "resource", "out_slot"];
-
 /// What a run knows about connectors: the installed definitions, and what it learnt as it ran.
 #[derive(Debug, Default)]
 pub struct Connectors {
@@ -237,6 +233,14 @@ impl Connectors {
             else {
                 continue;
             };
+            // Given in any shape, a number or a list included: one the plan gave is never replaced,
+            // and the lock refuses it if it is not text.
+            let given = |args: &BTreeMap<String, Arg>, field: &str| match args.get(field) {
+                Some(Arg::Text(value)) => !value.trim().is_empty(),
+                Some(Arg::List(values)) => !values.is_empty(),
+                Some(Arg::Count(_)) => true,
+                None => false,
+            };
             for (field, value) in &connector.surface.defaults {
                 // A field that is half of an either-or pair is left empty when the other half
                 // is given, or the step would hold both.
@@ -246,10 +250,8 @@ impl Connectors {
                 else {
                     continue;
                 };
-                let alternative_given = entry
-                    .iter()
-                    .any(|f| f != field && !text(&step.args, f).trim().is_empty());
-                if !alternative_given && text(&step.args, field).trim().is_empty() {
+                let alternative_given = entry.iter().any(|f| f != field && given(&step.args, f));
+                if !alternative_given && !given(&step.args, field) {
                     step.args.insert(field.clone(), Arg::Text(value.clone()));
                 }
             }
@@ -291,7 +293,7 @@ impl Connectors {
             let present = alternatives.iter().filter(|f| given(f)).count();
             // A fetch's selector only narrows what it reads, as the authority holds it too.
             let fine = match alternatives.as_slice() {
-                [only] => present == 1 || ALWAYS.contains(only) || *only == "select",
+                [only] => present == 1 || *only == "select",
                 _ => present == 1,
             };
             if !fine {
@@ -621,6 +623,29 @@ mod tests {
         assert!(step(None).steps[0].args.contains_key("item"));
     }
 
+    /// A value the plan gave is never replaced by a default, whatever its shape: a number stays
+    /// the number, for the lock to refuse as not text, rather than the default standing in for it.
+    #[test]
+    fn a_default_never_replaces_a_value_the_plan_gave_in_another_shape() {
+        let mail = connector(
+            "mail",
+            serde_json::json!({
+                "resources": {
+                    "message": { "step": "fetch", "uses": ["item"], "summary": "one email" }
+                },
+                "defaults": { "item": "latest" }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([("mail".to_string(), Ok(mail))]));
+        let mut step = DraftStep::new(CONNECTOR_FETCH)
+            .with_text("connector", "mail")
+            .with_text("resource", "message")
+            .with_text("out_slot", "m");
+        step.args.insert("item".into(), Arg::Count(2));
+        let filled = connectors.with_defaults(Draft::new(vec![step]));
+        assert_eq!(filled.steps[0].args.get("item"), Some(&Arg::Count(2)));
+    }
+
     /// A value is held to its form before the plan is put to anybody, so a place that climbs out of its
     /// owner/name, or an id with a leading zero, never reaches the line a person approves.
     #[test]
@@ -642,6 +667,13 @@ mod tests {
     /// The planner is told how to quote a value with a space, and the grammar reads it back as one term.
     #[test]
     fn the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses() {
+        assert!(
+            connectors().catalogue().contains(&format!(
+                "Today's date is {} (UTC)",
+                crate::preamble::today()
+            )),
+            "a plan fixes dates before anything runs, so the planner is told today's"
+        );
         assert!(
             connectors()
                 .catalogue()
@@ -758,6 +790,19 @@ mod tests {
         ]))
         .unwrap();
         assert!(connectors.check(&plan).unwrap_err().contains("bad json"));
+        let elsewhere = validate_for_tests(&Draft::new(vec![
+            DraftStep::new(CONNECTOR_FETCH)
+                .with_text("connector", "absent")
+                .with_text("resource", "issue")
+                .with_text("out_slot", "i"),
+        ]))
+        .unwrap();
+        assert!(
+            connectors
+                .check(&elsewhere)
+                .unwrap_err()
+                .contains("no connector named 'absent' is installed")
+        );
         assert!(!connectors.any());
         let told = connectors.refused();
         assert!(
@@ -765,11 +810,6 @@ mod tests {
             "{told}"
         );
         assert!(Connectors::default().refused().is_empty());
-        assert!(
-            Connectors::default()
-                .catalogue()
-                .contains("Connectors installed")
-        );
     }
 
     /// A plan may fetch and may not yet act, so the planner is offered each fetch resource and none of a

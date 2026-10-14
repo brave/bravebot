@@ -592,7 +592,7 @@ const CONTRACTS: &[Contract] = &[
     // here. Which fields a resource takes, and in what form, is the connector definition's to
     // say, and the driver checks a plan against it before the plan is put to anybody.
     //
-    // `place` is always routing and never resolved: it is the repository, mailbox or channel
+    // `place` is always routing and never a slot: it is the repository, mailbox or channel
     // the step reads from. A fetch may have none, as a search across places does; the definition
     // says which resources need one. `select` is a selector in the definition's vocabulary.
     Contract {

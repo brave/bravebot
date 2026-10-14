@@ -2878,7 +2878,6 @@ impl FakeAuthority {
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
 fn run_with_connectors(
     workspace: &Workspace,
     config: &Config,

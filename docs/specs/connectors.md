@@ -285,8 +285,8 @@ anybody: a connector that is installed and readable, a resource it offers for th
 fields that resource takes and exactly one of each either-or, each value in its form and among the
 values listed for its field, selector terms the resource offers, and one of its narrowing terms
 where it lists any. A field the definition gives a default for is filled before the plan is locked,
-unless it is half of an either-or whose other half was given, so the line a person approves holds
-the value that will be sent.
+unless the plan gave it in any shape or it is half of an either-or whose other half was given, so
+the line a person approves holds the value that will be sent.
 
 **Why.** The authority holds every request to the same rules, so a plan that breaks one would only
 fail at its step, after earlier steps had run. Here it fails before anything has.
@@ -300,6 +300,7 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 `verified-by: bravebot_agent::connectors::a_resource_that_lists_its_own_values_takes_only_those`
 `verified-by: bravebot_agent::connectors::a_fetch_whose_surface_lists_narrow_terms_uses_one_in_its_select`
 `verified-by: bravebot_agent::connectors::a_default_is_not_filled_beside_the_other_half_of_an_either_or`
+`verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_agent::connectors::a_connector_that_is_not_installed_or_could_not_be_read_refuses_the_plan`
 `verified-by: bravebot_agent::manifest::a_plan_that_breaks_a_connector_surface_is_refused_before_anybody_is_asked`
 
@@ -307,23 +308,26 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 ### CONNECTOR-18: the planner is told what a definition offers, and only that
 
 Where a connector is usable, the planner is told each one's fetch resources in the definition's own
-words, with the fields, selector terms, narrowing terms and listed values each takes, today's date
-and the machine's time zone where it names one, and which definitions are installed but refused,
-with why. The goal call is told the same resources in the definition's summaries and no step or
-field name. Where none is usable, no connector step is offered at all.
+words, with the fields, selector terms, narrowing terms and listed values each takes, and today's
+date and the machine's time zone where it names one. The goal call is told the same resources in
+the definition's summaries and no step or field name. Where none is usable, no connector step is
+offered at all. Both calls are told which definitions are installed but refused, with why, whether
+or not another is usable.
 
 `verified-by: bravebot_agent::connectors::the_catalogue_offers_each_fetch_and_no_act`
 `verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_fetches_in_plain_words`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses`
 `verified-by: bravebot_agent::manifest::the_catalogue_offers_no_connector_step_where_none_is_installed`
+`verified-by: bravebot_agent::manifest::a_refused_definition_offers_no_step_and_is_named_with_its_reason`
 
 <a id="CONNECTOR-19"></a>
 ### CONNECTOR-19: a grant is for one connector
 
 A run holds the connector capability for each connector its frozen plan names and for no other, and
 a grant for one connector is no grant for another. What a connector returns is untrusted and
-private, and this process sends it nowhere through its own network path: the authority makes the
-call from its own process.
+private. The call to the service is the authority's, made from its own process, so no request to
+the service passes this process's network path.
 
 `verified-by: bravebot_core::capability::a_connector_is_an_untrusted_private_effect_that_this_process_sends_nowhere`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
+`verified-by: bravebot_agent::manifest::a_run_is_granted_only_the_connectors_its_plan_names`

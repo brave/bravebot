@@ -1183,19 +1183,14 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 
     // A grant for each connector the frozen plan names and for no other, the way a turn holds one
     // per server it reached. The plan was already held to the installed definitions, so a name
-    // here is one the person installed; a step naming another connector is refused at its gate.
+    // here is one the person installed.
     let held = [
         Capability::FileRead,
         Capability::FileWrite,
         Capability::WebFetch,
     ]
     .into_iter()
-    .chain(
-        plan.steps()
-            .iter()
-            .filter(|step| manifest::is_connector(step.tool()))
-            .map(|step| Capability::Connector(ConnectorName::new(step.text("connector")))),
-    );
+    .chain(connector_grants(&plan));
     let policy = Policy::begin(routing, release, CapabilitySet::from_iter(held), sink)
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
     let mut policy = policy
@@ -1746,6 +1741,15 @@ fn locked_filter<S: Sink>(
     }
 }
 
+/// The connector capability for each connector a plan's steps name, and for no other.
+fn connector_grants(plan: &Manifest) -> Vec<Capability> {
+    plan.steps()
+        .iter()
+        .filter(|step| manifest::is_connector(step.tool()))
+        .map(|step| Capability::Connector(ConnectorName::new(step.text("connector"))))
+        .collect()
+}
+
 /// A fetch through a connector. The authority calls the service, applies the definition's
 /// floor, projection and bounds, and answers; the payload goes into one slot, unread.
 ///
@@ -2243,5 +2247,57 @@ mod tests {
     fn the_catalogue_offers_no_connector_step_where_none_is_installed() {
         let shown = catalogue(&crate::connectors::Connectors::default());
         assert!(!shown.contains("CONNECTOR_FETCH"));
+    }
+
+    /// A definition installed but refused offers no connector step either, and the planner is told
+    /// it is refused and why, so it does not say the connector is missing.
+    #[test]
+    fn a_refused_definition_offers_no_step_and_is_named_with_its_reason() {
+        let refused = crate::connectors::Connectors::from(std::collections::BTreeMap::from([(
+            "broken".to_string(),
+            Err("bad json".to_string()),
+        )]));
+        let shown = catalogue(&refused);
+        assert!(!shown.contains("CONNECTOR_FETCH"), "{shown}");
+        assert!(shown.contains("broken: bad json"), "{shown}");
+    }
+
+    /// A run holds the capability for each connector its plan names and no other, so a grant for
+    /// one installed service is never a grant for another.
+    #[test]
+    fn a_run_is_granted_only_the_connectors_its_plan_names() {
+        let fetch = |connector: &str, out: &str| {
+            DraftStep::new(manifest::CONNECTOR_FETCH)
+                .with_text("connector", connector)
+                .with_text("resource", "issue")
+                .with_text("out_slot", out)
+        };
+        let draft = Draft::new(vec![
+            fetch("github", "a"),
+            DraftStep::new("read_file")
+                .with_text("path", "x.md")
+                .with_text("out_slot", "b"),
+            fetch("gmail", "c"),
+        ]);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        let plan = policy
+            .adopt_manifest(&Labelled::trusted(draft))
+            .expect("a plan");
+        assert_eq!(
+            connector_grants(&plan),
+            vec![
+                Capability::Connector(ConnectorName::new("github")),
+                Capability::Connector(ConnectorName::new("gmail")),
+            ]
+        );
     }
 }

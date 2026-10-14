@@ -159,6 +159,7 @@ optional ones are locked as the absence of a value.
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
+`verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 
 <a id="MANIFEST-7"></a>
 ### MANIFEST-7: the only path to a screen is the one the plan named
