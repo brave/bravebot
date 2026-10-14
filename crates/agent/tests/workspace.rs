@@ -459,14 +459,13 @@ const PRECOMPOSED_NAME: &str = "caf\u{e9}.md";
 /// rule written about `cafe\u{301}.md` is about the file read as `caf\u{e9}.md`. Whichever form the
 /// planner types, the fetched page the rule was written for has to come back untrusted, or naming
 /// the file in the other form launders it into trusted content. A volume that holds the two forms
-/// apart has two files, and the test has nothing to say about them.
+/// apart has two files, and the rule reaches the second one as well (TRUST-2), so the test writes
+/// both names and asserts the same thing on either kind of volume.
 #[test]
 fn a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     let scratch = Scratch::new("equivalent-spelled-past-a-rule");
     std::fs::write(scratch.path.join(DECOMPOSED_NAME), "a fetched page").unwrap();
-    if !scratch.path.join(PRECOMPOSED_NAME).exists() {
-        return;
-    }
+    std::fs::write(scratch.path.join(PRECOMPOSED_NAME), "a fetched page").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     for (refused, read_as) in [
@@ -503,7 +502,9 @@ fn a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted()
 
 /// The same file through its write: fetched bytes written under one form of the name are what both
 /// forms read, whichever form an earlier trusted write used, so the second spelling must not keep
-/// the trust the first write recorded.
+/// the trust the first write recorded. A volume that holds the forms apart has two files, and the
+/// trusted one is still read as untrusted because the weakest rule among equivalent spellings
+/// decides each (TRUST-2), so the assertion is the same on either kind of volume.
 #[test]
 fn an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either()
  {
@@ -534,9 +535,6 @@ fn an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_unt
                 &Labelled::trusted("ours".to_string()),
             )
             .expect("trusted bytes are written");
-        if !scratch.path.join(untrusted_form).exists() {
-            continue;
-        }
         workspace
             .write(
                 &mut policy,
