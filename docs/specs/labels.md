@@ -55,7 +55,7 @@ guards:
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 22
-      - crates/agent/src/turn.rs: 5
+      - crates/agent/src/turn.rs: 6
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1

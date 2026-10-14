@@ -540,16 +540,36 @@ mod tests {
     }
 
     /// The name only survives while it is the same program. A link repointed at something else is
-    /// not an editor to start on a guess.
+    /// not an editor to start on a guess, and neither is one that no longer resolves: the lookup
+    /// settled on a file, and that file is what runs.
     #[cfg(unix)]
     #[test]
     fn a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path() {
         let scratch = Scratch::new("elsewhere");
-        let real = scratch.program("emacs");
+        let emacs = scratch.program("emacs").canonicalize().unwrap();
+        let asked = scratch.path.join("editor");
 
-        let found = lookup(real.to_str().unwrap(), &scratch.path).expect("the editor is found");
+        scratch.program("vim");
+        std::os::unix::fs::symlink("vim", &asked).expect("link");
+        assert_eq!(
+            started_as(asked.to_str().unwrap(), emacs.clone(), &scratch.path),
+            emacs,
+            "a link repointed at another program was started under its name"
+        );
 
-        assert_eq!(found.canonicalize().unwrap(), real.canonicalize().unwrap());
+        std::fs::remove_file(&asked).expect("unlink");
+        std::os::unix::fs::symlink("gone", &asked).expect("dangling link");
+        assert_eq!(
+            started_as(asked.to_str().unwrap(), emacs.clone(), &scratch.path),
+            emacs,
+            "a link that no longer resolves was started under its name"
+        );
+
+        let relative = started_as("editor", emacs.clone(), &scratch.path);
+        assert_eq!(
+            relative, emacs,
+            "a relative name that no longer resolves was started under its name"
+        );
     }
 
     /// SANDBOX-30: the editor is started unconfined, so a file a confined stage wrote under its

@@ -5147,6 +5147,112 @@ mod tests {
         );
     }
 
+    /// AGENT-4. Two delegates hand back the same words, one from a context that met something
+    /// untrusted and one from a clean one, in the same collection. The planner is handed a
+    /// reference to the first and shown the words of the second, so the shape follows each report's
+    /// own label and not the kind of delegate, the order, or what an earlier report did.
+    #[test]
+    fn the_shape_a_report_takes_follows_the_label_of_the_delegate_that_wrote_it() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect two reports of different labels");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let unvouched = policy.label_piped_input("THE-SAME-REPORT-WORDS".to_string());
+        let clean = bravebot_core::Labelled::trusted("THE-SAME-REPORT-WORDS".to_string());
+        assert!(
+            clean.label().is_trusted(),
+            "the clean delegate's report was not trusted, so nothing here was tested"
+        );
+        std::thread::scope(|scope| {
+            let mut delegates: Vec<Working<'_>> = [unvouched, clean]
+                .into_iter()
+                .enumerate()
+                .map(|(at, report)| {
+                    let handed = seeded.clone();
+                    let answered = scope.spawn(move || -> Joined {
+                        (
+                            crate::delegate::Ended {
+                                delegated: Ok(crate::delegate::Delegated {
+                                    report,
+                                    kind: "one-round".to_string(),
+                                    usage: Default::default(),
+                                }),
+                                vouched: handed,
+                                notices: Vec::new(),
+                                rounds: 1,
+                                took: Duration::from_millis(900),
+                                worked: Default::default(),
+                            },
+                            Default::default(),
+                            Vec::new(),
+                        )
+                    });
+                    Working {
+                        join_started: None,
+                        id: DelegateId::nth(1 + at as u32),
+                        seeded: seeded.clone(),
+                        checkout: None,
+                        rounds: 1,
+                        stop: Default::default(),
+                        handle: answered,
+                    }
+                })
+                .collect();
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut crate::outcome::Spent::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+                &mut Worked::default(),
+                0,
+            )
+            .unwrap();
+        });
+
+        let told = |id: &str| {
+            conversation
+                .messages()
+                .iter()
+                .map(|stored| stored.message.content.text())
+                .find(|text| text.contains(&format!("The one-round delegate {id} has finished.")))
+                .unwrap_or_else(|| panic!("the planner was never told {id} finished"))
+        };
+        let from_the_unvouched = told("d1");
+        let from_the_clean = told("d2");
+        assert!(
+            !from_the_unvouched.contains("THE-SAME-REPORT-WORDS"),
+            "an untrusted report was shown to the planner: {from_the_unvouched}"
+        );
+        assert!(
+            from_the_unvouched.contains("[ref:0]")
+                && from_the_unvouched.contains("you will not be shown it"),
+            "the planner was handed no reference to the report it may not read: {from_the_unvouched}"
+        );
+        assert!(
+            from_the_clean.contains("It reported:\n\nTHE-SAME-REPORT-WORDS"),
+            "a report from a clean context was not shown to the planner: {from_the_clean}"
+        );
+    }
+
     /// PANEL-9 where the policy refuses to quarantine the report. The turn has counted the
     /// delegate's usage when it fails, so the delegate has to be reported finished (failed) or the
     /// running total keeps adding it beside the turn's next report, which holds it already. A

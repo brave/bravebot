@@ -12728,6 +12728,27 @@ mod tests {
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
     }
 
+    /// The first tick goes out as `start_loop`'s return value; every later one goes out of
+    /// `loop_tick`. A later tick of a loop over `/exit` is still the seven characters sent to the
+    /// planner: the session does not quit, a turn begins, and nothing is left waiting as a command.
+    #[test]
+    fn a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("5m /exit"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        let later = Instant::now() + Duration::from_secs(5 * 60 + 1);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("/exit"));
+
+        assert!(!s.is_quitting(), "a tick ran the command it spelled");
+        assert_eq!(s.status, Status::Working, "the tick did not begin a turn");
+        assert!(
+            s.take_queued_command().is_none(),
+            "a tick was left waiting as a command"
+        );
+    }
+
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
     /// has a first token to compare a later one against.
     fn saw(token: &str) -> watch::Looked {
