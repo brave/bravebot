@@ -19109,7 +19109,10 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 /// succeeds. The session is opened outside the temporary directory, which every mode leaves writable.
 /// The regressions it rejects are a `read-only` that writes the session and one that stops reading
 /// the machine. A refused redirect exits 1 under bash and 2 under dash, so the refused write is
-/// asserted as a failed step and not as one status.
+/// asserted as a failed step and not as one status. SANDBOX-19: under `read-only` the description
+/// the turn sends does not offer `/add-dir` as the way to widen it, both it and the failure line
+/// say a request to write is refused, and the line does not say the caches were written, so the
+/// mode reaches both through the turn.
 #[test]
 fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
@@ -19132,7 +19135,7 @@ fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     };
 
     let writing = session("read-only-control-session");
-    let (_, control) = told(&writing, write, WorkspaceWrite);
+    let (described_writing, control) = told(&writing, write, WorkspaceWrite);
     let wrote = writing.join("written-by-the-run.txt").exists();
     let held = session("read-only-held-session");
     let (first, refused) = told(&held, write, ReadOnly);
@@ -19155,6 +19158,25 @@ fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     assert!(first.contains(TOLD_CONFINED), "{first}");
     assert!(first.contains("cannot write the project"), "{first}");
     assert!(read_result.contains("It exited 0."), "{read_result}");
+
+    let widened = "(`/add-dir`, `--add-dir`)";
+    let write_refused = "for a path to write is refused in this mode";
+    assert!(described_writing.contains(widened), "{described_writing}");
+    assert!(!first.contains(widened), "{first}");
+    assert!(first.contains(write_refused), "{first}");
+    assert!(
+        !refused.contains("and the temporary directory and the toolchain caches"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("write the temporary directory and the paths the person's own"),
+        "{refused}"
+    );
+    assert!(refused.contains("and nothing else of"), "{refused}");
+    assert!(refused.contains(write_refused), "{refused}");
+    let commit_fails = "`git commit` that writes the directories the session was opened on fails";
+    assert!(first.contains(commit_fails), "{first}");
+    assert!(refused.contains(commit_fails), "{refused}");
 }
 
 /// SANDBOX-22: `strict` is the deny-by-default profile, so a program cannot read a file outside the

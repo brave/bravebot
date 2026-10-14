@@ -1542,15 +1542,21 @@ directory and the temporary directory, the system and program directories and gi
 files for reading, the caches of the toolchain a program belongs to and the credential scope its
 command names. It says that a path outside those is refused by the operating system as `Operation
 not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
-`--add-dir`). On macOS, in both modes that confine, the description and the sentence after a failed
+`--add-dir`). On macOS, in every mode that confines, the description and the sentence after a failed
 step also say that a step whose program is not git cannot write any `.git`, so a program that runs
 git to commit, check out or clone is refused that write and git is run as a step of its own
-([SANDBOX-18](#SANDBOX-18)). On a platform with no base the description says programs are not confined. Under the mode `strict`
+([SANDBOX-18](#SANDBOX-18)); under `read-only` they say so of the places that mode writes, such as a
+clone in the temporary directory, since a git step cannot write the session's `.git` either. On a platform with no base the description says programs are not confined. Under the mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
 machine is not read there either. Under the mode `read-only` it says that programs cannot write the
-project, names the temporary directory as the one place they write, and says that only the person
-widens it, by choosing another sandbox mode. It also says that the file tools write nothing in that
-mode and that a line redirecting output into a file is refused. On a turn
+project, and that outside the paths the person's own write grants name, a build, a formatter or
+`git commit` that writes the directories the session was opened on fails whichever step runs it,
+git on its own included. It names what they write: the temporary directory, the paths the person's
+own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and remembered write grants
+([SANDBOX-23](#SANDBOX-23)) name, and `~/.ssh/known_hosts` for a command with the remote scope. It
+says that only the person widens it: that `/add-dir` and `--add-dir` add a directory to read, and
+that choosing another sandbox mode lets programs write the project. It also says that the file tools
+write nothing in that mode and that a line redirecting output into a file is refused. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
 programs do not have stops reaching for paths they can reach.
 
@@ -1560,7 +1566,12 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory, the description
+([SANDBOX-20](#SANDBOX-20)). Under `read-only` it names the temporary directory and the paths the
+person's own `allowWrite` entries and remembered write grants name as what the programs could write,
+and says they could write nothing else of the directories the session was opened on or the toolchain
+caches. Where it lists the directories reachable, because the machine is not read, it names the
+session's directories and the scratch directory as read. It also says what the description says of a
+build, a formatter and `git commit`. Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory, the description
 and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
 `off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
 A result whose steps all
@@ -1571,7 +1582,9 @@ The sentence ends with fixed text, in every mode that produces it, saying that a
 location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
 and that where the mode accepts a request, a credential scope is how a line reaches one. It then
 says that any other path a command needs is asked for with the `request_path` tool
-([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. A planner
+([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. Under
+`read-only` it says that of a path a command needs to read, and that a request for a path to write
+is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). A planner
 that meets a refusal on such a location otherwise has no other account of it, and asks the person
 for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
 exit 2. The menu sentence ends the same way, and the `run` description's
@@ -1628,6 +1641,9 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_every_mode_but_off`
 `verified-by: bravebot_agent::confine::the_planner_is_told_a_read_only_stage_cannot_write_the_project`
+`verified-by: bravebot_agent::confine::under_read_only_the_description_offers_no_remedy_that_cannot_write`
+`verified-by: bravebot_agent::confine::under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write`
+`verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
 `verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_workspace_write`

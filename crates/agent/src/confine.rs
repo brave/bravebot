@@ -1169,14 +1169,16 @@ impl Confinement {
         } else {
             ""
         };
+        let commit = commit_sentence(self.mode);
         let git = match self.prelude {
-            Prelude::MacOs => MACOS_GIT_SENTENCE,
+            Prelude::MacOs => macos_git_sentence(self.mode),
             Prelude::Linux | Prelude::Windows => "",
         };
         format!(
-            "{}{source}{refusal}{}{git}{CREDENTIAL_LOCATIONS_SENTENCE}",
+            "{}{source}{refusal}{}{commit}{git}{}",
             self.reach(steps),
             self.identity_sentence(steps),
+            credential_locations_sentence(self.mode),
         )
     }
 
@@ -1256,9 +1258,18 @@ impl Confinement {
 
     /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
     fn reach(&self, steps: &[&Step]) -> String {
-        let mut directories: Vec<String> = Vec::new();
-        for directory in self.roots.iter().chain(self.scratch.as_ref()) {
-            let shown = directory.display().to_string();
+        // The scratch directory is made inside the temporary directory, which every mode writes,
+        // so under `read-only` the directories said not to be written are `opened` alone.
+        let mut opened: Vec<String> = Vec::new();
+        for root in &self.roots {
+            let shown = root.display().to_string();
+            if !opened.contains(&shown) {
+                opened.push(shown);
+            }
+        }
+        let mut directories = opened.clone();
+        if let Some(scratch) = &self.scratch {
+            let shown = scratch.display().to_string();
             if !directories.contains(&shown) {
                 directories.push(shown);
             }
@@ -1331,14 +1342,20 @@ impl Confinement {
             ),
         };
         if self.reads_the_machine() {
-            let writes = match self.writes_without_a_request() {
-                true => "write every path a request_path with write set would be granted, which \
-                     is everything the account can write except the places that hold a credential \
-                     and the person's own denyRead and denyWrite paths, with no new entry made \
-                     directly in the home directory, a directory above it, or a directory that \
-                     holds a credential location"
+            let writes = match (self.writes_without_a_request(), self.mode) {
+                (true, _) => "write every path a request_path with write set would be granted, \
+                     which is everything the account can write except the places that hold a \
+                     credential and the person's own denyRead and denyWrite paths, with no new \
+                     entry made directly in the home directory, a directory above it, or a \
+                     directory that holds a credential location"
                     .to_string(),
-                false => format!(
+                (false, SandboxMode::ReadOnly) => format!(
+                    "write the temporary directory and the paths the person's own `allowWrite` \
+                     entries and remembered write grants name, and nothing else of {} or the \
+                     toolchain caches",
+                    opened.join(", "),
+                ),
+                (false, _) => format!(
                     "write {} and the temporary directory and the toolchain caches",
                     directories.join(", "),
                 ),
@@ -1356,14 +1373,23 @@ impl Confinement {
                 self.menu_sentence(),
             );
         }
+        let session = match self.mode {
+            SandboxMode::ReadOnly => format!(
+                "read {}, write only the temporary directory and the paths the person's own \
+                 `allowWrite` entries and remembered write grants name",
+                directories.join(", "),
+            ),
+            _ => format!(
+                "read and write {} and the temporary directory",
+                directories.join(", "),
+            ),
+        };
         format!(
-            "Confinement: programs could read and write {} and the temporary directory, and read \
-             the system and program directories and git's configuration files; beyond those \
-             they reached only what a toolchain list or credential scope added for the steps \
-             that named one (toolchain lists: {}; credential scopes: {}). Any other path is \
-             refused by the operating system as `Operation not permitted` or `Permission \
-             denied`. Network: {}.{}{}",
-            directories.join(", "),
+            "Confinement: programs could {session}, and read the system and program directories \
+             and git's configuration files; beyond those they reached only what a toolchain list \
+             or credential scope added for the steps that named one (toolchain lists: {}; \
+             credential scopes: {}). Any other path is refused by the operating system as \
+             `Operation not permitted` or `Permission denied`. Network: {}.{}{}",
             named(toolchains),
             named(scopes),
             network,
@@ -1378,7 +1404,7 @@ impl Confinement {
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
         match self.accepts_requests() {
-            true => format!(" {}", requests_menu_sentence()),
+            true => format!(" {}", requests_menu_sentence(self.mode)),
             false => String::new(),
         }
     }
@@ -1681,6 +1707,22 @@ const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.
      asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session.";
 
+/// [`CREDENTIAL_LOCATIONS_SENTENCE`] under `read-only`, which refuses a request to write a path
+/// before anyone is asked (SANDBOX-22).
+const READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.ssh`, \
+     `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`. Where the mode accepts \
+     a request, a credential scope is how a line reaches one. Any other path a command needs to \
+     read is asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
+     session. A request for a path to write is refused in this mode before anyone is asked.";
+
+/// The fixed text that ends every profile line under `mode`.
+fn credential_locations_sentence(mode: SandboxMode) -> &'static str {
+    match mode {
+        SandboxMode::ReadOnly => READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE,
+        _ => CREDENTIAL_LOCATIONS_SENTENCE,
+    }
+}
+
 /// Said to the planner on macOS, whose profile refuses a listening socket that no line asked for.
 const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a port of this \
      machine unless its line asks for `loopback`, so `cargo test` on a crate whose tests bind \
@@ -1692,6 +1734,35 @@ const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a p
 const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` cannot write any \
      `.git`: a script, `make`, `npm`, `gh` or any other program that runs git to commit, check out \
      or clone is refused that write, so run git as a step of its own.";
+
+/// [`MACOS_GIT_SENTENCE`] under `read-only`, where a git step cannot write the session's `.git`
+/// either, so running git on its own helps only in a place the mode writes.
+const MACOS_READ_ONLY_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` cannot \
+     write a `.git` even where this mode lets it write, as in a clone in the temporary directory: \
+     a script, `make`, `npm`, `gh` or any other program that runs git to commit, check out or clone \
+     there is refused that write, so there git is run as a step of its own.";
+
+/// Said to the planner under `read-only`, in the description and after a failed step
+/// (SANDBOX-19, SANDBOX-22).
+const READ_ONLY_COMMIT_SENTENCE: &str = " Outside the paths the person's own write grants name, a \
+     build, a formatter or `git commit` that writes the directories the session was opened on \
+     fails in this mode whichever step runs it, git on its own included.";
+
+/// What the planner is told of a build or a commit in the session's directories under `mode`.
+fn commit_sentence(mode: SandboxMode) -> &'static str {
+    match mode {
+        SandboxMode::ReadOnly => READ_ONLY_COMMIT_SENTENCE,
+        _ => "",
+    }
+}
+
+/// What the planner is told on macOS of writing a `.git` under `mode`.
+fn macos_git_sentence(mode: SandboxMode) -> &'static str {
+    match mode {
+        SandboxMode::ReadOnly => MACOS_READ_ONLY_GIT_SENTENCE,
+        _ => MACOS_GIT_SENTENCE,
+    }
+}
 
 /// Said after the closed network on macOS, where loopback is also how a line connects to a port of
 /// this machine.
@@ -1793,12 +1864,22 @@ const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, th
      case ask them rather than retrying.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
-fn requests_menu_sentence() -> String {
+fn requests_menu_sentence(mode: SandboxMode) -> String {
+    let paths = match mode {
+        SandboxMode::ReadOnly => {
+            "A path outside the workspace that a command needs to read is asked for with the \
+             `request_path` tool instead, and a yes lasts for the session; a request for a path to \
+             write is refused in this mode before anyone is asked."
+        }
+        _ => {
+            "A path outside the workspace that a command needs is asked for with the \
+             `request_path` tool instead, and a yes lasts for the session."
+        }
+    };
     format!(
         "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
          list: {}. The person is asked about the line every time, and no answer to it is \
-         remembered. A path outside the workspace that a command needs is asked for with the \
-         `request_path` tool instead, and a yes lasts for the session.",
+         remembered. {paths}",
         bravebot_sandbox::scope::Requested::MENU.join(", ")
     )
 }
@@ -1816,14 +1897,17 @@ fn stated(
         Some(Prelude::Windows) if mode == SandboxMode::ReadOnly => {
             "Programs this tool starts are confined and cannot write the project. Each may reach \
              only the directories the session was opened on and the scratch directory, read, the \
-             temporary directory, read and written, the system and program directories and git's \
-             configuration files, read, and the credential scope its command names. A path \
-             outside those, and a write to the directories the session was opened on, is refused \
-             by the operating system as `Operation not permitted` or `Permission denied`, so a \
-             program that reports either for such a path was stopped by the sandbox and not by a \
-             fault in the machine. Only the person widens it, by choosing another sandbox mode \
-             (`/add-dir`, `--add-dir`). The file tools write nothing in this mode either, and a \
-             line that redirects output into a file is refused."
+             temporary directory, the paths the person's own `allowWrite` entries and remembered \
+             write grants name and `~/.ssh/known_hosts` where its command has the remote scope, \
+             read and written, the system and program directories and git's configuration files, \
+             read, and the credential scope its command names. A path outside those, and a write \
+             anywhere else, the directories the session was opened on included, is refused by the \
+             operating system as `Operation not permitted` or `Permission denied`, so a program \
+             that reports either for such a path was stopped by the sandbox and not by a fault in \
+             the machine. Only the person widens it: `/add-dir` and `--add-dir` add a directory \
+             to read, and choosing another sandbox mode lets programs write the project. The \
+             file tools write nothing in this mode either, and a line that redirects output into \
+             a file is refused."
         }
         Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
@@ -1848,15 +1932,18 @@ fn stated(
         Some(Prelude::Linux | Prelude::MacOs) if mode == SandboxMode::ReadOnly => {
             "Programs this tool starts are confined and cannot write the project. Each may read \
              this machine except the places that hold a credential: ssh private keys, cloud and \
-             container logins, keychains, browser profiles and password stores. It may write only \
-             the temporary directory, and reads a credential directory only where the command's \
-             scope names it. A write to the directories the session was opened on, the scratch \
-             directory or the toolchain caches, and a path outside those it may reach, is refused \
-             by the operating system as `Operation not permitted` or `Permission denied`, so a \
-             program that reports either for such a path was stopped by the sandbox and not by a \
-             fault in the machine. Only the person widens it, by choosing another sandbox mode \
-             (`/add-dir`, `--add-dir`). The file tools write nothing in this mode either, and a \
-             line that redirects output into a file is refused."
+             container logins, keychains, browser profiles and password stores. It may write the \
+             temporary directory, the paths the person's own `allowWrite` entries and remembered \
+             write grants name, and `~/.ssh/known_hosts` where its command has the remote scope, \
+             and reads a credential directory only where the command's scope names it. Any other \
+             write, the directories the session was opened on and the toolchain caches included, \
+             and a path outside those it may reach, is refused by the operating system as \
+             `Operation not permitted` or `Permission denied`, so a program that reports either \
+             for such a path was stopped by the sandbox and not by a fault in the machine. Only \
+             the person widens it: `/add-dir` and `--add-dir` add a directory to read, and \
+             choosing another sandbox mode lets programs write the project. The file tools write \
+             nothing in this mode either, and a line that redirects output into a file is \
+             refused."
         }
         Some(Prelude::Linux | Prelude::MacOs) => {
             "Programs this tool starts are confined. Each may read this machine except the places \
@@ -1875,12 +1962,13 @@ fn stated(
         }
     });
     if prelude.is_some() {
+        said.push_str(commit_sentence(mode));
         said.push(' ');
-        said.push_str(&requests_menu_sentence());
+        said.push_str(&requests_menu_sentence(mode));
     }
     if prelude == Some(Prelude::MacOs) {
         said.push_str(MACOS_LISTENING_SENTENCE);
-        said.push_str(MACOS_GIT_SENTENCE);
+        said.push_str(macos_git_sentence(mode));
     }
     if prelude.is_some() && network.is_closed() {
         said.push_str(
@@ -3021,6 +3109,162 @@ mod tests {
         }
     }
 
+    /// SANDBOX-19, SANDBOX-22: under `read-only` the description sends the planner to no remedy
+    /// the mode refuses: `/add-dir` as a way to write, a `request_path` to write, or on macOS git
+    /// run as a step of its own on the session's `.git`. It says that `/add-dir` adds a directory
+    /// to read, that a request to write is refused and one to read is not, that `git commit` fails,
+    /// and that the person's own write grants are written, where a planner told the temporary
+    /// directory is the only place written would not look for them. The scratch directory is made
+    /// inside the temporary directory, which is written, so only the Windows form, which lists what
+    /// is reachable, names it, and as read. The control is `workspace-write`, which keeps all three
+    /// remedies. The regressions it rejects are a remedy left in the `read-only` words, a scratch
+    /// directory said to be refused, and those words reaching the mode that writes.
+    #[test]
+    fn under_read_only_the_description_offers_no_remedy_that_cannot_write() {
+        let any_path = "A path outside the workspace that a command needs is asked for";
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
+                .expect("a statement");
+            for refused in [
+                "(`/add-dir`, `--add-dir`)",
+                "by choosing another sandbox mode (",
+                any_path,
+                "may write only the temporary directory",
+                MACOS_GIT_SENTENCE,
+            ] {
+                assert!(!said.contains(refused), "{prelude:?}: {refused} in {said}");
+            }
+            assert_eq!(
+                said.contains("scratch directory"),
+                prelude == Prelude::Windows,
+                "{prelude:?}: {said}"
+            );
+            for told in [
+                "`/add-dir` and `--add-dir` add a directory to read",
+                "choosing another sandbox mode lets programs write the project",
+                "needs to read is asked for with the `request_path` tool",
+                "a request for a path to write is refused in this mode before anyone is asked",
+                "`git commit` that writes the directories the session was opened on fails",
+                "git on its own included",
+                "the person's own `allowWrite` entries and remembered write grants",
+                "`~/.ssh/known_hosts` where its command has the remote scope",
+            ] {
+                assert!(
+                    said.contains(told),
+                    "{prelude:?}: {told} missing from {said}"
+                );
+            }
+
+            let writing = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+            )
+            .expect("a statement");
+            assert!(writing.contains("(`/add-dir`, `--add-dir`)"), "{writing}");
+            assert!(writing.contains(any_path), "{writing}");
+            assert!(!writing.contains("refused in this mode"), "{writing}");
+            assert!(!writing.contains("`git commit`"), "{writing}");
+        }
+        let macos = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode).unwrap();
+        assert!(
+            macos(SandboxMode::ReadOnly).contains(MACOS_READ_ONLY_GIT_SENTENCE),
+            "{}",
+            macos(SandboxMode::ReadOnly)
+        );
+        assert!(macos(SandboxMode::WorkspaceWrite).contains(MACOS_GIT_SENTENCE));
+    }
+
+    /// SANDBOX-19, SANDBOX-22: under `read-only` the line after a failed step does not say the
+    /// session's directories or the toolchain caches were written, names the person's own write
+    /// grants as what was, and sends the planner to no remedy the mode refuses: a `request_path` to
+    /// write, or on macOS git run as a step of its own on the session's `.git`. The scratch
+    /// directory is made inside the temporary directory, which is written, so the line names it only
+    /// where it lists what is read. It holds where the machine is read, where the stage is held to
+    /// listed rows on Windows, and where the session names no home and so takes the listed form too.
+    /// The control is the same confinement
+    /// under `workspace-write`, whose line names the directories as written and keeps the remedies.
+    /// The regression it rejects is a `git commit` refused under `read-only` and followed by a line
+    /// saying the project was writable and git should be run on its own.
+    #[test]
+    fn under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write()
+    {
+        let roots = ["/work/project"];
+        let no_home = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            None,
+            roots.iter().map(PathBuf::from).collect(),
+            Some(Path::new("/var/scratch")),
+        );
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let machine_written = "and write /work/project, /var/scratch and the temporary directory";
+        let machine_held = "and nothing else of /work/project or the toolchain caches";
+        let listed_written = "read and write /work/project, /var/scratch";
+        let listed_held =
+            "programs could read /work/project, /var/scratch, write only the temporary directory";
+        for (name, confined, written, held, lists_reads) in [
+            (
+                "linux",
+                reading_confinement(Prelude::Linux, &roots),
+                machine_written,
+                machine_held,
+                false,
+            ),
+            (
+                "macos",
+                reading_confinement(Prelude::MacOs, &roots),
+                machine_written,
+                machine_held,
+                false,
+            ),
+            (
+                "windows",
+                confinement(&roots),
+                listed_written,
+                listed_held,
+                true,
+            ),
+            ("no home", no_home, listed_written, listed_held, true),
+        ] {
+            let control = confined.profile(&[&commit]);
+            assert!(control.contains(written), "{name}: {control}");
+            assert!(!control.contains("`git commit`"), "{name}: {control}");
+            assert!(
+                control.ends_with(CREDENTIAL_LOCATIONS_SENTENCE),
+                "{name}: {control}"
+            );
+
+            let line = confined
+                .with_mode(SandboxMode::ReadOnly)
+                .profile(&[&commit]);
+            assert_eq!(line.contains("/var/scratch"), lists_reads, "{name}: {line}");
+            for refused in [
+                written,
+                "write /work/project",
+                "Any other path a command needs is asked for",
+                "A path outside the workspace that a command needs is asked for",
+                MACOS_GIT_SENTENCE,
+            ] {
+                assert!(!line.contains(refused), "{name}: {refused} in {line}");
+            }
+            for told in [
+                held,
+                "the person's own `allowWrite` entries and remembered write grants",
+                "`git commit` that writes the directories the session was opened on fails",
+                "git on its own included",
+                "A request for a path to write is refused in this mode before anyone is asked.",
+            ] {
+                assert!(line.contains(told), "{name}: {told} missing from {line}");
+            }
+            assert!(
+                line.ends_with(READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE),
+                "{name}: {line}"
+            );
+        }
+    }
+
     /// SANDBOX-26: a requested scope lifts its own directory on a stage that names nothing, and no
     /// other. The control is the same stage with no request, which refuses all three; the
     /// regression it rejects is a request that lifts every credential, or none.
@@ -3360,13 +3604,15 @@ mod tests {
     /// SANDBOX-14, SANDBOX-19: the planner is told on macOS, in the description and after a
     /// failed step, that only a step whose program is git writes a `.git`, in every mode that
     /// confines, and is not told it on Linux or Windows, where nothing is held back. Without it a
-    /// `make` target that commits is refused with nothing that says why.
+    /// `make` target that commits is refused with nothing that says why. Under `read-only` it is
+    /// told so of the places that mode writes, since a git step cannot write the session's `.git`
+    /// there either.
     #[test]
     fn the_planner_is_told_on_macos_that_only_git_writes_a_git_directory() {
-        for mode in [
-            SandboxMode::WorkspaceWrite,
-            SandboxMode::ReadOnly,
-            SandboxMode::Strict,
+        for (mode, sentence) in [
+            (SandboxMode::WorkspaceWrite, MACOS_GIT_SENTENCE),
+            (SandboxMode::ReadOnly, MACOS_READ_ONLY_GIT_SENTENCE),
+            (SandboxMode::Strict, MACOS_GIT_SENTENCE),
         ] {
             let described =
                 |prelude| stated(true, Some(prelude), Network::Open, mode).expect("says something");
@@ -3375,14 +3621,8 @@ mod tests {
                     .with_mode(mode)
                     .profile(&[&step("/usr/bin/make", &["release"])])
             };
-            assert!(
-                described(Prelude::MacOs).contains(MACOS_GIT_SENTENCE),
-                "{mode:?}"
-            );
-            assert!(
-                failed(Prelude::MacOs).contains(MACOS_GIT_SENTENCE),
-                "{mode:?}"
-            );
+            assert!(described(Prelude::MacOs).contains(sentence), "{mode:?}");
+            assert!(failed(Prelude::MacOs).contains(sentence), "{mode:?}");
             for elsewhere in [Prelude::Linux, Prelude::Windows] {
                 assert!(
                     !described(elsewhere).contains("`.git`"),
@@ -4709,69 +4949,95 @@ mod tests {
 
     /// SANDBOX-19: every profile line ends with one fixed sentence saying a credential location
     /// cannot be added and a credential scope is the way to reach one. It is the same words in each
-    /// mode, on each platform that confines, with or without a home to apply a request under, and
-    /// for any step, and it names no mode, so it stays true whichever modes accept a request.
+    /// mode that accepts a request to write a path, on each platform that confines, with or without
+    /// a home to apply a request under, and for any step. Under `read-only`, which refuses that
+    /// request, it is one other fixed sentence saying so. Neither names a mode, so each stays true
+    /// whichever modes accept a request.
     #[test]
     fn the_profile_line_ends_with_the_fixed_sentence_about_credential_locations() {
         let roots = ["/work/project"];
-        let no_home = Confinement::new(
-            Prelude::Linux,
-            PathBuf::from("/tmp"),
-            None,
-            roots.iter().map(PathBuf::from).collect(),
-            Some(Path::new("/var/scratch")),
-        );
+        let no_home = || {
+            Confinement::new(
+                Prelude::Linux,
+                PathBuf::from("/tmp"),
+                None,
+                roots.iter().map(PathBuf::from).collect(),
+                Some(Path::new("/var/scratch")),
+            )
+        };
+        let writing = CREDENTIAL_LOCATIONS_SENTENCE;
+        let read_only = READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE;
         let confinements = [
-            ("windows", confinement(&roots)),
-            ("strict", confinement(&roots).with_mode(SandboxMode::Strict)),
+            ("windows", confinement(&roots), writing),
+            (
+                "strict",
+                confinement(&roots).with_mode(SandboxMode::Strict),
+                writing,
+            ),
             (
                 "workspace-write linux",
                 reading_confinement(Prelude::Linux, &roots),
+                writing,
             ),
             (
                 "workspace-write macos",
                 reading_confinement(Prelude::MacOs, &roots),
+                writing,
             ),
             (
                 "strict macos",
                 reading_confinement(Prelude::MacOs, &roots).with_mode(SandboxMode::Strict),
+                writing,
             ),
-            ("no home", no_home),
+            ("no home", no_home(), writing),
+            (
+                "read-only windows",
+                confinement(&roots).with_mode(SandboxMode::ReadOnly),
+                read_only,
+            ),
+            (
+                "read-only macos",
+                reading_confinement(Prelude::MacOs, &roots).with_mode(SandboxMode::ReadOnly),
+                read_only,
+            ),
+            (
+                "read-only no home",
+                no_home().with_mode(SandboxMode::ReadOnly),
+                read_only,
+            ),
         ];
         let failing = step("/bin/sh", &["-c", "false"]);
         let building = step("/usr/bin/make", &["build"]);
 
-        for (name, confined) in &confinements {
+        for (name, confined, sentence) in &confinements {
             let lines = [
                 confined.profile(&[&failing]),
                 confined.profile(&[&building]),
                 confined.profile(&[&failing, &building]),
             ];
             for line in lines {
-                assert!(
-                    line.ends_with(CREDENTIAL_LOCATIONS_SENTENCE),
-                    "{name}: {line}"
-                );
+                assert!(line.ends_with(sentence), "{name}: {line}");
                 assert_eq!(line.matches("cannot be added").count(), 1, "{name}: {line}");
             }
         }
 
-        let sentence = CREDENTIAL_LOCATIONS_SENTENCE;
-        for needle in [
-            "`~/.ssh`",
-            "`~/.aws`",
-            "`~/.kube`",
-            "`/add-dir`",
-            "`--add-dir`",
-            "credential scope",
-        ] {
-            assert!(
-                sentence.contains(needle),
-                "{needle} missing from {sentence}"
-            );
-        }
-        for mode in SandboxMode::ALL.map(SandboxMode::name) {
-            assert!(!sentence.contains(mode), "{mode} named in {sentence}");
+        for sentence in [writing, read_only] {
+            for needle in [
+                "`~/.ssh`",
+                "`~/.aws`",
+                "`~/.kube`",
+                "`/add-dir`",
+                "`--add-dir`",
+                "credential scope",
+            ] {
+                assert!(
+                    sentence.contains(needle),
+                    "{needle} missing from {sentence}"
+                );
+            }
+            for mode in SandboxMode::ALL.map(SandboxMode::name) {
+                assert!(!sentence.contains(mode), "{mode} named in {sentence}");
+            }
         }
     }
 
