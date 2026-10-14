@@ -3352,6 +3352,14 @@ skill-model-substituted = { $skill } asked for { $model } and was answered by a 
 # settings deny reading, so it was left out of the turn. The source is its workspace-relative path
 # and stays as it is. "deny" is the name of the settings list the rule sits in.
 source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
+# Skills in the person's own ~/.bravebot/skills that were not loaded, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write, and no
+# skill directory of the project offered them in their place. ~/.bravebot/skills stays as it is.
+home-skills-reached-through-the-workspace =
+    { $count ->
+        [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.

@@ -137,6 +137,15 @@ Each project skills directory is checked for trust **before it is enumerated at 
 directory name is content too. A source that fails the gate is dropped entirely, and what was skipped
 is counted rather than named. See [Instructions](instructions.md#trust).
 
+Where the working directory is your home directory or a directory holding it, or you opened such a
+directory with `/add-dir`, `~/.bravebot/skills` is inside the session's reach and a turn can write
+to it. So it can where the way to a skill goes through the project, for example when
+`~/.bravebot/skills` links into a dotfiles repository you are working in. Those skills are then not
+read as your own. In a session started in your home directory they are read through the trust map
+as `<workspace>/.bravebot/skills`. From a directory above it, they are read that way once the
+session has read or written something under your home directory, as any directory's
+`.bravebot/skills` is. Where nothing reads them, you are told how many were not loaded.
+
 A project skill replaces a global one of the same name, and one in `.bravebot/skills` replaces one
 of the same name in `.claude/skills` or `.agents/skills`.
 

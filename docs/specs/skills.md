@@ -71,7 +71,27 @@ would be laundering.
 Nothing is assumed from silence. An empty directory offers nothing, and putting a file there is
 the grant, on the same footing as the configuration that picks the model and the endpoint.
 
+A skill file there whose path goes through the workspace is not read from provenance at all,
+because a turn can write it. The workspace here is every directory the file tools may write to:
+the working directory, a directory opened beside it ([TRUST-9](trust-map.md#TRUST-9)), and the
+session's own ([TRUST-16](trust-map.md#TRUST-16)). Every file there goes through it where one of
+those is, or holds, the home directory. So does a file reached through a link that sits inside the
+workspace, wherever that link leads, since a turn can change the link. Such a file is the
+project's, and is offered only where [SKILL-4](#SKILL-4) reads it through the trust map: in a
+session started in the home directory, that is `.bravebot/skills`. Those passed over are counted
+in a notice, as [SKILL-6](#SKILL-6) counts what it skips, except where `~/.bravebot/skills` is
+itself one of the project skill directories read, whose own notices already account for each.
+The two are compared as directories, so no entry's name is held or compared.
+
 `verified-by: bravebot_agent::skills::a_home_skill_is_not_labelled_by_a_rule_meant_for_the_workspace`
+`verified-by: bravebot_agent::skills::a_session_started_in_the_home_directory_reads_its_skills_through_the_trust_map`
+`verified-by: bravebot_agent::skills::a_skill_inside_a_working_directory_that_holds_the_home_directory_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_directory_reached_through_a_link_into_the_workspace_is_inside_it`
+`verified-by: bravebot_agent::skills::a_home_skill_named_inside_the_workspace_is_not_offered_through_a_link_out_of_it`
+`verified-by: bravebot_agent::skills::a_home_skill_reached_through_a_link_inside_the_workspace_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
+`verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
 
 <a id="SKILL-4"></a>
 ### SKILL-4: a project's own files are read through the trust map

@@ -1341,6 +1341,12 @@ impl Workspace {
                 .is_some_and(|dir| resolved.starts_with(dir))
     }
 
+    /// Whether a resolved path lands where this workspace's file tools may write: the root or a
+    /// directory reached by its absolute name.
+    pub(crate) fn lands_in_reach(&self, resolved: &Path) -> bool {
+        resolved.starts_with(&self.root) || self.is_opened(resolved)
+    }
+
     /// Whether an absolute path is one this workspace may touch.
     ///
     /// For a destination something else opens, which is what a redirection in a command line is:
@@ -1355,7 +1361,7 @@ impl Workspace {
             remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
+        if self.lands_in_reach(&resolved) {
             return Ok(());
         }
         Err(escapes())
