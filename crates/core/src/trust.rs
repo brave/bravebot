@@ -42,6 +42,7 @@
 //! prefix decides among them all.
 
 use crate::label::Integrity;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -210,19 +211,18 @@ impl TrustStore {
     /// held out of a trusted rule above it would answer to that rule once its own rule went.
     ///
     /// Every spelling [`TrustStore::folding_case`] reads as `path` is one rule, since any of them
-    /// may be the one deciding it. Where a broader rule would still trust `path` once its own
-    /// went, an undecided boundary takes its place: the rule dropped may have been written over
-    /// a distrust, and the broader one never spoke for what is here. Either way `path` answers
-    /// as trusted by no rule afterwards.
+    /// may be the one deciding it, and so is every canonically equivalent spelling whatever the
+    /// volume does with them: dropping a trust only narrows, so reaching a name the volume holds
+    /// apart costs a question and never a grant. Where a broader rule would still trust `path`
+    /// once its own went, an undecided boundary takes its place: the rule dropped may have been
+    /// written over a distrust, and the broader one never spoke for what is here. Either way
+    /// `path` answers as trusted by no rule afterwards.
     pub fn withdraw_trust(&mut self, path: &str) -> bool {
         let key = self.key(path);
-        let folded = self.folds_case.then(|| fold_case(&key));
+        let name = Name::new(&key, self.folds_case);
         let before = self.rules.len();
         self.rules.retain(|rule, decision| {
-            let here = match &folded {
-                Some(folded) => fold_case(rule) == *folded,
-                None => *rule == key,
-            };
+            let here = name.is(rule) || name.is_equivalent(rule);
             !here || *decision != Some(Integrity::Trusted)
         });
         if self.rules.len() == before {
@@ -284,7 +284,8 @@ impl TrustStore {
 
     fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
         // Probe only whole-segment ancestors, from the most specific to the least.
-        // Each lookup costs O(log rules). Where the volume folds case, a probe scans every rule.
+        // Each probe scans every rule, since a rule written about another spelling of the name may
+        // be the one deciding it. Comparing two ASCII names costs a byte comparison.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
             if let Some(decision) = self.rule_at(prefix) {
@@ -317,16 +318,24 @@ impl TrustStore {
     /// distrust was recorded about. A trust under one spelling does not replace a lower rule under
     /// another, because a name that folds the same is not always the same file: NTFS holds
     /// `cla\u{df}.md` and `class.md` apart, and so does a directory added from a case-sensitive
-    /// volume for `Docs` and `docs`. Otherwise the map stays byte-exact.
+    /// volume for `Docs` and `docs`.
+    ///
+    /// A rule that withholds trust, a distrust or an undecided boundary, is also about every
+    /// canonically equivalent spelling of its name, and is weighed with the rest. The map is not
+    /// told whether the volume opens a file under them, because that cannot be asked without
+    /// creating one, and a refusal that reaches a name the volume holds apart only asks a question
+    /// the person could have been spared. A trust never crosses: it decides the spelling it was
+    /// written about, and a volume that holds another apart has been asked nothing about it.
+    ///
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
-        if !self.folds_case {
-            return self.rules.get(key);
-        }
-        let folded = fold_case(key);
+        let name = Name::new(key, self.folds_case);
         self.rules
             .iter()
-            .filter(|(rule, _)| fold_case(rule) == folded)
+            .filter(|(rule, decision)| {
+                name.is(rule)
+                    || (**decision != Some(Integrity::Trusted) && name.is_equivalent(rule))
+            })
             .map(|(_, decision)| decision)
             .min_by_key(|decision| match decision {
                 Some(Integrity::Untrusted) => 0,
@@ -361,8 +370,14 @@ impl TrustStore {
             .integrity_of_or(path, Some(assumed))
             .unwrap_or(Integrity::Untrusted);
         let path = self.key(path);
+        let beneath = canonical_form(&path, self.folds_case);
         for (prefix, integrity) in self.keyed() {
-            if covers(&path, prefix, self.folds_case) {
+            // A trust under an equivalent spelling is counted as well, which changes nothing since
+            // it is the top of the meet. The case this exists for is a refusal beneath the
+            // directory that was recorded under another form of its name.
+            if covers(&path, prefix, self.folds_case)
+                || covers_spelled(&beneath, &canonical_form(prefix, self.folds_case))
+            {
                 answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
             }
         }
@@ -486,6 +501,76 @@ pub fn fold_case(key: &str) -> String {
         .collect()
 }
 
+/// `key` in the one form every canonically equivalent spelling of it shares, with case folded out
+/// as well where `folds_case` says the volume folds it.
+///
+/// Canonical equivalence is Unicode's: `cafe` followed by a combining acute accent is `caf` and the
+/// precomposed letter, the Angstrom sign is the letter Å, and two combining marks on one letter are
+/// the same in either order. APFS stores a name as it was created and opens it under any of them.
+/// It is not compatibility equivalence: a full-width `\u{ff53}` is not `s`. The form is the
+/// decomposed one, decomposed again after case is folded, since a case mapping can leave a string
+/// undecomposed. `/` is a starter that composes with nothing, so the segments of a key are the
+/// segments of its form.
+///
+/// An ASCII key is its own form unless case is folded, which is nearly every key and costs no
+/// allocation.
+pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
+    if key.is_ascii() {
+        return match folds_case {
+            true => Cow::Owned(fold_case(key)),
+            false => Cow::Borrowed(key),
+        };
+    }
+    let decomposed = crate::canonical::decompose(key);
+    match folds_case {
+        true => Cow::Owned(crate::canonical::decompose(&fold_case(&decomposed))),
+        false => Cow::Owned(decomposed),
+    }
+}
+
+/// A name, held in the forms it is compared in, for a lookup that tests it against many rules.
+struct Name<'a> {
+    key: &'a str,
+    /// The key with case folded, where the volume folds it.
+    folded: Option<String>,
+    canonical: Cow<'a, str>,
+    folds_case: bool,
+}
+
+impl<'a> Name<'a> {
+    fn new(key: &'a str, folds_case: bool) -> Self {
+        Self {
+            key,
+            folded: folds_case.then(|| fold_case(key)),
+            canonical: canonical_form(key, folds_case),
+            folds_case,
+        }
+    }
+
+    /// Whether `rule` is this name as the volume reads it: the same bytes, or the same bytes with
+    /// case folded where the volume folds it. A rule of either polarity about such a name decides
+    /// it.
+    fn is(&self, rule: &str) -> bool {
+        match &self.folded {
+            Some(folded) => fold_case(rule) == *folded,
+            None => rule == self.key,
+        }
+    }
+
+    /// Whether `rule` is a canonically equivalent spelling of this name, which only a rule that
+    /// withholds trust may decide it by.
+    ///
+    /// Asked after [`Name::is`], and two ASCII names are one in the two senses or neither, so that
+    /// pair is not compared again: on a volume that folds case it would fold the rule a second time
+    /// for every rule at every level of a lookup.
+    fn is_equivalent(&self, rule: &str) -> bool {
+        if self.key.is_ascii() && rule.is_ascii() {
+            return false;
+        }
+        canonical_form(rule, self.folds_case) == self.canonical
+    }
+}
+
 /// Whether `prefix` covers `path`, matching whole segments only.
 ///
 /// Segment-wise so `src` does not cover `srcfoo`, which a plain string prefix test would
@@ -509,7 +594,11 @@ pub(crate) fn covers(prefix: &str, path: &str, folds_case: bool) -> bool {
             std::borrow::Cow::Borrowed(path),
         )
     };
-    let (prefix, path) = (prefix.as_ref(), path.as_ref());
+    covers_spelled(&prefix, &path)
+}
+
+/// [`covers`] for two keys already in the form they are compared in.
+fn covers_spelled(prefix: &str, path: &str) -> bool {
     // The filesystem root covers everything, and is the one key with no segment of its own.
     if prefix == "/" {
         return true;
@@ -914,6 +1003,181 @@ mod tests {
             "a distrust rule reached a different file that differs only in case"
         );
         assert!(!covers("Docs", "docs/a.md", false));
+    }
+
+    /// Pairs of spellings that Unicode makes one name: an accent as a mark or as part of the
+    /// letter, a sign that decomposes to a letter, two marks in either order, a Hangul syllable
+    /// whole or as its jamo, and a sign whose canonical form is an ASCII character.
+    const EQUIVALENT_SPELLINGS: [(&str, &str); 6] = [
+        ("cafe\u{301}", "caf\u{e9}"),
+        ("\u{212b}ngstrom", "\u{c5}ngstrom"),
+        ("a\u{323}\u{301}", "a\u{301}\u{323}"),
+        ("\u{d55c}", "\u{1112}\u{1161}\u{11ab}"),
+        ("a\u{37e}b", "a;b"),
+        ("note\u{301}s", "not\u{e9}s"),
+    ];
+
+    /// A refusal recorded about one form of a name is about the file the other form opens, on a
+    /// volume that opens it under either (APFS) and on one that holds them apart, which the map is
+    /// not told the difference of. Left to compare bytes, naming the file in the other form falls
+    /// through to the trusted rule above it and reads a fetched page as trusted. Each refusal
+    /// reaches the file, a name beneath a directory, and the tree read as a whole.
+    #[test]
+    fn a_refusal_recorded_about_one_form_of_a_name_decides_the_other() {
+        for folds in [false, true] {
+            for (one, other) in EQUIVALENT_SPELLINGS {
+                for (refused, named) in [(one, other), (other, one)] {
+                    for decision in [Some(Integrity::Untrusted), None] {
+                        let mut store = TrustStore::new("/work").folding_case(folds);
+                        store.trust(".");
+                        match decision {
+                            Some(_) => store.distrust(&format!("{refused}/fetched.md")),
+                            None => store.undecide(&format!("{refused}/fetched.md")),
+                        }
+                        assert_eq!(
+                            store.integrity_of(&format!("{named}/fetched.md")),
+                            decision,
+                            "folds case {folds}: a rule about {refused:?}/fetched.md missed {named:?}"
+                        );
+                        assert_eq!(
+                            store.integrity_beneath(named),
+                            Some(Integrity::Untrusted),
+                            "folds case {folds}: the tree {named:?} was read as trusted past a rule beneath {refused:?}"
+                        );
+
+                        let mut directory = TrustStore::new("/work").folding_case(folds);
+                        directory.trust(".");
+                        match decision {
+                            Some(_) => directory.distrust(refused),
+                            None => directory.undecide(refused),
+                        }
+                        assert_eq!(
+                            directory.integrity_of(&format!("{named}/deeper/fetched.md")),
+                            decision,
+                            "folds case {folds}: a rule about the directory {refused:?} missed {named:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A trust is a grant, and a grant reaches the spelling it was written about. The map is not
+    /// told whether the volume opens the other form as the same file, so a trust that crossed
+    /// would vouch for a file the person was never asked about wherever the two are two.
+    #[test]
+    fn a_trust_does_not_reach_a_canonically_equivalent_spelling() {
+        for folds in [false, true] {
+            for (one, other) in EQUIVALENT_SPELLINGS {
+                // On a volume that folds case, a trust already reaches a pair that case folding
+                // makes one name: the Angstrom sign lowers to å, as Å does.
+                if folds && fold_case(one) == fold_case(other) {
+                    continue;
+                }
+                for (trusted, named) in [(one, other), (other, one)] {
+                    let mut store = TrustStore::new("/work").folding_case(folds);
+                    store.trust(trusted);
+                    assert_eq!(
+                        store.integrity_of(&format!("{trusted}/a.md")),
+                        Some(Integrity::Trusted)
+                    );
+                    assert_eq!(
+                        store.integrity_of(&format!("{named}/a.md")),
+                        None,
+                        "folds case {folds}: a trust about {trusted:?} vouched for {named:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Where two rules are about equivalent spellings the weaker decides every one of them, as it
+    /// does for two case variants: the later decision does not win, and neither does the spelling
+    /// that sorts first. A trust written about one form leaves a refusal about the other in force,
+    /// since the two may be two files and a yes about one is no yes for the other.
+    #[test]
+    fn the_weakest_of_two_equivalent_spellings_decides_every_form() {
+        let (trusted, untrusted) = (Some(Integrity::Trusted), Some(Integrity::Untrusted));
+        for (first, second, weakest) in [
+            (trusted, untrusted, untrusted),
+            (untrusted, trusted, untrusted),
+            (trusted, None, None),
+            (None, trusted, None),
+            (None, untrusted, untrusted),
+            (untrusted, None, untrusted),
+        ] {
+            for (earlier, later) in [
+                ("docs/cafe\u{301}.md", "docs/caf\u{e9}.md"),
+                ("docs/caf\u{e9}.md", "docs/cafe\u{301}.md"),
+            ] {
+                let mut store = TrustStore::new("/work");
+                store.trust(".");
+                for (path, decision) in [(earlier, first), (later, second)] {
+                    match decision {
+                        Some(Integrity::Trusted) => store.trust(path),
+                        Some(Integrity::Untrusted) => store.distrust(path),
+                        None => store.undecide(path),
+                    }
+                }
+                for spelling in [earlier, later] {
+                    assert_eq!(
+                        store.integrity_of(spelling),
+                        weakest,
+                        "{spelling}: {first:?} as {earlier}, then {second:?} as {later}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Names that differ by more than their form stay different: another accent, no accent, and a
+    /// compatibility form such as a full-width letter, which no volume opens as the letter it
+    /// looks like. Matching those would let one refused file refuse its neighbours.
+    #[test]
+    fn canonical_equivalence_does_not_merge_names_that_only_look_alike() {
+        for folds in [false, true] {
+            let mut store = TrustStore::new("/work").folding_case(folds);
+            store.trust(".");
+            store.distrust("cafe\u{301}.md");
+            store.distrust("\u{ff53}rc");
+            for unrelated in [
+                "cafe.md",
+                "cafe\u{300}.md",
+                "caf\u{e8}.md",
+                "src/a.md",
+                "cafe\u{301}.md.bak",
+            ] {
+                assert_eq!(
+                    store.integrity_of(unrelated),
+                    Some(Integrity::Trusted),
+                    "folds case {folds}: a rule about a different name refused {unrelated:?}"
+                );
+            }
+        }
+    }
+
+    /// A trust withdrawn is withdrawn from every form of the name, whatever the volume does with
+    /// them: it only narrows, and a form left trusted would be the way back in.
+    #[test]
+    fn withdrawing_trust_reaches_every_canonically_equivalent_spelling() {
+        for folds in [false, true] {
+            let mut map = TrustStore::new("/work").folding_case(folds);
+            map.trust("/Users/x/cafe\u{301}");
+            map.distrust("/Users/x/caf\u{e9}/fetched.md");
+
+            assert!(map.withdraw_trust("/Users/x/caf\u{e9}"));
+            for form in ["cafe\u{301}", "caf\u{e9}"] {
+                assert_eq!(
+                    map.integrity_of(&format!("/Users/x/{form}/a.md")),
+                    None,
+                    "folds case {folds}: {form:?} stayed trusted"
+                );
+                assert_eq!(
+                    map.integrity_of(&format!("/Users/x/{form}/fetched.md")),
+                    Some(Integrity::Untrusted)
+                );
+            }
+        }
     }
 
     /// The answer belongs to the volume, so a map moved to another directory takes the answer for

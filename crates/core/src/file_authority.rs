@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 #[derive(Debug)]
 struct State {
     trust: TrustStore,
-    // Both keyed by `slot`, so every spelling the map reads as one path is one entry.
+    // Both keyed by `slot`, so every spelling the map reads as one path, and every canonically
+    // equivalent spelling of it, is one entry.
     active: BTreeSet<String>,
     revision: u64,
     // One latest revision per distinct path for outstanding preview approvals.
@@ -24,13 +25,15 @@ struct State {
 }
 
 impl State {
-    /// What `key` is reserved and revised under: the key with case folded where the map reads two
-    /// spellings differing only in case as one path (TRUST-4).
+    /// What `key` is reserved and revised under: the key in the form its canonically equivalent
+    /// spellings share, with case folded where the map reads two spellings differing only in case
+    /// as one path (TRUST-4).
+    ///
+    /// Equivalent spellings share a slot whatever the volume does with them, because the slot only
+    /// refuses a second writer and stales an approval. Reaching a file the volume holds apart costs
+    /// a refusal of a write that could have gone ahead, never a write that should have been refused.
     fn slot(&self, key: &str) -> String {
-        match self.trust.folds_case() {
-            true => crate::trust::fold_case(key),
-            false => key.to_string(),
-        }
+        crate::trust::canonical_form(key, self.trust.folds_case()).into_owned()
     }
 
     /// Look up only whole-segment ancestors, including the special root rules.
@@ -240,7 +243,8 @@ impl FileAuthority {
     /// one key, so a caller comparing the names it was handed would enter a second effect on a path
     /// it is already writing and be refused by its own reservation. Two spellings differing only in
     /// case on a volume that folds are two keys and one reservation, so a second effect through the
-    /// other spelling is refused.
+    /// other spelling is refused. So are two spellings that are canonically equivalent, on any
+    /// volume.
     pub fn key(&self, path: &str) -> String {
         self.state().trust.key(&self.spelled(path))
     }
@@ -576,6 +580,99 @@ mod tests {
                 authority.revision_of("docs/a.md") != approved_at,
                 folds,
                 "folds case: {folds}, a decision about DOCS"
+            );
+        }
+    }
+
+    /// Untrusted bytes written through one form of a name are read as untrusted under every
+    /// canonically equivalent form, whichever form an earlier trusted write used, on a volume that
+    /// folds case and on one that does not. The map is not told whether the volume opens a file
+    /// under both, so the refusal reaches both.
+    #[test]
+    fn an_untrusted_write_through_an_equivalent_spelling_is_read_untrusted_under_both() {
+        for folds in [false, true] {
+            for (trusted, untrusted) in [
+                ("docs/cafe\u{301}.md", "docs/caf\u{e9}.md"),
+                ("docs/caf\u{e9}.md", "docs/cafe\u{301}.md"),
+            ] {
+                let mut trust = TrustStore::new("/ws").folding_case(folds);
+                trust.trust(".");
+                let authority = FileAuthority::new(trust);
+
+                let effect = authority.capture().begin(trusted).unwrap();
+                effect.complete(Integrity::Trusted);
+                let effect = authority.capture().begin(untrusted).unwrap();
+                effect.complete(Integrity::Untrusted);
+
+                for spelling in [trusted, untrusted] {
+                    assert_eq!(
+                        authority.integrity_of(spelling),
+                        Some(Integrity::Untrusted),
+                        "folds case {folds}: {spelling} read as trusted after untrusted bytes were written as {untrusted}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A writer through another form of a name being written is refused as a second writer to it,
+    /// on every volume: the reservation only refuses, so a volume that holds the two forms apart
+    /// loses a write that could have gone ahead and a volume that does not never takes two writers
+    /// to one file. A name that differs by more than its form takes a writer of its own.
+    #[test]
+    fn a_second_writer_through_an_equivalent_spelling_is_refused_while_the_first_is_open() {
+        for folds in [false, true] {
+            let authority = FileAuthority::new(TrustStore::new("/ws").folding_case(folds));
+
+            let first = authority.capture().begin("docs/cafe\u{301}.md").unwrap();
+            let second = authority.capture().begin("docs/caf\u{e9}.md");
+            assert!(
+                second.is_none(),
+                "folds case {folds}: a second writer through the precomposed form was let in"
+            );
+            drop(second);
+            for other in ["docs/cafe.md", "docs/cafe\u{300}.md", "docs/caf\u{e8}.md"] {
+                assert!(
+                    authority.capture().begin(other).is_some(),
+                    "folds case {folds}: {other} was refused as a writer to the name written"
+                );
+            }
+            first.complete(Integrity::Trusted);
+            assert!(authority.capture().begin("docs/caf\u{e9}.md").is_some());
+        }
+    }
+
+    /// A decision made through one form of a name moves the revision of the path under every
+    /// canonically equivalent form, so an approval given for the path does not outlive it, and
+    /// moves nothing for a name that only looks alike.
+    #[test]
+    fn a_decision_through_an_equivalent_spelling_moves_the_revision_of_the_path() {
+        for folds in [false, true] {
+            let mut trust = TrustStore::new("/ws").folding_case(folds);
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+
+            let approved_at = authority.revision_of("docs/caf\u{e9}.md");
+            let alike_approved_at = authority.revision_of("docs/cafe.md");
+            let effect = authority.capture().begin("docs/cafe\u{301}.md").unwrap();
+            effect.complete(Integrity::Trusted);
+            assert_ne!(
+                authority.revision_of("docs/caf\u{e9}.md"),
+                approved_at,
+                "folds case {folds}: a write to the decomposed form left an approval for the precomposed one standing"
+            );
+            assert_eq!(
+                authority.revision_of("docs/cafe.md"),
+                alike_approved_at,
+                "folds case {folds}: a write to docs/cafe\u{301}.md moved the revision of docs/cafe.md"
+            );
+
+            let approved_at = authority.revision_of("docs/caf\u{e9}.md");
+            authority.publish("DOCS/cafe\u{301}.md", Integrity::Untrusted);
+            assert_eq!(
+                authority.revision_of("docs/caf\u{e9}.md") != approved_at,
+                folds,
+                "folds case {folds}: a decision about DOCS/cafe\u{301}.md"
             );
         }
     }

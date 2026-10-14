@@ -88,6 +88,14 @@ trusting one decides. Trusting `docs` does not undo a distrust recorded for `Doc
 directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
 about `docs`.
 
+**A refusal reaches every spelling Unicode makes one name.** An accented name can be written as a
+letter followed by a combining accent mark or as one precomposed letter. Unicode treats the two as
+one name, and a volume such as APFS opens one file under either. A file you refused, or one a
+fetched page was written to, stays untrusted whichever of the two the model types. The map cannot
+ask the volume whether it keeps the two apart, so the refusal reaches both. A trust does not:
+vouching for one spelling decides that spelling, and where a refusal is recorded for the other the
+less trusting rule decides.
+
 ## What a write does
 
 Every row here is exact. A write matching a row does what that row says and nothing else.

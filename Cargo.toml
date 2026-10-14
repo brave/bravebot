@@ -44,6 +44,10 @@ sha2 = "0.10"
 # Test fixtures use private directories that are removed even when a test fails.
 # This includes file-helper permission tests and isolated terminal session profiles.
 tempfile = "3"
+# Checks the decomposition tables in bravebot-core against the crate that publishes them. A
+# dev-dependency only: gix-utils already depends on it, so the lock gains the one line saying
+# bravebot-core's tests use it, and bravebot-core itself keeps no dependency at runtime.
+unicode-normalization = "0.1"
 unicode-width = "0.2"
 # The Win32 calls that keep the imported subscription file readable by one account, which is what
 # stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep

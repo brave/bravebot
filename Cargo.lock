@@ -241,6 +241,9 @@ dependencies = [
 [[package]]
 name = "bravebot-core"
 version = "0.15.0"
+dependencies = [
+ "unicode-normalization",
+]
 
 [[package]]
 name = "bravebot-diag"

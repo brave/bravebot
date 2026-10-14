@@ -57,18 +57,7 @@ pub struct Alias {
     pub unhandled: &'static [(Consumer, &'static str)],
 }
 
-const NORMALIZATION: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2312"),
-    (Consumer::TrustWrite, "#2312"),
-    (Consumer::WriterReservation, "#2312"),
-];
-
-const NORMALIZATION_AND_RULE: &[(Consumer, &str)] = &[
-    (Consumer::TrustRead, "#2312"),
-    (Consumer::TrustWrite, "#2312"),
-    (Consumer::WriterReservation, "#2312"),
-    (Consumer::DenyRule, "#2337"),
-];
+const UNMATCHED_DENY_RULE: &[(Consumer, &str)] = &[(Consumer::DenyRule, "#2337")];
 
 const LINK: &[(Consumer, &str)] = &[
     (Consumer::TrustRead, "#2328"),
@@ -130,7 +119,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "caf\u{e9}.md",
         made: Made::ByTheVolume,
         skippable: true,
-        unhandled: NORMALIZATION,
+        unhandled: &[],
     },
     Alias {
         kind: "NFC and NFD, NFC name",
@@ -138,7 +127,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "cafe\u{301}.md",
         made: Made::ByTheVolume,
         skippable: true,
-        unhandled: NORMALIZATION,
+        unhandled: &[],
     },
     Alias {
         kind: "NFC and NFD, directory",
@@ -146,7 +135,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "caf\u{e9}/fetched.json",
         made: Made::ByTheVolume,
         skippable: true,
-        unhandled: NORMALIZATION,
+        unhandled: &[],
     },
     Alias {
         kind: "NFC and NFD, NFC name, file stored as NFD",
@@ -154,7 +143,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "cafe\u{301}.md",
         made: Made::StoredAsTheAlias,
         skippable: true,
-        unhandled: NORMALIZATION_AND_RULE,
+        unhandled: UNMATCHED_DENY_RULE,
     },
     Alias {
         kind: "NFC and NFD, NFD name, file stored as NFC",
@@ -162,7 +151,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "caf\u{e9}.md",
         made: Made::StoredAsTheAlias,
         skippable: true,
-        unhandled: NORMALIZATION_AND_RULE,
+        unhandled: UNMATCHED_DENY_RULE,
     },
     Alias {
         kind: "symbolic link to the file",
