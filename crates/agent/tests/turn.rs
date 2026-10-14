@@ -1745,6 +1745,77 @@ fn a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_direc
     );
 }
 
+/// A directory beside the working directory, named to `list_files` or `search`, is refused with the
+/// directory itself as the one to open, and the refusal says nothing about checkouts, since opening
+/// a sibling leaves them as they were (CHECKOUT-7). The trail records the same remedy the planner
+/// was told.
+///
+/// The failure this rejects is the refusal for a file in that directory: the directory it is in,
+/// which holds the working directory, so the planner asks the person to open the parent of the
+/// directory it wanted and is warned that doing so ends checkouts.
+#[test]
+fn a_sibling_directory_named_to_a_listing_or_a_search_is_offered_as_itself() {
+    let holder = Scratch::new("directory-remedy-turn");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("policy.rs"), "fn policy() {}").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let directory = sibling.display().to_string();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "list_files",
+            &serde_json::json!({ "directory": directory }).to_string(),
+        ),
+        tool_request(
+            "search",
+            &serde_json::json!({ "pattern": "policy", "directory": directory }).to_string(),
+        ),
+        reply_with("could not look"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at the directory beside this one"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    for call in ["list_files", "search"] {
+        let request = received.recv().expect("a request after the tool result");
+        let told = message_from(&request, &format!("Result of {call}"));
+        assert!(
+            told.contains("open the directory this path names"),
+            "{call} was not told to open the directory itself: {told}"
+        );
+        assert!(
+            !told.contains("the directory it is in") && !told.contains("no delegate is given"),
+            "{call} was sent to the parent, which holds the working directory: {told}"
+        );
+    }
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 2, "{:?}", sink.events());
+    for (refusal, field) in refused
+        .iter()
+        .zip(["list_files.directory", "search.directory"])
+    {
+        assert!(
+            refusal.starts_with(field)
+                && refusal.ends_with("remedy offered: open the directory itself"),
+            "the trail does not record the remedy offered: {refusal}"
+        );
+    }
+}
+
 /// Once the person has opened the worktree beside the working directory, the planner's `../<name>/..`
 /// path reaches it, and a failure names the absolute path the call was made on rather than the
 /// spelling that was typed, so the planner and the trail say the same file (TRUST-10).

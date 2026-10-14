@@ -620,10 +620,14 @@ refused whether or not there is anything at the other end of it.
 
 An absolute path refused for landing outside the root and every opened directory is refused with
 what the person can do about it: open the directory it is in with `/add-dir` or `--add-dir`, after
-which the same path reaches the file. A call that reads the file is also told it can be dropped on
-the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or searches is not,
-since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
-workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
+which the same path reaches the file. Where the path names a directory, that directory is the one to
+open, and the refusal says so instead of naming the directory it is in. A name nothing is at yet is
+offered through the directory it is in, as a file is. A call that reads the file is also told it can
+be dropped on the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or
+searches is not, since a drop only ever reads. A read that names a directory is offered the
+directory to open and no drop, since a directory cannot be dropped ([DROP-5](dropping.md#DROP-5)).
+Naming the file with `@` is not offered, since a name cannot leave the workspace either
+([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
 `run`. For a call that writes, the refusal names the one route that ends in a prompt: a `run` line
 that redirects into the file, started with `unconfined: true`, which the person is asked to
@@ -672,6 +676,10 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
+`verified-by: bravebot_agent::workspace::a_directory_the_planner_names_is_offered_as_itself`
+`verified-by: bravebot_agent::workspace::a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in`
+`verified-by: bravebot_agent::workspace::a_read_naming_a_directory_outside_the_workspace_is_not_told_to_drop_it`
+`verified-by: bravebot_agent::turn::a_sibling_directory_named_to_a_listing_or_a_search_is_offered_as_itself`
 `verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open`
 `verified-by: bravebot_agent::workspace::a_path_climbing_into_a_directory_that_is_not_open_is_refused`
 `verified-by: bravebot_agent::workspace::a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere`

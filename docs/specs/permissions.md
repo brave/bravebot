@@ -855,6 +855,7 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir`
+`verified-by: bravebot_agent::workspace::a_directory_is_not_offered_to_be_opened_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`

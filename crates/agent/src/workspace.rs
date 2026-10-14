@@ -243,6 +243,23 @@ impl WorkspaceError {
                  window to have it read with their next message"
             ),
             Self::Escapes {
+                remedy: Remedy::OpenItself,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory this path names, with /add-dir in the terminal or --add-dir \
+                 when starting bravebot, after which this path reaches it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::OpenItselfEndsCheckouts,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory this path names, with /add-dir in the terminal or --add-dir \
+                 when starting bravebot, after which this path reaches it. That directory holds \
+                 the working directory, and {ENDS_CHECKOUTS}"
+            ),
+            Self::Escapes {
                 remedy: Remedy::OpenEndsCheckouts,
                 ..
             } => format!(
@@ -360,7 +377,8 @@ pub enum Remedy {
     /// or to a place inside the root; a link carries it out; it is inside the root, where a
     /// directory cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
-    /// Opening the directory makes the same path reach the file, for whatever the call does to it.
+    /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
+    /// the same path reach it, for whatever the call does to it.
     Open,
     /// [`Remedy::Open`] for a call that reads the file, where dropping it is a second way to have
     /// it read. A drop only ever reads (DROP-3), so no other call is told of it.
@@ -371,6 +389,12 @@ pub enum Remedy {
     /// [`Remedy::OpenOrDrop`] where the directory holds the working directory. The drop is named
     /// first, since it reaches the file and costs nothing.
     DropOrOpenEndsCheckouts,
+    /// The path names a directory, which is opened as itself rather than through the directory it
+    /// is in. This remedy names no drop for any call, since a directory cannot be dropped.
+    OpenItself,
+    /// [`Remedy::OpenItself`] where the directory holds the working directory, so opening it leaves
+    /// no delegate a checkout (CHECKOUT-7).
+    OpenItselfEndsCheckouts,
     /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
     /// which a drop would not serve (PERM-16).
     Kept,
@@ -391,6 +415,11 @@ impl Remedy {
             Self::DropOrOpenEndsCheckouts => {
                 "drop the file, or open its directory, which holds the working directory and so \
                  ends checkouts"
+            }
+            Self::OpenItself => "open the directory itself",
+            Self::OpenItselfEndsCheckouts => {
+                "open the directory itself, which holds the working directory and so ends \
+                 checkouts"
             }
             Self::Kept => {
                 "none, since permissions.readsStayInWorkspace refuses opening its directory"
@@ -2193,18 +2222,29 @@ impl Workspace {
 
     /// What a person can do so that `resolved`, which no opened directory holds, is reached.
     /// Inside the root a directory cannot be opened, and the relative path reaches the file.
+    ///
+    /// The directory to open is `resolved` itself where it is a directory, and the directory it is
+    /// in for a file or for a name nothing is at yet. The warning about checkouts is asked of that
+    /// directory.
     fn remedy_outside(&self, resolved: &Path) -> Remedy {
         if resolved.starts_with(&self.root) {
-            Remedy::Nothing
-        } else if self.reads_stay_inside {
-            Remedy::Kept
-        } else if resolved
-            .parent()
-            .is_some_and(|directory| self.root.starts_with(directory))
-        {
-            Remedy::OpenEndsCheckouts
+            return Remedy::Nothing;
+        }
+        if self.reads_stay_inside {
+            return Remedy::Kept;
+        }
+        let itself = resolved.is_dir();
+        let to_open = if itself {
+            Some(resolved)
         } else {
-            Remedy::Open
+            resolved.parent()
+        };
+        let ends_checkouts = to_open.is_some_and(|directory| self.ends_checkouts(directory));
+        match (itself, ends_checkouts) {
+            (false, false) => Remedy::Open,
+            (false, true) => Remedy::OpenEndsCheckouts,
+            (true, false) => Remedy::OpenItself,
+            (true, true) => Remedy::OpenItselfEndsCheckouts,
         }
     }
 

@@ -17573,8 +17573,8 @@ mod tests {
             assert_eq!(
                 refused,
                 [
-                    "run.directory: '..' resolves outside the workspace; remedy offered: open its \
-                     directory, which holds the working directory and so ends checkouts"
+                    "run.directory: '..' resolves outside the workspace; remedy offered: open the \
+                     directory itself, which holds the working directory and so ends checkouts"
                 ],
                 "the refused directory was not recorded as the planner named it"
             );
