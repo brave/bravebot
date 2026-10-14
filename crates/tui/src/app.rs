@@ -4867,115 +4867,13 @@ impl Rules {
     }
 }
 
-/// The answers the event loop itself keeps past the prompt that gave them.
-///
-/// One value so that `/cd`, `/clear`, `/branch`, `/undo` and `/rewind` each take it apart with no
-/// `..`: a set added here does not build until each says whether it is kept, reset, rebased or read
-/// again. The mode, vetting and the MCP servers are the `Session`'s, and the directories `/add-dir`
-/// opened are the `Workspace`'s, so no pattern reaches them.
-struct Answers {
-    trust: TrustStore,
-    programs: TrustedPrograms,
-    /// The language servers this session has started, LSP-8. Held here rather than inside a turn
-    /// because the process is the session's: one built per turn would be shut down at the end of
-    /// the turn that started it, so the next message would ask the same person about the same
-    /// language and wait for a second index of the same tree. `None` until the first turn builds
-    /// one, and again after `/clear`, which ends the session the approval belonged to, and after
-    /// `/cd`, which leaves the tree it was approved for.
-    servers: Option<LanguageServers>,
-    /// Every run prompt this session has drawn, so a second prompt for one binary under other
-    /// arguments can say that a settings file is what ends the asking. It grants nothing and is not
-    /// written down anywhere: a session that ends forgets what it asked, which is the same lifetime
-    /// the list of programs it vouched for has.
-    asked_about: AskedAbout,
-    /// Every file this session has agreed the planner may be given despite the credential scan.
-    /// The same lifetime, except that `/cd` drops it: an answer is kept under the file's name from
-    /// the working directory, which after a move names another file.
-    exposed: bravebot_core::credentials::Exposed,
-    rules: Rules,
-}
-
-impl Answers {
-    /// What a session holds on opening, before any turn has asked anything.
-    fn opening(trust: TrustStore, programs: TrustedPrograms, rules: Rules) -> Self {
-        Self {
-            trust,
-            programs,
-            servers: None,
-            asked_about: AskedAbout::new(),
-            exposed: bravebot_core::credentials::Exposed::new(),
-            rules,
-        }
-    }
-
-    /// The map, the programs vouched for and the rules are the record's, so the copy `/branch`
-    /// carries on in holds them. A server approved, a run prompt drawn and a file agreed to hold a
-    /// secret were answers given to the session the copy was made from, and `--resume` of the copy
-    /// would start without them.
-    fn forget_what_no_record_keeps(&mut self) {
-        let Answers {
-            trust: _,
-            programs: _,
-            rules: _,
-            servers,
-            asked_about,
-            exposed,
-        } = self;
-        *servers = None;
-        *asked_about = AskedAbout::new();
-        *exposed = bravebot_core::credentials::Exposed::new();
-    }
-
-    /// Forget what the session agreed to, for one beginning again in this process (`/clear`).
-    fn forget_what_was_agreed(&mut self) {
-        let Answers {
-            // Replaced by the `/clear` arm before it calls this: the map the new session was asked
-            // for, TRUST-6, and the rules read again for the root it opens in, PERM-15.
-            trust: _,
-            rules: _,
-            programs,
-            servers,
-            asked_about,
-            exposed,
-        } = self;
-        // A new session vouches for no program, on the same reasoning as the map: the list is a
-        // standing permission, and this begins a session that was never asked.
-        *programs = TrustedPrograms::new();
-        // The servers go with it, LSP-8: what was approved was a process for the session, so
-        // dropping the set shuts them down and the session beginning here is asked again before
-        // one starts.
-        *servers = None;
-        // And nothing has been asked about, since the questions this list holds were put in a
-        // session that is over.
-        *asked_about = AskedAbout::new();
-        // And nothing agreed to be shown, and no file agreed to hold a secret, for the same reason.
-        *exposed = bravebot_core::credentials::Exposed::new();
-    }
-
-    /// The answers [`rewind`] reaches, for `/undo` and `/rewind` (SESSION-19). It meets the map with
-    /// the point's, returns the programs to the point's and stops the servers. The others are kept.
-    fn what_a_rewind_takes_back(
-        &mut self,
-    ) -> (
-        &mut TrustStore,
-        &mut TrustedPrograms,
-        &mut Option<LanguageServers>,
-    ) {
-        let Answers {
-            trust,
-            programs,
-            servers,
-            // Kept: it grants nothing.
-            asked_about: _,
-            // Kept: CRED-13 and CRED-15 give a file agreed to be shown or to hold a secret the
-            // session's lifetime, and no rewind point holds one.
-            exposed: _,
-            // Kept: read for the root, which a rewind does not move.
-            rules: _,
-        } = self;
-        (trust, programs, servers)
-    }
-}
+/// The answers the event loop itself keeps past the prompt that gave them, with the rules it reads
+/// for the root it is in. `/cd`, `/clear`, `/branch`, `/undo` and `/rewind` each take it apart with
+/// no `..`, so a set added to [`bravebot_agent::answers::Answers`] does not build until each says
+/// whether it is kept, reset, rebased or read again. The mode, vetting and the MCP servers are the
+/// `Session`'s, and the directories `/add-dir` opened are the `Workspace`'s, so no pattern reaches
+/// them.
+type Answers = bravebot_agent::answers::Answers<Rules>;
 
 /// The directories the names in a settings file would open, in the order they were named.
 ///

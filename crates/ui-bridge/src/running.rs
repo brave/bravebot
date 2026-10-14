@@ -10,6 +10,7 @@
 
 use crate::turn::Reply;
 use bravebot_agent::Conversation;
+use bravebot_agent::answers::Answers;
 use bravebot_agent::conversation::Snapshot;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::programs::TrustedPrograms;
@@ -29,21 +30,29 @@ use std::sync::mpsc::Sender;
 pub struct State {
     /// The exchange so far, which is what resuming restores.
     pub conversation: Conversation,
-    /// Which paths this session's user vouched for, and what its writes recorded since.
+    /// What this session's user has agreed to, kept past the prompt that asked.
     ///
-    /// Carried forward turn to turn rather than re-derived: a turn that writes untrusted
-    /// data into a trusted path records that path as untrusted, and losing that would let
-    /// the next turn read the same data back as trusted.
-    pub trust: TrustStore,
-    /// Which programs this session's user vouched for.
+    /// The map is carried forward turn to turn rather than re-derived: a turn that writes
+    /// untrusted data into a trusted path records that path as untrusted, and losing that would
+    /// let the next turn read the same data back as trusted. The programs are a vouch, a
+    /// standing answer about a command, read back off the record when a session resumes, so
+    /// re-asking about one already answered, or forgetting one, would both be wrong. The prompts
+    /// drawn and the files agreed to be shown are live only and in no record. Opening, forking,
+    /// undoing and the end of a turn each take it apart with no `..` in [`Answers`].
     ///
-    /// Carried forward turn to turn for the same reason as [`State::trust`], and read back
-    /// off the record when a session resumes: a vouch is a standing answer about a command,
-    /// so re-asking about one already answered — or forgetting one — would both be wrong.
-    pub programs: TrustedPrograms,
-    /// Live prompt history; neither field is stored in a session record.
-    pub asked_about: bravebot_core::programs::AskedAbout,
-    pub exposed: bravebot_core::credentials::Exposed,
+    /// The rules are the permission rules this session opened under (PERM-12): empty until the
+    /// session is opened, and for a session no settings file wrote a rule for. Read once and
+    /// kept, so a settings file edited while the session is open changes nothing about it. Not
+    /// saved: a reopened session reads the files again.
+    ///
+    /// The language servers are the ones this session has started (LSP-8): `None` until a turn
+    /// builds the set. The session holds the set so that an approved server answers later turns.
+    /// A set owned by a turn would stop at the end of it, and the next turn would ask about the
+    /// same language and index the same tree again. Each turn takes the set and puts it back. The
+    /// set is not saved to the record: a reopened or forked session starts with none and asks
+    /// before starting a server. Dropping this state stops the servers, which happens when the
+    /// session closes or the process ends.
+    pub answers: Answers<crate::rules::SettingsRules>,
     /// Which directories beyond the project this session has open, canonical.
     ///
     /// This front-end opens none: there is no `/add-dir` in the protocol, so a session begun
@@ -88,27 +97,11 @@ pub struct State {
     pub rewind: bravebot_session::rewind::RewindStack,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
-    /// The permission rules this session opened under (PERM-12). Empty until the session is
-    /// opened, and for a session no settings file wrote a rule for.
-    ///
-    /// Read once and kept, so a settings file edited while the session is open changes nothing
-    /// about it. Not saved: a reopened session reads the files again.
-    pub rules: crate::rules::SettingsRules,
     /// How many manifest runs this open session has started. Numbers the runs in events.
     ///
     /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
     /// holds nothing about it.
     pub runs: usize,
-    /// The language servers this session has started (LSP-8). `None` until a turn builds the set.
-    ///
-    /// The session holds the set so that an approved server answers later turns. A set owned by
-    /// a turn would stop at the end of it, and the next turn would ask about the same language
-    /// and index the same tree again. Each turn takes the set and puts it back.
-    ///
-    /// The set is not saved to the record. A reopened or forked session starts with none and
-    /// asks before starting a server. Dropping this state stops the servers, which happens when
-    /// the session closes or the process ends.
-    pub servers: Option<bravebot_agent::lsp::LanguageServers>,
     /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
     pub mcp: Mcp,
     /// The directory of its own outside the project, made as the session opened (TRUST-14).
@@ -181,10 +174,7 @@ impl State {
     pub fn fresh(trust: TrustStore) -> Self {
         Self {
             conversation: Conversation::new(),
-            trust,
-            programs: TrustedPrograms::new(),
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
             directories: Vec::new(),
             handle: None,
             turns: 0,
@@ -197,9 +187,7 @@ impl State {
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt: None,
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
@@ -226,10 +214,7 @@ impl State {
         handle.set_agent(None);
         Self {
             conversation: Conversation::restored(record.conversation.clone()),
-            trust,
-            programs: record.trusted_programs(project),
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
             handle: Some(handle),
             turns: record.turns,
@@ -242,9 +227,7 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
@@ -289,10 +272,7 @@ impl State {
     ) -> Self {
         Self {
             conversation: Conversation::restored(before),
-            trust,
-            programs,
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, programs, Default::default()),
             directories,
             handle: Some(handle),
             turns,
@@ -307,9 +287,7 @@ impl State {
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt,
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),

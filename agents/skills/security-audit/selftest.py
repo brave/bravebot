@@ -2126,6 +2126,7 @@ def register_findings(
     asks=("ask",),
     spec_id="PROMPT",
     elsewhere="",
+    visibility="pub ",
 ):
     """Run the register check in a tree holding one of each declaration it reads."""
     front = "".join(f"  - {one}\n" for one in kept)
@@ -2141,8 +2142,8 @@ def register_findings(
             "crates/agent/src/confirm.rs": f"pub trait {trait} {{\n"
             + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Decision;\n" for one in methods)
             + "}\n",
-            "crates/tui/src/app.rs": "struct Answers {\n"
-            + "".join(f"    /// Kept.\n    {one}: Kept,\n" for one in fields)
+            "crates/agent/src/answers.rs": "pub struct Answers<Rules = ()> {\n"
+            + "".join(f"    /// Kept.\n    {visibility}{one}: Kept,\n" for one in fields)
             + "}\n",
             "crates/tui/src/trust_prompt.rs": "".join(
                 f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
@@ -2175,6 +2176,12 @@ def test_answers_registered():
         ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
         ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
         ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
+        ("a field with no visibility nobody listed", {"fields": ("trust", "granted"), "visibility": ""}, ["answer-unregistered"]),
+        (
+            "a field visible to the crate nobody listed",
+            {"fields": ("trust", "granted"), "visibility": "pub(crate) "},
+            ["answer-unregistered"],
+        ),
         ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
         (
             "an entry landing in a row the table does not have",
@@ -2223,7 +2230,7 @@ def test_answers_registered():
     unlisted = register_findings(fields=("trust", "granted"))
     check(
         "the finding names the member and where it is declared",
-        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/tui/src/app.rs" in unlisted[0]["summary"],
+        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/agent/src/answers.rs" in unlisted[0]["summary"],
         str(unlisted[0] if unlisted else "no finding"),
     )
 

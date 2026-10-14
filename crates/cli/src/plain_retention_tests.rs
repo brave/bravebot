@@ -27,7 +27,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
     Running {
         config,
         workspace,
-        trust,
+        answers: Answers::opening(trust, TrustedPrograms::new(), ()),
         egress: bravebot_net::Egress::new(),
         permissions: Default::default(),
         mode: bravebot_agent::PermissionMode::default(),
@@ -45,12 +45,8 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         home: None,
         profile: None,
         conversation: Default::default(),
-        programs: TrustedPrograms::new(),
-        servers: None,
         mcp: None,
-        asked_about: AskedAbout::new(),
         beside: None,
-        exposed: Default::default(),
         auto_vetting: false,
         kept: None,
     }
@@ -99,7 +95,7 @@ fn failed_plain_turn_excludes_replacement_from_the_next_request() {
             "replacement reached the next planner request"
         );
         assert_eq!(
-            session.trust.integrity_of("target.txt"),
+            session.answers.trust.integrity_of("target.txt"),
             Some(bravebot_core::label::Integrity::Untrusted)
         );
     }

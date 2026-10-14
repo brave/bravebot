@@ -337,9 +337,9 @@ REGISTERED = {
         re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
     ),
     "Answers": (
-        Path("crates/tui/src/app.rs"),
-        re.compile(r"^struct Answers\s*\{"),
-        re.compile(r"^    ([a-z_][a-z0-9_]*)\s*:"),
+        Path("crates/agent/src/answers.rs"),
+        re.compile(r"^pub struct Answers\b[^{]*\{"),
+        re.compile(r"^    (?:pub(?:\([a-z:]+\))? )?([a-z_][a-z0-9_]*)\s*:"),
     ),
     "trust_prompt": (
         Path("crates/tui/src/trust_prompt.rs"),
@@ -350,9 +350,11 @@ REGISTERED = {
 # Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
 # declarations above.
 REMEMBERED_SETS = (
+    "crates/tui/src/app.rs",
     "crates/tui/src/state.rs",
     "crates/tui/src/sandbox_command.rs",
     "crates/cli/src/plain.rs",
+    "crates/ui-bridge/src/bridge.rs",
     "crates/ui-bridge/src/running.rs",
     "crates/session/src/sessions.rs",
     "crates/agent/src/tools.rs",
@@ -2339,9 +2341,9 @@ def check_answers_registered(specs, sources):
     A yes is kept under a key, and the defect this repository keeps being sent is a key that later
     matches something the person was never shown. Each was fixed where it was found, and none left
     anything that would make the next prompt, or the next set a session keeps, say what its answer
-    is kept under. So every method of the confirmer, every field of the terminal's remembered
-    answers and every question its trust prompts ask is listed against the row it lands in, or as
-    keeping nothing, and every row names the tests that pin it or the Known cost that accepts it.
+    is kept under. So every method of the confirmer, every field of the remembered answers and every
+    question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
+    nothing, and every row names the tests that pin it or the Known cost that accepts it.
     """
     spec, header, rows, entries = register_of(specs)
 
