@@ -2,10 +2,15 @@
 
 mod repository;
 
+#[allow(dead_code)]
+#[path = "../test-support/aliases.rs"]
+mod aliases;
+
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Match, Matches, Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, Principle, RecordingSink};
+use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::label::{Integrity, Label};
 use bravebot_core::policy::{Denial, Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
@@ -261,6 +266,187 @@ fn an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelli
         );
     }
     assert!(policy.finish());
+}
+
+/// A path or a body of bytes that the caller wrote and no untrusted content shaped.
+fn trusted_text(text: &str) -> Labelled<String> {
+    Labelled::trusted(text.to_string())
+}
+
+/// A policy over a trusted workspace, reading the trust of a map made for the volume the
+/// workspace is on, with `distrusted` recorded as untrusted.
+fn alias_policy<'a>(
+    workspace: &Workspace,
+    sink: &'a mut RecordingSink,
+    distrusted: Option<&str>,
+) -> Policy<'a, RecordingSink> {
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    if let Some(name) = distrusted {
+        trust.distrust(name);
+    }
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust)
+        .with_root(workspace.root())
+}
+
+/// The read of a file recorded untrusted under one name has to carry that record under every other
+/// name the volume opens it by (TRUST-2). A name the map keys differently reads the workspace's
+/// trust instead, so a fetched page is quarantined only when the planner asks for it as it was
+/// first written. A row the map does not join lists the issue that tracks it, and fails once the
+/// map joins it, so the TRUST-2 table is revised with the fix.
+#[test]
+fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-read-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(&workspace, &mut sink, Some(row.name));
+
+        let sibling = workspace
+            .read(&mut policy, &trusted_text(aliases::CONTROL))
+            .expect("the control file opens");
+        assert_eq!(
+            sibling.label().integrity,
+            Integrity::Trusted,
+            "{}: the workspace is not trusted, so an untrusted read shows nothing",
+            row.kind
+        );
+        let control = workspace
+            .read(&mut policy, &trusted_text(row.name))
+            .expect("the file opens under its own name");
+        assert_eq!(
+            control.label().integrity,
+            Integrity::Untrusted,
+            "{}: the record about {:?} did not reach a read of {:?}",
+            row.kind,
+            row.name,
+            row.name
+        );
+        let through = workspace
+            .read(&mut policy, &trusted_text(row.alias))
+            .unwrap_or_else(|error| panic!("{}: {:?} did not open: {error}", row.kind, row.alias));
+        aliases::expect(
+            row,
+            aliases::Consumer::TrustRead,
+            through.label().integrity == Integrity::Untrusted,
+        );
+    }
+}
+
+/// Fetched bytes written through one name of a file are what every name of it reads back, so the
+/// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
+/// does not join lists the issue that tracks it.
+#[test]
+fn each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-write-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(&workspace, &mut sink, None);
+
+        workspace
+            .write(&mut policy, &trusted_text(row.name), &trusted_text("ours"))
+            .expect("trusted bytes are written");
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(row.alias),
+                &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+            )
+            .unwrap_or_else(|error| panic!("{}: {:?} did not write: {error}", row.kind, row.alias));
+
+        let mut read = |spelling: &str| {
+            workspace
+                .read(&mut policy, &trusted_text(spelling))
+                .expect("the file is read")
+                .label()
+                .integrity
+        };
+        let (under_the_alias, under_the_name) = (read(row.alias), read(row.name));
+        assert_eq!(
+            read(aliases::CONTROL),
+            Integrity::Trusted,
+            "{}: a write to one file distrusted another, so a name reading untrusted shows nothing",
+            row.kind
+        );
+        assert_eq!(
+            under_the_alias,
+            Integrity::Untrusted,
+            "{}: the write was not recorded under the name it was made through",
+            row.kind
+        );
+        aliases::expect(
+            row,
+            aliases::Consumer::TrustWrite,
+            under_the_name == Integrity::Untrusted,
+        );
+    }
+}
+
+/// A second writer to a file is refused while the first is open, whichever name of the file it
+/// uses (TRUST-4). Reserved by a name the map keys differently, two writes to one file overlap and
+/// the later publication decides the label of bytes the earlier one wrote. The second write goes
+/// through `Workspace::write`, which keys the reservation as a turn does, with another file written
+/// in the same state to show that only this file is held.
+#[test]
+fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-writer-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_file_authority(authority.clone())
+        .with_root(workspace.root());
+
+        let first = authority
+            .capture()
+            .begin(row.name)
+            .unwrap_or_else(|| panic!("{}: the first writer was refused", row.kind));
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(aliases::CONTROL),
+                &trusted_text("another file"),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{}: a file nobody holds was refused: {error}", row.kind)
+            });
+        let second = workspace.write(
+            &mut policy,
+            &trusted_text(row.alias),
+            &trusted_text("a second writer"),
+        );
+        let refused = match second {
+            Err(WorkspaceError::Contended { .. }) => true,
+            Ok(_) => false,
+            Err(error) => panic!(
+                "{}: {:?} was refused for another reason: {error}",
+                row.kind, row.alias
+            ),
+        };
+        aliases::expect(row, aliases::Consumer::WriterReservation, refused);
+        first.complete(Integrity::Trusted);
+    }
 }
 
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a

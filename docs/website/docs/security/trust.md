@@ -442,13 +442,14 @@ All of these are deliberate.
   have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
   of it.
 
-- **A symlink inside the project gives one file two names, and each name is its own rule.** A rule is
-  keyed on the path an operation spelled, while confinement resolves where that path lands, and the
-  two do not have to agree. So content written as untrusted through one name is read back as trusted
-  under the other, which is the one way the round trip in [What a write does](#what-a-write-does)
-  stays open. Two spellings of the same name are a single rule, so this is about a link in the tree
-  and not about punctuation in a path. If a tree holds a link to somewhere else inside itself, that is
-  a tree to say no to.
+- **A symlink or a hard link inside the project gives one file two names, and each name is its own
+  rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
+  path lands, and the two do not have to agree. So content written as untrusted through one name is
+  read back as trusted under the other, which is the one way the round trip in
+  [What a write does](#what-a-write-does) stays open. A second path to the same tree, such as a
+  macOS firmlink or a Linux bind mount, does the same once you have opened both. Spellings that differ
+  only in punctuation or letter case are a single rule, so this is about a link or a mount and not
+  about those. If a tree holds a link to somewhere else inside itself, that is a tree to say no to.
 
 - **Confinement is settled before an operation runs, not while it runs.** Where a path lands is worked
   out by resolving it, and the read or the write happens after that. A tree already arranged to escape

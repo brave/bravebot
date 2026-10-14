@@ -5,7 +5,8 @@
 On Linux a path, a program name, an argument and an environment value are arbitrary bytes. What a
 reviewer checks here, none of which a compiler or a lint can decide, is whether a conversion to
 text sits on a display or on a decision. Most of the `to_string_lossy` calls in the tree are
-display, which is correct, so a lint cannot tell the two apart.
+display, which is correct, so a lint cannot tell the two apart. The same reviewer checks that a fix
+to a name that got past a rule accounts for the other names the file has.
 
 ---
 
@@ -88,3 +89,20 @@ assert_ne!(key_for(invalid), key_for(lookalike));
 
 **Why:** without both names, an assertion that two values are different cannot fail on the
 implementation that merges them.
+
+---
+
+<a id="PATH-004"></a>
+
+## A fix for a spelling that got past a rule goes through every other name for the file
+
+**A change that fixes a path spelling that bypassed a rule lists the other names the filesystem
+treats as the same file, and says for each whether the change handles it.** The list is the table
+of spellings in [TRUST-2](../specs/trust-map.md#TRUST-2). A reviewer looks for the pull request to
+go down its rows, to add a row for a name the table lacks, and to show a test for each row it
+handles and the issue for each it leaves. A diff that fixes only the spelling that was reported
+leaves the next one to be found by another report.
+
+**Why:** a rule is read under the name a call used, and a filesystem gives one file more names than
+any one report finds. A fix confined to the reported name closes one of them and says nothing about
+the rest.
