@@ -192,6 +192,12 @@ gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
   --description "Better than what comparable tools offer, by a concrete margin"
 ```
 
+The [session-review skill](../../agents/skills/session-review/SKILL.md), which files the problems
+bravebot gave a person in a recorded session, applies `bug` or `enhancement`, an `area` where one
+is clear, and no axis. It never files a problem that touches the guarantee: it prints that to the
+person running it. It uses the same duplicate search, pacing and label check as the
+peer-advisories skill, and an issue it files carries no text from the session.
+
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
 duplication and files or functions past a length, applies `maintenance`, or `bug` where a reviewer
 found a defect, an `area` or `infrastructure` where one is clear, and no axis. It assigns every
