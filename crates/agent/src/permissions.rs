@@ -182,6 +182,7 @@ pub fn for_an_unattended_run(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
@@ -196,6 +197,20 @@ pub fn for_an_unattended_run(
     let (_, unreadable) = dropped_allow_entries(settings, &anchors);
     rejected.extend(unreadable);
     (permissions, rejected)
+}
+
+/// Put the reason the person wrote beside each rule onto the rule (PERM-1).
+///
+/// The settings crate answers, and it answers only for the person's own file: a `reason` written in
+/// a project, local or `--settings` layer is not read at all, because the sentence would be text a
+/// checkout wrote and the places a reason is shown present it as the person's own words. That is
+/// the same layering `summaryModel` and the `provider` block have, and it is what keeps a
+/// checkout's sentence out of the refusal the planner is given.
+///
+/// The reason reaches nothing that decides. It is carried on the rule and handed to a report, and
+/// [`Permissions::explain`] states the half of that the kernel is responsible for.
+fn explain(permissions: &mut Permissions, settings: &Settings) {
+    permissions.explain(|list, written| settings.rule_reason(list, written).map(str::to_string));
 }
 
 /// What a leading `~` and a leading `/` in a rule are resolved against.
@@ -302,6 +317,7 @@ pub fn with_granted(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     rejected.extend(entries_that_are_not_lines(lists));
     rejected.extend(values_that_are_not_lists(settings));
@@ -960,6 +976,88 @@ mod tests {
         assert!(
             said[0].contains("Nonsense"),
             "the entry that is not a rule was not named: {said:?}"
+        );
+    }
+
+    /// PERM-1, PERM-14: a `reason` is read from the person's own file and from no other layer, and
+    /// the rule decides the same either way. A reason is shown to the person as their own words, so
+    /// a sentence a checkout wrote is not read at all, which is the layering `summaryModel` has.
+    ///
+    /// Both layers in one test, because an implementation that read every layer's reason passes an
+    /// assertion about the home layer alone, and that is the case the scope of this field exists to
+    /// close.
+    #[test]
+    fn a_reason_the_person_wrote_reaches_the_rule_and_a_checkouts_does_not() {
+        let own = r#"{"permissions": {"deny": [{"rule": "Read(own.env)", "reason": "my keys"}]}}"#;
+        let checkout = r#"{"permissions": {"deny": [{"rule": "Read(theirs.env)", "reason": "their sentence"}]}}"#;
+        let settings = layered_settings("reason-layers", Some(checkout), Some(own));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "own.env")
+            .expect("the person's own deny rule");
+        assert_eq!(ruling, Ruling::Deny);
+        assert_eq!(
+            rule.reason(),
+            Some("my keys"),
+            "the reason the person wrote did not reach the rule"
+        );
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "theirs.env")
+            .expect("the checkout's deny rule");
+        assert_eq!(
+            ruling,
+            Ruling::Deny,
+            "a checkout's deny rule stopped deciding"
+        );
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule"
+        );
+    }
+
+    /// PERM-1, PERM-15: granting a checkout's `allow` entry puts the rule in force and carries no
+    /// sentence with it. What the person accepted was the rule text the question showed, which is
+    /// not agreement with a sentence the same file wrote, and a dropped checkout entry records no
+    /// source for a reason to be read back from.
+    #[test]
+    fn a_reason_a_checkout_wrote_does_not_reach_a_rule_the_person_granted() {
+        let block = r#"{"permissions": {"allow": [{"rule": "Bash(bash scripts/check.sh)", "reason": "their sentence"}]}}"#;
+        let checkout = layered_settings("granted-reason", Some(block), None);
+        let profile = PathBuf::from("/home/x");
+
+        let offered: Vec<String> = proposed(&checkout, Some(&profile))
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "an object entry was not offered as the rule it holds"
+        );
+
+        let (permissions, rejected) = with_granted(
+            &checkout,
+            &["Bash(bash scripts/check.sh)".to_string()],
+            Some(&profile),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+        let (ruling, rule) = permissions
+            .rule_for_command(&["bash", "scripts/check.sh"])
+            .expect("the granted rule");
+        assert_eq!(ruling, Ruling::Allow);
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule the person granted"
         );
     }
 

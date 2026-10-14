@@ -54,6 +54,7 @@ permissions-check-allow = allow
 permissions-check-none = no rule matches, so the ordinary gates decide
 permissions-check-rule = rule
 permissions-check-file = file
+permissions-check-reason = reason
 permissions-check-granted = granted at the question for this workspace, written in { $path }
 permissions-check-not-in-force = not in force: { $rule } in { $path } would allow this once it is granted at the question
 cli-usage-sessions = List the sessions that keep running after the terminal closes

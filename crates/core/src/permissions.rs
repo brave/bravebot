@@ -203,6 +203,12 @@ pub struct Rule {
     landed: Vec<Pattern>,
     /// The rule as the list spelled it, trimmed, for a report that names which rule decided.
     written: String,
+    /// Why the person wrote it, where their own settings file said so (PERM-1).
+    ///
+    /// Display text and nothing else. Nothing here reads it, compares it, or matches on it: it is
+    /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
+    /// A rule decides exactly what it decided before one was written.
+    reason: Option<String>,
 }
 
 impl Rule {
@@ -229,6 +235,11 @@ impl Rule {
     /// The rule as the list spelled it.
     pub fn written(&self) -> &str {
         &self.written
+    }
+
+    /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
     }
 
     /// [`Rule::parse`] on text with its surrounding space already removed.
@@ -280,6 +291,7 @@ impl Rule {
             pattern,
             landed: Vec::new(),
             written: String::new(),
+            reason: None,
         })
     }
 
@@ -587,6 +599,27 @@ impl Permissions {
             folds_case: anchors.folds_case,
         };
         (permissions, rejected)
+    }
+
+    /// Attach to each rule the reason the person gave for writing it (PERM-1).
+    ///
+    /// `reason_of` is asked about every rule in turn, by the list it is in (`deny`, `ask` or
+    /// `allow`) and the text it was written as, and answers with the reason or `None`. Asked rather
+    /// than passed in alongside the lists because which file wrote an entry is not this crate's to
+    /// know, and only the person's own file's reason is theirs to show.
+    ///
+    /// Nothing in this crate reads what comes back. It is stored on the rule, handed to a report,
+    /// and never matched, compared or branched on, so this cannot change what any rule decides.
+    pub fn explain(&mut self, reason_of: impl Fn(&str, &str) -> Option<String>) {
+        for (list, rules) in [
+            ("deny", &mut self.deny),
+            ("ask", &mut self.ask),
+            ("allow", &mut self.allow),
+        ] {
+            for rule in rules.iter_mut() {
+                rule.reason = reason_of(list, &rule.written);
+            }
+        }
     }
 
     /// The paths a definition's `writes:` line lets a delegate edit, read as `Edit` patterns on the
@@ -1377,6 +1410,78 @@ mod tests {
             .expect("a rule decides");
         assert_eq!((ruling, rule.written()), (Ruling::Ask, "Mcp(weather:get)"));
         assert!(permissions.rule_for_mcp("weather", "set").is_none());
+    }
+
+    /// A rule read from a list carries no reason of its own. A field defaulted to anything but
+    /// absence would have a report quote a sentence nobody wrote.
+    #[test]
+    fn a_rule_carries_no_reason_until_one_is_attached() {
+        let permissions = rules(&["Read(.env)"], &["Bash(git push *)"], &["Bash(ls *)"]);
+        for rule in permissions
+            .deny
+            .iter()
+            .chain(&permissions.ask)
+            .chain(&permissions.allow)
+        {
+            assert_eq!(rule.reason(), None);
+        }
+    }
+
+    /// Each rule is asked about by the list it is in and the text it was written as, so a reason
+    /// lands on the rule the person wrote it beside. An implementation that asked by text alone
+    /// would put one list's reason on another list's rule of the same spelling.
+    #[test]
+    fn explain_attaches_a_reason_by_list_and_written_text() {
+        let mut permissions = rules(&["Read(.env)"], &["Read(.env)"], &["Bash(ls *)"]);
+        permissions.explain(|list, written| match (list, written) {
+            ("deny", "Read(.env)") => Some("holds the deployment key".to_string()),
+            ("ask", "Read(.env)") => Some("asked about on purpose".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            permissions.deny[0].reason(),
+            Some("holds the deployment key")
+        );
+        assert_eq!(permissions.ask[0].reason(), Some("asked about on purpose"));
+        assert_eq!(permissions.allow[0].reason(), None);
+    }
+
+    /// A reason is display text. Every decision is the same after one is attached, including for a
+    /// reason whose own words name a path and a program the rules decide about, which an
+    /// implementation that matched or trimmed against a reason would answer differently.
+    #[test]
+    fn a_reason_decides_nothing() {
+        let deny = ["Read(.env)"];
+        let ask = ["Bash(git push *)"];
+        let allow = ["Bash(git diff *)"];
+        let plain = rules(&deny, &ask, &allow);
+        let mut explained = rules(&deny, &ask, &allow);
+        explained.explain(|_, _| Some("allow Read(.env) and Bash(git push *)".to_string()));
+
+        for (subject, path) in [
+            (Subject::Read, ".env"),
+            (Subject::Read, "src/main.rs"),
+            (Subject::Edit, ".env"),
+        ] {
+            assert_eq!(
+                explained.for_path(subject, path),
+                plain.for_path(subject, path)
+            );
+        }
+        for line in ["git push origin main", "git diff --stat", "rm -rf /"] {
+            assert_eq!(
+                explained.for_command(&words(line)),
+                plain.for_command(&words(line))
+            );
+        }
+        assert_eq!(
+            explained
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string())),
+            plain
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string()))
+        );
     }
 
     /// The deny-over-ask order needs one subject in both lists, the ask rule narrower in the first

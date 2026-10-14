@@ -12240,6 +12240,68 @@ fn permissions_check_counts_a_checkouts_allow_rule_the_person_granted() {
     );
 }
 
+/// CLI-30, PERM-1: a reason the person wrote beside their own rule is printed under the rule and
+/// file, and nothing else carries one.
+///
+/// Three cases in one fixture. The home's deny is written in the object form with a reason, so the
+/// line appears. The home's ask is a plain string, where an implementation that printed an empty
+/// reason line, or the rule text again, would add a line. The checkout's ask carries a reason in
+/// its file, which is not the person's own layer and so is not read: printing it would show a
+/// project's own text as something the person said.
+#[test]
+fn permissions_check_prints_a_reason_only_from_the_persons_own_file() {
+    let scratch = Scratch::new("cli-running-permissions-check-reason").with_settings(
+        r#"{"permissions": {
+            "deny": [{"rule": "Bash(git push *)", "reason": "pushes go through review"}],
+            "ask": ["Mcp(weather:get)"],
+            "allow": ["Bash(git *)"]
+        }}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("create the checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"permissions": {"ask": [{"rule": "Read(./.env)", "reason": "a project wrote this"}]}}"#,
+    )
+    .expect("write the checkout's settings");
+    let home = scratch.settings().display().to_string();
+    let project = checkout
+        .join(".bravebot")
+        .join("settings.json")
+        .display()
+        .to_string();
+
+    assert_eq!(
+        permissions_check(
+            &scratch,
+            &checkout,
+            &["Bash", "git", "push", "origin", "main"]
+        ),
+        [
+            "decision: deny".to_string(),
+            "rule: Bash(git push *)".to_string(),
+            format!("file: {home}"),
+            "reason: pushes go through review".to_string(),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Mcp", "weather:get"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Mcp(weather:get)".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Read", ".env"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Read(./.env)".to_string(),
+            format!("file: {project}"),
+        ]
+    );
+}
+
 /// CLI-30: a command line that names no call is refused with the status for an argument, and
 /// nothing is printed on stdout for a script to take as an answer.
 #[test]
