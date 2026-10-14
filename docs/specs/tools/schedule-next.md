@@ -122,5 +122,6 @@ it writes that to somebody who then believes a watch exists that nothing is keep
 `verified-by: bravebot_agent::turn::a_tick_the_person_timed_cannot_reschedule_itself`
 `verified-by: bravebot_agent::turn::a_tick_of_a_self_paced_loop_says_when_to_run_again`
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::a_delegates_descriptions_do_not_name_schedule_next`
 `verified-by: bravebot_cli::running::a_one_shot_run_offers_no_way_to_arrange_a_later_look`
 `verified-by: bravebot_tui::app::only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look`
