@@ -156,12 +156,13 @@ There is no planner left to show anything to. A step result is stored, whatever 
 the only ways out of a slot are a later processor, a write back into the workspace, and a
 release the plan named in advance.
 
-An unmarked processor answer is a remark, not a document, except for a slot only the plan's answers
-read. Treating it as the slot would write an explanation over whatever the plan named next. Such an
-answer is asked for once more, with the plan's instruction and one fixed sentence, both trusted, and
-a second answer without the mark fails the step. An empty reply is asked for once more as it stands,
-sharing that one further try. A slot only shown to the person has no file for a remark to land on,
-and what the processor said reaches the person either way, so there it stands as the answer.
+An unmarked processor answer is a remark, not a document, except for a slot an answer reads and
+nothing else does. Treating it as the slot would write an explanation over whatever the plan named
+next. Such an answer is asked for once more, with the plan's instruction and one fixed sentence,
+both trusted, and a second answer without the mark fails the step. An empty reply is asked for once
+more as it stands, sharing that one further try. A slot only shown to the person has no file for a
+remark to land on, and what the processor said reaches the person either way, so there it stands as
+the answer.
 
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`

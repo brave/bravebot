@@ -415,8 +415,8 @@ fn without_leading_reasoning(text: &str) -> &str {
     text
 }
 
-/// Whether the slot the step at `index` fills is only ever shown to the person: read by at least one
-/// later step, and by nothing but the plan's answers.
+/// Whether the slot the step at `index` fills is only ever shown to the person: read by at least
+/// one later step, and by nothing but the plan's answers.
 fn shown_only(plan: &Manifest, index: usize) -> bool {
     let Some(slot) = plan.steps()[index].out_slot() else {
         return false;
@@ -1494,17 +1494,16 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             // input is not a substitute for it: a plan reads that slot to write somewhere else,
             // so standing the input in would copy one file over whatever comes next. In a turn
             // the planner asks again for the line; a plan has no planner left, so the driver asks
-            // once more itself, with the plan's instruction and one fixed sentence, both trusted;
-            // an empty reply is asked for once more as it stands.
-            // A second answer without the line fails the step, which is the direction an
-            // unmarked answer fails in everywhere.
+            // once more itself, with the plan's instruction and one fixed sentence, both trusted.
+            // An empty reply shares that one further try. Whichever went wrong, a second failure
+            // fails the step, which is the direction an unmarked answer fails in everywhere.
             let mut asked = instruction;
             let mut retried = false;
             let (spec, processed, document) = loop {
                 // `about` is a turn-loop field the schema does not name. Passing nothing is the
                 // driver not inventing a slot the plan did not: what comes back names the one
-                // document the call was given, where the whole of what it was given is one document,
-                // and no document otherwise.
+                // document the call was given, where the whole of what it was given is one
+                // document, and no document otherwise.
                 let spec = policy
                     .before_processor(&format!("step_{index}"), step.reads(), &asked, None, slots)
                     .map_err(|d| d.to_string())?;
@@ -1523,8 +1522,6 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 accounting.publish(reporter);
                 let mut processed = match processed {
                     Ok(done) => done,
-                    // An empty reply is asked for once more too, as it stands: the same one
-                    // further try an unmarked answer gets.
                     Err(crate::processor::ProcessorError::Chat(error))
                         if error.is_empty_reply() && !retried =>
                     {

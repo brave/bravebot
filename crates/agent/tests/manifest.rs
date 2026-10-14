@@ -1228,11 +1228,14 @@ fn an_unmarked_transform_is_asked_once_more_for_its_document() {
         "RAW TEXT"
     );
     let asked: Vec<String> = received.try_iter().collect();
+    let again = asked.last().expect("a second processor call");
     assert!(
-        asked
-            .last()
-            .is_some_and(|r| r.contains("marked no document")),
-        "the second call did not ask for the line"
+        again.contains("marked no document") && again.contains("shout"),
+        "the second call is the plan's instruction and the fixed sentence: {again}"
+    );
+    assert!(
+        !again.contains("said without the line"),
+        "the first answer was fed back into the second call: {again}"
     );
 }
 
