@@ -884,7 +884,7 @@ thing to switch off by near-miss.
 `open` is the default: every program the agent runs keeps the network. `closed` takes it from every
 program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
 `pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
-a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. `cat`, `grep`, `make`, `python3` and a test
+a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
 run get none, so what they read cannot be sent anywhere.
 
 `--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
