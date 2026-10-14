@@ -389,10 +389,10 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
-	check-maintenance-selftest
+	check-maintenance-selftest check-session-review-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
-	check-maintenance-selftest
+	check-maintenance-selftest check-session-review-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -420,6 +420,9 @@ check-pr-worktree-selftest:
 
 check-maintenance-selftest:
 	python3 agents/skills/maintenance/selftest.py
+
+check-session-review-selftest:
+	python3 agents/skills/session-review/selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
