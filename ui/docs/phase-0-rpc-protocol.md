@@ -799,22 +799,20 @@ except `connectors.preview` returns what `connectors.list` returns.
 
 ```json
 { "id": 8, "method": "trust.reply",
-  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true,
-              "remember": false } }
+  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true } }
 ```
 
 Records the user's answer to the startup question into that session's `TrustStore`,
-before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": null }`.
+before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": true }`.
 
 The question is answered once. A repeat, and a reply to a session that was never asked, is refused
 with `no_such_request`, and the trust already given stands.
 
-`remember` is optional, and `true` keeps the answer for later sessions in the directory. It is
-refused with `bad_request`, and nothing is recorded, with `trusted: false` or where the
-question offered no `keeping`; the offer is spent once the question is answered. `kept` is
-`true` when the answer was written down, `false` when writing it failed (the answer is then a
-yes for this session only, and the client says so, naming the file), and `null` when nothing
-was asked to be kept.
+A yes is kept for later sessions in the directory wherever the question carried `keeping`, and
+there is no separate field or call to ask for it. A no is never kept. `kept` is `true` when the
+yes was written down, `false` when writing it failed (the answer is then a yes for this session
+only, and the client says so, naming the file), and `null` when nothing was to be kept: a no, or
+a question that carried no `keeping`.
 
 #### `doctor`
 
@@ -1124,20 +1122,21 @@ The flow:
 `turn.send` before trust has been answered for that session errors `bad_request`. Not a
 default: defaulting either way is the mistake this design exists to avoid.
 
-**A remembered answer** is the one exception, and it is one the person made
-([trust-map.md](../../docs/specs/trust-map.md#TRUST-23)). Where a yes was kept about exactly
-this directory, a session the flow above would ask is not asked: it starts from the rule a yes
+**A kept yes** is the one exception, and it is one the person gave
+([trust-map.md](../../docs/specs/trust-map.md#TRUST-23)). Where a yes was kept about this
+directory, or about the root of the git worktree around it, a session the flow above would ask
+is not asked: it starts from the rule a yes
 writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
 and its response carries `remembered: { at, path }`, when
 the answer was given (seconds since the epoch) and the file it is kept in, for the client to
 say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
 the terminal keeps, so an answer kept in either front end settles the other.
 
-Where the question is put and its answer may be kept, the response and the `trust.request`
-carry `keeping`, the file a `trust.reply` with `remember: true` would write; the client names
-it on the question. `keeping` is `null` where the answer may not be kept: no state directory,
-a filesystem root, the home directory or one holding it, or a filesystem that cannot say when
-the directory was made.
+Where the question is put and a yes may be kept, the response and the `trust.request`
+carry `keeping`, the file a yes writes; the client names it on the question and says that a yes
+is kept. `keeping` is `null` where the answer may not be kept: no state directory,
+a filesystem root, the home directory or one holding it, a filesystem that cannot say when
+the directory was made, or an incognito session.
 
 ---
 

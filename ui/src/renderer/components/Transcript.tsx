@@ -1275,9 +1275,9 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
         </p>
       )}
       {kept && (
-        <p className="session-banner session-notice" role="note" data-tooltip={`Remembered ${ago(kept.at)} · kept in ${kept.path}`}>
+        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.path}`}>
           <Icon name="shield-done" />
-          <span className="notice-text">Trust is remembered for this directory, so chats started here are not asked.</span>
+          <span className="notice-text">You trusted this directory, so chats started here are not asked.</span>
           <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
         </p>
       )}

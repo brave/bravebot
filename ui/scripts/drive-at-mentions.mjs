@@ -69,7 +69,7 @@ try {
   }, project)
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
 
   const field = page.getByRole('textbox', { name: 'Message the agent' })
@@ -217,7 +217,7 @@ try {
   await page.waitForTimeout(500)
   assert.equal(await list.count(), 0, 'a bot page with no conversation yet has no folder to list')
   await page.keyboard.press('Enter')
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
   await page.locator('.bubble.assistant').first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })

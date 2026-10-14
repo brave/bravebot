@@ -90,7 +90,7 @@ try {
   }, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
   assert.equal(methods.length, 0, 'opening a session starts no server')
 

@@ -107,18 +107,25 @@ cli-plain-takes-nothing-else =
 # Dit sur stderr par une exécution unique qui s'ouvre avec une réponse retenue sur son répertoire de
 # travail ou sur la racine de l'arbre git qui l'entoure, et qui nomme le répertoire concerné.
 cli-trusting-kept =
-    { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
+    { $directory } approuvé (vous l'avez approuvé { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot, ou supprimez de { $path } les lignes qui le
     nomment)
 
 cli-plain-trusting-kept =
-    { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
+    { $directory } approuvé (vous l'avez approuvé { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
 cli-plain-trusting-kept-root =
-    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; pour que la
+    { $directory } approuvé, dans { $root } (vous avez approuvé { $root } { $when } ; pour que la
     question soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui nomment { $root })
+cli-plain-trust-kept =
+    { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; pour
+    revenir dessus, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
+    lignes qui le nomment
+cli-plain-trust-remember-where =
+    Pour revenir dessus, lancez /forget-trust dans bravebot sans --plain, ou supprimez de ce
+    fichier les lignes qui nomment ce répertoire :
 # Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
 # depuis son enregistrement (BG-1).
 cli-plain-resumed = Reprise de la conversation précédente de cette session ({ $count }).
@@ -1223,12 +1230,14 @@ trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir
 trust-directory-remember-explained =
-    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard dans ce répertoire, ou en dessous s'il est une racine git
+    Un oui est retenu : la question n'est pas posée aux sessions démarrées plus tard dans ce répertoire, ou en dessous s'il est une racine git.
 trust-directory-remember-exact =
     La question reste posée à une session démarrée au-dessus, dans un dépôt imbriqué, ou dans un répertoire supprimé puis recréé ici.
 trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
-trust-directory-remember-unseen = ↑↓ r ne retient rien : ce qu'il écrit n'est pas encore affiché
-trust-directory-remember-too-small = r ne retient rien : ce qu'il écrit dépasse la hauteur du cadre
+trust-directory-not-remembered =
+    Cette réponse ne peut pas être retenue ici, donc une session démarrée plus tard dans ce répertoire posera de nouveau la question.
+trust-directory-remember-unseen = ↑↓ y ne fait pas encore confiance : ce qu'il retient n'est pas encore affiché
+trust-directory-remember-too-small = y ne fait pas confiance : ce qu'il retient dépasse la hauteur du cadre
 quit = quitter
 trust-quit-again = encore
 
@@ -2312,9 +2321,9 @@ session-trusting-as-left = { $directory } approuvé (comme cette session l'avait
 session-trusting-unasked =
     { $directory } approuvé (--dangerously-skip-permissions, la question ne vous a pas été posée)
 session-trusting-kept =
-    { $directory } approuvé (vous avez demandé de le retenir { $when } ; /forget-trust pour que la question soit reposée)
+    { $directory } approuvé (vous l'avez approuvé { $when } ; /forget-trust pour que la question soit reposée)
 session-trusting-kept-root =
-    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; /forget-trust pour que la question soit reposée)
+    { $directory } approuvé, dans { $root } (vous avez approuvé { $root } { $when } ; /forget-trust pour que la question soit reposée)
 session-trust-kept =
     { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; /forget-trust revient dessus
 session-trust-not-kept =

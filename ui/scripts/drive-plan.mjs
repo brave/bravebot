@@ -75,7 +75,7 @@ try {
   }, project)
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
 
   const composer = page.locator('.composer textarea')
@@ -212,7 +212,7 @@ try {
   await record.getByRole('button', { name: 'New chat here', exact: true }).click()
   await composer.waitFor()
   if (await trust.isVisible().catch(() => false)) {
-    await trust.getByRole('button', { name: 'Trust this directory' }).click()
+    await trust.locator('[data-test="trust-approve"]').click()
     await trust.waitFor({ state: 'hidden' })
   }
   assert.equal(await page.locator('.bubble').count(), 0, 'the new session holds nothing the run said')

@@ -249,10 +249,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         session
     }
 
@@ -722,10 +731,14 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
         );
     }
 
+    // In a directory nothing has been kept about: the yes above settles a session in the project.
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("a second directory");
     let opened = front.call(
         "session.new",
-        json!({"directory": scratch.project().display().to_string()}),
+        json!({"directory": elsewhere.display().to_string()}),
     );
+    assert!(opened["remembered"].is_null(), "{opened}");
     let unanswered = opened["session"].as_str().expect("a handle");
     let refused = front.answered("manifest.run", json!({"session": unanswered, "task": TASK}));
     assert_eq!(refused["error"]["code"], "bad_request", "{refused}");

@@ -48,23 +48,23 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
       {grants?.commands.length === 0 && <p className="grant-empty"><Icon name="window-console" />No remembered command grants.</p>}
     </section>
     <section className="grant-section">
-      <h3>Remembered for this directory</h3>
+      <h3>Trusted for this directory</h3>
       <p className="grant-note">Kept outside this conversation: sessions started in this directory, or below it where it is the root of a git repository, are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
       {grants?.remembered && <RememberedHere kept={grants.remembered} busy={busy} onForget={() => void request('permissions.revoke', { kind: 'remembered' })} />}
-      {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />No answer is remembered for this directory.</p>}
+      {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />Nothing is kept for this directory.</p>}
     </section>
     <RulesInForce rules={grants?.settingsRules ?? null} />
   </Modal>
 }
 
 /**
- * The yes kept about this directory: when the person said to remember it, the file it is kept in,
- * and the button that takes it back (TRUST-24).
+ * The yes kept about this directory: when the person trusted it, the file it is kept in, and the
+ * button that takes it back (TRUST-24).
  */
 export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
   return <ul className="grant-list"><li className="grant-row">
     <Icon name="pin" /><code>{kept.path}</code>
-    <span className="grant-state" data-test="remembered-when">{`Remembered ${ago(kept.at)}`}</span>
+    <span className="grant-state" data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
     {kept.root && <span className="grant-state" data-test="remembered-root">{`for ${kept.root}`}</span>}
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>

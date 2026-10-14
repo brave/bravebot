@@ -48,8 +48,8 @@ struct Open {
     /// default: defaulting either way answers on behalf of somebody who was never asked,
     /// which is the mistake the whole trust design exists to avoid.
     answered_trust: bool,
-    /// The record a "trust and remember" answer is kept in, while the question that offered it is
-    /// waiting (TRUST-23). `None` where no question is waiting or remembering is not on offer.
+    /// The record a yes is kept in, while the question is waiting (TRUST-23). `None` where no
+    /// question is waiting or the answer may not be kept.
     keeping: Option<(trusted::Store, trusted::Identity)>,
     /// The turn in flight, if there is one.
     running: Option<Running>,
@@ -557,9 +557,9 @@ impl Bridge {
 
         let branch = bravebot_session::sessions::branch_of(&directory);
         let auto_vetting = self.auto_vetting(&directory);
-        // Nothing carried in, whatever an earlier session here answered, unless the person said to
-        // remember that answer. Unanswered, the map is empty until they answer; nothing runs before
-        // then, so it is never the map a turn uses.
+        // Nothing carried in, whatever an earlier session here answered, unless a kept yes settles
+        // it. Unanswered, the map is empty until they answer; nothing runs before then, so it is
+        // never the map a turn uses.
         let opening = Opening::of(&directory, None);
         let reported = opening.json();
         let handle = self.mint(Open::opened(
@@ -1654,6 +1654,9 @@ impl Bridge {
     }
 
     /// Record what the user answered about trusting the directory.
+    ///
+    /// A yes is kept for later sessions wherever the question offered to keep it (TRUST-23), and a
+    /// no never is.
     fn reply_trust(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let trusted = request
@@ -1661,15 +1664,6 @@ impl Bridge {
             .get("trusted")
             .and_then(Value::as_bool)
             .ok_or_else(|| Failure::bad_request("`trusted` must be a boolean"))?;
-        let remember = match request.params.get("remember") {
-            None | Some(Value::Null) => false,
-            Some(value) => value
-                .as_bool()
-                .ok_or_else(|| Failure::bad_request("`remember` must be a boolean"))?,
-        };
-        if remember && !trusted {
-            return Err(Failure::bad_request("only a yes can be remembered"));
-        }
 
         let open = self
             .open
@@ -1683,14 +1677,6 @@ impl Bridge {
                 "the trust question is not waiting for an answer",
             ));
         }
-        // Kept only where the question offered it, so an answer the window was never shown the
-        // record for, or one given where it may not be kept, writes nothing (TRUST-23).
-        if remember && open.keeping.is_none() {
-            return Err(Failure::bad_request(
-                "remembering this answer was not offered for this session",
-            ));
-        }
-
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
         // outcomes the terminal offers, so an answer means the same in both.
@@ -1709,14 +1695,10 @@ impl Bridge {
         }
         open.answered_trust = true;
         self.emitter.view_trusted(&handle);
-        // The question is answered, so what it offered is spent.
+        // The question is answered, so what it offered is spent. Offered only where the answer may
+        // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
-        let kept = match keeping {
-            Some((store, identity)) if remember => {
-                Some(store.keep(&identity, &named, seconds_now()))
-            }
-            _ => None,
-        };
+        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named);
 
         Ok(json!({ "trusted": trusted, "kept": kept }))
     }
@@ -2814,7 +2796,7 @@ struct Opening {
     answered: bool,
     /// The kept answer that settled it, and the file it is kept in.
     remembered: Option<(trusted::Kept, PathBuf)>,
-    /// Where the question is put, the record a "trust and remember" answer would be kept in.
+    /// Where the question is put, the record a yes would be kept in.
     keeping: Option<(trusted::Store, trusted::Identity)>,
 }
 
@@ -2823,9 +2805,9 @@ impl Opening {
     /// or `None` where it carries none.
     ///
     /// What it carries answers first, since that is the answer this conversation's own user gave.
-    /// Then an answer the person said to remember about this exact directory (TRUST-23), which starts
-    /// the session from the rule a yes writes and nothing else. Then the question, offering to keep
-    /// its answer only where it may be written and later honoured.
+    /// Then a yes that was kept about this directory or the git worktree root around it (TRUST-23),
+    /// which starts the session from the rule a yes writes and nothing else. Then the question, whose
+    /// yes is kept only where it may be written and later honoured.
     fn of(project: &Path, carried: Option<TrustStore>) -> Self {
         if let Some(trust) = carried {
             return Self {
@@ -2835,7 +2817,6 @@ impl Opening {
                 keeping: None,
             };
         }
-        let record = remembering(project);
         let kept =
             honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf()));
         let mut trust = bravebot_agent::workspace::trust_store(project);
@@ -2854,7 +2835,7 @@ impl Opening {
                 trust,
                 answered: false,
                 remembered: None,
-                keeping: record.filter(|_| trusted::may_be_written()),
+                keeping: to_keep(project),
             },
         }
     }
@@ -2875,13 +2856,13 @@ pub(crate) fn merge(into: &mut Value, extra: Value) {
     }
 }
 
-/// The record of the answer kept about `project` (TRUST-23), or `None` where none may be kept or
-/// honoured.
+/// The record a yes about `project` is kept in (TRUST-23), or `None` where none may be kept, honoured
+/// or written.
 ///
 /// Read under the name a turn there resolves the directory to, which is the name the terminal
 /// reads it under, so one directory has one record whichever front end answered.
-fn remembering(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
-    trusted::record_for(
+fn to_keep(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
+    trusted::record_to_keep(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         &project.canonicalize().ok()?,
@@ -2947,13 +2928,6 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
             ),
         )),
     }
-}
-
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
 }
 
 #[cfg(test)]

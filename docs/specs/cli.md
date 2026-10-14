@@ -643,13 +643,15 @@ Every question is put the same way: what it is about, a line at a time, then the
 to answer it. Only the affirmative approves. Any other line refuses, and so does the end of the
 input. One answer per question and no second key, so the answers that record something, stop asking
 about these programs and remember this line, are not offered, and nothing answered here outlives
-the session. The startup question about the working directory
+the session, with the one exception below. The startup question about the working directory
 ([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
-to that one starts no session at all. It is not put where the person told the interface that draws,
-or the desktop, to remember the answer about this directory
-([TRUST-23](trust-map.md#TRUST-23)): that record is read here as it is there, and the session says
-it is trusting the directory for that reason, when, and how to be asked again. Remembering is still
-not offered here, and nothing here writes the record.
+to that one starts no session at all. A yes to it is kept, as it is in the interface that draws
+([TRUST-23](trust-map.md#TRUST-23)): the lines before the question say what a yes keeps and name the
+file it is written to, so all of it is read before the answer is given. Where a yes cannot be kept,
+those lines say so and a yes trusts this session only. A no, any other line and the end of the input
+keep nothing. The question is not put where an answer was kept about this directory: that record is
+read here as it is there, and the session says it is trusting the directory for that reason, when,
+and how to be asked again.
 
 It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
 CLI-13, which belong to every way of starting, with the `--agent` of CLI-17, and with nothing else:
@@ -700,7 +702,11 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
-`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
+`verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
+`verified-by: bravebot_cli::plain::the_question_in_lines_names_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`

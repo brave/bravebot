@@ -108,6 +108,41 @@ pub fn record_for(
     Some((Store::new(home, directory), identity))
 }
 
+/// The record a yes is kept in, where it may be kept and this session may write it.
+///
+/// [`record_for`] in a session that adds to `~/.bravebot`. An incognito session reads the record
+/// and writes nothing ([`may_be_written`]), so a yes given there is not offered as one that is
+/// kept. Every front end asks here when it puts the startup question, so none says a yes is kept
+/// where another would write nothing.
+pub fn record_to_keep(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    directory: &Path,
+) -> Option<(Store, Identity)> {
+    if !may_be_written() {
+        return None;
+    }
+    record_for(home, profile, directory)
+}
+
+/// Write a yes down in `record` for later sessions, and say whether it was written, or `None` where
+/// nothing is kept: a no, or a yes with no record to write it in ([`record_to_keep`]).
+///
+/// The step every front end takes when the startup question is answered, with the one clock that
+/// dates the entry, so each of them is left only to put the result into its own words. `session`
+/// names the session in the entry and decides nothing; it is empty where the session has no name.
+pub fn keep_a_yes(record: Option<&(Store, Identity)>, yes: bool, session: &str) -> Option<bool> {
+    let (store, identity) = record?;
+    yes.then(|| store.keep(identity, session, seconds_now()))
+}
+
+/// Seconds since the epoch, which is how a kept answer says when it was given.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 /// A kept answer that settles a session, and the record it is in.
 ///
 /// [`Kept::root`] is the session's own directory where the answer was kept there, and the root of
@@ -448,6 +483,47 @@ mod tests {
                 root: PathBuf::from("/work"),
             })
         );
+    }
+
+    /// TRUST-23: a yes given to the question is the answer that is kept, dated by the clock the
+    /// helper owns, and the next session in the directory reads it back. Asked of the helper rather
+    /// than of `Store::keep`, since a helper that wrote nothing would pass a test that called the
+    /// store itself.
+    #[test]
+    fn a_yes_is_written_and_read_back_by_the_next_session_there() {
+        let scratch = Scratch::new("trusted-keep-a-yes");
+        let record = (scratch.store("/work"), identity(1));
+
+        assert_eq!(keep_a_yes(Some(&record), true, "a-session"), Some(true));
+
+        let kept = record.0.kept(&identity(1)).expect("the yes was not kept");
+        assert_eq!(kept.session, "a-session");
+        assert!(kept.at > 0, "the entry carries no time");
+    }
+
+    /// TRUST-23: a no writes nothing, and neither does a yes with no record to write it in. The
+    /// regression it rejects is a no kept as a yes, which would trust a directory nobody vouched for.
+    #[test]
+    fn a_no_and_a_yes_with_no_record_write_nothing() {
+        let scratch = Scratch::new("trusted-keep-no");
+        let record = (scratch.store("/work"), identity(1));
+
+        assert_eq!(keep_a_yes(Some(&record), false, "a-session"), None);
+        assert!(!record.0.path().exists(), "a no was written down");
+        assert_eq!(keep_a_yes(None, true, "a-session"), None);
+    }
+
+    /// TRUST-23: a yes whose record cannot be written says so, so the front end can tell the person
+    /// the next session will ask. The state directory here is a file, which nothing can be created
+    /// inside.
+    #[test]
+    fn a_yes_that_cannot_be_written_says_so() {
+        let scratch = Scratch::new("trusted-keep-blocked");
+        let blocked = scratch.path.join("not-a-directory");
+        std::fs::write(&blocked, b"").expect("a file in the way");
+        let record = (Store::new(&blocked, Path::new("/work")), identity(1));
+
+        assert_eq!(keep_a_yes(Some(&record), true, "a-session"), Some(false));
     }
 
     /// TRUST-23: an answer covers the exact directory it was given in. A tree rule covers what is

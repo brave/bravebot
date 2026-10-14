@@ -104,8 +104,11 @@ the input refuses every question still waiting, so a write that was waiting does
 
 The first prompt of a session whose directory has no recorded answer puts the trust question to the
 editor as a permission request, and no turn starts and no model is asked until it is answered. A
-refusal is an answer: the session runs with no path trusted. The question is put once per session
-and an answer is never remembered. Stopping the prompt at that question answers it no, so the session still takes a prompt afterwards. A question of the planner's own is not a permission, so it is
+refusal is an answer: the session runs with no path trusted. The question is put once per session.
+A yes is kept as it is at the other front ends' question ([TRUST-23](trust-map.md#TRUST-23)), and
+the question says so before the editor is asked: the option reads "Trust and remember" and the
+question names the file the yes is written to, or the option reads "Trust for this session" and the
+question says the answer cannot be kept here. A refusal is never kept. Stopping the prompt at that question answers it no, so the session still takes a prompt afterwards. A question of the planner's own is not a permission, so it is
 not put to the editor; the turn continues as it does where nobody could be asked.
 
 The trust question is sent as a permission request of kind `other`. An editor that approves such
@@ -117,6 +120,9 @@ directory before they reach the editor ([MODE-2](permission-modes.md#MODE-2)).
 
 `verified-by: bravebot_ui_bridge::acp::no_turn_starts_before_the_trust_question_is_answered`
 `verified-by: bravebot_ui_bridge::acp::a_session_asks_about_trust_once`
+`verified-by: bravebot_ui_bridge::acp::a_yes_is_kept_where_the_question_says_so_and_a_later_session_is_not_asked`
+`verified-by: bravebot_ui_bridge::acp::a_refusal_at_the_trust_question_is_not_kept`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_says_when_a_yes_cannot_be_kept`
 `verified-by: bravebot_ui_bridge::acp::a_session_stopped_at_the_trust_question_can_still_take_a_prompt`
 `verified-by: bravebot_ui_bridge::acp::a_question_of_the_planners_is_not_put_to_the_editor_as_a_permission`
 

@@ -406,6 +406,34 @@ fn no_trusted_directory_is_written_down() {
     );
 }
 
+/// INCOG-5, TRUST-23: the check every front end puts the startup question through offers no record
+/// to keep a yes in, though it would for the same directory in an ordinary session, so none tells a
+/// private session its yes is kept. The control is `record_for`, which finds the record here, and a
+/// yes written to it anyway reports that it was not written. The regression it rejects is the
+/// incognito refusal dropped from `record_to_keep`, which no test of the store's own refusal sees.
+#[test]
+fn a_yes_is_offered_no_record_to_be_kept_in() {
+    let scratch = Scratch::new("offers-no-record");
+    if a_kept_directory(&scratch).is_none() {
+        return;
+    }
+    let found = bravebot_agent::trusted::record_for(Some(&scratch.home), None, &scratch.home)
+        .expect("the control: this directory can be kept about");
+
+    assert!(
+        bravebot_agent::trusted::record_to_keep(Some(&scratch.home), None, &scratch.home).is_none(),
+        "a private session was offered a record to keep its yes in"
+    );
+    assert_eq!(
+        bravebot_agent::trusted::keep_a_yes(Some(&found), true, "a-private-session"),
+        Some(false)
+    );
+    assert!(
+        !found.0.path().exists(),
+        "an incognito session kept a yes in the record"
+    );
+}
+
 /// INCOG-5, TRUST-23: reading is unchanged here too. An answer an earlier ordinary session kept for
 /// this directory still answers, and the session says so where it starts.
 #[test]

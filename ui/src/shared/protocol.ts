@@ -206,9 +206,9 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes an earlier session here was told to remember, where it and not `trust` settled the question (TRUST-23). */
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
   remembered?: KeptTrust | null
-  /** Where a remembered yes would be written, where the question is asked and remembering is offered. */
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
   branchNote: string | null
   buildNote: string | null
