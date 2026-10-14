@@ -121,11 +121,13 @@ equivalent to the one it was written about, and the weakest rule among them deci
 as it does for case variants, in the order untrusted, undecided, trusted. A trust is about the
 spelling it was written about, with case folded where the volume folds it, and does not reach an
 equivalent one. A refusal that reaches too far costs a question, and a trust that did would vouch
-for a file nobody was asked about. Equivalence is Unicode's canonical equivalence, so a full-width
-letter or a ligature is not the letter it looks like. Closing a directory withdraws its trust from
-every equivalent spelling for the same reason. Names are compared in Normalization Form D, with the
-data carried in the kernel as tables because the crate takes no dependency
-([CRED-18](credential-protection.md#CRED-18)); a test compares the tables with the
+for a file nobody was asked about. Both follow from the round trip [TRUST-4](#TRUST-4) closes:
+bytes written as untrusted under one spelling are not read back as trusted under another, and the
+map cannot tell which spellings the volume opens as one file. Equivalence is Unicode's canonical
+equivalence, so a full-width letter or a ligature is not the letter it looks like. Closing a
+directory withdraws its trust from every equivalent spelling for the same reason. Names are compared
+in Normalization Form D, with the data carried in the kernel as tables because the crate takes no
+dependency ([CRED-18](credential-protection.md#CRED-18)); a test compares the tables with the
 `unicode-normalization` crate over every code point.
 
 **Every way a file has two names.** A rule is read under the name a call used, so each name a
@@ -1582,14 +1584,16 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   destination instead is what closes it, and that is a change to every rule the map holds rather
   than to confinement. Rules can name paths that do not exist yet and directory prefixes, which
   have no identity to key on.
-- **A refusal reaches a name the volume may hold apart, and a vouch does not lift it.** A refusal
-  is about every canonically equivalent spelling of its name (TRUST-2), because the volume cannot be
-  asked whether it opens them as one file. Where it holds them apart, such as a Linux filesystem
-  without `casefold`, refusing `cafe` with a combining accent also refuses the precomposed name,
-  which is a second file there, and the person is asked about it. Trusting that second name does not
-  help, whether by a vouch or by a trusted write that completes: the weakest rule among equivalent
-  spellings decides each, as it does for case variants, so the refusal stays in force until a vouch
-  replaces it under the spelling it was written about.
+- **A refusal reaches a name the volume may hold apart, and a vouch does not lift it.** The round
+  trip TRUST-4 closes requires that a file marked untrusted under one spelling is not read back as
+  trusted under another, so a refusal is about every canonically equivalent spelling of its name
+  (TRUST-2), because the volume cannot be asked whether it opens them as one file. Where it holds
+  them apart, such as a Linux filesystem without `casefold`, refusing `cafe` with a combining
+  accent also refuses the precomposed name, which is a second file there, and the person is asked
+  about it. Trusting that second name does not help, whether by a vouch or by a trusted write that
+  completes: the weakest rule among equivalent spellings decides each, as it does for case
+  variants, so the refusal stays in force until a vouch replaces it under the spelling it was
+  written about.
 - **A share has no key, so a directory on one cannot be opened by name.** Every rule is keyed
   under a `/`-spelled name (TRUST-18). A drive letter has one and a share and a device path do not,
   so `/add-dir` and `/cd` refuse a resolved path on either: admitting one would key its rule under a

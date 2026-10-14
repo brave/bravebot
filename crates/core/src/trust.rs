@@ -324,8 +324,10 @@ impl TrustStore {
     /// canonically equivalent spelling of its name, and is weighed with the rest. The map is not
     /// told whether the volume opens a file under them, because that cannot be asked without
     /// creating one, and a refusal that reaches a name the volume holds apart only asks a question
-    /// the person could have been spared. A trust never crosses: it decides the spelling it was
-    /// written about, and a volume that holds another apart has been asked nothing about it.
+    /// the person could have been spared. The refusal reaches it because TRUST-4 requires that
+    /// bytes marked untrusted under one spelling are not read back as trusted under another. A
+    /// trust never crosses: it decides the spelling it was written about, and a volume that holds
+    /// another apart has been asked nothing about it.
     ///
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
