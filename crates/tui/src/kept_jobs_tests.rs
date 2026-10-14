@@ -204,3 +204,30 @@ fn a_stop_during_a_turn_leaves_the_stop_to_the_turn() {
         "the stop was carried out while a turn was in flight to read it"
     );
 }
+
+/// A reply with no tool calls ends the turn without another step, so a stop typed while it was in
+/// flight is never read by the turn. The session carries it out when the turn ends: left alone the
+/// row says "being stopped" over a running program, with no turn to come that reads the token.
+#[test]
+fn a_stop_pending_when_the_turn_ends_is_carried_out_then() {
+    let root = a_checkout("kept-job-stopped-as-the-turn-ends");
+    let mut session = Session::new("none");
+    let pid = a_turn_that_started_a_job(&mut session, &root);
+    assert!(session.stop_job("job:1", None));
+    assert!(is_alive(&pid), "the stop was carried out during the turn");
+
+    session.complete("done", Vec::new(), 0);
+
+    let (row, job) = session.jobs().next().expect("the row stays in the list");
+    assert_eq!(job.state, JobState::Ended);
+    assert!(
+        matches!(row.outcome, Outcome::StoppedByTheUser(_)),
+        "{:?}",
+        row.outcome
+    );
+    assert_eq!(session.jobs_running(), 0);
+    assert!(
+        !is_alive(&pid),
+        "the turn ended with the stop asked for and the program running"
+    );
+}

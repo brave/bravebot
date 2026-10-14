@@ -1742,8 +1742,10 @@ at whichever step read it. It asserts nothing about what the job printed, so it 
 ([CMD-8](../commands.md#CMD-8)). Waiting for the turn to end would leave nothing to stop. Where
 [RUN-15](#RUN-15) keeps jobs past the turn, `/jobs` lists the ones still running with the next turn's
 list, and a stop asked for when no turn is in flight kills the job there and then, since nothing
-would read the token. It keeps what it printed, and the next turn's first round tells the planner
-the person stopped it, after how long, as a stop read mid-turn is told.
+would read the token. The same holds when the turn ends with a stop unread, as when the last reply
+had no tool calls, and for a second `/jobs stop` on a job still being stopped with no turn in flight.
+It keeps what it printed, and the next turn's first round tells the planner the person stopped it,
+after how long, as a stop read mid-turn is told.
 
 **Why.** The planner could stop a job with `job_output` and `kill`, and the turn stopped every job
 when it ended, but a person who saw one job going wrong, a server on the wrong port or a build of
@@ -1769,6 +1771,8 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_agent::turn::a_stop_asked_for_between_turns_ends_the_job_and_the_next_turn_says_who_stopped_it`
 `verified-by: bravebot_tui::kept_jobs_tests::a_stop_between_turns_ends_the_program_and_the_row`
 `verified-by: bravebot_tui::kept_jobs_tests::a_stop_during_a_turn_leaves_the_stop_to_the_turn`
+`verified-by: bravebot_tui::kept_jobs_tests::a_stop_pending_when_the_turn_ends_is_carried_out_then`
+`verified-by: bravebot_tui::state::a_second_stop_with_no_turn_in_flight_is_not_refused`
 
 <a id="RUN-28"></a>
 ### RUN-28: an entry in a person's list may be a pattern over variable names
