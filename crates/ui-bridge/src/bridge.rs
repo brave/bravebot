@@ -2733,7 +2733,7 @@ fn record_turn(
 /// The same `Handle` the terminal uses, so a session written here is one `bravebot --resume`
 /// can pick up. Created on the first turn rather than when the window opened: an
 /// abandoned window should leave nothing behind.
-fn save(
+pub(crate) fn save(
     project: &std::path::Path,
     state: &mut State,
     turn: usize,
