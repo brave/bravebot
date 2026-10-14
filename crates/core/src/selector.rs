@@ -47,3 +47,40 @@ pub fn matches(pattern: &str, key: &str, value: &str) -> bool {
         None => want_value == value,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A selector is routing a person approves, so every way it can be malformed is refused rather
+    /// than read as something nobody wrote.
+    #[test]
+    fn a_malformed_term_is_refused() {
+        for (select, why) in [
+            ("state", "is not a key:value term"),
+            (":open", "is not a selector key"),
+            ("sta-te:open", "is not a selector key"),
+            ("subject:\"two words", "opens a quote it does not close"),
+            ("state:", "has no usable value"),
+            ("subject:\"\"", "has no usable value"),
+            ("subject:\"a\tb\"", "has no usable value"),
+        ] {
+            let refused = terms(select).expect_err(select);
+            assert!(refused.contains(why), "{select}: {refused}");
+        }
+        let long = format!("text:{}", "a".repeat(101));
+        assert!(terms(&long).unwrap_err().contains("has no usable value"));
+        assert!(terms(&format!("text:{}", "a".repeat(100))).is_ok());
+    }
+
+    #[test]
+    fn a_pattern_matches_its_key_and_its_value_or_the_rest_of_it() {
+        assert!(matches("state:open", "state", "open"));
+        assert!(!matches("state:open", "state", "closed"));
+        assert!(!matches("state:open", "label", "open"));
+        assert!(matches("label:*", "label", "bug"));
+        assert!(matches("sort:created-*", "sort", "created-asc"));
+        assert!(!matches("sort:created-*", "sort", "updated-asc"));
+        assert!(!matches("no-colon", "no-colon", ""));
+    }
+}

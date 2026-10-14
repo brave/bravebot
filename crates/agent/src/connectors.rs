@@ -467,6 +467,8 @@ mod tests {
         connectors.check(&plan)
     }
 
+    /// A search across places names none, and a resource that reads from one place needs it, as the
+    /// authority holds them, so a plan never sends a place a resource ignores or omits one it needs.
     #[test]
     fn a_fetch_names_a_place_only_when_its_resource_uses_one() {
         let anywhere = |resource: &str| {
@@ -491,6 +493,8 @@ mod tests {
         );
     }
 
+    /// The goal call describes the work and names no tools, so it is told what each connector reads in
+    /// the definition's words, and nothing a plan may not yet do.
     #[test]
     fn the_goal_call_is_told_each_connector_and_what_it_fetches_in_plain_words() {
         let told = connectors().in_plain_words();
@@ -504,6 +508,8 @@ mod tests {
         assert!(!told.contains("uses:"), "{told}");
     }
 
+    /// Every field and selector term a step gives is one its resource takes, so nothing reaches the
+    /// authority that the definition did not offer.
     #[test]
     fn a_step_is_held_to_its_resource_fields_values_and_selector_terms() {
         assert!(checked(vec![fetch("issue", "i").with_text("item", "914")]).is_ok());
@@ -547,6 +553,8 @@ mod tests {
         );
     }
 
+    /// A mail definition goes through the same check with no item form of its own, so a path or a query
+    /// cannot pass as a message id.
     #[test]
     fn mail_reads_take_a_selector_or_an_opaque_id_and_nothing_else() {
         let gmail = connector(
@@ -583,6 +591,8 @@ mod tests {
         }
     }
 
+    /// A default fills a field the plan left out, and never the second half of an either-or the plan
+    /// already gave, which would make the step ask for both.
     #[test]
     fn a_default_is_not_filled_beside_the_other_half_of_an_either_or() {
         let mail = connector(
@@ -611,6 +621,8 @@ mod tests {
         assert!(step(None).steps[0].args.contains_key("item"));
     }
 
+    /// A value is held to its form before the plan is put to anybody, so a place that climbs out of its
+    /// owner/name, or an id with a leading zero, never reaches the line a person approves.
     #[test]
     fn a_value_outside_its_named_form_is_refused_before_anything_is_asked() {
         for place in ["x/../../user", "a/..", "a/b/c", "a b/c", "x%2e%2e"] {
@@ -627,6 +639,7 @@ mod tests {
         assert!(checked(vec![fetch("issue", "i").with_text("item", "01")]).is_err());
     }
 
+    /// The planner is told how to quote a value with a space, and the grammar reads it back as one term.
     #[test]
     fn the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses() {
         assert!(
@@ -644,6 +657,8 @@ mod tests {
         assert!(selector::terms("subject:connector test").is_err());
     }
 
+    /// A fetch the definition holds to narrowing, such as a search across every place, uses one of its
+    /// terms, and the planner is told which.
     #[test]
     fn a_fetch_whose_surface_lists_narrow_terms_uses_one_in_its_select() {
         let mut scoped = connectors();
@@ -682,6 +697,8 @@ mod tests {
         );
     }
 
+    /// A resource's own list of values replaces the definition's for that resource, and a trailing `*`
+    /// stands for a non-empty rest, as the authority reads it.
     #[test]
     fn a_resource_that_lists_its_own_values_takes_only_those() {
         let calendar = connector(
@@ -724,6 +741,8 @@ mod tests {
         );
     }
 
+    /// A definition that could not be read refuses the plan that names it with its reason, and the
+    /// planner is told it is refused rather than that it is missing.
     #[test]
     fn a_connector_that_is_not_installed_or_could_not_be_read_refuses_the_plan() {
         let connectors = Connectors::from(BTreeMap::from([(
@@ -753,6 +772,8 @@ mod tests {
         );
     }
 
+    /// A plan may fetch and may not yet act, so the planner is offered each fetch resource and none of a
+    /// definition's acts, nor a field only an act takes.
     #[test]
     fn the_catalogue_offers_each_fetch_and_no_act() {
         let shown = connectors().catalogue();

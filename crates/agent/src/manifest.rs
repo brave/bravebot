@@ -1788,7 +1788,6 @@ fn connector_fetch<S: Sink>(
         title: None,
         release: None,
     };
-    // The authority a connector names, stopped when the run is.
     let reply = bravebot_connector::Authority::new(authority)
         .map_err(|e| e.to_string())?
         .with_cancel(connectors.cancel().clone())

@@ -3446,3 +3446,100 @@ fn a_plan_the_checks_refuse_reaches_neither_the_authority_nor_a_person() {
         "the goal call is told to plan and let the checks refuse"
     );
 }
+
+/// A plan of one fetch, shown as the answer.
+#[cfg(unix)]
+fn one_fetch() -> String {
+    plan(json!([
+        {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "issue",
+            "place": "brave/bravebot", "item": "2", "out_slot": "issue"}},
+        {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+    ]))
+}
+
+/// A fetch the authority could not say happened, or accepted with nothing to show, fails its step
+/// saying so, rather than standing in an empty slot or a guess for what the service has.
+#[cfg(unix)]
+#[test]
+fn a_fetch_the_authority_cannot_vouch_for_fails_its_step() {
+    for (reply, why) in [
+        (
+            r#"{"protocol":1,"outcome":"unknown","reason":"timed-out"}"#,
+            "github issue: the authority could not say whether this happened, so it is not retried (timed-out)",
+        ),
+        (
+            r#"{"protocol":1,"outcome":"accepted"}"#,
+            "github issue: accepted with nothing fetched",
+        ),
+    ] {
+        let scratch = Scratch::new("connector-unvouched");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let authority = FakeAuthority::new(&scratch, &[reply]);
+        let (endpoint, _received) = serve(vec![any_shape(), one_fetch()]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut asked = RecordsEveryQuestion::default();
+
+        let failure = run_with_connectors(
+            &workspace,
+            &config,
+            &authority.home,
+            "read issue 2",
+            &mut asked,
+            &mut sink,
+        )
+        .expect_err(why);
+        assert!(failure.to_string().contains(why), "got: {failure}");
+    }
+}
+
+/// A run stopped while a fetch waits on the authority, which may be waiting on a person's popup,
+/// stops waiting and fails the step, rather than holding the run until the authority answers.
+#[cfg(unix)]
+#[test]
+fn a_run_stopped_while_a_fetch_waits_stops_waiting() {
+    let scratch = Scratch::new("connector-stopped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    std::fs::write(
+        authority.dir.join("agent.sh"),
+        "#!/bin/sh\ndir=\"$(dirname \"$0\")\"\ncat > \"$dir/requests/0.json\"\nsleep 60\n",
+    )
+    .unwrap();
+    let (endpoint, _received) = serve(vec![any_shape(), one_fetch()]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopper = thread::spawn({
+        let cancel = cancel.clone();
+        let sent = authority.dir.join("requests/0.json");
+        move || {
+            let waited = std::time::Instant::now();
+            while !sent.exists() && waited.elapsed() < std::time::Duration::from_secs(20) {
+                thread::sleep(std::time::Duration::from_millis(20));
+            }
+            cancel.cancel();
+        }
+    });
+
+    let started = std::time::Instant::now();
+    let result = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read issue 2").with_home(Some(authority.home.clone())),
+        &mut asked,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &cancel,
+    );
+    stopper.join().unwrap();
+    assert!(result.is_err(), "a stopped run did not fail");
+    assert_eq!(authority.requests(), 1, "the fetch reached the authority");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the run waited on the authority"
+    );
+}

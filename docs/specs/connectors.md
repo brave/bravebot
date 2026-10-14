@@ -8,7 +8,7 @@ governs:
   - crates/config/src/connectors.rs
   - crates/config/src/connectors/forms.rs
   - crates/agent/src/connectors.rs
-documented-by: none (gap: a page is owed once a manifest run calls a connector; until then nothing a person runs reaches this client)
+documented-by: none (gap: a manifest run fetches through a connector, and the page saying how to install a definition and its authority is owed)
 ---
 
 ## Scope
@@ -111,6 +111,7 @@ and only goes back to the authority, which issued it.
 `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form`
 `verified-by: bravebot_connector::lib::a_link_is_kept_only_when_it_is_one_https_url_on_one_line`
 `verified-by: bravebot_connector::lib::a_reply_keeps_its_link_only_when_it_is_well_formed`
+`verified-by: bravebot_agent::manifest::a_fetch_the_authority_cannot_vouch_for_fails_its_step`
 `verified-by: bravebot_connector::lib::what_the_service_sent_carries_the_capabilitys_label_and_the_authoritys_fields_do_not`
 
 <a id="CONNECTOR-8"></a>
@@ -150,6 +151,7 @@ not having happened, and a hung authority never holds the run.
 `verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
 `verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`
 `verified-by: bravebot_connector::lib::a_reply_is_kept_though_a_program_the_authority_started_holds_its_output`
+`verified-by: bravebot_agent::manifest::a_run_stopped_while_a_fetch_waits_stops_waiting`
 
 <a id="CONNECTOR-10"></a>
 ### CONNECTOR-10: a definition is read from the person's own directory, writable by them alone
@@ -290,6 +292,8 @@ the value that will be sent.
 fail at its step, after earlier steps had run. Here it fails before anything has.
 
 `verified-by: bravebot_agent::connectors::a_step_is_held_to_its_resource_fields_values_and_selector_terms`
+`verified-by: bravebot_core::selector::a_malformed_term_is_refused`
+`verified-by: bravebot_core::selector::a_pattern_matches_its_key_and_its_value_or_the_rest_of_it`
 `verified-by: bravebot_agent::connectors::a_fetch_names_a_place_only_when_its_resource_uses_one`
 `verified-by: bravebot_agent::connectors::a_value_outside_its_named_form_is_refused_before_anything_is_asked`
 `verified-by: bravebot_agent::connectors::mail_reads_take_a_selector_or_an_opaque_id_and_nothing_else`
