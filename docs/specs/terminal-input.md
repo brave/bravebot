@@ -2580,7 +2580,12 @@ not used for it: that chord suspends the process on a terminal that has not had 
 off, which this program does not take.
 
 `undo` is one of the eleven chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
-the `?` list shows it (INPUT-13).
+the `?` list shows it (INPUT-13). While it stands on that default, the chord also answers to Ctrl-7,
+Ctrl-Shift-_, Ctrl-/ and Ctrl-Shift-/, the spellings a terminal reports for the same byte or the same
+key by another name, so the key that undoes on a terminal reporting one answers on a terminal
+reporting another. An alternate is read only where a settings file has not moved another action onto
+that exact chord: moving `trail` onto `ctrl-/` takes the chord from undo, which goes on answering to
+its remaining alternates and to its default.
 
 **Why.** One wrong key loses a paragraph in the ordinary box today with nothing to put it back,
 which Claude Code, Gemini CLI and OpenCode each document a key against. Folding a run of typing into
@@ -2600,3 +2605,8 @@ character of a sentence somebody has otherwise finished typing.
 `verified-by: bravebot_tui::app::the_undo_chord_works_while_a_turn_is_running`
 `verified-by: bravebot_tui::state::a_second_typing_run_after_undo_opens_its_own_step`
 `verified-by: bravebot_tui::state::typing_after_a_yank_opens_its_own_run`
+`verified-by: bravebot_tui::state::undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_stashing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`

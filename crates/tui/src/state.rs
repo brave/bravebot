@@ -20013,6 +20013,112 @@ mod tests {
         assert!(s.submit().is_some());
         assert!(!s.undo_last_change());
         assert_eq!(s.input, "");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "",
+            "typing after the send opened no step of its own"
+        );
+    }
+
+    /// Clearing the line, the way Escape does, leaves nothing to undo either: a step taken of a
+    /// line that has gone is a step `u` after it would put back by mistake.
+    #[test]
+    fn undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        assert_eq!(s.input, "");
+        assert!(
+            !s.undo_last_change(),
+            "clearing the line left a step to undo"
+        );
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "",
+            "typing after the clear opened no step of its own"
+        );
+    }
+
+    /// Putting the line away and bringing it back both leave nothing to undo: a step is a copy of
+    /// a line that stood in the box, and the stash is a line that has left it.
+    #[test]
+    fn undo_after_stashing_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        assert!(s.stash(), "putting the line away did nothing");
+        assert_eq!(s.input, "");
+        assert!(
+            !s.undo_last_change(),
+            "putting the line away left a step to undo"
+        );
+
+        assert!(s.stash(), "bringing the line back did nothing");
+        assert_eq!(s.input, "one two");
+        assert!(
+            !s.undo_last_change(),
+            "bringing the line back left a step to undo"
+        );
+        assert_eq!(s.input, "one two");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "one two",
+            "typing after the stash round-trip opened no step of its own"
+        );
+    }
+
+    /// Switching to the other style and back leaves nothing to undo, the way INPUT-28 already says
+    /// for vi: a step taken under one style answers to keys the other does not press.
+    #[test]
+    fn undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.choose_editing(crate::vim::Editing::Ordinary);
+        assert!(!s.undo_last_change(), "switching style left a step to undo");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "one two",
+            "typing after the switch opened no step of its own"
+        );
+    }
+
+    /// Recalling an earlier prompt is a line arriving whole, the way a send, a clear or a stash
+    /// is, so it leaves nothing to undo either.
+    #[test]
+    fn undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "sent before".chars() {
+            s.type_char(c);
+        }
+        assert!(s.submit().is_some());
+
+        s.recall_older();
+        assert_eq!(s.input, "sent before");
+        assert!(
+            !s.undo_last_change(),
+            "recalling a prompt left a step to undo"
+        );
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "sent before",
+            "typing after the recall opened no step of its own"
+        );
     }
 
     /// A marker is kept behind an edit the same as the text around it, so deleting one and undoing

@@ -346,14 +346,42 @@ impl Keybindings {
         self.scope.matches(key)
     }
 
+    /// Whether `chord` is what some other action currently answers to, whether that is still its
+    /// default or a settings file moved it there.
+    fn chord_taken_by_another_action(&self, chord: KeyChord) -> bool {
+        [
+            self.background,
+            self.editor,
+            self.history,
+            self.panel,
+            self.paste,
+            self.scope,
+            self.scroller,
+            self.stash,
+            self.trail,
+            self.watch,
+        ]
+        .contains(&chord)
+    }
+
     /// Whether this press asks for the last edit back, in any spelling the default arrives in.
     ///
     /// The alternatives are read only while the action stands on its default, since they are facts
     /// about how a terminal reports Ctrl-_ and say nothing about a chord a person moved it to. A
     /// chord a settings file named is matched as every other configured chord is.
+    ///
+    /// An alternative is skipped where a settings file moved another action onto that exact chord:
+    /// `from_map` resolves contests among the ten movable chords, but these four are not among
+    /// them, so nothing there stops a person asking for `ctrl-/` on `trail` and finding undo answer
+    /// it instead.
     pub fn is_undo(&self, key: &KeyEvent) -> bool {
-        self.undo.matches(key)
-            || (self.undo == Self::UNDO && UNDO_SPELLINGS.iter().any(|chord| chord.matches(key)))
+        if self.undo.matches(key) {
+            return true;
+        }
+        self.undo == Self::UNDO
+            && UNDO_SPELLINGS
+                .iter()
+                .any(|chord| chord.matches(key) && !self.chord_taken_by_another_action(*chord))
     }
 
     pub fn background_name(&self) -> String {
@@ -700,5 +728,31 @@ mod tests {
         map.insert("undo".to_string(), "alt-u".to_string());
         let moved = Keybindings::from_map(&map);
         assert!(!moved.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
+    }
+
+    /// A settings file moving another action onto one of the alternate spellings takes it: that
+    /// action stands on the chord, and undo gives it up rather than answering a press meant for
+    /// the action a person asked for. `from_map` does not see these four chords at all, since they
+    /// are not among the eleven it resolves, so skipping one has to be undo's own to do.
+    #[test]
+    fn an_alternate_spelling_given_to_another_action_no_longer_answers_undo() {
+        let mut map = BTreeMap::new();
+        map.insert("trail".to_string(), "ctrl-/".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.trail, KeyChord::ctrl('/'));
+
+        let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        assert!(
+            bindings.is_trail(&pressed),
+            "trail did not answer the chord it was moved to"
+        );
+        assert!(
+            !bindings.is_undo(&pressed),
+            "undo answered a chord moved to another action"
+        );
+
+        // Undo still answers on its own default, and on the alternates nothing else was moved to.
+        assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL)));
+        assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
     }
 }
