@@ -140,7 +140,10 @@ same grant as `/`, and on Windows a drive root such as `C:\` is one too.
 
 A confined process reaches neither the network nor the filesystem outside its grants. Egress,
 where a policy asks for it, is to IP addresses. A unix socket that has a path is reached only under
-a path the policy names for writing, and not under one it names for reading. On macOS a connect to
+a path the policy names for writing, and not under one it names for reading. A refusal of a read
+or of a write inside a write row refuses a connect beneath it as well. A narrower write row beneath
+the refusal reaches the sockets under it, and so does a write row at a refusal of a read. A write
+row at a refusal of a write is withdrawn and reaches none. On macOS a connect to
 a socket counts as egress, so there a write row reaches a socket only while egress is granted, and
 egress also reaches the resolver's socket, which every host name lookup goes through. On Linux the
 socket rule holds on a kernel carrying Landlock ABI version 9, which is Linux 7.1. Below it, which
@@ -195,7 +198,9 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::macos::loopback_leaves_a_stage_held_to_a_port_with_that_port_alone`
 `verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
+`verified-by: bravebot_sandbox::macos::a_write_grant_reaches_no_socket_inside_a_refusal`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
+`verified-by: bravebot_sandbox::macos::a_refusal_over_the_resolvers_directory_leaves_egress_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_signal_a_process_it_started`
@@ -212,6 +217,7 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
 `verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
+`verified-by: bravebot_sandbox::linux::a_socket_with_a_path_is_reached_under_a_write_grant_and_not_under_a_read_grant_or_a_refusal`
 `verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
 `verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
