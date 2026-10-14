@@ -96,6 +96,19 @@ guards:
     sites:
       - crates/agent/src/tools.rs: 1
       - crates/core/src/policy.rs: 1
+  - symbol: Policy::names_for_display
+    sites:
+      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/turn.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::promote_reference_for_read
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
+  - symbol: Policy::destination_from_reference
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
   - symbol: VettingSpec::where_it_came_from
     sites:
       - crates/core/src/policy.rs: 5
@@ -263,12 +276,23 @@ the way it pins a declassification. A decision relocated into the kernel and tak
 address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
 outside the gates does not compile at all, bar the single release named next.
 
-One of those sentences does leave the kernel, because the person being asked whether to let a
-slot's bytes through has to be told which file they are. It leaves through a single gate that
-records the release, and the `guards` list pins that gate's uses file by file too, so a second
-reader of a slot's address anywhere downstream is a line in a diff rather than a branch nobody
-is shown. Apart from that release, outside the kernel a slot answers one question about its
-address, whether asking for its bytes will open a file, which names nothing.
+Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
+`guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
+than a branch nobody is shown:
+
+- **The sentence saying where its bytes came from**, through `release_where_a_slot_came_from`,
+  because the person being asked whether to let a slot's bytes through has to be told which file
+  they are.
+- **The file a reference names, for a line a person reads**, through `names_for_display`. It
+  returns every slot's filename as a plain string to be worded into a preview, a note or a task
+  line, and records one `Declassified` event and one `display` allow for the call. It is a display
+  release and nothing it returns may become a path an effect uses.
+- **The file a reference names, as a read's path or a destination**, through
+  `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
+  settles and which share `path_of_reference`.
+
+Apart from those, outside the kernel a slot answers one question about its address, whether asking
+for its bytes will open a file, which names nothing.
 
 **`bravebot-core` and `bravebot-agent` are both the driver.** Moving a branch from one
 into the other does not remove it.
@@ -283,7 +307,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from is the one accessor that can, and it records the release. Those eight are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
