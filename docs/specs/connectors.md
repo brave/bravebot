@@ -100,6 +100,7 @@ form is replaced or dropped rather than shown:
 
 `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form`
 `verified-by: bravebot_connector::lib::a_link_is_kept_only_when_it_is_one_https_url_on_one_line`
+`verified-by: bravebot_connector::lib::a_reply_keeps_its_link_only_when_it_is_well_formed`
 `verified-by: bravebot_connector::lib::what_the_service_sent_carries_the_capabilitys_label_and_the_authoritys_fields_do_not`
 
 <a id="CONNECTOR-8"></a>
@@ -118,13 +119,22 @@ where it stopped parsing, never by the value it could not read.
 <a id="CONNECTOR-9"></a>
 ### CONNECTOR-9: a call ends when the run is stopped or its bound passes
 
-A call still waiting on the authority ends when the run is cancelled, or when its bound passes,
-ten minutes unless the caller sets another. The authority is stopped and reaped either way, and the
-failure says whether the call happened is not known. An authority that answered and then does not
-exit is stopped at the same bound.
+A run already stopped starts no authority, and says nothing was sent. A call still waiting on the
+authority ends when the run is cancelled, or when its bound passes, ten minutes unless the caller
+sets another. The authority is stopped and reaped either way, and the failure says whether the call
+happened is not known. An authority that answered and then does not exit is stopped at the same
+bound, and its reply is kept.
+
+Once the authority is started, its reply is read whatever became of the request, since it may
+answer, and act, without reading all of it. A started authority whose reply cannot be read is
+reported as not known, never as unreachable.
 
 **Why.** An act may already have reached the service when the wait ends, so it is never reported as
 not having happened, and a hung authority never holds the run.
 
 `verified-by: bravebot_connector::lib::a_cancelled_run_stops_waiting_on_a_silent_authority`
 `verified-by: bravebot_connector::lib::an_authority_that_never_answers_is_given_up_on`
+`verified-by: bravebot_connector::lib::a_run_stopped_before_the_call_starts_no_authority`
+`verified-by: bravebot_connector::lib::an_authority_that_answers_and_does_not_exit_is_stopped_at_the_bound`
+`verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
+`verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`

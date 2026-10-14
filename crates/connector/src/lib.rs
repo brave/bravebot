@@ -179,8 +179,13 @@ pub enum Text {
 
 #[derive(Debug)]
 pub enum ConnectorError {
-    /// The authority could not be started or spoken to.
+    /// The authority could not be started, so nothing was sent.
     Unreachable(String),
+    /// The run was stopped before the authority was started, so nothing was sent.
+    Stopped,
+    /// The authority was started and its reply could not be read. Whether the call happened is
+    /// not known.
+    Lost(String),
     /// The authority answered with something this client does not understand.
     Malformed(String),
     /// The policy refused the call.
@@ -198,6 +203,14 @@ impl fmt::Display for ConnectorError {
             Self::Unreachable(why) => {
                 write!(f, "the credential authority could not be reached: {why}")
             }
+            Self::Stopped => {
+                f.write_str("stopped before the credential authority was started; nothing was sent")
+            }
+            Self::Lost(why) => write!(
+                f,
+                "the credential authority's reply could not be read, so whether the call happened \
+                 is not known: {why}"
+            ),
             Self::Malformed(why) => write!(
                 f,
                 "the credential authority's reply was not understood, so whether the call happened \
@@ -392,32 +405,35 @@ impl Authority {
                 command.env(name, value);
             }
         }
+        // A run already stopped starts nothing, so a stop that came first is never an act sent.
+        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            return Err(ConnectorError::Stopped);
+        }
         // Under the gate every start of a program in this process shares, so the authority holds
         // no end of a control channel another thread is creating.
         let mut child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
             .map_err(|e| ConnectorError::Unreachable(e.to_string()))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| ConnectorError::Unreachable("no standard input".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| ConnectorError::Unreachable("no standard output".into()))?;
+        // From here the authority is running and may act, so every failure says the outcome is not
+        // known rather than that nothing happened.
+        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ConnectorError::Lost("no standard input or output".into()));
+        };
 
         // Writing and reading happen off this thread, so an authority that never reads or never
-        // answers cannot keep the run from looking at its cancel flag.
+        // answers cannot keep the run from looking at its cancel flag. The reply is read whatever
+        // the write did: an authority may answer, and act, without reading the whole request.
         let (sent, received) = mpsc::channel();
         std::thread::spawn(move || {
+            let wrote = stdin.write_all(&line);
+            drop(stdin);
             let mut raw = Vec::new();
-            let done = stdin
-                .write_all(&line)
-                .and_then(|()| {
-                    drop(stdin);
-                    stdout.take(MAX_REPLY + 1).read_to_end(&mut raw)
-                })
-                .map(|_| raw)
-                .map_err(|e| ConnectorError::Unreachable(e.to_string()));
+            let done = match (stdout.take(MAX_REPLY + 1).read_to_end(&mut raw), wrote) {
+                (Ok(_), Err(e)) if raw.is_empty() => Err(ConnectorError::Lost(e.to_string())),
+                (Ok(_), _) => Ok(raw),
+                (Err(e), _) => Err(ConnectorError::Lost(e.to_string())),
+            };
             let _ = sent.send(done);
         });
 
@@ -426,7 +442,7 @@ impl Authority {
             match received.recv_timeout(POLL) {
                 Ok(done) => break done,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break Err(ConnectorError::Unreachable(
+                    break Err(ConnectorError::Lost(
                         "the reader stopped without a reply".into(),
                     ));
                 }
@@ -456,12 +472,12 @@ impl Authority {
                     std::thread::sleep(pause);
                     pause = (pause * 2).min(POLL);
                 }
-                Ok(None) => {
+                // A reply already read is kept whatever the wait says: it is what the authority did.
+                Ok(None) | Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
                     break;
                 }
-                Err(e) => return Err(ConnectorError::Unreachable(e.to_string())),
             }
         }
         outcome
@@ -785,6 +801,83 @@ cat > \"$d/request\"
             &format!("https://{}", "a".repeat(512)),
         ] {
             assert!(!link(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_run_stopped_before_the_call_starts_no_authority() {
+        let program = recording("stopped", r#"{"protocol":1,"outcome":"accepted"}"#);
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let result = program
+            .authority()
+            .with_cancel(cancel)
+            .exchange(b"{}".to_vec());
+        assert!(matches!(result, Err(ConnectorError::Stopped)), "{result:?}");
+        assert!(!program.0.join("request").exists(), "the authority ran");
+        assert!(
+            ConnectorError::Stopped
+                .to_string()
+                .contains("nothing was sent")
+        );
+    }
+
+    /// A request larger than a pipe holds, to an authority that never reads it, fails the write.
+    fn unread_request() -> Vec<u8> {
+        vec![b' '; 1024 * 1024]
+    }
+
+    #[test]
+    fn a_reply_is_read_though_the_authority_did_not_read_the_whole_request() {
+        let program = Program::new("unread", "#!/bin/sh\nprintf '{\"ok\":1}'\n");
+        let reply = program.authority().exchange(unread_request()).unwrap();
+        assert_eq!(reply, b"{\"ok\":1}");
+    }
+
+    #[test]
+    fn a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing() {
+        let program = Program::new("lost", "#!/bin/sh\nexit 0\n");
+        let error = program
+            .authority()
+            .exchange(unread_request())
+            .expect_err("no reply");
+        assert!(matches!(error, ConnectorError::Lost(_)), "{error:?}");
+        assert!(error.to_string().contains("is not known"), "{error}");
+    }
+
+    #[test]
+    fn an_authority_that_answers_and_does_not_exit_is_stopped_at_the_bound() {
+        let program = Program::new(
+            "lingers",
+            "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":1}'\nexec >&-\nsleep 60\n",
+        );
+        let started = Instant::now();
+        let reply = program
+            .authority()
+            .with_limit(Duration::from_secs(2))
+            .exchange(b"{}".to_vec())
+            .unwrap();
+        assert_eq!(reply, b"{\"ok\":1}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_reply_keeps_its_link_only_when_it_is_well_formed() {
+        for (link, kept) in [
+            ("https://github.com/o/r/pull/1", true),
+            ("http://github.com/o/r/pull/1", false),
+        ] {
+            let program = recording(
+                "link",
+                &format!(r#"{{"protocol":1,"outcome":"accepted","link":"{link}"}}"#),
+            );
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = policy(&mut sink, vec![capability()]);
+            let reply = program
+                .authority()
+                .call(&mut policy, capability(), &request(), None)
+                .expect("call");
+            assert_eq!(reply.link.is_some(), kept, "{link}");
         }
     }
 }
