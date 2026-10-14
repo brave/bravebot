@@ -1152,6 +1152,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: self.grants.clone(),
             sink: record,
             denials: 0,
+            path_requests_unasked: self.path_requests_unasked,
             trust: self.trust.clone(),
             root: self.root.clone(),
             scratch: self.scratch.clone(),
@@ -17268,6 +17269,25 @@ five
             assert!(branch.before_capability(Capability::ShellExec).is_err());
             assert!(branch.read_is_denied("/work/secret.txt"));
             assert!(!branch.read_is_denied("/work/other.txt"));
+        }
+    }
+
+    /// A branch words a refusal as the policy it came from would. One that began with the grant of
+    /// an unasked `request_path` unset would tell the planner to ask when the policy grants it
+    /// without a question.
+    #[test]
+    fn a_branch_keeps_whether_path_requests_are_granted_unasked() {
+        for unasked in [true, false] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.grant_path_requests_unasked(unasked);
+            let mut record = RecordingSink::new();
+            let branch = policy.branch(&mut record);
+            assert_eq!(
+                branch.path_requests_are_granted_unasked(),
+                unasked,
+                "policy granting unasked: {unasked}"
+            );
         }
     }
 
