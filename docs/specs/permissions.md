@@ -459,6 +459,10 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::tools::a_read_refused_by_a_rule_with_a_reason_says_the_reason`
+`verified-by: bravebot_agent::tools::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
+`verified-by: bravebot_agent::tools::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
+`verified-by: bravebot_agent::turn::a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else
