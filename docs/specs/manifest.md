@@ -157,10 +157,13 @@ the only ways out of a slot are a later processor, a write back into the workspa
 release the plan named in advance.
 
 An unmarked processor answer is a remark, not a document. Treating it as the slot would write an
-explanation over whatever the plan named next.
+explanation over whatever the plan named next. Such an answer is asked for once more, with the
+plan's instruction and one fixed sentence, both trusted, and a second answer without the mark fails
+the step.
 
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`
+`verified-by: bravebot_agent::manifest::an_unmarked_transform_is_asked_once_more_for_its_document`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
 
 <a id="MANIFEST-9"></a>

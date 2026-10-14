@@ -1055,6 +1055,7 @@ fn an_unmarked_transform_does_not_become_a_file() {
             {"capability": "FILE_WRITE", "args": {"path": "out.md", "from_slot": "loud"}},
         ])),
         says("this is an explanation, not a file"),
+        says("still an explanation, not a file"),
     ]);
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
@@ -1066,6 +1067,41 @@ fn an_unmarked_transform_does_not_become_a_file() {
     assert!(
         !scratch.path.join("out.md").exists(),
         "the remark was written as a file"
+    );
+}
+
+/// A plan has no planner to ask again for the line, so the driver asks once more itself, and a
+/// second answer that marks its document fills the slot with that document and nothing else.
+#[test]
+fn an_unmarked_transform_is_asked_once_more_for_its_document() {
+    let scratch = Scratch::new("unmarked-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says("RAW TEXT, said without the line"),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+    let asked: Vec<String> = received.try_iter().collect();
+    assert!(
+        asked
+            .last()
+            .is_some_and(|r| r.contains("marked no document")),
+        "the second call did not ask for the line"
     );
 }
 
