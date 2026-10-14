@@ -1342,8 +1342,8 @@ fn a_record_that_cannot_be_read_is_not_written_over() {
     }
 }
 
-/// A list is put to the person every session: a yes records nothing, and a `tools` line an
-/// earlier version wrote does not stand in for the answer, since deciding from a server's bytes
+/// A list is put to the person every session: a yes records nothing, and a `tools` line that
+/// matches the list does not stand in for the answer, since deciding from a server's bytes
 /// whether it was seen before is the driver's decision taken from untrusted content.
 #[test]
 fn a_list_is_asked_about_every_session_and_a_yes_records_nothing() {
@@ -1384,10 +1384,13 @@ fn a_list_is_asked_about_every_session_and_a_yes_records_nothing() {
         [("weather".to_string(), Offering::Declined)]
     );
 
+    // The digest an earlier version recorded for the list this server sends, so that the line is
+    // one that would have answered for it and the only thing that can fail this is that answer.
     let digest = declaration();
+    let list = "8f7dc1133696e730f427675b9f2f6d1ebdf97a7ecc29ef909393c7167fb33f7e";
     std::fs::write(
         approvals_file(&scratch.state()),
-        format!("tools {digest} {digest}\n"),
+        format!("tools {digest} {list}\n"),
     )
     .expect("write a line an earlier version wrote");
     let (endpoint, _chat) = serve_chat(vec![reply_with("three")]);
