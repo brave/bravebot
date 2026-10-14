@@ -9,7 +9,7 @@
 //! The reply is handled as an MCP stdio result is. Its fixed fields are the authority's own
 //! protocol: whether the call was accepted, counts and reason codes, a receipt, a standing. Its
 //! payload and any failure detail are what the service sent back, so they are labelled with the
-//! connector capability's label, untrusted and private, and never read here.
+//! call's capability label, which for a connector is untrusted and private, and never read here.
 
 #![forbid(unsafe_code)]
 
@@ -24,7 +24,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// The protocol version this client speaks. The authority refuses a request naming another.
@@ -154,7 +154,8 @@ pub struct Reply {
     pub withheld: Vec<Withheld>,
     pub receipt: Option<String>,
     pub standing: Option<Standing>,
-    /// What the service sent back, untrusted and private. `None` for an act.
+    /// What the service sent back, at the call's capability label. `None` where the reply carried
+    /// none, as an act's does.
     pub payload: Option<Labelled<String>>,
     /// Anything the authority quoted from the service about the call, labelled like the payload.
     pub detail: Option<Labelled<String>>,
@@ -243,6 +244,10 @@ pub struct Authority {
 /// answer a popup; it is a bound on a hung authority, not on a slow one.
 pub const CALL_LIMIT: Duration = Duration::from_secs(10 * 60);
 
+/// How long a reply is waited on after the authority has exited, for output a program it started
+/// still holds open.
+const HELD_OPEN: Duration = Duration::from_secs(1);
+
 /// How often a waiting call looks at the run's cancel flag.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -316,6 +321,11 @@ impl Authority {
         let line =
             serde_json::to_vec(&body).map_err(|e| ConnectorError::Malformed(e.to_string()))?;
 
+        // The label what comes back will carry, taken before the authority starts: once it has, a
+        // refusal could no longer say whether the call happened.
+        let label = policy
+            .observe(capability)
+            .map_err(|denial| ConnectorError::Denied(denial.to_string()))?;
         let raw = self.exchange(line)?;
         if raw.len() as u64 > MAX_REPLY {
             return Err(ConnectorError::Malformed(format!(
@@ -339,9 +349,6 @@ impl Authority {
                 wire.protocol
             )));
         }
-        let label = policy
-            .observe(capability)
-            .map_err(|denial| ConnectorError::Denied(denial.to_string()))?;
         Ok(Reply {
             outcome: wire.outcome,
             reason: wire.reason.map(code),
@@ -399,6 +406,7 @@ impl Authority {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .current_dir("/")
             .env_clear();
         for name in PASSED {
             if let Some(value) = std::env::var_os(name) {
@@ -423,24 +431,50 @@ impl Authority {
 
         // Writing and reading happen off this thread, so an authority that never reads or never
         // answers cannot keep the run from looking at its cancel flag. The reply is read whatever
-        // the write did: an authority may answer, and act, without reading the whole request.
+        // the write did: an authority may answer, and act, without reading the whole request. What
+        // has been read is shared, so a reply is kept even where the end of the output never comes.
+        let read = Arc::new(Mutex::new(Vec::new()));
         let (sent, received) = mpsc::channel();
-        std::thread::spawn(move || {
-            let wrote = stdin.write_all(&line);
-            drop(stdin);
-            let mut raw = Vec::new();
-            let done = match (stdout.take(MAX_REPLY + 1).read_to_end(&mut raw), wrote) {
-                (Ok(_), Err(e)) if raw.is_empty() => Err(ConnectorError::Lost(e.to_string())),
-                (Ok(_), _) => Ok(raw),
-                (Err(e), _) => Err(ConnectorError::Lost(e.to_string())),
-            };
-            let _ = sent.send(done);
+        std::thread::spawn({
+            let read = Arc::clone(&read);
+            move || {
+                let wrote = stdin.write_all(&line);
+                drop(stdin);
+                let mut stdout = stdout.take(MAX_REPLY + 1);
+                let mut chunk = [0u8; 64 * 1024];
+                let finished = loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) => break Ok(()),
+                        Ok(n) => read
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .extend_from_slice(&chunk[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) => break Err(e),
+                    }
+                };
+                let _ = sent.send((wrote, finished));
+            }
         });
+        let reply = |why: String| {
+            let raw = read
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if raw.is_empty() {
+                Err(ConnectorError::Lost(why))
+            } else {
+                Ok(raw)
+            }
+        };
 
         let started = Instant::now();
+        let mut exited: Option<Instant> = None;
         let outcome = loop {
             match received.recv_timeout(POLL) {
-                Ok(done) => break done,
+                Ok((_, Err(e))) => break Err(ConnectorError::Lost(e.to_string())),
+                Ok((Err(e), Ok(()))) => break reply(e.to_string()),
+                Ok((Ok(()), Ok(()))) => break reply("the authority gave no reply".into()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     break Err(ConnectorError::Lost(
                         "the reader stopped without a reply".into(),
@@ -452,6 +486,15 @@ impl Authority {
                     }
                     if started.elapsed() >= self.limit {
                         break Err(ConnectorError::TimedOut);
+                    }
+                    // A program the authority started may hold its output open after it exits,
+                    // so the end of the output never comes. Once the authority itself has exited,
+                    // what it wrote is its reply.
+                    if exited.is_none() && matches!(child.try_wait(), Ok(Some(_))) {
+                        exited = Some(Instant::now());
+                    }
+                    if exited.is_some_and(|at| at.elapsed() >= HELD_OPEN) {
+                        break reply("the authority exited, and its output is held open".into());
                     }
                 }
             }
@@ -879,5 +922,36 @@ cat > \"$d/request\"
                 .expect("call");
             assert_eq!(reply.link.is_some(), kept, "{link}");
         }
+    }
+
+    /// An authority that starts a program and exits leaves its reply behind, though that program
+    /// holds the output open: the reply is kept rather than waited on to the bound.
+    #[test]
+    fn a_reply_is_kept_though_a_program_the_authority_started_holds_its_output() {
+        let program = Program::new(
+            "helper",
+            "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":1}'\nsleep 30 &\nexit 0\n",
+        );
+        let started = Instant::now();
+        let reply = program
+            .authority()
+            .with_limit(Duration::from_secs(20))
+            .exchange(b"{}".to_vec())
+            .unwrap();
+        assert_eq!(reply, b"{\"ok\":1}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "waited on the helper"
+        );
+    }
+
+    /// The authority starts in the root directory, so nothing it reads by a relative path is the
+    /// checkout's.
+    #[test]
+    fn the_authority_starts_outside_the_checkout() {
+        let program = Program::new("cwd", "#!/bin/sh\ncat >/dev/null\npwd\n");
+        let seen =
+            String::from_utf8(program.authority().exchange(b"{}".to_vec()).unwrap()).unwrap();
+        assert_eq!(seen.trim(), "/");
     }
 }
