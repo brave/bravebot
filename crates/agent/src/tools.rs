@@ -10878,18 +10878,17 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     // The server is given the path it can open, which is the resolved one. What the planner is
     // shown is rendered back against the root by the lsp module.
     let root = servers.root().to_path_buf();
+    let file = root.join(&relative);
     let absolute = if relative.is_empty() {
         String::new()
     } else {
-        root.join(&relative).to_string_lossy().into_owned()
+        file.to_string_lossy().into_owned()
     };
 
     // A file that is not there has nothing to check, and the person should not be asked to start a
     // server to be told so. Whether a path is a file is a fact about the filesystem, not a byte of
     // anything in it.
-    if operation == bravebot_lsp::Operation::Diagnostics
-        && !std::path::Path::new(&absolute).is_file()
-    {
+    if operation == bravebot_lsp::Operation::Diagnostics && !file.is_file() {
         return Produced::problem(format!(
             "error: {relative} is not a file, so there is nothing for a language server to check"
         ));
