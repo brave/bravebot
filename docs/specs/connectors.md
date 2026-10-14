@@ -32,7 +32,7 @@ for the named connector decides what the call is.
 **Why.** A credential this process never holds is one no prompt injection can make it send, and a
 client that knows no service is one a new connector needs no code in.
 
-`verified-by: by-construction (the crate depends on bravebot-core and bravebot-sandbox alone, reads no file, passes the authority only the variables CONNECTOR-4 names, and its request type has no field that can carry a secret the authority holds; the authority's definition, not this crate, names the service)`
+`verified-by: by-construction (of the workspace's crates it depends on bravebot-core and bravebot-sandbox alone, reads no file, passes the authority only the variables CONNECTOR-4 names, and its request type has no field that can carry a secret the authority holds; the authority's definition, not this crate, names the service)`
 
 <a id="CONNECTOR-2"></a>
 ### CONNECTOR-2: the authority is a program at an absolute path
@@ -58,16 +58,17 @@ and nothing from the request.
 `verified-by: bravebot_connector::lib::an_authority_that_answers_is_read_whole`
 
 <a id="CONNECTOR-4"></a>
-### CONNECTOR-4: the authority starts with a cleared environment
+### CONNECTOR-4: the authority starts with a cleared environment, outside the checkout
 
 The authority is started with only `HOME`, `XDG_RUNTIME_DIR`, `PATH`, `TMPDIR`, `LANG` and
 `DBUS_SESSION_BUS_ADDRESS`, each where this process has it set, and with nothing else of this
-process's environment.
+process's environment. It starts in the root directory, not the one this process runs in.
 
 **Why.** The rest of the environment may hold this process's own credentials, which are not the
-authority's to read.
+authority's to read, and a relative path the authority reads should not be one a checkout answers.
 
 `verified-by: bravebot_connector::lib::the_authority_starts_with_only_the_variables_it_is_passed`
+`verified-by: bravebot_connector::lib::the_authority_starts_outside_the_checkout`
 
 <a id="CONNECTOR-5"></a>
 ### CONNECTOR-5: a call needs its capability
@@ -88,7 +89,8 @@ the call's capability label and read nowhere in the client.
 ### CONNECTOR-7: the authority's own fields are held to their form
 
 The rest of a reply is printed on a step's line, so each field has a fixed form, and a value out of
-form is replaced or dropped rather than shown:
+form is replaced or dropped rather than shown. A receipt is not among them: it is printed nowhere,
+and only goes back to the authority, which issued it.
 
 | Field | Form | Out of form |
 |---|---|---|
@@ -126,8 +128,9 @@ happened is not known. An authority that answered and then does not exit is stop
 bound, and its reply is kept.
 
 Once the authority is started, its reply is read whatever became of the request, since it may
-answer, and act, without reading all of it. A started authority whose reply cannot be read is
-reported as not known, never as unreachable.
+answer, and act, without reading all of it. Once the authority itself has exited, what it wrote is
+its reply, though a program it started still holds its output open. A started authority whose reply
+cannot be read is reported as not known, never as unreachable.
 
 **Why.** An act may already have reached the service when the wait ends, so it is never reported as
 not having happened, and a hung authority never holds the run.
@@ -138,3 +141,4 @@ not having happened, and a hung authority never holds the run.
 `verified-by: bravebot_connector::lib::an_authority_that_answers_and_does_not_exit_is_stopped_at_the_bound`
 `verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
 `verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`
+`verified-by: bravebot_connector::lib::a_reply_is_kept_though_a_program_the_authority_started_holds_its_output`
