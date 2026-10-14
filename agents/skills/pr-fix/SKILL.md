@@ -25,13 +25,14 @@ worktree itself, as in any other worktree.
 
 Set `BRAVEBOT_PR_WORKTREES` to a directory to put worktrees there instead, as
 `<directory>/<main clone>-<pr>`. A relative value is taken from the main clone, so `../` puts them
-beside it. A worktree outside the workspace is refused by the file tools until the person opens it
-with `/add-dir <worktree>`. Once it is open, a file in it is reached by its absolute path or by a
-`../<worktree>/...` path, which is taken as the absolute one. `request_path` does not open it, since
-a person's yes to it reaches programs and not the file tools. In bypass mode there is no person to
-ask, and a granted `request_path` for the worktree opens it for the file tools too, so use it there
-instead of waiting for `/add-dir`. If a file tool refuses the worktree, ask the person to run
-`/add-dir` on it and say which directory.
+beside it. A worktree outside the workspace is refused by the file tools until it is opened, which
+the person does with `/add-dir <worktree>`. Once it is open, a file in it is reached by its absolute
+path or by a `../<worktree>/...` path, which is taken as the absolute one. A person's yes to
+`request_path` reaches programs and not the file tools, so it does not open the worktree, but where
+the person has turned permission prompts off a `request_path` for the worktree is granted without a
+question and opens it for the file tools too. The refusal of a file tool says which applies: where
+it names `request_path`, call it for the worktree and read the result; otherwise ask the person to
+run `/add-dir` on it and say which directory.
 
 `<pr>` is a number or a pull request URL. Several can be given, separated by commas or spaces
 (`12,13 https://github.com/brave/bravebot/pull/14`), and `all` stands for every open

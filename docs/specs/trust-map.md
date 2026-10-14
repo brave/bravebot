@@ -595,7 +595,9 @@ since the relative spelling reaches the file.
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
 them, with the trust that comes with it ([TRUST-9](#TRUST-9)). In bypass mode, where nobody is there
 to run `/add-dir`, the grant of a `request_path` opens the directory as `/add-dir` would, and the
-refusal is not reached for it.
+refusal is not reached for it. Where the session grants a `request_path` unasked, the refusal says
+so and names the call, and elsewhere it names `/add-dir` alone
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)).
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.

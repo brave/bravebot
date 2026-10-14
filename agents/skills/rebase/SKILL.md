@@ -15,8 +15,9 @@ brave/bravebot and the one holding the head, puts the branch in `.worktrees/pr-<
 clone, fetches,
 rebases, and pushes over only the head it fetched. Spend tokens on the conflicts and nothing else.
 The directory is inside the workspace and ignored by git. `BRAVEBOT_PR_WORKTREES` names another
-one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and a worktree outside the workspace needs
-`/add-dir` before the file tools reach it.
+one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and the file tools refuse a worktree outside the
+workspace until it is opened with `/add-dir` or, where the person has turned permission prompts off,
+a granted `request_path`. The refusal says which applies, as that skill says.
 
 Each `rebase.py` step runs `git` against the remote or signs the commits it rewrites from inside
 the script, so its command line shows no operation for the sandbox to lend a credential for. When
