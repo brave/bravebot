@@ -4770,7 +4770,7 @@ mod tests {
                 "{needle} missing from {sentence}"
             );
         }
-        for mode in ["strict", "workspace-write", "off"] {
+        for mode in SandboxMode::ALL.map(SandboxMode::name) {
             assert!(!sentence.contains(mode), "{mode} named in {sentence}");
         }
     }

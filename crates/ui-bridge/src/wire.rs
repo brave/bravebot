@@ -145,9 +145,12 @@ pub fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     let asked = refused.asked.name();
     let pinned = refused.pinned.name();
     match refused.because {
-        Floor::Mode => format!(
-            "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may be stricter than that but not looser."
-        ),
+        Floor::Mode => {
+            let looser = bravebot_agent::sandbox_reason::looser(refused);
+            format!(
+                "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may read and write no more than that. {looser}"
+            )
+        }
         Floor::Network => format!(
             "The sandbox mode {asked} is refused: {file} pins run.network to closed, so the mode must be {pinned} or stricter."
         ),

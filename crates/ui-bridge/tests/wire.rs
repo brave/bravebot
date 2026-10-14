@@ -1493,6 +1493,42 @@ fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
     assert!(by_network.contains("run.network"), "{by_network}");
 }
 
+/// SANDBOX-22: the refusal says which of reading and writing the asked mode does more of than the
+/// pin. The modes are not a line, so the fault it rejects is a window told a mode is looser with no
+/// word of how, which under a `strict` pin leaves `read-only` refused for no reason given.
+#[test]
+fn a_refused_sandbox_mode_says_whether_it_reads_or_writes_more_than_the_pin() {
+    use bravebot_config::sandbox::{Floor, Refused};
+    use bravebot_sandbox::SandboxMode;
+    for (asked, pinned, said) in [
+        (
+            SandboxMode::ReadOnly,
+            SandboxMode::Strict,
+            "read-only reads more of the machine than strict.",
+        ),
+        (
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            "strict writes more than read-only.",
+        ),
+        (
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::Strict,
+            "workspace-write reads more of the machine and writes more than strict.",
+        ),
+    ] {
+        let sentence = wire::sandbox_refusal(&Refused {
+            asked,
+            asked_in: None,
+            pinned,
+            pinned_in: "/etc/bravebot/managed.json".into(),
+            because: Floor::Mode,
+        });
+        assert!(sentence.contains(said), "{sentence}");
+        assert!(!sentence.contains("stricter"), "{sentence}");
+    }
+}
+
 /// The hosts cross as the program named them, and nothing else does.
 #[test]
 fn a_host_prompt_carries_the_hosts_and_nothing_else() {

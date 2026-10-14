@@ -90,7 +90,8 @@ fn refusal(refused: &Refused) -> String {
             session_sandbox_refused_mode,
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
-            pinned_in = pinned_in
+            pinned_in = pinned_in,
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         ),
         Floor::Network => t!(
             session_sandbox_refused_network,
@@ -362,6 +363,45 @@ mod tests {
         );
         run(&mut session, "strict", &closed, never_asked);
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
+    }
+
+    /// SANDBOX-22: the refusal says which of reading and writing the asked mode does more of than
+    /// the pin. The modes are not a line, so the fault it rejects is a sentence that calls a mode
+    /// looser and leaves a person under a `strict` pin guessing why `read-only` is.
+    #[test]
+    fn a_refusal_says_which_of_reading_and_writing_the_mode_does_more_of() {
+        for (pin, held, word, said) in [
+            (
+                "read-only",
+                SandboxMode::ReadOnly,
+                "strict",
+                "strict writes more than read-only.",
+            ),
+            (
+                "strict",
+                SandboxMode::Strict,
+                "read-only",
+                "read-only reads more of the machine than strict.",
+            ),
+            (
+                "strict",
+                SandboxMode::Strict,
+                "workspace-write",
+                "workspace-write reads more of the machine and writes more than strict.",
+            ),
+        ] {
+            let managed = pinned(
+                &format!("looser-{pin}-{word}"),
+                &format!(r#"{{"sandbox": {{"mode": "{pin}"}}}}"#),
+            );
+            let mut session = Session::new("kernel-enforced");
+            session.set_sandbox_mode(held);
+            run(&mut session, word, &managed, never_asked);
+            assert_eq!(session.sandbox_mode(), held, "{word}");
+            let note = last_note(&session);
+            assert!(note.contains(said), "{note}");
+            assert!(!note.contains("stricter"), "{note}");
+        }
     }
 
     /// SANDBOX-22: a word that is not exactly a mode changes nothing and lists the four, and the

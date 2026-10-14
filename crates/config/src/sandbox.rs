@@ -2,11 +2,12 @@
 //!
 //! Three places can name one: the command line, the person's own settings file and the managed
 //! file. The checkout's two files may only ask for `strict`. A mode is a bundle of what a program
-//! `run` starts may reach, so a line in a checkout that could pick `workspace-write` or `off` would let
-//! whoever wrote the checkout loosen what the person who cloned it is held to. Asking for `strict`
-//! takes nothing from that person, on the footing of the `permissions` keys that only refuse
-//! ([`crate::Narrowing`]), except where their file or the managed file chose `read-only`: `strict`
-//! writes the session's directories and `read-only` does not, so there the checkout is not obeyed.
+//! `run` starts may reach, so a line in a checkout that could pick `read-only`, `workspace-write` or
+//! `off` would let whoever wrote the checkout loosen what the person who cloned it is held to.
+//! Asking for `strict` takes nothing from that person, on the footing of the `permissions` keys that
+//! only refuse ([`crate::Narrowing`]), except where their file or the managed file chose
+//! `read-only`: `strict` writes the session's directories and `read-only` does not, so there the
+//! checkout is not obeyed.
 //!
 //! The managed file is a floor and not a default: nothing the command line or a settings file says
 //! may be looser than it, and a setting that is refuses the session before it starts, naming the
@@ -29,7 +30,7 @@ pub(crate) enum Stated {
     Absent,
     /// The file named one.
     Mode(SandboxMode),
-    /// The file named something that is not a mode: a word the three do not include, or a value
+    /// The file named something that is not a mode: a word that names none of the four, or a value
     /// that is not a word. Read as absence and reported, since a mistyped `strict` leaves the
     /// session less confined than whoever wrote it believes.
     Unreadable,
@@ -106,9 +107,10 @@ pub struct Refused {
 
 /// The mode in force: the flag, else the settings files, else the managed pin, else workspace-write.
 ///
-/// A mode looser than the managed pin is refused whoever asked for it. One at least as strict is
-/// kept, so a person may be stricter than the machine requires. A managed file that pins the
-/// network closed is a floor of `workspace-write` as well, since `off` would otherwise open it.
+/// A mode looser than the managed pin is refused whoever asked for it. One no looser than the pin
+/// is kept, so a person may hold programs to less than the machine requires. A managed file that
+/// pins the network closed is a floor of `workspace-write` as well, since `off` would otherwise
+/// open it.
 pub fn resolve(
     flag: Option<SandboxMode>,
     settings: &crate::Settings,
