@@ -2540,6 +2540,46 @@ fn a_binary_file_is_reported_as_binary() {
     );
 }
 
+/// A file with no null byte and no control characters passes the sniff of its first bytes, so the
+/// only thing that can name it binary is the decoding that follows. Latin-1 text is that file: the
+/// clause forbids reporting it as a decoding error, in a whole read and in a paged one.
+#[test]
+fn a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary() {
+    let scratch = Scratch::new("read-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let path = Labelled::trusted("latin1.txt".to_string());
+
+    let whole = workspace
+        .read(&mut policy, &path)
+        .expect_err("bytes that are not UTF-8 must not read as text");
+    let paged = workspace
+        .read_page(&mut policy, &path, 1, 10)
+        .expect_err("bytes that are not UTF-8 must not page as text");
+
+    for error in [whole, paged] {
+        assert!(
+            matches!(error, WorkspaceError::Binary { .. }),
+            "expected a binary error, got {error:?}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("binary"), "unhelpful message: {message}");
+        assert!(
+            !message.contains("UTF-8"),
+            "the internal decoding error leaked: {message}"
+        );
+    }
+}
+
 /// Every failure a tool reports to the planner is worded about the name the caller passes, and
 /// none of them keeps the path the call was made on.
 ///

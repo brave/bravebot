@@ -927,6 +927,19 @@ mod tests {
         assert_eq!(result.text(), "caption");
     }
 
+    /// A block of another type may still carry a `text` field, as an embedded resource does. Only
+    /// the type decides, so what it holds is not taken.
+    #[test]
+    fn a_block_of_another_type_is_ignored_even_when_it_carries_text() {
+        let raw = r#"{"content":[
+            {"type":"resource","text":"embedded"},
+            {"type":"image","text":"alt text"},
+            {"type":"text","text":"caption"}
+        ]}"#;
+        let result: ToolResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(result.text(), "caption");
+    }
+
     #[test]
     fn a_tool_level_error_is_visible() {
         let raw = r#"{"content":[{"type":"text","text":"it failed"}],"isError":true}"#;
