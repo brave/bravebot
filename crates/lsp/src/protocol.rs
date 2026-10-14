@@ -503,7 +503,8 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
-    /// How many diagnostics of any severity the notice held.
+    /// Callers decide from this integer whether there is any text to carry or to report as held
+    /// back, and never from the length of the words.
     pub fn count(&self) -> usize {
         self.errors.len() + self.warnings + self.others
     }
