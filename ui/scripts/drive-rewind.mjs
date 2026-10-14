@@ -78,7 +78,7 @@ try {
   const prompt = 'Change blue to green in notes.txt.'
 
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await page.getByRole('button', { name: 'Trust this directory', exact: true }).click()
+  await page.locator('[data-test="trust-approve"]').click()
   await page.getByRole('dialog', { name: 'Project trust', exact: true }).waitFor({ state: 'hidden' })
 
   /** One turn that writes `colour` into notes.txt, after `first` if given, approving whatever it asks. */

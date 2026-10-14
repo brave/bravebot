@@ -63,9 +63,10 @@ for this run, as answering yes to the startup question does, and nothing else: d
 bravebot --trust-workspace -p "summarise what src/ does"
 ```
 
-A run in a directory where a session once kept the answer (`r` at the startup question), or inside
-the git worktree whose root it was kept about, opens trusting the directory without the flag, and says so on stderr with how to take it back. The flag is read from
-the command line only, so a settings file or a checkout cannot turn it on.
+A run in a directory where a session once kept a yes (`y` at the startup question), or inside the
+git worktree whose root it was kept about, opens trusting the directory without the flag, and says so
+on stderr with how to take it back. The flag is read from the command line only, so a settings file
+or a checkout cannot turn it on.
 
 ## Piped input is untrusted and private, always
 

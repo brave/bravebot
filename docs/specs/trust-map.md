@@ -256,10 +256,10 @@ fetched page into a project nobody may edit.
 <a id="TRUST-6"></a>
 ### TRUST-6: the map belongs to the session, not the directory
 
-Every session start asks, whatever any earlier session in that directory answered, unless the person
-said to remember the answer there ([TRUST-23](#TRUST-23)). `/clear` begins a session and therefore
-asks, on the same terms. `--resume` does not ask, and restores the map from the record of the session
-chosen; a record from before maps were kept has none, and is asked about.
+A session start asks unless an earlier yes was kept for that directory ([TRUST-23](#TRUST-23)).
+A no is never kept, so a directory answered with a no asks again. `/clear` begins a session and
+therefore asks, on the same terms. `--resume` does not ask, and restores the map from the record of
+the session chosen; a record from before maps were kept has none, and is asked about.
 
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
@@ -271,10 +271,10 @@ another turn; a pre-turn copy cannot replace it.
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
 
-A remembered answer is the answer and nothing else the session held. The session it settles starts
-from the rule a yes writes and from no other: a path an earlier session's writes marked untrusted, a
-directory it opened, a file it vouched for, and a no given inside the tree are all left behind with
-that session, as they are when the person presses `y` again.
+A kept yes is the yes and nothing else the session held. The session it settles starts from the rule
+a yes writes and from no other: a path an earlier session's writes marked untrusted, a directory it
+opened, a file it vouched for, and a no given inside the tree are all left behind with that
+session, as they are when the person presses `y` again.
 
 [MEMORY-5](definition-memory.md#MEMORY-5) specifies one path that is not left behind: a
 definition's memory a write left untrusted is recorded outside the session, and before every turn in
@@ -296,21 +296,22 @@ TRUST-1 rules out: it is an answer a person gave, about one rule text from one n
 rule decides is whether they are asked rather than what is trusted. The map is still asked about
 afresh, so a session inheriting such a grant trusts no path nobody vouched for.
 
-**Why.** The question grants standing permission. Honouring last week's yes as though it had been
-given for every session grants it on behalf of a user who was never asked whether it should last,
-and trust assumed from silence is not trust granted. A resume is not an exception: the answer
-honoured is the one that session's own user gave, and it carries the rules that session's writes
-recorded, which is what stops a resumed turn reading back a file an earlier turn of the same session
-poisoned. Nor is a remembered answer: the person was asked exactly that, on a screen that named the
-file it would be written to.
+**Why a yes lasts.** The question grants standing permission over a tree, and it says that the yes
+is kept: what it keeps, how far it reaches, the file it is written in and how to take it back are on
+the screen before the key is taken. A person who presses `y` has been asked whether it should
+last. Asking again would protect only a person who reads the tree before pressing `y` each time,
+since a fresh yes trusts whatever arrived since the last session too, and a question answered every
+morning is answered without being read. A kept yes is narrowed to what a yes in that directory could
+only mean (TRUST-23). A resume is not an exception to the question being asked: the answer honoured
+is the one that session's own user gave, and it carries the rules that session's writes recorded,
+which is what stops a resumed turn reading back a file an earlier turn of the same session poisoned.
 
-**Why this answer lasts only where the person said so.** It covers a whole tree and everything that
-appears in it afterwards, and a granted rule does not: one text, from one file, lapsing the moment
-the checkout edits it. So a granted rule may last by default and this answer may not. What asking
-again does not buy is a reading of what arrived since the last session, since a fresh yes trusts
-that too and a question answered every morning is answered without it. The person is therefore the
-one who chooses the lifetime, and a kept answer is narrowed to what a yes in that directory could
-only mean (TRUST-23).
+**Why a no does not.** A no grants nothing, so there is nothing to carry forward. Asking again is
+how a person changes their mind, and a session started with nothing trusted has no other question
+that vouches for the whole tree at once.
+
+**Why one key.** A second key for a longer lifetime would put a question about lifetime to a person
+who has already decided to vouch for the tree, on a screen that names what a yes keeps either way.
 
 `verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
@@ -328,11 +329,12 @@ only mean (TRUST-23).
 ### TRUST-7: the startup question covers the whole workspace, and declining trusts nothing
 
 At startup the user is asked whether they trust the working directory. Yes writes a rule covering
-the tree. Declining writes nothing, so every write is shown. Leaving at the question starts no
-session. Where the answer may be kept ([TRUST-23](#TRUST-23)), a third key, `r`, writes the same rule
-as yes and keeps the answer for later sessions; where it may not, `r` is neither shown nor answers.
-It is held to the rule the other keys are, so an `r` arriving with other bytes answers nothing. The
-desktop interface offers the same answer as a third button, on the same terms.
+the tree and, where the answer may be kept ([TRUST-23](#TRUST-23)), keeps it for later sessions.
+Declining writes nothing, so every write is shown, and keeps nothing, so the next session asks
+again. Leaving at the question starts no session. There is no third key: `r` answers nothing. Where
+the yes may not be kept the question says so, and yes trusts this session only. A key is held to
+the rule the others are, so a `y` or `n` arriving with other bytes answers nothing. The desktop
+interface offers the same two answers as two buttons, on the same terms.
 
 A session running in the mode that asks about nothing is the one exception: the question is not put,
 and the map is the one a yes would have written. That mode approves vouching for every quarantined
@@ -358,11 +360,11 @@ every permission says the flag answered, which is what is in force, and never wr
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`
 `verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
-`verified-by: bravebot_tui::trust_prompt::r_remembers_only_at_a_question_that_offers_it`
-`verified-by: bravebot_tui::trust_prompt::an_r_nobody_pressed_on_its_own_remembers_nothing`
-`verified-by: bravebot_tui::trust_prompt::remembering_trusts_exactly_what_yes_trusts`
-`verified-by: bravebot_tui::trust_prompt::the_prompt_not_offering_to_remember_says_nothing_of_it`
-`verified-by: bravebot_ui_bridge::remembered_trust::an_answer_is_kept_only_where_the_question_offered_it`
+`verified-by: bravebot_tui::trust_prompt::r_answers_nothing`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_that_cannot_keep_a_yes_says_so`
+`verified-by: bravebot_tui::trust_prompt::a_question_that_cannot_keep_a_yes_takes_y_at_every_scroll`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_no_is_not_kept_and_the_next_session_asks`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_where_keeping_is_not_offered_trusts_this_session_and_writes_nothing`
 
 ## The ways a rule is written
 
@@ -1127,29 +1129,30 @@ tree, which is why it is narrower than the answer it keeps.
 of definitions' memories a write left untrusted.
 
 <a id="TRUST-23"></a>
-### TRUST-23: a remembered yes answers for later sessions started in that directory, or below the root of its git worktree
+### TRUST-23: a kept yes answers for later sessions started in that directory, or below the root of its git worktree
 
-**Offered.** Remembering is offered at the question about the working directory and nowhere else:
-not at a directory a settings file named, not at the rules a checkout proposed. The terminal
-interface offers it as a third key, `r`, and the desktop interface as a third button beside the two
-answers. Both read and write one record, under the name a turn resolves the directory to, so an
-answer kept in either is honoured by the other and taken back from either. A session in lines reads
-the same record and honours it, but never offers remembering and never writes the record, since it
-has one answer per question and none of them outlives the session ([cli.md](cli.md#CLI-14)): an `r`
-typed there is a line that is not yes, and declines.
-It is offered only where the answer may be kept and later honoured: there is a state directory, the
+**Offered.** The yes at the question about the working directory keeps the answer, and no other
+question does: not a directory a settings file named, not the rules a checkout proposed. The
+terminal interface and the desktop interface read and write one record, under the name a turn
+resolves the directory to, so a yes kept in either is honoured by the other and taken back from
+either. A session in lines reads the same record, puts the same lines before its question, and keeps
+a yes on the same terms ([cli.md](cli.md#CLI-14)). A line that is not yes there declines, and keeps
+nothing.
+A yes is kept only where the answer may be kept and later honoured: there is a state directory, the
 working directory is not a filesystem root, not the user's home and not a directory holding it
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
 working directory is resolved past), the filesystem says when the directory was made, and the
 session is not incognito. One check decides that for every front end, so none keeps or honours an
-answer another would refuse. The question says what remembering does, how far it reaches, how to take it back, and the file it writes, since nobody can endorse a record they
-were not shown. Where the box is too short for those lines they scroll below the keys, and `r` in the
-terminal interface is taken only once they have all been on the screen in one draw; until then the
-row above the keys says why it does nothing, or that they do not fit where they are taller than the
-box, and `y` still answers. An answer to remember that the question did not offer, or given with a no, is
-refused and writes nothing; the question once answered offers nothing more.
+answer another would refuse. The question says what the yes keeps, how far it reaches, how to take it
+back, and the file it writes, since nobody can endorse a record they were not shown. Where the box is
+too short for those lines they scroll below the keys, and `y` in the terminal interface is taken only
+once they have all been on the screen in one draw; until then the row above the keys says why it does
+nothing, or that they do not fit where they are taller than the box, and `n` still answers. Where
+the yes may not be kept, the question says that the answer cannot be kept and that a session started
+here later asks again, names no file, and `y` trusts this session only and is taken at once. A no
+writes nothing, and the question once answered offers nothing more.
 
-**Kept.** Choosing it writes the rule a yes writes, for this session, and appends one line to
+**Kept.** A yes writes the rule a yes writes, for this session, and appends one line to
 `~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
@@ -1161,7 +1164,7 @@ desktop interface, by a session in lines, or by a resume or reopening whose reco
 not asked. It starts from the rule a yes writes and from nothing else
 ([TRUST-6](#TRUST-6)), less the memories [MEMORY-5](definition-memory.md#MEMORY-5) keeps
 untrusted, and says as it opens that it is trusting the directory because the person
-said to remember it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
+trusted it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
 it names that command in the interface that draws, and the file holding the answer with the lines
 naming the directory as what to delete, since a directory whose path is spelled alike shares the
 file. A session started below the
@@ -1197,7 +1200,7 @@ settles a session here, about this directory or the root of its git worktree, th
 trusting this directory, as a session in lines does, and says so on stderr with
 when it was kept and how to take it back. Where it holds none the run trusts nothing. In an
 incognito session the record is read, as the other records are
-([incognito.md](incognito.md#INCOG-5)), and remembering is not offered.
+([incognito.md](incognito.md#INCOG-5)), and a yes is not kept.
 
 **Why.** See TRUST-6: a fresh yes already trusts whatever arrived since the last session, so asking
 again only protects a person who reads the tree before pressing `y`, and a question answered daily
@@ -1229,7 +1232,8 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_directory_named_another_way_shares_the_terminals_record`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_answer_answers_for_that_directory_alone`
-`verified-by: bravebot_ui_bridge::remembered_trust::an_answer_is_kept_only_where_the_question_offered_it`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_no_is_not_kept_and_the_next_session_asks`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_is_written_once_and_an_unreadable_answer_answers_nothing`
 `verified-by: bravebot_ui_bridge::remembered_trust::an_answer_that_cannot_be_kept_is_still_a_yes_for_this_session`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
 `verified-by: bravebot_agent::incognito::no_trusted_directory_is_written_down`
@@ -1238,15 +1242,27 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
-`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
+`verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
+`verified-by: bravebot_cli::plain::the_question_in_lines_names_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_cli::main::a_kept_answer_trusts_a_one_shot_run_there_and_says_so`
 `verified-by: bravebot_cli::main::a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere`
 `verified-by: bravebot_cli::main::a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted`
-`verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
-`verified-by: bravebot_tui::trust_prompt::r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen`
-`verified-by: bravebot_tui::trust_prompt::a_question_not_offering_to_remember_never_takes_r`
+`verified-by: bravebot_tui::app::a_yes_is_kept_and_the_next_session_there_is_not_asked`
+`verified-by: bravebot_tui::app::a_no_is_not_kept_and_the_next_session_there_is_asked`
+`verified-by: bravebot_tui::app::a_yes_the_record_refuses_says_so_and_a_yes_with_no_record_says_nothing`
+`verified-by: bravebot_agent::trusted::a_yes_is_written_and_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::a_no_and_a_yes_with_no_record_write_nothing`
+`verified-by: bravebot_agent::trusted::a_yes_that_cannot_be_written_says_so`
+`verified-by: bravebot_agent::incognito::a_yes_is_offered_no_record_to_be_kept_in`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_that_keeps_a_yes_names_the_record_it_writes`
+`verified-by: bravebot_tui::trust_prompt::y_trusts_nothing_until_the_record_it_keeps_has_been_on_the_screen`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_that_cannot_keep_a_yes_says_so`
+`verified-by: bravebot_tui::trust_prompt::a_question_that_cannot_keep_a_yes_takes_y_at_every_scroll`
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
@@ -1255,8 +1271,8 @@ yes writes rather than everything the session went on to record.
 ### TRUST-24: a kept answer is shown with the session's rules and taken back where they are
 
 `/status` in the terminal interface, and the permissions a desktop session lists, say that a later
-session started in the working directory will trust it without asking, when the person said to
-remember it, the file it is kept in and how to withdraw it. Where the answer was kept about the root
+session started in the working directory will trust it without asking, when the person trusted
+it, the file it is kept in and how to withdraw it. Where the answer was kept about the root
 of the git worktree around the directory ([TRUST-23](#TRUST-23)), they name that root. The record is
 read when the report is drawn rather than when the session began, since it belongs to every session
 in the directory. Nothing is said where nothing is kept.
@@ -1414,8 +1430,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
-- **A kept answer vouches for what arrived while nobody was asked.** A session started from a
-  remembered answer trusts its directory as a yes given at its start would (TRUST-23), so both costs
+- **A kept yes vouches for what arrived while nobody was asked.** A session started from a kept
+  yes trusts its directory as a yes given at its start would (TRUST-23), so both costs
   above apply to it: what landed in the tree since is trusted, and what an earlier session marked
   untrusted is forgotten. What it loses beyond a yes is the question itself, the moment a person who
   has just pulled a branch or added a dependency might have answered `n`. The line the session opens
@@ -1424,7 +1440,7 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   marked untrusted beside the answer would close the second half, and is not built.
   [MEMORY-5](definition-memory.md#MEMORY-5) keeps it for definitions' memories alone.
 - **A directory is told from the one before it at the same path by what the filesystem keeps.**
-  Where the filesystem does not say when a directory was made, `r` is not offered and every session
+  Where the filesystem does not say when a directory was made, a yes is not kept and every session
   there is asked, as before. Linux gives a freed number to the next directory made, so there the
   time alone tells a replacement apart, which holds because it was made after the answer and
   nobody can set it. Where the platform gives a directory no number on the volume, which is Windows,

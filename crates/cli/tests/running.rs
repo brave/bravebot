@@ -2658,6 +2658,73 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
     );
 }
 
+/// CLI-31. A model `-i` is given that nothing serves ends the start before the terminal is taken,
+/// as the same name given to a one-shot run's `--model` does, rather than opening a session whose
+/// first turn could not be sent.
+///
+/// A property of the process: the terminal check comes first, so `script` is what reaches it, and
+/// what the clause forbids is the screen being drawn, which only the bytes written can show.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_model_given_to_a_session_on_a_prompt_that_nothing_serves_ends_the_start() {
+    let scratch = Scratch::new("cli-running-interactive-unserved").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            },
+            "model": "openrouter/z-ai/glm-4.6"
+        }"#,
+    );
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+        (
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        ),
+        ("OPENROUTER_API_KEY", "a-token"),
+    ];
+
+    // Bounded, because a start that was not refused opens the screen and waits for a
+    // person: the fault this test rejects would hang the suite rather than fail it.
+    let mut refused = in_a_terminal_command(
+        &scratch.path,
+        None,
+        &environment,
+        &["-i", "'fix the failing test'", "--model", "nosuch/model"],
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("script runs the built binary in a terminal");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while refused.try_wait().expect("poll the run").is_none() {
+        if std::time::Instant::now() > deadline {
+            refused.kill().expect("stop the run that opened a screen");
+            let _ = refused.wait();
+            panic!("the start opened a session on a model nothing serves");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let refused = refused.wait_with_output().expect("collect the run");
+    let (transcript, _) = said(&refused);
+    assert_eq!(refused.status.code(), Some(3), "{transcript}");
+    assert!(
+        transcript.contains("nosuch/model") || transcript.contains("configured"),
+        "the start was not refused for the model: {transcript}"
+    );
+    assert!(
+        !transcript.contains('\x1b'),
+        "the terminal was taken before the model was refused: {transcript:?}"
+    );
+}
+
 /// And a session in lines on a machine that has configured a service opens: the refusal is about
 /// what is configured, not about the way the session was started.
 ///
@@ -6878,7 +6945,7 @@ fn a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trus
         "the kept answer did not trust the file"
     );
     assert!(
-        stderr.contains("you said to remember it") && stderr.contains("/forget-trust"),
+        stderr.contains("you trusted it") && stderr.contains("/forget-trust"),
         "the run did not say it was trusting a kept answer: {stderr}"
     );
 }

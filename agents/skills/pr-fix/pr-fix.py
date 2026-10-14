@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bring a brave/bravebot pull request up to date and green, in a worktree of its own.
 
-    pr-fix.py start <pr>                fetch, check the head out in ../<checkout>-<pr>, rebase
+    pr-fix.py start <pr>                fetch, check the head out in .worktrees/pr-<pr>, rebase
     pr-fix.py continue <pr>             stage the resolved files and carry on
     pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change
@@ -20,12 +20,14 @@ parallel, each in a process of its own. It works from the main clone or from any
 
 import argparse
 import concurrent.futures
+import hashlib
 import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -120,6 +122,18 @@ query($owner: String!, $name: String!, $number: Int!) {
 """
 
 
+def lock_path(here):
+    """The lock file for the repository `here` belongs to, named from its common git directory.
+
+    It is in the temp directory because on macOS the sandbox refuses a write under .git from any
+    program but git. It only has to serialise these scripts, and every worktree of one clone has the
+    same common git directory.
+    """
+    common = Path(here, git("rev-parse", "--git-common-dir", cwd=here)).resolve()
+    digest = hashlib.sha256(str(common).encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"pr-fix-{digest}.lock"
+
+
 class SharedRepo:
     """One process at a time changes what every worktree shares: remotes, fetched refs, the worktree list."""
 
@@ -129,8 +143,7 @@ class SharedRepo:
     def acquire(self, here):
         if fcntl is None or self.handle:
             return
-        path = Path(here, git("rev-parse", "--git-common-dir", cwd=here)) / "pr-fix.lock"
-        self.handle = open(path, "w")
+        self.handle = open(lock_path(here), "w")
         fcntl.flock(self.handle, fcntl.LOCK_EX)
 
     def release(self):

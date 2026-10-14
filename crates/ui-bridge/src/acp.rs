@@ -16,7 +16,7 @@ use crate::bridge::Bridge;
 use crate::protocol::{Event, Request};
 use bravebot_agent::diff::Change;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -74,8 +74,9 @@ struct Shared {
     write: Writer,
     wake: Box<dyn Fn() + Send>,
     sessions: HashMap<String, Session>,
-    /// Sessions the bridge asked the trust question about before `session/new` had returned.
-    unasked: HashSet<String>,
+    /// Sessions the bridge asked the trust question about before `session/new` had returned, with
+    /// the record a yes is kept in where the question offered to keep it.
+    unasked: HashMap<String, Option<String>>,
     asked: HashMap<u64, Asked>,
     next: u64,
     queued: Vec<Queued>,
@@ -134,7 +135,7 @@ impl Acp {
             write,
             wake,
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -310,16 +311,40 @@ impl Acp {
             held.prompt = Some(id);
             held.cancelled = false;
             let directory = held.directory.clone();
-            shared.unasked.remove(&session).then_some(directory)
+            shared
+                .unasked
+                .remove(&session)
+                .map(|keeping| (directory, keeping))
         };
-        if let Some(directory) = trust {
+        if let Some((directory, keeping)) = trust {
             let mut shared = self.lock();
             let title = format!("Trust {}", plain(&directory));
+            // A yes is kept wherever the bridge offered to keep it, so the question says so and
+            // names the record, since nobody can endorse a record they were not shown.
+            let (allow, text) = match keeping {
+                Some(record) => (
+                    "Trust and remember",
+                    format!(
+                        "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
+                        plain(&record)
+                    ),
+                ),
+                None => (
+                    "Trust for this session",
+                    "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
+                ),
+            };
             shared.ask(
                 &session.clone(),
                 Asked::Trust { session, turn },
-                json!({ "toolCallId": "trust", "title": title, "kind": "other", "status": "pending" }),
-                options(false, "Trust this directory", "Do not trust"),
+                json!({
+                    "toolCallId": "trust",
+                    "title": title,
+                    "kind": "other",
+                    "status": "pending",
+                    "content": [{ "type": "content", "content": { "type": "text", "text": text } }],
+                }),
+                options(false, allow, "Do not trust"),
             );
             return;
         }
@@ -635,7 +660,8 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
     let data = &event.data;
     match event.name {
         "trust.request" => {
-            shared.unasked.insert(session);
+            let keeping = data["keeping"].as_str().map(str::to_string);
+            shared.unasked.insert(session, keeping);
         }
         "narration" => {
             if let Some(text) = data["text"].as_str() {
@@ -1592,7 +1618,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -1622,7 +1648,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),

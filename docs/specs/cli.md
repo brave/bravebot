@@ -643,13 +643,15 @@ Every question is put the same way: what it is about, a line at a time, then the
 to answer it. Only the affirmative approves. Any other line refuses, and so does the end of the
 input. One answer per question and no second key, so the answers that record something, stop asking
 about these programs and remember this line, are not offered, and nothing answered here outlives
-the session. The startup question about the working directory
+the session, with the one exception below. The startup question about the working directory
 ([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
-to that one starts no session at all. It is not put where the person told the interface that draws,
-or the desktop, to remember the answer about this directory
-([TRUST-23](trust-map.md#TRUST-23)): that record is read here as it is there, and the session says
-it is trusting the directory for that reason, when, and how to be asked again. Remembering is still
-not offered here, and nothing here writes the record.
+to that one starts no session at all. A yes to it is kept, as it is in the interface that draws
+([TRUST-23](trust-map.md#TRUST-23)): the lines before the question say what a yes keeps and name the
+file it is written to, so all of it is read before the answer is given. Where a yes cannot be kept,
+those lines say so and a yes trusts this session only. A no, any other line and the end of the input
+keep nothing. The question is not put where an answer was kept about this directory: that record is
+read here as it is there, and the session says it is trusting the directory for that reason, when,
+and how to be asked again.
 
 It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
 CLI-13, which belong to every way of starting, with the `--agent` of CLI-17, and with nothing else:
@@ -700,7 +702,11 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
-`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
+`verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
+`verified-by: bravebot_cli::plain::the_question_in_lines_names_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
@@ -1580,9 +1586,9 @@ as from a typed line. `-i` composes with every flag taken out of the line before
 on it, as a bare `bravebot` does, `--dangerously-skip-permissions` and `--agent` among them. It
 comes first among the rest, and is refused with the status for an argument (CLI-6), before the
 terminal is taken, when no prompt follows it, when the prompt is blank or opens with `-` and holds no
-whitespace, when anything follows the prompt, when it follows a one-shot run's own options, and when
-it follows another way of starting a session: `--resume`, `--continue`, `--fork`, `--from-pr` or
-`--bg`. It is refused the same way where stdin or stdout is not a terminal, and the refusal names
+whitespace, when anything but `--model` and `--effort` follows the prompt, when either has no value,
+when it follows a one-shot run's own options, and when it follows another way of starting a session:
+`--resume`, `--continue`, `--fork`, `--from-pr` or `--bg`. It is refused the same way where stdin or stdout is not a terminal, and the refusal names
 `-p`.
 
 **Why.** A script that hands somebody a task to watch otherwise has the one-shot run, which nobody
@@ -1598,26 +1604,41 @@ characters nothing draws, and sent unchanged it would reach the planner as words
 A flag of its own rather than the positional prompt, because scripts call `bravebot "<task>"` as the
 one-shot it is, and opening the interface there would leave them waiting at a screen nobody reads.
 
-Anything after the prompt is refused rather than ignored, for the reason CLI-13 refuses a settings
-path that is not a file. `--model`, `--effort` and the other options for a task describe a one-shot
-run, and a session that opened on a model other than the one the line named would be running under a
-choice its author did not make. The prompt is one argument because a prompt a script assembled holds
-line breaks and indentation that are part of it, and joining words would flatten them. After another
-way of starting, `-i` would be dropped by one that reads no further than its value, read as the
-start of a one-shot run's arguments by another, or sent as the first word of a background session's
-prompt, and none of those is the session the line asked for.
+`--model <name>` and `--effort <level>` may follow the prompt, in either order. They are read as a
+one-shot run reads them (CLI-9, CLI-16), so a blank name or a word that is no level is refused with
+the status for an argument. The session opens on them over every file and every pick recorded by
+`/model` and `/effort` ([BACKEND-11](backends.md#BACKEND-11), [BACKEND-43](backends.md#BACKEND-43)),
+and they record nothing: the line describes this start, so the next session opens on the pick it
+would have had without it, and the two commands change the model and the level once the session is
+open. A model that nothing serves or that the machine-level layer refuses ends the start before the
+terminal is taken, as it does a one-shot run, and names the file that refused
+([BACKEND-48](backends.md#BACKEND-48)). They follow the prompt rather than precede it because a
+one-shot run takes its first word that is no option as the task, and `-i` behind a task's options is
+refused for that reason.
+
+Anything else after the prompt is refused rather than ignored, for the reason CLI-13 refuses a
+settings path that is not a file. `--file` and the other options for a task describe a one-shot run,
+and a session that dropped them would run without what the line asked for. The prompt is one
+argument because a prompt a script assembled holds line breaks and indentation that are part of it,
+and joining words would flatten them. After another way of starting, `-i` would be dropped by one
+that reads no further than its value, read as the start of a one-shot run's arguments by another, or
+sent as the first word of a background session's prompt, and none of those is the session the line
+asked for.
 
 Refused without a terminal rather than run as a one-shot, because the line asked for somebody to
 watch the task and be able to stop it. A one-shot in its place, with `--dangerously-skip-permissions`,
 would make every change with nobody watching.
 
-**Known cost.** `--model` and `--effort` do not name the model or the level of a session, this one
-or a bare one: those are what `/model` and `/effort` recorded, or what a settings file names, and the
-two commands change them once the session is open.
+**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model` and
+`/effort` recorded or a settings file names. Only `-i` takes them from the line.
 
 `verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
 `verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`
-`verified-by: bravebot_cli::main::anything_after_the_prompt_is_refused_by_name`
+`verified-by: bravebot_cli::main::anything_else_after_the_prompt_is_refused_by_name`
+`verified-by: bravebot_cli::main::a_model_and_a_level_after_the_prompt_reach_the_session`
+`verified-by: bravebot_cli::main::a_blank_model_or_an_unknown_level_after_the_prompt_is_refused`
+`verified-by: bravebot_tui::persist::a_model_and_a_level_the_command_line_named_are_recorded_nowhere`
+`verified-by: bravebot_cli::running::a_model_given_to_a_session_on_a_prompt_that_nothing_serves_ends_the_start`
 `verified-by: bravebot_cli::main::a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task`
 `verified-by: bravebot_cli::main::a_session_flag_beside_another_way_of_starting_is_refused`
 `verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`

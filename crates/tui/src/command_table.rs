@@ -44,8 +44,8 @@ pub(crate) const ADD_DIR_CLOSE: &str = "close";
 /// The line that moves the session to another working directory, taking the path as its argument.
 pub(crate) const CD_COMMAND: &str = "/cd";
 
-/// The line that withdraws the answer an earlier session was told to remember about the working
-/// directory, so the next session begun there is asked (TRUST-24).
+/// The line that withdraws the yes an earlier session kept about the working directory, so the
+/// next session begun there is asked (TRUST-24).
 pub(crate) const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 
 /// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).

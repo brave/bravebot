@@ -70,7 +70,7 @@ it takes appears dimly after the cursor until you start typing one.
 Reports everything the session knows about itself:
 
 - the working directory, and anything opened with `/add-dir`, and whether a later session started
-  there will trust it without asking because you [said to remember](#forget-trust);
+  there will trust it without asking because a yes was [kept](#forget-trust);
 - each [checkout](../customize/agents.md#a-checkout-of-its-own) a delegate kept or that could not be
   removed, with its number, the commit it holds and the delegate it was made for, since the
   transcript says one was kept but not where;
@@ -314,9 +314,9 @@ about again.
 
 ## `/forget-trust`
 
-Takes back the answer you said to remember at the question a session asks about its directory, with
-`r` here or **Trust and remember** in the desktop app, which keep it in one place. The next session
-started in this directory asks again, in either. This session keeps the answer it already has;
+Takes back the yes that was kept at the question a session asks about its directory, whether given
+here or in the desktop app, which keep it in one place. The next session started in this directory
+asks again, in either. This session keeps the answer it already has;
 [`/clear`](#clear) starts one that asks. Typed while a turn runs with nothing waiting, it is carried
 out at once, and the turn goes on under the answer it already has.
 

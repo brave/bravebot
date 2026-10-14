@@ -5,6 +5,9 @@
 //! Declining means everything is untrusted, so every write is shown, which is the correct
 //! behaviour for a directory whose contents came from somewhere else.
 //!
+//! A yes is kept for later sessions wherever it can be written down (TRUST-23), and the question
+//! says so and shows the file before it takes the key. A no is never kept.
+//!
 //! Nothing is trusted by default. An unreadable terminal, an unexpected key, or a lost event
 //! stream all resolve to declining, because the failure mode of guessing wrong here is that a
 //! session silently writes to files nobody vouched for.
@@ -43,14 +46,12 @@ use crate::theme;
 /// What the user decided about the working directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
+    /// Trust the directory. At the working directory's own question, where the caller offered a
+    /// record, the caller also writes the answer down for later sessions started in this directory
+    /// or below its git root (TRUST-23). A directory a settings file named and the rules a checkout
+    /// proposed are requests from the tree, and a standing answer to one would be the tree's, so
+    /// nothing is written for them.
     Trust,
-    /// Trust, and keep the answer for later sessions started in this directory or below its git root (TRUST-23).
-    ///
-    /// Grants this session what [`Answer::Trust`] grants and nothing more; what differs is that the
-    /// caller writes it down. Only ever the answer at the working directory's own question, and only
-    /// where the caller offered it: a directory a settings file named and the rules a checkout
-    /// proposed are requests from the tree, and a standing answer to one would be the tree's.
-    Remember,
     Decline,
     /// Leave without starting a session at all.
     Leave,
@@ -62,11 +63,11 @@ pub enum Answer {
 /// Trusting records the workspace root, which covers everything beneath it. Declining records
 /// nothing, leaving an empty map in which no path is trusted.
 ///
-/// Asked afresh every time a session begins unless an earlier one here was told to remember
-/// (TRUST-23), in which case this is not called. `keeping` is where that answer would be written, or
-/// `None` where it may not be: the answer is offered only with somewhere to put it, since a key that
-/// said it remembered and wrote nothing would be the next session asking somebody who was told it
-/// would not. Writing it is the caller's, which holds the session it is recorded against.
+/// Asked afresh every time a session begins unless an earlier yes here was kept (TRUST-23), in which
+/// case this is not called. `keeping` is where a yes would be written, or `None` where it may not
+/// be: the question says which, since a yes that said it was kept and wrote nothing would be the
+/// next session asking somebody who was told it would not. Writing it is the caller's, which holds
+/// the session it is recorded against.
 ///
 /// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
 /// but a request to leave, so no session begins at all.
@@ -76,8 +77,8 @@ pub fn ask<B: Backend>(
     keeping: Option<&Path>,
     carried: &mut String,
 ) -> Option<(TrustStore, Answer)> {
-    // Kept across draws for the reason the rules question keeps its own: what `r` needs is that what
-    // it writes was on the screen, whichever draw put it there.
+    // Kept across draws for the reason the rules question keeps its own: what `y` needs is that what
+    // it keeps was on the screen, whichever draw put it there.
     let mut recorded = false;
     let answer = ask_one(terminal, carried, |frame, offered, scroll| {
         draw(frame, directory, keeping, offered, scroll, &mut recorded)
@@ -155,8 +156,7 @@ fn granting(rules: &[Proposed], answer: impl FnOnce() -> Answer) -> Option<bool>
         return Some(false);
     }
     match answer() {
-        // Never put here, since this question does not offer it; a yes is what it would have been.
-        Answer::Trust | Answer::Remember => Some(true),
+        Answer::Trust => Some(true),
         Answer::Decline => Some(false),
         Answer::Leave => None,
     }
@@ -171,7 +171,7 @@ fn accepted(directories: &[String], mut answer: impl FnMut(&str) -> Answer) -> O
     let mut opening = Vec::new();
     for directory in directories {
         match answer(directory) {
-            Answer::Trust | Answer::Remember => opening.push(directory.clone()),
+            Answer::Trust => opening.push(directory.clone()),
             Answer::Decline => continue,
             Answer::Leave => return None,
         }
@@ -206,12 +206,12 @@ pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore>
 /// what a yes grants here: two functions writing the map would be two readings of TRUST-7, and the
 /// one the tests pin is this one.
 ///
-/// Remembering grants what trusting does, so what a later session is spared asking is what this one
-/// was granted, and nothing the record could come to mean is a rule a yes never writes.
+/// Keeping a yes grants what trusting does, so what a later session is spared asking is what this
+/// one was granted, and nothing the record could come to mean is a rule a yes never writes.
 pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
-        Answer::Trust | Answer::Remember => Some(trusting_the_workspace(directory)),
+        Answer::Trust => Some(trusting_the_workspace(directory)),
         Answer::Decline => Some(bravebot_agent::workspace::trust_store(directory)),
     }
 }
@@ -242,7 +242,6 @@ fn ask_one<B: Backend>(
             furthest: 0,
             page: 1,
             answerable: false,
-            remembering: false,
         };
         // Drawn inside the loop rather than once before it, because the offer to leave is part of
         // what the question says: a panel drawn once would take the first interrupt and then look as
@@ -269,37 +268,34 @@ fn ask_one<B: Backend>(
                     // Presses only: the interface asks for disambiguated keys, so a release arrives
                     // too, and answering twice grants standing permission on one keystroke.
                     Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                    Some(key) => match answer_for(
-                        key,
-                        offered_to_leave,
-                        arrived_alone,
-                        drawn.remembering,
-                        drawn.answerable,
-                    ) {
-                        Response::Answer(answer) => return answer,
-                        Response::Scroll(by) => {
-                            scroll = drawn.moved(scroll, by);
-                            continue;
+                    Some(key) => {
+                        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
+                            Response::Answer(answer) => return answer,
+                            Response::Scroll(by) => {
+                                scroll = drawn.moved(scroll, by);
+                                continue;
+                            }
+                            Response::Page(by) => {
+                                scroll =
+                                    drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
+                                continue;
+                            }
+                            // Kept rather than dropped. What this refused to answer on was a run of keys
+                            // another program wrote, and words that vanish leave a person with no account
+                            // of what just happened: the question stayed up and their virtualenv
+                            // activated, with nothing on the screen joining the two. Carried to the box,
+                            // where they can read it and decide (#403).
+                            Response::Nothing if !arrived_alone => {
+                                carried.extend(input::text_of(&key));
+                                continue;
+                            }
+                            Response::Offer => {
+                                offered_to_leave = true;
+                                continue;
+                            }
+                            Response::Nothing => continue,
                         }
-                        Response::Page(by) => {
-                            scroll = drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
-                            continue;
-                        }
-                        // Kept rather than dropped. What this refused to answer on was a run of keys
-                        // another program wrote, and words that vanish leave a person with no account
-                        // of what just happened: the question stayed up and their virtualenv
-                        // activated, with nothing on the screen joining the two. Carried to the box,
-                        // where they can read it and decide (#403).
-                        Response::Nothing if !arrived_alone => {
-                            carried.extend(input::text_of(&key));
-                            continue;
-                        }
-                        Response::Offer => {
-                            offered_to_leave = true;
-                            continue;
-                        }
-                        Response::Nothing => continue,
-                    },
+                    }
                     None => continue,
                 }
             }
@@ -335,16 +331,15 @@ fn withdraws_the_offer(taken: &event::Event) -> bool {
 
 /// Interpret one key press, or `None` for a key that answers nothing.
 ///
-/// `keeping` is whether `r` is taken: remembering is on offer and what it writes has been on the
-/// screen. Where it is not, `r` is a key like any other. `answerable` is whether a yes may be taken
-/// yet, which at the rules question is not until every rule has been on the screen.
+/// `answerable` is whether a yes may be taken yet, which at the rules question is not until every
+/// rule has been on the screen, and at the working directory's question is not until what a yes
+/// keeps has been.
 ///
 /// Separated from the loop so it can be tested without a terminal.
 fn answer_for(
     key: KeyEvent,
     offered_to_leave: bool,
     arrived_alone: bool,
-    keeping: bool,
     answerable: bool,
 ) -> Response {
     // Raw mode delivers Ctrl-C as a key rather than as a signal, so a prompt that ignored it would
@@ -379,10 +374,9 @@ fn answer_for(
     }
 
     match key.code {
-        // Both yeses wait for everything they grant to have been shown, and no waits for nothing:
+        // A yes waits for everything it grants to have been shown, and no waits for nothing:
         // declining grants nothing, so there is nothing it has to have been told first.
         KeyCode::Char('y' | 'Y') if answerable => Response::Answer(Answer::Trust),
-        KeyCode::Char('r' | 'R') if keeping && answerable => Response::Answer(Answer::Remember),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Response::Answer(Answer::Decline),
         // The keys the write and run prompts scroll with, for the same reason (PROMPT-4).
         KeyCode::Up | KeyCode::Char('k') => Response::Scroll(-1),
@@ -424,8 +418,6 @@ struct Drawn {
     page: u16,
     /// Whether a yes may be taken.
     answerable: bool,
-    /// Whether `r` may be taken, which is never where remembering is not on offer.
-    remembering: bool,
 }
 
 impl Drawn {
@@ -441,12 +433,13 @@ impl Drawn {
 }
 
 /// Draw the question about the working directory, setting `recorded` once a draw has put on the
-/// screen together what `r` does and the record it writes.
+/// screen together what a yes keeps and the record it writes.
 ///
-/// `keeping` is where remembering would write the answer, or `None` where it is not offered. What a
-/// yes grants is named in the question line, which stays above what scrolls, so a yes is taken from
-/// the first draw with the question and the keys whole. What `r` grants beyond it is in the lines
-/// that scroll, so `r` is not taken until they have been shown.
+/// `keeping` is where a yes would be written, or `None` where it cannot be kept. What a yes grants
+/// is named in the question line, which stays above what scrolls. What it keeps beyond this session
+/// is in the lines that scroll, so where there is a record `y` is not taken until they have been
+/// shown. Where there is none the question says so, and `y` is taken from the first draw with the
+/// question and the keys whole.
 fn draw(
     frame: &mut ratatui::Frame,
     directory: &Path,
@@ -473,60 +466,57 @@ fn draw(
         )),
     ];
 
-    // What `r` would do, where it is offered (RUN-19). What its one word cannot say: that later
-    // sessions read it, that the directory has to be this one exactly, and where it is written,
-    // which is part of the grant rather than a footnote because nobody can endorse a record they
-    // were not shown. Not indented, as the command prompt's are: these lines are long enough to
-    // wrap, and a wrapped line starts again at the left edge, under nothing.
+    // What a yes keeps, where there is a record to keep it in (TRUST-23). What the key's label
+    // cannot say: that later sessions read it, that the directory has to be this one exactly, and
+    // where it is written, which is part of the grant rather than a footnote because nobody can
+    // endorse a record they were not shown. Not indented, as the command prompt's are: these lines
+    // are long enough to wrap, and a wrapped line starts again at the left edge, under nothing.
     let width = Laid::width(frame.area());
-    let mut remembering = 0..0;
-    if let Some(path) = keeping {
-        lines.push(Line::raw(""));
-        let from = u32::from(rows_of(&lines, width));
-        lines.push(Line::from(Span::styled(
-            t!(trust_directory_remember_explained),
-            Style::default().fg(theme::muted()),
-        )));
-        // The half a person is most likely to assume the other way, since a remembered answer
-        // elsewhere in this program is kept per directory name, so it is the half that is coloured.
-        lines.push(Line::from(Span::styled(
-            t!(trust_directory_remember_exact),
+    let mut kept = 0..0;
+    lines.push(Line::raw(""));
+    match keeping {
+        Some(path) => {
+            let from = u32::from(rows_of(&lines, width));
+            lines.push(Line::from(Span::styled(
+                t!(trust_directory_remember_explained),
+                Style::default().fg(theme::muted()),
+            )));
+            // The half a person is most likely to assume the other way, since a kept answer
+            // elsewhere in this program is kept per directory name, so it is the half that is
+            // coloured.
+            lines.push(Line::from(Span::styled(
+                t!(trust_directory_remember_exact),
+                Style::default().fg(theme::running()),
+            )));
+            lines.push(Line::from(Span::styled(
+                t!(trust_directory_remember_where),
+                Style::default().fg(theme::muted()),
+            )));
+            lines.push(Line::from(Span::styled(
+                path.display().to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            kept = from..u32::from(rows_of(&lines, width));
+        }
+        None => lines.push(Line::from(Span::styled(
+            t!(trust_directory_not_remembered),
             Style::default().fg(theme::running()),
-        )));
-        lines.push(Line::from(Span::styled(
-            t!(trust_directory_remember_where),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            path.display().to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        remembering = from..u32::from(rows_of(&lines, width));
+        ))),
     }
 
-    let answers = |answerable, taken| {
-        keys(
-            t!(trust_directory_yes),
-            t!(trust_directory_no),
-            keeping.map(|_| (t!(trust_directory_remember), taken)),
-            offered_to_leave,
-            answerable,
-        )
+    let yes = match keeping {
+        Some(_) => t!(trust_directory_remember),
+        None => t!(trust_directory_yes),
     };
-    let laid = Laid::new(
-        frame.area(),
-        &question,
-        &lines,
-        &answers(true, true),
-        scroll,
-    );
-    *recorded |= laid.shows(&remembering);
-    // Where nothing is offered there are no rows to have shown, and an empty run of them counts as
-    // on the screen.
-    let drawn = laid.drawn(true, keeping.is_some() && *recorded);
+    let answers = |answerable| keys(yes, t!(trust_directory_no), offered_to_leave, answerable);
+    let laid = Laid::new(frame.area(), &question, &lines, &answers(true), scroll);
+    *recorded |= laid.shows(&kept);
+    // Where there is no record there is nothing for a yes to wait for, and it is taken as soon as
+    // the question and the keys are whole.
+    let drawn = laid.drawn(keeping.is_none() || *recorded);
 
     let hint = match keeping {
-        Some(_) if !*recorded && !laid.could_show(&remembering) => {
+        Some(_) if !*recorded && !laid.could_show(&kept) => {
             withheld(t!(trust_directory_remember_too_small))
         }
         Some(_) if !*recorded => withheld(t!(trust_directory_remember_unseen)),
@@ -539,7 +529,7 @@ fn draw(
         question,
         lines,
         hint,
-        answers(drawn.answerable, drawn.remembering),
+        answers(drawn.answerable),
     );
     drawn
 }
@@ -570,13 +560,12 @@ fn draw_named(
         keys(
             t!(named_directory_yes),
             t!(named_directory_no),
-            None,
             offered_to_leave,
             answerable,
         )
     };
     let laid = Laid::new(frame.area(), &question, &lines, &answers(true), scroll);
-    let drawn = laid.drawn(true, false);
+    let drawn = laid.drawn(true);
     let hint = laid.rows_hint();
     panel(
         frame,
@@ -655,7 +644,6 @@ fn draw_granted(
         keys(
             t!(granted_rules_yes),
             t!(granted_rules_no),
-            None,
             offered_to_leave,
             answerable,
         )
@@ -670,7 +658,7 @@ fn draw_granted(
             unshowable |= !laid.could_show(rows);
         }
     }
-    let drawn = laid.drawn(unseen == 0, false);
+    let drawn = laid.drawn(unseen == 0);
 
     let hint = if unshowable {
         withheld(t!(granted_rules_too_small))
@@ -719,18 +707,11 @@ fn asking(question: &str, directory: &str) -> Line<'static> {
     ])
 }
 
-/// The answers on offer: the same two keys and the same way out at every question, and `r` between
-/// them where `remember` names it, with whether it is taken yet.
+/// The answers on offer: the same two keys and the same way out at every question.
 ///
 /// `answerable` is whether a yes is taken yet. A key not taken yet is drawn muted rather than
 /// dropped, so the line keeps its shape and the row above it says why.
-fn keys(
-    yes: &str,
-    no: &str,
-    remember: Option<(&str, bool)>,
-    offered_to_leave: bool,
-    answerable: bool,
-) -> Line<'static> {
+fn keys(yes: &str, no: &str, offered_to_leave: bool, answerable: bool) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             "  y",
@@ -744,19 +725,6 @@ fn keys(
         ),
         Span::raw(format!(" {yes}    ")),
     ];
-    if let Some((remember, taken)) = remember {
-        spans.push(Span::styled(
-            "r",
-            Style::default()
-                .fg(if taken {
-                    theme::running()
-                } else {
-                    theme::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(format!(" {remember}    ")));
-    }
     spans.extend([
         Span::styled(
             "n",
@@ -878,16 +846,15 @@ impl Laid {
         }
     }
 
-    /// What this draw decided, given whether a yes and `r` are taken on what has been shown.
+    /// What this draw decided, given whether a yes is taken on what has been shown.
     ///
-    /// Neither is where the question or the keys are cut off: a key pressed at a box that no longer
+    /// It is not where the question or the keys are cut off: a key pressed at a box that no longer
     /// says what it answers, or that has lost the keys that say how to, is not an answer to it.
-    fn drawn(&self, answerable: bool, remembering: bool) -> Drawn {
+    fn drawn(&self, answerable: bool) -> Drawn {
         Drawn {
             furthest: self.furthest,
             page: self.body.height.saturating_sub(1).max(1),
             answerable: self.whole && answerable,
-            remembering: self.whole && remembering,
         }
     }
 
@@ -1000,7 +967,7 @@ mod tests {
             };
             // Arriving with the rest of the line, which is what one read of a write looks like.
             assert_eq!(
-                answer_for(key, false, false, false, true),
+                answer_for(key, false, false, true),
                 Response::Nothing,
                 "{c:?} out of a written line answered the question"
             );
@@ -1015,7 +982,6 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
                 false,
                 true,
-                false,
                 true
             ),
             Response::Answer(Answer::Trust)
@@ -1025,7 +991,6 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
                 false,
                 true,
-                false,
                 true
             ),
             Response::Answer(Answer::Decline)
@@ -1040,10 +1005,7 @@ mod tests {
         for c in " source /tmp/x/env/bin/activate".chars() {
             let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
             // Arriving with the rest of the line, so the question answers nothing on it.
-            assert_eq!(
-                answer_for(key, false, false, false, true),
-                Response::Nothing
-            );
+            assert_eq!(answer_for(key, false, false, true), Response::Nothing);
             carried.extend(crate::input::text_of(&key));
         }
         assert_eq!(carried, " source /tmp/x/env/bin/activate");
@@ -1059,13 +1021,7 @@ mod tests {
 
     /// One key pressed at a question with nothing offered, arriving on its own.
     fn pressing(code: KeyCode) -> Response {
-        answer_for(
-            KeyEvent::new(code, KeyModifiers::NONE),
-            false,
-            true,
-            false,
-            true,
-        )
+        answer_for(KeyEvent::new(code, KeyModifiers::NONE), false, true, true)
     }
 
     /// The rules question as it is first drawn, with no interrupt pressed yet.
@@ -1485,11 +1441,11 @@ mod tests {
             "a yes was on offer with rules below the edge"
         );
         assert_eq!(
-            answer_for(y, false, true, false, drawn.answerable),
+            answer_for(y, false, true, drawn.answerable),
             Response::Nothing
         );
         assert_eq!(
-            answer_for(n, false, true, false, drawn.answerable),
+            answer_for(n, false, true, drawn.answerable),
             Response::Answer(Answer::Decline)
         );
 
@@ -1505,7 +1461,7 @@ mod tests {
         }
         assert!(drawn.answerable, "reading every rule left the yes withheld");
         assert_eq!(
-            answer_for(y, false, true, false, drawn.answerable),
+            answer_for(y, false, true, drawn.answerable),
             Response::Answer(Answer::Trust)
         );
         assert!(
@@ -1594,30 +1550,26 @@ mod tests {
         }
     }
 
-    /// `j` and `k` scroll the startup questions a line as Down and Up do, wherever the question
-    /// offers to remember, and are not answers: a person scrolling a long list with them must not
-    /// grant it, and one pressed with Ctrl is not a scroll.
+    /// `j` and `k` scroll the startup questions a line as Down and Up do, and are not answers: a
+    /// person scrolling a long list with them must not grant it, and one pressed with Ctrl is not a
+    /// scroll.
     #[test]
     fn j_and_k_scroll_the_question_a_line_and_answer_nothing() {
-        for keeping in [false, true] {
-            let press = |code, modifiers| {
-                answer_for(KeyEvent::new(code, modifiers), false, true, keeping, true)
-            };
+        let press = |code, modifiers| answer_for(KeyEvent::new(code, modifiers), false, true, true);
+        assert_eq!(
+            press(KeyCode::Char('j'), KeyModifiers::NONE),
+            Response::Scroll(1)
+        );
+        assert_eq!(
+            press(KeyCode::Char('k'), KeyModifiers::NONE),
+            Response::Scroll(-1)
+        );
+        for letter in ['j', 'k'] {
             assert_eq!(
-                press(KeyCode::Char('j'), KeyModifiers::NONE),
-                Response::Scroll(1)
+                press(KeyCode::Char(letter), KeyModifiers::CONTROL),
+                Response::Nothing,
+                "ctrl-{letter}"
             );
-            assert_eq!(
-                press(KeyCode::Char('k'), KeyModifiers::NONE),
-                Response::Scroll(-1)
-            );
-            for letter in ['j', 'k'] {
-                assert_eq!(
-                    press(KeyCode::Char(letter), KeyModifiers::CONTROL),
-                    Response::Nothing,
-                    "ctrl-{letter}"
-                );
-            }
         }
     }
 
@@ -1629,7 +1581,6 @@ mod tests {
             furthest: 5,
             page: 3,
             answerable: true,
-            remembering: false,
         };
         assert_eq!(drawn.moved(20, -1), 4);
         assert_eq!(drawn.moved(4, 3), 5);
@@ -1675,9 +1626,9 @@ mod tests {
         assert!(!drawn.answerable);
     }
 
-    /// PROMPT-4: no question takes a yes, or `r`, where the terminal cuts off its question or its
-    /// keys, one that took them at a larger size included. A key pressed at a box that no longer
-    /// says what it answers is not an answer to it.
+    /// PROMPT-4: no question takes a yes where the terminal cuts off its question or its keys, one
+    /// that took it at a larger size included. A key pressed at a box that no longer says what it
+    /// answers is not an answer to it.
     #[test]
     fn a_question_a_small_terminal_cuts_off_takes_no_answer() {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
@@ -1702,11 +1653,10 @@ mod tests {
 
         let whole = answers((80, 24));
         assert!(whole.iter().all(|drawn| drawn.answerable), "{whole:?}");
-        assert!(whole[0].remembering, "{whole:?}");
         for size in [(80, 3), (80, 4), (24, 6), (2, 40), (1, 1)] {
             for drawn in answers(size) {
                 assert!(
-                    !drawn.answerable && !drawn.remembering,
+                    !drawn.answerable,
                     "an answer was taken at {size:?}: {drawn:?}"
                 );
             }
@@ -1715,7 +1665,7 @@ mod tests {
 
     /// PROMPT-4: a question that fits its box says nothing of scrolling and does not scroll, one
     /// that fits it exactly included: the blank above the keys is dropped there rather than pushing
-    /// the record `r` writes below the edge.
+    /// the record a yes writes below the edge.
     #[test]
     fn a_question_that_fits_its_box_says_nothing_of_scrolling() {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
@@ -1757,14 +1707,14 @@ mod tests {
             .expect("draw");
         let shown = inside(terminal.backend().buffer());
         assert!(
-            shown.contains("r remembers nothing: what it writes is taller than this box"),
+            shown.contains("y trusts nothing: what it keeps is taller than this box"),
             "{shown}"
         );
-        assert!(!drawn.expect("the question was drawn").remembering);
+        assert!(!drawn.expect("the question was drawn").answerable);
     }
 
     /// PROMPT-4: the question about the working directory goes through the same box, so on a short
-    /// terminal it keeps its question and keys too, and the record `r` would write can be scrolled to.
+    /// terminal it keeps its question and keys too, and the record a yes writes can be scrolled to.
     #[test]
     fn a_directory_question_longer_than_the_box_keeps_its_keys_and_scrolls_to_the_rest() {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
@@ -1787,14 +1737,21 @@ mod tests {
         assert!(shown.starts_with("Trust /work?"), "{shown}");
         assert!(shown.contains("ctrl-c"), "the keys were cut off: {shown}");
         assert!(shown.contains("↑↓"), "nothing said there is more: {shown}");
-        assert!(drawn.answerable);
+        assert!(
+            !drawn.answerable,
+            "a yes was taken with the record it keeps below the edge"
+        );
 
-        let (shown, _) = at(drawn.furthest);
+        let (shown, scrolled) = at(drawn.furthest);
         assert!(
             shown.contains("work-1a2b.jsonl"),
             "the record could not be scrolled to: {shown}"
         );
         assert!(shown.contains("ctrl-c"), "the keys scrolled away: {shown}");
+        assert!(
+            scrolled.answerable,
+            "the yes stayed withheld after the record was shown"
+        );
     }
 
     /// The path is the whole of what the answer is about, and it is the one thing a settings file
@@ -1919,61 +1876,24 @@ mod tests {
         assert_eq!(pressing(KeyCode::Enter), Response::Nothing);
     }
 
-    /// `r` answers only where the question offered it (TRUST-23): at a question that did not, it
-    /// is a key nobody was told about, and a yes that outlives the session is not one to take from
-    /// a key the person was never shown.
+    /// The key that used to keep an answer is not an answer any more (TRUST-23): a yes keeps it
+    /// where it can be kept, and an `r` pressed at the question trusts nothing and declines nothing.
     #[test]
-    fn r_remembers_only_at_a_question_that_offers_it() {
-        let remember = |code, keeping| {
-            answer_for(
-                KeyEvent::new(code, KeyModifiers::NONE),
-                false,
-                true,
-                keeping,
-                true,
-            )
-        };
-        assert_eq!(
-            remember(KeyCode::Char('r'), true),
-            Response::Answer(Answer::Remember)
-        );
-        assert_eq!(
-            remember(KeyCode::Char('R'), true),
-            Response::Answer(Answer::Remember)
-        );
-        assert_eq!(remember(KeyCode::Char('r'), false), Response::Nothing);
-        assert_eq!(remember(KeyCode::Char('R'), false), Response::Nothing);
-    }
-
-    /// The answer that lasts longest is held to the rule the others are: an `r` in a line another
-    /// program wrote answers nothing, and neither does a chord.
-    #[test]
-    fn an_r_nobody_pressed_on_its_own_remembers_nothing() {
-        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
-        assert_eq!(answer_for(r, false, false, true, true), Response::Nothing);
-        let chord = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
-        assert_eq!(
-            answer_for(chord, false, true, true, true),
-            Response::Nothing
-        );
-    }
-
-    /// Remembering grants what yes grants and nothing more (TRUST-23): the record says the question
-    /// need not be put again, not that the answer grew.
-    #[test]
-    fn remembering_trusts_exactly_what_yes_trusts() {
-        let remembered = trust_for(Answer::Remember, here()).expect("remembering starts a session");
-        assert_eq!(
-            Some(remembered),
-            trust_for(Answer::Trust, here()),
-            "remembering granted a different map from yes"
-        );
+    fn r_answers_nothing() {
+        for letter in ['r', 'R'] {
+            assert_eq!(
+                pressing(KeyCode::Char(letter)),
+                Response::Nothing,
+                "{letter}"
+            );
+        }
     }
 
     /// The record is written where the person can see it and read it before agreeing, so the
-    /// question says what `r` does, that the directory has to be this one, and names the file.
+    /// question says that the yes is kept, that the directory has to be this one, and names the
+    /// file.
     #[test]
-    fn the_prompt_offering_to_remember_names_the_record_it_writes() {
+    fn the_prompt_that_keeps_a_yes_names_the_record_it_writes() {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
         let output = rendered(|frame| {
             draw(frame, here(), Some(record), false, 0, &mut false);
@@ -1995,15 +1915,19 @@ mod tests {
             output.contains("/forget-trust"),
             "nothing said how to take it back: {output}"
         );
+        assert!(
+            !output.contains("cannot be kept"),
+            "the prompt said the answer could not be kept: {output}"
+        );
     }
 
-    /// TRUST-23: `r` remembers nothing until what it writes has been on the screen, and `y` answers
-    /// from the first draw. The record is part of what `r` grants, so an `r` taken with it below the
-    /// bottom edge endorses a record nobody was shown; what `y` grants is the directory in the
-    /// question line, which is always on the screen.
+    /// TRUST-23: `y` trusts nothing until what it keeps has been on the screen, and `n` answers from
+    /// the first draw. The record is part of what a yes grants, so a yes taken with it below the
+    /// bottom edge endorses a record nobody was shown; declining grants nothing, so it waits for
+    /// nothing.
     #[test]
-    fn r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen() {
-        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+    fn y_trusts_nothing_until_the_record_it_keeps_has_been_on_the_screen() {
+        let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
         let mut recorded = false;
@@ -2026,70 +1950,70 @@ mod tests {
             !shown.contains("work-1a2b.jsonl"),
             "the record fit: {shown}"
         );
-        assert!(!first.remembering, "r was on offer with its record unseen");
+        assert!(!first.answerable, "y was on offer with its record unseen");
         assert_eq!(
-            answer_for(r, false, true, first.remembering, first.answerable),
+            answer_for(y, false, true, first.answerable),
             Response::Nothing
         );
         assert_eq!(
-            answer_for(y, false, true, first.remembering, first.answerable),
-            Response::Answer(Answer::Trust)
+            answer_for(n, false, true, first.answerable),
+            Response::Answer(Answer::Decline)
         );
         assert!(
-            shown.contains("r remembers nothing: what it writes is not shown yet"),
-            "nothing said why r does nothing: {shown}"
+            shown.contains("y trusts nothing yet: what it keeps is not shown yet"),
+            "nothing said why y does nothing: {shown}"
         );
 
         let (_, scrolled) = at(first.furthest, &mut recorded);
         assert!(
-            scrolled.remembering,
-            "r was withheld once the record was read"
+            scrolled.answerable,
+            "y was withheld once the record was read"
         );
         // And it stays taken once scrolled back, since the record was shown.
         let (shown, back) = at(0, &mut recorded);
         assert_eq!(
-            answer_for(r, false, true, back.remembering, back.answerable),
-            Response::Answer(Answer::Remember)
+            answer_for(y, false, true, back.answerable),
+            Response::Answer(Answer::Trust)
         );
         assert!(!shown.contains("not shown yet"), "{shown}");
     }
 
-    /// TRUST-23: and a question that does not offer `r` never takes it, though it has no record to
-    /// have left below the edge: an empty run of rows is on the screen at every scroll, so a draw
-    /// that took `r` on its record having been shown would take it at every question.
+    /// TRUST-23: and a question that cannot keep a yes takes it at every scroll, though it has no
+    /// record to have left below the edge. Each draw here is the first one the question has made, so
+    /// a yes gated on a record having been shown would be withheld wherever the question scrolls.
     #[test]
-    fn a_question_not_offering_to_remember_never_takes_r() {
-        let drawn = |draw_it: &mut dyn FnMut(&mut ratatui::Frame) -> Drawn| {
-            let mut terminal = Terminal::new(TestBackend::new(72, 20)).expect("terminal");
+    fn a_question_that_cannot_keep_a_yes_takes_y_at_every_scroll() {
+        let drawn_at = |scroll| {
+            let mut terminal = Terminal::new(TestBackend::new(72, 10)).expect("terminal");
             let mut drawn = None;
             terminal
-                .draw(|frame| drawn = Some(draw_it(frame)))
+                .draw(|frame| {
+                    drawn = Some(draw(frame, here(), None, false, scroll, &mut false));
+                })
                 .expect("draw");
             drawn.expect("the question was drawn")
         };
-        let rules = a_long_list(1);
-        for scroll in [0, u16::MAX] {
-            assert!(
-                !drawn(&mut |frame| draw(frame, here(), None, false, scroll, &mut false))
-                    .remembering
-            );
-            assert!(
-                !drawn(&mut |frame| draw_named(frame, "/elsewhere", false, scroll)).remembering
-            );
-            assert!(
-                !drawn(&mut |frame| draw_granted(frame, &rules, false, scroll, &mut [false]))
-                    .remembering
-            );
+        assert!(
+            drawn_at(0).furthest > 0,
+            "the question fit the box, so no scroll was tested"
+        );
+        for scroll in [0, 1, u16::MAX] {
+            assert!(drawn_at(scroll).answerable, "scrolled {scroll}");
         }
     }
 
-    /// And where it is not offered, nothing on the screen says it is.
+    /// Where a yes cannot be kept the question says so and names no record, so a person is not left
+    /// to find out from the next session, and the key is not offered as one that remembers.
     #[test]
-    fn the_prompt_not_offering_to_remember_says_nothing_of_it() {
+    fn the_prompt_that_cannot_keep_a_yes_says_so() {
         let output = rendered(|frame| draw_at_rest(frame, here()));
         assert!(
-            !output.contains("remember"),
-            "a key that answers nothing was shown: {output}"
+            output.contains("cannot be kept"),
+            "nothing said the answer is not kept: {output}"
+        );
+        assert!(
+            !output.contains("trust and remember"),
+            "a key that keeps nothing said it remembers: {output}"
         );
         assert!(!output.contains("/forget-trust"), "{output}");
     }
@@ -2104,13 +2028,18 @@ mod tests {
             bravebot_agent::trusted::Store::new(Path::new("/Users/somebody/.bravebot"), directory);
         let record = store.path();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut drawn = None;
         terminal
             .draw(|frame| {
-                draw(frame, directory, Some(record), false, 0, &mut false);
+                drawn = Some(draw(frame, directory, Some(record), false, 0, &mut false));
             })
             .expect("draw");
         let output = inside(terminal.backend().buffer());
 
+        assert!(
+            drawn.expect("the question was drawn").answerable,
+            "a yes was withheld at a common terminal size: {output}"
+        );
         assert!(output.contains("ctrl-c"), "the keys were clipped: {output}");
         assert!(
             output.contains("trust and remember"),
@@ -2169,9 +2098,9 @@ mod tests {
     #[test]
     fn ctrl_c_leaves_on_the_second_press() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(answer_for(key, false, true, false, true), Response::Offer);
+        assert_eq!(answer_for(key, false, true, true), Response::Offer);
         assert_eq!(
-            answer_for(key, true, true, false, true),
+            answer_for(key, true, true, true),
             Response::Answer(Answer::Leave)
         );
     }
@@ -2183,7 +2112,7 @@ mod tests {
     fn one_interrupt_another_program_wrote_closes_nothing() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_ne!(
-            answer_for(key, false, true, false, true),
+            answer_for(key, false, true, true),
             Response::Answer(Answer::Leave),
             "one byte ended the session before it began"
         );
@@ -2194,11 +2123,8 @@ mod tests {
     #[test]
     fn two_interrupts_that_arrived_together_close_nothing() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(
-            answer_for(key, false, false, false, true),
-            Response::Nothing
-        );
-        assert_eq!(answer_for(key, true, false, false, true), Response::Nothing);
+        assert_eq!(answer_for(key, false, false, true), Response::Nothing);
+        assert_eq!(answer_for(key, true, false, true), Response::Nothing);
     }
 
     /// And an offer does not stand about waiting to be taken. The interrupt an editor writes arrives
@@ -2262,7 +2188,6 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
                 false,
                 true,
-                false,
                 true
             ),
             Response::Nothing
@@ -2272,7 +2197,6 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
                 false,
                 true,
-                false,
                 true
             ),
             Response::Nothing

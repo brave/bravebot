@@ -647,6 +647,11 @@ impl Permissions {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
     }
 
+    /// Whether any `deny` rule is about reading a path.
+    pub fn denies_any_read(&self) -> bool {
+        self.deny.iter().any(|rule| rule.subject == Subject::Read)
+    }
+
     /// How many rules are in force, for a report.
     pub fn len(&self) -> usize {
         self.deny.len() + self.ask.len() + self.allow.len()

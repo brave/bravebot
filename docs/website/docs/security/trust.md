@@ -8,12 +8,11 @@ description: The question at startup, every other way a path comes to be trusted
 
 At startup you are asked whether you trust the working directory.
 
-- **Trust it** and a rule covering the whole tree is written, so ordinary work proceeds without a
-  prompt for every edit.
-- **Decline** and nothing is written, so nothing is trusted and every write is shown to you first.
-- **Trust and remember** (`r` in the terminal interface, a third button in the desktop app) trusts it
-  as a yes does and writes the answer down, so later sessions started in exactly that directory are
-  not asked. See [Remembering the answer](#remembering-the-answer).
+- **Trust it** (`y`) and a rule covering the whole tree is written, so ordinary work proceeds
+  without a prompt for every edit. The answer is written down as well, so later sessions started in
+  that directory are not asked. See [Remembering the answer](#remembering-the-answer).
+- **Decline** (`n`) and nothing is written, so nothing is trusted and every write is shown to you
+  first. You can still work in the directory. A decline is not kept, so the next session asks again.
 - **Leaving at the question starts no session.** It takes Ctrl-C twice, because a program writing
   into your terminal, such as an editor activating a virtualenv, can send one Ctrl-C by itself.
 
@@ -123,8 +122,7 @@ inspected content.
 
 | Gesture | What it grants |
 |---|---|
-| yes at the startup question | the whole working directory, for this session |
-| `r`, or **Trust and remember**, at the startup question | the whole working directory, for this session and every later one started in exactly that directory, until [`/forget-trust`](../reference/commands.md#forget-trust) or **Forget** in the desktop app's permissions |
+| yes at the startup question | the whole working directory, for this session and every later one started in that directory (or below it, where it is a git root), until [`/forget-trust`](../reference/commands.md#forget-trust) or **Forget** in the desktop app's permissions. For this session only where the answer cannot be kept |
 | [`@path`](../using/context.md#naming-a-file-path) or `--file` | that one file, for the rest of the session |
 | [dropping a file](../using/context.md#dropping-a-file) | that one file, wherever on disk it is, plus reach to it |
 | `/add-dir <path>` | that directory: reachable **and** trusted, for this session |
@@ -320,9 +318,9 @@ does.
 
 ## How long an answer lasts
 
-**The map belongs to the session, not the directory.** Every session start asks, whatever any earlier
-session in that directory answered, unless you said to remember the answer there
-([below](#remembering-the-answer)). `/clear` begins a session and therefore asks, on the same terms.
+**The map belongs to the session, not the directory.** A session start asks unless an earlier yes
+was kept for that directory ([below](#remembering-the-answer)). A decline is never kept. `/clear` begins
+a session and therefore asks, on the same terms.
 
 `--resume` does not ask: it restores the map from the record of the session you chose, because the
 answer honoured is the one that session's own user gave. It also carries the rules that session's
@@ -335,32 +333,39 @@ back on the relative ones. That is what keeps a record about the same files afte
 the checkout: full paths on disk would each name somewhere that is no longer there, nothing would
 match, and the session would resume as though nobody had vouched for anything.
 
-The question grants standing permission. Honouring last week's yes would grant it on behalf of a user
-who was never asked, and trust assumed from silence is not trust granted. Remembering is the one
-answer that says it is meant to last, and it is honoured on narrower terms than a yes is given on.
+The question grants standing permission, and it says that a yes is kept: what it covers, how to take
+it back and the file it writes are on the screen before you answer. A yes is honoured on narrower
+terms than it is given on.
 
 ### Remembering the answer
 
-The startup question offers a third answer: `r` in the terminal interface, and **Trust and
-remember** in the desktop app. It trusts the directory exactly as a yes does and writes the answer
-down, one file per directory under `~/.bravebot/trusted`. The question says what it covers, how to
-take it back and the file it writes before you choose it. Both read and write the same file, so an
-answer kept in one is honoured by the other.
+A yes at the startup question trusts the directory and writes the answer down, one file per directory
+under `~/.bravebot/trusted`. Both the terminal and the desktop app read and write the same file, so a
+yes kept in one is honoured by the other. Nothing is written inside the project, so a checkout cannot
+supply or change it.
+
+Where a yes cannot be kept, the question says so and the yes trusts that session only. That is the
+case at your home directory, a directory holding it or a filesystem root, where the filesystem cannot
+say when the directory was made, and in an
+[incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
 
 A later session started in that directory is not asked, and says so as it opens. In the terminal:
 
 ```
-trusting /home/me/projects/app (you said to remember it 3 days ago; /forget-trust to be asked again)
+trusting /home/me/projects/app (you trusted it 3 days ago; /forget-trust to be asked again)
 ```
 
 The desktop app says the same at the top of the conversation, and points to its permissions.
 
 It covers less than a yes does:
 
-- **Exactly that directory.** A session started in a directory inside it or above it is asked. A
-  rule about a directory covers everything below it, so an answer kept about `~/projects` would
-  otherwise answer for a session started in any repository cloned there afterwards. A session
-  started in the remembered directory itself trusts everything below it, as a yes there does.
+- **That directory, and below it only for a git root.** A session started in the directory itself
+  trusts everything below it, as a yes there does. A session started below it is not asked where the
+  directory is the root of a git worktree, which is the nearest directory above the session's that
+  holds a `.git` entry. A nested repository or a submodule is below its own root and is asked unless
+  it was answered about itself. A directory above the one answered about is asked: a rule about a
+  directory covers everything below it, so a yes kept about `~/projects` would otherwise answer for a
+  session started in any repository cloned there afterwards.
 - **That directory, not its name.** The answer records which directory was at the path, by when it
   was made and, except on Windows, its number on the disk. One deleted and made again at the same
   path, such as a fresh clone, is asked about. On Windows the time is all there is to go on, and a
@@ -368,18 +373,16 @@ It covers less than a yes does:
 - **The rule a yes writes, and nothing else.** What the earlier session went on to record, a file it
   marked untrusted included, is not carried. That is the [first cost below](#known-costs), and a
   kept answer does not close it.
-- **Not everywhere.** It is not offered at your home directory, a directory holding it or a
-  filesystem root, where the filesystem cannot say when the directory was made, at a directory your
-  settings file named, with `--dangerously-skip-permissions` (which asks nothing and writes nothing),
-  or in an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind). An
-  incognito session still honours an answer an ordinary one kept.
+- **Not everywhere.** It is not kept at a directory your settings file named, with
+  `--dangerously-skip-permissions` (which asks nothing and writes nothing), or in the cases above. An
+  incognito session still honours a yes an ordinary one kept.
 
 Whenever it is in doubt it asks: a missing or unreadable record, one about an earlier directory at
 the path, or a line about this directory that this build cannot read all mean the question is put.
 
-`bravebot --plain` honours a kept answer too, and says so as it opens, naming the file that holds
-it: delete the lines about the directory from that file to be asked again. It never
-offers to remember one: `r` typed at its question is a line that is not yes, and declines.
+`bravebot --plain` puts the same lines before its question, keeps a yes the same way, and honours a
+kept yes, saying so as it opens and naming the file that holds it: delete the lines about the
+directory from that file to be asked again. A line that is not yes declines and keeps nothing.
 
 [`/status`](#reading-the-map-back) says when a kept answer is in force and names its file.
 [`/forget-trust`](../reference/commands.md#forget-trust) removes it: the session you type it in
@@ -433,8 +436,8 @@ All of these are deliberate.
   so the redirection exception covers less of the traffic. No rule about that would help, since the
   same writes are available one directory up.
 
-- **A kept answer trusts what arrived while nobody was asked.** A session started from `r` trusts its
-  directory as a yes given at its start would, so both costs above apply to it. What it loses beyond a
+- **A kept yes trusts what arrived while nobody was asked.** A session started from a kept yes trusts
+  its directory as a yes given at its start would, so both costs above apply to it. What it loses beyond a
   yes is the question itself: the moment after pulling a branch or adding a dependency when you might
   have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
   of it.

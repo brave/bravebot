@@ -1216,6 +1216,16 @@ fn copy_reply(session: &mut Session, text: &str, copy: impl FnOnce(&str) -> bool
     }
 }
 
+/// The model and level the command line named for the session it opens, which outrank every file
+/// and what `/model` and `/effort` recorded, and are recorded nowhere (CLI-31).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AskedFor {
+    /// The model as typed, resolved against the configuration when the session opens.
+    pub model: Option<String>,
+    /// The level, already checked to be one.
+    pub effort: Option<bravebot_aichat::protocol::Effort>,
+}
+
 /// What a session begins with.
 #[derive(Debug, Default)]
 pub enum Start {
@@ -1223,8 +1233,9 @@ pub enum Start {
     #[default]
     Fresh,
     /// A new session that sends this prompt as its first turn once the questions it opens with are
-    /// answered, as the person's own line (CLI-31).
-    Sending(String),
+    /// answered, as the person's own line, under the model and level the command line named
+    /// (CLI-31).
+    Sending(String, AskedFor),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
@@ -2015,9 +2026,20 @@ fn begin_session(
         .in_workspace(workspace.root())
         .on_tier(config)
         .with_model_labels(config);
+    // What the command line named for this session, which outranks the saved pick and is not
+    // recorded (CLI-31). Read off `start` before the match below consumes it.
+    let asked = match &start {
+        Start::Sending(_, asked) => asked.clone(),
+        _ => AskedFor::default(),
+    };
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
-    // below is asked for, which is the window of whichever model this settles on.
-    session.adopt_model(&settings, config);
+    // below is asked for, which is the window of whichever model this settles on. Not read at all
+    // where the command line named a model, so a pick set aside is not reported for a model that
+    // was never going to be asked for.
+    match &asked.model {
+        Some(name) => session.name_model(config.model_named(name)),
+        None => session.adopt_model(&settings, config),
+    }
     session.set_reference_sources(workspace.reference_sources());
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
@@ -2053,7 +2075,7 @@ fn begin_session(
         _ => None,
     };
     let first_turn = match &start {
-        Start::Sending(prompt) => Some(prompt.clone()),
+        Start::Sending(prompt, _) => Some(prompt.clone()),
         _ => None,
     };
 
@@ -2062,7 +2084,7 @@ fn begin_session(
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2178,6 +2200,10 @@ fn begin_session(
     // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
     // and `/effort` is how this one is changed.
     session.adopt_effort(&settings);
+    if let Some(level) = asked.effort {
+        session.name_effort(level);
+        say_if_unread(&mut session);
+    }
     session.adopt_limit(&settings);
     // No unit test reaches this call, because this function needs a real terminal. A scripted
     // session (`contrib/drive_tui.py`) with a `style` in settings and `/style` typed checks it.
@@ -4554,9 +4580,9 @@ fn set_theme(session: &mut Session, name: &str) {
 /// Where a session's opening trust map came from, which is what it says about it.
 #[derive(Debug, Clone, Copy)]
 enum Whence {
-    /// The person answered the startup question just now, or answered it in an earlier session
-    /// here and said to remember it (TRUST-23). Either way they are here, and are asked about
-    /// whatever else the tree proposes: what they said to remember was that question and no other.
+    /// The person answered the startup question just now, or answered yes to it in an earlier
+    /// session here and the yes was kept (TRUST-23). Either way they are here, and are asked about
+    /// whatever else the tree proposes: what the yes kept was that question and no other.
     Asked,
     /// The record of the session being picked up, so the answer is that session's user's own.
     Resumed,
@@ -5007,7 +5033,9 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
+        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => {
+            Beginning::New
+        }
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -5019,8 +5047,8 @@ fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
 enum Opening {
     /// Settled without asking, and what that says about where it came from.
     Settled(TrustStore, Whence),
-    /// Settled by the answer an earlier session here was told to remember (TRUST-23), which is
-    /// what the session says it started from.
+    /// Settled by a yes an earlier session here gave and kept (TRUST-23), which is what the session
+    /// says it started from.
     Remembered(TrustStore, bravebot_agent::trusted::Kept),
     /// Nothing has answered, so the person is.
     Ask,
@@ -5057,15 +5085,15 @@ fn opening_for(
     }
 }
 
-/// The record of a remembered answer about `root`, and which directory is at `root` now, or `None`
-/// where no answer about it may be kept or honoured ([`bravebot_agent::trusted::record_for`]).
-fn remembering(
+/// The record a yes about `root` is kept in, and which directory is at `root` now, or `None` where
+/// no answer about it may be kept ([`bravebot_agent::trusted::record_to_keep`]).
+fn keeping_in(
     root: &std::path::Path,
 ) -> Option<(
     bravebot_agent::trusted::Store,
     bravebot_agent::trusted::Identity,
 )> {
-    bravebot_agent::trusted::record_for(
+    bravebot_agent::trusted::record_to_keep(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
@@ -5082,11 +5110,35 @@ fn honoured(root: &std::path::Path) -> Option<bravebot_agent::trusted::Honoured>
     )
 }
 
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
+/// What the answer to the startup question does to the record, as the line the session says, or
+/// `None` where nothing was kept: only `Answer::Trust` is a yes, so declining and leaving are a no
+/// (TRUST-23), and a yes with no record has nowhere to be written.
+///
+/// Everything [`opening_trust`] does with an answer once the question is closed, apart from the
+/// map, so a test drives it with each [`crate::trust_prompt::Answer`] and no terminal.
+fn keep_the_answer(
+    answer: crate::trust_prompt::Answer,
+    record: Option<&(
+        bravebot_agent::trusted::Store,
+        bravebot_agent::trusted::Identity,
+    )>,
+    session: &str,
+    root: &std::path::Path,
+) -> Option<String> {
+    let yes = answer == crate::trust_prompt::Answer::Trust;
+    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session)?;
+    let directory = root.display();
+    Some(match kept {
+        true => t!(session_trust_kept, directory = directory),
+        false => t!(
+            session_trust_not_kept,
+            directory = directory,
+            path = record.map_or(String::new(), |(store, _)| store
+                .path()
+                .display()
+                .to_string())
+        ),
+    })
 }
 
 /// Withdraw every answer kept about `root` inside `home`, and say what became of it (TRUST-24).
@@ -5140,11 +5192,11 @@ fn forget_trust(home: Option<&std::path::Path>, root: &std::path::Path) -> Strin
 
 /// The trust map the session starts with, or nothing if the user asked to leave.
 ///
-/// A fresh session asks, unless the person said to remember the answer in an earlier session begun
-/// in this exact directory (TRUST-23). The question grants standing permission, and a launch that
-/// skipped it because someone said yes last week would be granting that permission on behalf of a
-/// user who was never asked; a person who pressed the key that says "and remember" was asked, and
-/// was told what it keeps and where.
+/// A fresh session asks, unless an earlier session begun in this exact directory, or below the root
+/// of its git worktree, was answered yes (TRUST-23). The question grants standing permission, and a
+/// launch that skipped it because someone said yes last week would be granting that permission on
+/// behalf of a user who was never asked; a person who pressed the yes was asked, and was told what it
+/// keeps and where.
 ///
 /// Resuming does not ask either, and it is not an exception to that: the map comes out of the record
 /// of the very session being picked up, so the answer being honoured is the one its own user gave.
@@ -5163,13 +5215,13 @@ fn opening_trust(
     beginning: Beginning,
     id: &str,
 ) -> Option<(TrustStore, Whence)> {
-    let record = remembering(root);
+    let record = keeping_in(root);
     let where_it_is = root.display();
     let kept = || honoured(root).map(|honoured| honoured.kept);
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root, kept) {
         Opening::Settled(trust, whence) => (trust, whence),
         // Asked as a session asked just now would be about what else the tree proposes: the person
-        // is here, and what they said to remember was this question and no other.
+        // is here, and what the yes kept was this question and no other.
         Opening::Remembered(trust, kept) => {
             let when = bravebot_session::sessions::how_long_ago(kept.at);
             session.note(if kept.root == root {
@@ -5185,12 +5237,9 @@ fn opening_trust(
             return Some((trust, Whence::Asked));
         }
         Opening::Ask => {
-            // Offered only where it can be written, so a key that says it remembers never writes
+            // Offered only where it can be written, so a yes that says it is kept never writes
             // nothing: an incognito session reads the record and adds nothing to it.
-            let keeping = record
-                .as_ref()
-                .filter(|_| bravebot_agent::trusted::may_be_written())
-                .map(|(store, _)| store.path());
+            let keeping = record.as_ref().map(|(store, _)| store.path());
             // What the question refused to answer on, which is words another program typed at the
             // terminal while it was up. Put in the box rather than dropped, so a person who came back
             // to a question still waiting and a virtualenv activated can see what did it (#403).
@@ -5199,17 +5248,8 @@ fn opening_trust(
             if !carried.is_empty() {
                 session.paste_text(&carried);
             }
-            if let (crate::trust_prompt::Answer::Remember, Some((store, identity))) =
-                (answer, &record)
-            {
-                session.note(match store.keep(identity, id, seconds_now()) {
-                    true => t!(session_trust_kept, directory = where_it_is),
-                    false => t!(
-                        session_trust_not_kept,
-                        directory = where_it_is,
-                        path = store.path().display()
-                    ),
-                });
+            if let Some(said) = keep_the_answer(answer, record.as_ref(), id, root) {
+                session.note(said);
                 return Some((trust, Whence::Asked));
             }
             (trust, Whence::Asked)
@@ -24103,10 +24143,10 @@ mod tests {
         )
     }
 
-    /// The opening map comes from how this session was started and from what the person said to
-    /// remember, and from nowhere else. A fresh start brings no record, so without a kept answer
-    /// the question is put: reading back the yes somebody gave in this directory last week would
-    /// grant standing permission over the tree on behalf of a user nobody asked. `/clear` begins a
+    /// The opening map comes from how this session was started and from a yes that was kept, and
+    /// from nowhere else. A fresh start brings no record, so without a kept yes the question is put:
+    /// reading back what an earlier session here was left holding, a no included, would grant
+    /// standing permission over the tree on behalf of a user nobody asked. `/clear` begins a
     /// session too, and reaches this with the same `Beginning::New`.
     #[test]
     fn a_fresh_session_is_asked_rather_than_inheriting_a_map() {
@@ -24126,7 +24166,7 @@ mod tests {
         );
     }
 
-    /// What an earlier session was told to remember settles a fresh one, and `/clear` too, and the
+    /// A yes an earlier session kept settles a fresh one, and `/clear` too, and the
     /// map it settles is the one `y` would have given: the tree trusted, nothing more.
     #[test]
     fn a_remembered_answer_settles_a_fresh_session() {
@@ -24153,6 +24193,128 @@ mod tests {
                 opening => panic!("a remembered answer was not honoured: {opening:?}"),
             }
         }
+    }
+
+    /// A directory to answer about and the record a yes there is kept in, under a state directory
+    /// of its own. `None` on a filesystem that cannot say when a directory was made, which keeps
+    /// nothing.
+    fn a_record_to_keep_in(
+        name: &str,
+    ) -> Option<(
+        std::path::PathBuf,
+        std::path::PathBuf,
+        (
+            bravebot_agent::trusted::Store,
+            bravebot_agent::trusted::Identity,
+        ),
+    )> {
+        let scratch = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("work");
+        std::fs::create_dir_all(&root).expect("create");
+        let identity = bravebot_agent::trusted::Identity::of(&root)?;
+        let store = bravebot_agent::trusted::Store::new(&home, &root);
+        Some((home, root, (store, identity)))
+    }
+
+    /// TRUST-23: a yes is the answer that is kept. The answer goes through the function
+    /// `opening_trust` calls once the question is closed, and the next session started in the
+    /// directory finds what it wrote, is not asked, and opens with the tree trusted. The regression
+    /// it rejects is the call being dropped, or a yes not reaching the record.
+    #[test]
+    fn a_yes_is_kept_and_the_next_session_there_is_not_asked() {
+        use crate::trust_prompt::Answer;
+        use bravebot_agent::PermissionMode;
+
+        let Some((home, root, record)) = a_record_to_keep_in("bravebot-app-yes-kept") else {
+            return;
+        };
+
+        assert_eq!(
+            keep_the_answer(Answer::Trust, Some(&record), "1-2", &root),
+            Some(t!(session_trust_kept, directory = root.display())),
+            "a yes with a record did not say it was kept"
+        );
+
+        let kept = bravebot_agent::trusted::honoured(Some(&home), None, &root)
+            .expect("the next session here would be asked after a yes")
+            .kept;
+        match opening_for(Beginning::New, PermissionMode::Ask, &root, || {
+            Some(kept.clone())
+        }) {
+            Opening::Remembered(trust, _) => {
+                assert!(
+                    trust.is_trusted("src/main.rs"),
+                    "the kept yes covers the tree"
+                );
+            }
+            opening => panic!("a kept yes did not settle the next session: {opening:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
+    }
+
+    /// TRUST-23: a no is never kept. The next session started there asks, since a no grants nothing
+    /// and asking again is how a person changes their mind. Each answer the question can give goes
+    /// through the function `opening_trust` calls, so the reading of which of them is a yes is the
+    /// code's and not the test's: declining and leaving are both a no. The regression it rejects is
+    /// either of them reaching the record.
+    #[test]
+    fn a_no_is_not_kept_and_the_next_session_there_is_asked() {
+        use crate::trust_prompt::Answer;
+        use bravebot_agent::PermissionMode;
+
+        let Some((home, root, record)) = a_record_to_keep_in("bravebot-app-no-not-kept") else {
+            return;
+        };
+
+        for answer in [Answer::Decline, Answer::Leave] {
+            assert_eq!(
+                keep_the_answer(answer, Some(&record), "1-2", &root),
+                None,
+                "{answer:?} was kept"
+            );
+        }
+
+        assert!(!record.0.path().exists(), "a record was written for no yes");
+        assert!(matches!(
+            opening_for(Beginning::New, PermissionMode::Ask, &root, || {
+                bravebot_agent::trusted::honoured(Some(&home), None, &root).map(|h| h.kept)
+            }),
+            Opening::Ask
+        ));
+        let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
+    }
+
+    /// TRUST-23: a yes whose record cannot be written says it was not kept and names the file, so
+    /// the person knows the next session asks; a yes with no record has nothing to say, because the
+    /// question already said the answer cannot be kept. The state directory here is a file, which
+    /// nothing can be created inside.
+    #[test]
+    fn a_yes_the_record_refuses_says_so_and_a_yes_with_no_record_says_nothing() {
+        use crate::trust_prompt::Answer;
+
+        let Some((_, root, _)) = a_record_to_keep_in("bravebot-app-yes-refused") else {
+            return;
+        };
+        let identity = bravebot_agent::trusted::Identity::of(&root).expect("a directory");
+        let blocked = root.parent().expect("scratch").join("not-a-directory");
+        std::fs::write(&blocked, b"").expect("a file in the way");
+        let record = (
+            bravebot_agent::trusted::Store::new(&blocked, &root),
+            identity,
+        );
+
+        assert_eq!(
+            keep_the_answer(Answer::Trust, Some(&record), "1-2", &root),
+            Some(t!(
+                session_trust_not_kept,
+                directory = root.display(),
+                path = record.0.path().display()
+            ))
+        );
+        assert_eq!(keep_the_answer(Answer::Trust, None, "1-2", &root), None);
+        let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
     }
 
     /// Bypassing every permission answers before the kept record is read, so the session says the

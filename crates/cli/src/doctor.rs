@@ -141,7 +141,7 @@ fn skill_keys_unread(
 
 /// The trust map a session starting in this directory would open with, without asking anybody.
 ///
-/// A remembered yes answers here as it answers there (TRUST-23); anything else is a directory
+/// A kept yes answers here as it answers there (TRUST-23); anything else is a directory
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
 fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {

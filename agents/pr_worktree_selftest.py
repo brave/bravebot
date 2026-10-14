@@ -27,6 +27,7 @@ os.environ.update(
     GIT_COMMITTER_NAME="selftest",
     GIT_COMMITTER_EMAIL="selftest@example.invalid",
 )
+os.environ.pop(pr_worktree.WORKTREES_ENV, None)
 
 FORK_CLONE = """\
 origin\tgit@github.com:someone/bravebot.git (fetch)
@@ -79,6 +80,35 @@ def test_the_base_is_whichever_remote_names_brave_bravebot():
     direct = pr_worktree.github_remotes(DIRECT_CLONE)
     assert direct["brave/bravebot"][0] == "origin", direct
     assert len(direct) == 1, "a host that only ends in github.com is not GitHub"
+
+
+def test_an_ssh_alias_for_github_names_the_repo_it_points_at():
+    listing = (
+        "upstream\tgit@github-work:brave/bravebot.git (fetch)\n"
+        "origin\tgit@github-other:someone/bravebot.git (fetch)\n"
+        "evil\tgit@github-evil.example.com:evil/bravebot.git (fetch)\n"
+        "mirror\tgit@gitlab.com:mirror/bravebot.git (fetch)\n"
+    )
+    found = pr_worktree.github_remotes(listing)
+    assert found["brave/bravebot"][0] == "upstream", found
+    assert found["someone/bravebot"][0] == "origin", found
+    assert set(found) == {"brave/bravebot", "someone/bravebot"}, "only github.com and its aliases count"
+
+
+def test_a_new_fork_remote_does_not_inherit_the_base_remotes_ssh_alias():
+    url = pr_worktree.fork_url("someone/bravebot", "git@github-work:brave/bravebot.git")
+    assert url == "git@github.com:someone/bravebot.git", url
+
+
+def test_a_worktree_goes_in_an_ignored_directory_of_the_clone_unless_a_directory_is_named():
+    main = Path("/work/bravebot")
+    assert pr_worktree.worktree_path(main, 9) == main / ".worktrees" / "pr-9"
+    with mock.patch.dict(os.environ, {pr_worktree.WORKTREES_ENV: "/elsewhere"}):
+        assert pr_worktree.worktree_path(main, 9) == Path("/elsewhere/bravebot-9")
+    with mock.patch.dict(os.environ, {pr_worktree.WORKTREES_ENV: "../trees"}):
+        assert pr_worktree.worktree_path(main, 9) == main / ".." / "trees" / "bravebot-9"
+    gitignore = (HERE.parent / ".gitignore").read_text()
+    assert "/.worktrees/" in gitignore.splitlines(), "git must ignore the default directory"
 
 
 def test_a_pull_request_is_named_by_number_or_by_its_url():

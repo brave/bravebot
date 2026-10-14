@@ -68,12 +68,13 @@ def world(root, signed=False):
 
 def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own():
     with tempfile.TemporaryDirectory() as tmp:
-        pr, _, fork = world(Path(tmp).resolve())
+        root = Path(tmp).resolve()
+        pr, _, fork = world(root)
         code, out = quietly(pr_fix.start, pr())
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
         tree = pr().tree
-        assert tree.name == "bravebot-9", tree
+        assert tree == root / "bravebot" / ".worktrees" / "pr-9", tree
 
         code, out = quietly(pr_fix.resume, pr())
         assert code == 1 and "markers remain" in out, "a marker left in place is not staged"
@@ -340,7 +341,7 @@ def test_it_works_from_a_worktree_and_puts_the_pull_request_beside_the_main_clon
         code, out = quietly(pr_fix.start, pr(elsewhere))
         assert code == 1, out
         tree = pr(elsewhere).tree
-        assert tree == root / "bravebot-9", tree
+        assert tree == clone / ".worktrees" / "pr-9", "the main clone's, not the worktree start ran in"
         (tree / "a.txt").write_text("resolved\n")
         code, out = quietly(pr_fix.resume, pr(elsewhere))
         assert code == 0 and "push 9" in out, out
@@ -531,6 +532,22 @@ def test_the_command_each_pull_request_runs_carries_the_step_and_its_flags():
     command = pr_fix.child_command("check", 9, ["--target", "check-spec"])
     assert command[2:] == ["check", "9", "--target", "check-spec"], command
     assert Path(command[1]).name == "pr-fix.py", command
+
+
+def test_the_lock_is_outside_git_and_the_same_from_every_worktree_of_a_clone():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        one, two = root / "one", root / "two"
+        for clone in (one, two):
+            git("init", "-q", str(clone), cwd=root)
+            git("commit", "-q", "--allow-empty", "-m", "x", cwd=clone)
+        tree = root / "one-tree"
+        git("worktree", "add", "-q", "-b", "other", str(tree), cwd=one)
+        lock = pr_fix.lock_path(one)
+        assert ".git" not in lock.parts and one not in lock.parents, lock
+        assert lock.parent == Path(tempfile.gettempdir()), lock
+        assert pr_fix.lock_path(tree) == lock, "a worktree shares its clone's lock"
+        assert pr_fix.lock_path(two) != lock, "another clone is not held up by this one"
 
 
 def test_only_one_process_changes_the_shared_repo_at_a_time():

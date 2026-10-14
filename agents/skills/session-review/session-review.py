@@ -171,7 +171,7 @@ def select(found, named, limit, now, idle):
 
 def pending(args, now=None):
     root = Path(args.root)
-    ref, tip = pa.checked_commit(root, ledger="", verb="review", worktree="bravebot-session-review")
+    ref, tip = pa.checked_commit(root, ledger="", verb="review", worktree="session-review")
     store = Path(args.sessions_root) if args.sessions_root else sessions_root()
     if not store.is_dir():
         raise Problem(f"no sessions under {store}")

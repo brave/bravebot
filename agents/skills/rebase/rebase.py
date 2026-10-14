@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rebase a brave/bravebot pull request onto its base, in a worktree of its own.
 
-    rebase.py start <pr>                fetch, check the head out in ../<checkout>-<pr>, rebase
+    rebase.py start <pr>                fetch, check the head out in .worktrees/pr-<pr>, rebase
     rebase.py continue <pr>             stage the resolved files and carry on
     rebase.py check <pr> [target ...]   run the checks the resolved files call for, or the make
                                         targets named, printing only a failure

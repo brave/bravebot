@@ -1123,6 +1123,27 @@ fn routing_path<S: Sink>(policy: &Policy<'_, S>, key: &str) -> String {
         .to_string()
 }
 
+/// Whether a `deny` rule covers a file the user named or dropped, which is then left out of the turn and
+/// the person told, as a covered instructions file is (PERM-7).
+///
+/// Asked before the name is vouched for or the file opened: naming a file is a grant against the
+/// trust map and never against a rule.
+fn left_out_by_rule<S: Sink, R: Reporter + ?Sized>(
+    workspace: &Workspace,
+    policy: &Policy<'_, S>,
+    reporter: &mut R,
+    notices: &mut Vec<crate::skills::Notice>,
+    path: &str,
+) -> bool {
+    if !workspace.rule_denies_reading(policy, path) {
+        return false;
+    }
+    let notice = crate::skills::Notice::denied_by_rule(path);
+    reporter.notice(notice.message.clone());
+    notices.push(notice);
+    true
+}
+
 /// Put one file the user vouched for into the conversation, as context.
 ///
 /// Reading it is the caller's, since how far the read may reach is decided by which gesture named
@@ -2587,6 +2608,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
         for index in 0..task.files.len() {
             let path = routing_path(&policy, &format!("file_{index}"));
+            if left_out_by_rule(workspace, &policy, &mut reporter, &mut notices, &path) {
+                continue;
+            }
             // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
             // file in the project can arrive spelled absolutely, and a rule under that spelling would
             // leave the read below asking about the relative one and finding nothing.
@@ -2600,6 +2624,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // which is rarely inside the workspace, so this is the read that is not confined to it.
         for index in 0..task.dropped_text.len() {
             let path = routing_path(&policy, &format!("dropped_{index}"));
+            if left_out_by_rule(workspace, &policy, &mut reporter, &mut notices, &path) {
+                continue;
+            }
             // Keyed as the read below keys it. A drop usually arrives from outside the project, where
             // the name stands as it is, but one from inside it has a relative name and that is the one
             // the read will ask about.
@@ -2663,6 +2690,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     .get(&key)
                     .expect("routing was precommitted with this key")
                     .to_string();
+                if left_out_by_rule(workspace, &policy, &mut reporter, &mut notices, &path) {
+                    continue;
+                }
                 let media = task.attachments[index].media.clone();
 
                 // Attaching the file is the grant, exactly as naming one with `@` is. Recorded before

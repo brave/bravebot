@@ -356,6 +356,11 @@ What a `WebFetch` rule reaches is the fetch tool. This program's own connection 
 egress too and no rule about a website governs it, which [fetch-url.md](tools/fetch-url.md) sets
 out, and a command line that talks to the network is judged as the command line it is.
 
+A file named with `@`, `--file` or a drop is judged the same way before it is vouched for or opened,
+and a covered one is left out of the turn with a notice to the person. An `lsp` answer leaves out a
+location in a covered file without saying how many it left out, and its hover text, which names no
+file, is withheld while any rule covers reading a path.
+
 **Why.** A file whose contents are off limits is not protected if it can be overwritten, so the two
 families are consulted together for a write. Enumerating a directory and searching it both report
 what is in it, so a rule that fences a tree fences those too. A processor is the component allowed
@@ -369,6 +374,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 
 `verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
+`verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_left_out_of_the_turn`
+`verified-by: bravebot_agent::lsp::a_location_in_a_denied_file_is_left_out_of_an_answer`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
 `verified-by: bravebot_agent::turn::a_project_relative_deny_rule_refuses_a_redirection_to_the_file`
@@ -911,9 +918,9 @@ have made each of those three depend on nobody else having spoken.
   show, or a terminal too small for one rule and the keys, is never granted there at all. Both fail
   closed: `n` still answers, and the person is asked about each action as they would have been.
 - **A grant outlives the session that gave it, which no other answer here does.** PERM-15's record
-  makes a later session in that workspace honour a rule without asking, where the startup trust
-  answer is asked afresh unless the person said to remember it, and then only for that one
-  directory ([trust-map.md](trust-map.md#TRUST-23)). The narrowness is what
+  makes a later session in that workspace honour a rule without asking, where a startup trust
+  answer is honoured only for a yes, and then only for that one directory or the root of its git
+  worktree ([trust-map.md](trust-map.md#TRUST-23)). The narrowness is what
   makes it sound: an entry covers one rule text from one file in one workspace, so what a second
   session honours unasked is exactly what a person read and accepted. Deleting the line, or the
   file, is the way back, and `doctor` names both.

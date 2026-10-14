@@ -114,6 +114,33 @@ impl Editor {
         asked
     }
 
+    /// A new session on `project` given one prompt, refusing the trust question if it is put. Says
+    /// how many questions the editor was asked and how the prompt ended.
+    fn session_and_prompt(mut self, project: &Path, words: &str) -> Outcome {
+        let session = self.session(project);
+        let prompt = self.prompt(&session, text(words));
+        let first = self.until(|message| {
+            message["method"] == "session/request_permission"
+                || (message["id"] == json!(prompt) && message.get("method").is_none())
+        });
+        let mut questions = 0;
+        let done = if first["method"] == "session/request_permission" {
+            questions = 1;
+            self.send(json!({"jsonrpc": "2.0", "id": first["id"],
+                "result": {"outcome": selected("reject-once")}}));
+            self.response(prompt)
+        } else {
+            first
+        };
+        Outcome {
+            questions,
+            stop_reason: done["result"]["stopReason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        }
+    }
+
     fn texts(&self) -> Vec<String> {
         self.seen
             .iter()
@@ -126,6 +153,12 @@ impl Editor {
             })
             .collect()
     }
+}
+
+/// What [`Editor::session_and_prompt`] saw.
+struct Outcome {
+    questions: usize,
+    stop_reason: String,
 }
 
 fn selected(option: &str) -> Value {
@@ -658,6 +691,108 @@ fn a_session_asks_about_trust_once() {
         .filter(|message| message["method"] == "session/request_permission")
         .count();
     assert_eq!(questions, 1);
+}
+
+/// The question says what a yes keeps and the file it is written to before the editor is asked for
+/// it, a yes writes that file, and a later session in the directory is not asked.
+#[test]
+fn a_yes_is_kept_where_the_question_says_so_and_a_later_session_is_not_asked() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("trust-kept");
+    let (config, _requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let first = editor.prompt(&session, text("one"));
+    let asked = editor.answer_next(selected("allow-once"));
+    editor.response(first);
+
+    let names: Vec<&str> = asked["params"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Trust and remember", "Do not trust"]);
+    let said = asked["params"]["toolCall"]["content"][0]["content"]["text"]
+        .as_str()
+        .expect("the question said what a yes does");
+    let records = bravebot_agent::home::directory()
+        .expect("a profile")
+        .join("trusted");
+    let record = std::fs::read_dir(&records)
+        .expect("a yes wrote a record")
+        .flatten()
+        .next()
+        .expect("a record")
+        .path();
+    assert!(said.contains(&record.display().to_string()), "{said}");
+
+    let second = Editor::on(&config.endpoint, &project).session_and_prompt(&project, "two");
+    assert_eq!(second.questions, 0, "a kept yes was asked again");
+    assert_eq!(second.stop_reason, "end_turn");
+    server.join().unwrap();
+}
+
+/// A refusal is not kept, so the next session in the directory asks.
+#[test]
+fn a_refusal_at_the_trust_question_is_not_kept() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("trust-refused");
+    let (config, _requests, _server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let first = editor.prompt(&session, text("one"));
+    editor.answer_next(selected("reject-once"));
+    editor.response(first);
+    assert!(
+        !bravebot_agent::home::directory()
+            .expect("a profile")
+            .join("trusted")
+            .exists(),
+        "a refusal was written down"
+    );
+
+    let second = Editor::on(&config.endpoint, &project).session_and_prompt(&project, "two");
+    assert_eq!(second.questions, 1, "a refusal settled a later session");
+}
+
+/// Where a yes cannot be kept, the question says so and the option does not claim to remember.
+#[test]
+fn the_trust_question_says_when_a_yes_cannot_be_kept() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let home = bravebot_agent::home::profile().expect("a profile");
+    std::fs::create_dir_all(&home).unwrap();
+    let (config, _requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &home);
+    let session = editor.session(&home);
+    let prompt = editor.prompt(&session, text("one"));
+    let asked = editor.answer_next(selected("allow-once"));
+    editor.response(prompt);
+    server.join().unwrap();
+
+    let names: Vec<&str> = asked["params"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Trust for this session", "Do not trust"]);
+    let said = asked["params"]["toolCall"]["content"][0]["content"]["text"]
+        .as_str()
+        .expect("the question said what a yes does");
+    assert!(said.contains("cannot be kept here"), "{said}");
+    assert!(
+        !home.join(".bravebot/trusted").exists(),
+        "an answer was written down"
+    );
 }
 
 /// A question the planner puts is not a permission, and an editor is never asked it as one. The

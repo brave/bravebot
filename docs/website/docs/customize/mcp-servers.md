@@ -218,8 +218,8 @@ flag bravebot does not know comes before the package, the line says which packag
 known, since that flag may take the next word as its value.
 
 In the full-screen interface the question is asked on the terminal before the interface opens. In
-`--plain` it is asked after the question about trusting the directory, or, where you told bravebot
-to [remember that answer](../security/trust.md#remembering-the-answer), after the line saying so.
+`--plain` it is asked after the question about trusting the directory, or, where an earlier yes was
+[kept](../security/trust.md#remembering-the-answer), after the line saying so.
 
 ### Where nobody can be asked
 

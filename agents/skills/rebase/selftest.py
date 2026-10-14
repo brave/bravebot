@@ -71,7 +71,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
         tree = pr().tree
-        assert tree.name == "bravebot-9", tree
+        assert tree == Path(tmp).resolve() / "bravebot" / ".worktrees" / "pr-9", tree
 
         code, out = quietly(rebase.resume, pr())
         assert code == 1 and "markers remain" in out, "a marker left in place is not staged"
