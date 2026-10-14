@@ -48,7 +48,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 31 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 18 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
-| [connectors.md](connectors.md) | `CONNECTOR` | 9 | the client that hands a credential authority one request for a connector call and reads its one reply |
+| [connectors.md](connectors.md) | `CONNECTOR` | 16 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 16 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 9 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
