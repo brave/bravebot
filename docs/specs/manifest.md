@@ -169,6 +169,7 @@ and what the processor said reaches the person either way, so there it stands as
 `verified-by: bravebot_agent::manifest::an_empty_processor_reply_is_asked_for_once_more`
 `verified-by: bravebot_agent::manifest::a_processor_gets_one_further_try_whatever_went_wrong`
 `verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer`
+`verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
 
 <a id="MANIFEST-9"></a>

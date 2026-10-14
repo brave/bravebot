@@ -327,6 +327,42 @@ fn an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer() {
     );
 }
 
+/// A slot an answer shows and a write also reads is not only shown, so the marker rule holds for it:
+/// two unmarked answers fail the step, the file is never written, and nothing is shown.
+#[test]
+fn an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails() {
+    let scratch = Scratch::new("shown-and-written");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+            {"capability": "FILE_WRITE", "args": {"path": "summary.md", "from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+        says("Still without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = run(&config, &workspace, "summarise the readme", &mut sink)
+        .expect_err("an unmarked answer for a slot a write reads");
+    assert!(
+        failure.to_string().contains("no document"),
+        "got: {failure}"
+    );
+    assert!(!scratch.path.join("summary.md").exists());
+    assert_eq!(
+        received.try_iter().count(),
+        4,
+        "shape, plan and the two processor calls"
+    );
+}
+
 #[test]
 fn a_read_transform_answer_plan_runs_end_to_end() {
     let scratch = Scratch::new("end-to-end");
