@@ -5321,11 +5321,24 @@ impl Session {
         self.handed_over = Some(prompt);
     }
 
+    /// Hold a prompt from the command line for the session beginning now to open with (CLI-31).
+    ///
+    /// It arrives whole from outside the box, as a paste does, and is drawn as the person's own line,
+    /// so it loses what a paste loses and the count is said (PASTE-10). Sent as it came, a message
+    /// spelled in characters nothing draws would reach the planner as words nobody read.
+    pub fn hand_over_from_the_command_line(&mut self, prompt: &str) {
+        let (text, removed) = crate::invisible::without_invisible(&normalised(prompt));
+        if removed > 0 {
+            self.note(t!(cli_prompt_invisible_removed, count = removed));
+        }
+        self.hand_over(text);
+    }
+
     /// Send the prompt [`Session::hand_over`] held, as the person's own line.
     ///
     /// It goes through [`Session::submit`], the path a prompt they typed takes, because that is what
-    /// it is: they read it and chose to send it. Nothing is sent where the box has something in it
-    /// by now, which stays theirs.
+    /// it is: they read it and chose to send it. A line already in the box by now is kept as the
+    /// draft Up brings back first.
     pub fn start_handed_over(&mut self) -> Option<String> {
         if self.status != Status::Idle {
             return None;

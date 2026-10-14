@@ -2454,6 +2454,58 @@ fn a_session_in_lines_is_refused_where_its_input_is_not_a_terminal() {
     );
 }
 
+/// CLI-31. `-i` opens a session on the terminal it was started from, so started without one it is
+/// refused before anything is sent, rather than run as the one-shot it resembles. Whoever wrote the
+/// line asked for somebody to watch the task and be able to stop it, and with
+/// `--dangerously-skip-permissions` a one-shot in its place would make every change with nobody
+/// watching. The refusal names `-p`, the invocation for a run nobody watches.
+///
+/// A property of the process, as the refusal of a session in lines is: nothing inside the program
+/// can arrange to have been started from a terminal.
+#[test]
+fn a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch = Scratch::new("cli-running-interactive-not-a-terminal")
+        .with_settings(&settings_for(&gateway));
+
+    for flag in ["-i", "--interactive"] {
+        let output = bravebot(
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[
+                "--dangerously-skip-permissions",
+                flag,
+                "fix the failing test",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flag} did not exit as a refused argument: {stderr}"
+        );
+        assert!(
+            stdout.is_empty(),
+            "{flag} put something on the reply stream: {stdout}"
+        );
+        assert!(
+            stderr.contains("terminal") && stderr.contains("-p"),
+            "{flag} was not refused for the terminal, naming -p: {stderr}"
+        );
+        assert!(
+            !stderr.contains('\x1b') && !stdout.contains('\x1b'),
+            "{flag} asked something of the terminal: {stderr:?}"
+        );
+    }
+    // The gateway hands over each request's body before it answers, so a turn either run sent
+    // is already here.
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused start sent a turn"
+    );
+}
+
 /// Run the built binary with a terminal for its input, and read back everything it wrote to one.
 ///
 /// A session in lines refuses a pipe before it does anything else, so nothing it decides after

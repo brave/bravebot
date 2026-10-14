@@ -23,6 +23,7 @@ count-turns = { $count ->
 cli-tagline = bravebot { $version }: a general-purpose agent resistant to prompt injection
 cli-usage-heading = Usage:
 cli-usage-interactive = Start an interactive session
+cli-usage-interactive-prompt = Start an interactive session and send the prompt as its first turn
 cli-usage-plain = Start a session in lines, taking nothing from the terminal
 cli-usage-task = Run a single task
 cli-usage-piped = ...with piped input, never trusted
@@ -155,6 +156,7 @@ cli-option-tools = Offer the agent only these tools, comma separated. It cannot 
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
+cli-option-interactive = Open the interactive session and send this prompt as its first turn
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
@@ -304,6 +306,23 @@ cli-no-such-session = no session { $id } in this directory
 cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
+cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
+# Said where something follows the prompt of -i. The session it opens takes the flags every way of
+# starting takes, which are already out of the line by then; what is left describes a one-shot run.
+cli-interactive-takes-nothing-else =
+    -i takes one prompt, quoted where it has spaces, and nothing after it, so '{ $argument }' is
+    refused. --model, --effort, --file and the other options for a task go with a one-shot run (-p).
+# Said where -i came after a task's own options rather than first.
+cli-interactive-not-with-a-task =
+    -i opens a session and comes first, followed by its prompt. --model, --effort, --file and the
+    other options for a task go with a one-shot run (-p).
+# Said where -i came after another way of starting a session, such as --resume or --fork.
+cli-interactive-not-with-another-start = -i opens a new session and comes first, so it does not go with { $flag }.
+# Said where -i was given with something other than a terminal on stdin or stdout, where there is
+# nothing to draw the session on and nobody to watch the task.
+cli-interactive-needs-a-terminal =
+    -i opens a session on this terminal, so its input and output must be one. Use -p to run the
+    task with nobody watching.
 cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
 cli-piped-input-too-large =
@@ -3086,6 +3105,10 @@ paste-folded = { $lines ->
 paste-invisible-removed = { $count ->
     [one] removed { $count } invisible character from that paste
    *[other] removed { $count } invisible characters from that paste
+    }
+cli-prompt-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the prompt -i gave
+   *[other] removed { $count } invisible characters from the prompt -i gave
     }
 drop-name-not-written =
     a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command

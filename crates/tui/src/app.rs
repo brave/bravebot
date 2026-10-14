@@ -640,8 +640,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
 /// turn ends and stops at a command, so without this the line behind one would wait for a key press
 /// that nobody is going to make.
 fn queued_next(session: &mut Session) -> Option<Action> {
-    // The first prompt of a session a handoff has just begun, which nobody will press anything to
-    // send: Enter on the brief already did.
+    // The first prompt of a session a handoff or `-i` has just begun, which nobody will press
+    // anything to send: Enter on the brief, or the command line, already did.
     if let Some(prompt) = session.start_handed_over() {
         return Some(Action::Submit(prompt));
     }
@@ -1222,6 +1222,9 @@ pub enum Start {
     /// A new session, with nothing behind it.
     #[default]
     Fresh,
+    /// A new session that sends this prompt as its first turn once the questions it opens with are
+    /// answered, as the person's own line (CLI-31).
+    Sending(String),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
@@ -2049,13 +2052,17 @@ fn begin_session(
         Start::Resuming(record) => record.agent.clone(),
         _ => None,
     };
+    let first_turn = match &start {
+        Start::Sending(prompt) => Some(prompt.clone()),
+        _ => None,
+    };
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2273,6 +2280,14 @@ fn begin_session(
         settings.agent(),
     ) {
         return Err(Ended::Refused(refused));
+    }
+
+    // Held rather than sent: the loop's first pass sends it, and the loop runs only once this has
+    // returned with every startup question answered. No unit test reaches this call, because this
+    // function needs a real terminal; a scripted session (`contrib/drive_tui.py`) started with `-i`
+    // checks it.
+    if let Some(prompt) = first_turn {
+        session.hand_over_from_the_command_line(&prompt);
     }
 
     Ok(Begun {
@@ -5094,7 +5109,7 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
+        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -15766,6 +15781,33 @@ mod tests {
             Some(Action::Submit("the brief".to_string()))
         );
         assert_eq!(queued_next(&mut next), None, "it was sent twice");
+    }
+
+    /// CLI-31. A prompt from the command line is drawn as the person's own line, so what a terminal
+    /// draws as nothing is taken out of it and counted, as from a paste. Sent as it came, tag
+    /// characters spelling an instruction would reach the planner as words nobody saw. A file
+    /// written on Windows gives `\r\n`, which arrives as the line break a paste gives. The prompt
+    /// goes once, as the first turn, with nothing pressed.
+    #[test]
+    fn a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once() {
+        let mut session = Session::new("none");
+        session.hand_over_from_the_command_line("fix it\u{E0068}\u{E0069}\r\nthen the suite");
+        assert_eq!(
+            last_note(&session),
+            t!(cli_prompt_invisible_removed, count = 2),
+            "the removal was not counted"
+        );
+
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("fix it\nthen the suite".to_string()))
+        );
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.speaker),
+            Some(crate::state::Speaker::User),
+            "the prompt is not in the transcript as the person's"
+        );
+        assert_eq!(queued_next(&mut session), None, "it was sent twice");
     }
 
     /// Each way `/handoff` is refused says so and asks for nothing. Dropping the goal check, the
