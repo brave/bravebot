@@ -50,6 +50,9 @@ use. What came of that in practice was a planner guessing globs to see which cam
 `verified-by: bravebot_agent::workspace::a_failure_is_worded_about_the_name_the_caller_may_say`
 `verified-by: bravebot_agent::tools::a_deferred_read_that_fails_does_not_name_the_file`
 `verified-by: bravebot_agent::tools::a_deferred_read_a_rule_denies_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::a_deferred_read_of_a_removed_file_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::an_edit_by_reference_to_a_removed_file_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_does_not_name_the_file`
 `verified-by: bravebot_agent::workspace::a_listing_leaves_out_a_directory_it_cannot_open_and_says_so`
 `verified-by: bravebot_agent::tools::a_listing_that_cannot_open_a_directory_does_not_name_it`
 
