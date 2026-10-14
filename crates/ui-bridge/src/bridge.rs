@@ -1530,9 +1530,9 @@ impl Bridge {
             ));
         }
         // What the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
-        // running, as it always has. Present, it stops that turn or run and no other.
+        // running, as it always has. Present, even as null, it stops that turn or run and no other.
         let expected = match request.params.get("target") {
-            None | Some(Value::Null) => None,
+            None => None,
             Some(value) => Some(
                 value
                     .as_u64()
