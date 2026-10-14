@@ -96,6 +96,7 @@ help:
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
+	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -812,6 +813,108 @@ app-installers-windows:
 	@set -e; for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
 		node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-$$electron" --arch=$$arch --out=dist; \
+	done
+
+# The CLI's Linux packages, the channel apt and dnf check for themselves, built on a Linux host
+# from what the cross-build left in dist/:
+#
+#   reads   dist/bravebot-linux-<arch>
+#   writes  dist/bravebot-linux-<arch>.deb, dist/bravebot-linux-<arch>.rpm
+#
+# for <arch> amd64 and arm64, from `make linux-amd64 linux-arm64 strip`, and needing no Rust
+# toolchain. The four names are the ones the publish job uploads, so they are a contract: a
+# rename here publishes nothing. The payload is the one binary at /usr/bin/bravebot, and both
+# descriptions are written here from one architecture list, so neither format can be built for
+# an architecture the other is not.
+#
+# The packers are the app packages' two, for the reasons `app-packages-linux` gives: each builds
+# in its own /tmp from a tree staged on the host rather than in the mounted stage, since Docker
+# Desktop's file sharing does not preserve every mode a package records; each runs as root,
+# since installing rpmbuild needs it; and each hands its output back to whoever is packaging.
+# rpmbuild is given its target from the spec's `ExclusiveArch`, as `app-packages-linux` reads it.
+#
+# The dependencies are the binary's own, from its dynamic section: libm, libc, libpthread and
+# libdl, all four libc6 on Debian and glibc on Fedora, required at 2.30 or newer, the newest
+# symbol version either architecture asks for. The Electron list the app declares is not copied:
+# none of it is needed here.
+#
+# The packages are unsigned, as the app's are. Signing them, and the apt and dnf repositories
+# that serve them, are the publish side's.
+
+# The assets' two architectures, and the name rpmbuild wants for each: an asset and its .deb
+# name agree, so a pair is the asset and its rpm name.
+CLI_ARCHES = amd64:x86_64 arm64:aarch64
+
+.PHONY: cli-packages-linux
+cli-packages-linux:
+	@set -e; missing=; builds=; for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; \
+		test -f dist/bravebot-linux-$$arch || { missing="$$missing bravebot-linux-$$arch"; builds="$$builds linux-$$arch"; }; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; rpmarch=$${pair#*:}; \
+		dir="$$stage/$$arch"; \
+		install -d -m 0755 "$$dir/payload/usr/bin"; \
+		install -m 0755 dist/bravebot-linux-$$arch "$$dir/payload/usr/bin/bravebot"; \
+		size=$$(( ($$(wc -c < dist/bravebot-linux-$$arch) + 1023) / 1024 )); \
+		{ printf '%s\n' \
+			'Package: bravebot' \
+			'Version: $(VERSION)' \
+			"Architecture: $$arch" \
+			'Maintainer: Brave Software, Inc. <support@brave.com>' \
+			"Installed-Size: $$size" \
+			'Depends: libc6 (>= 2.30)' \
+			'Section: devel' \
+			'Priority: optional' \
+			'Homepage: https://github.com/brave/bravebot' \
+			'Description: A general-purpose agent with structural resistance to indirect prompt injection' \
+			' bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			' carried and written, and it never decides what happens.'; } > "$$dir/control"; \
+		{ printf '%s\n' \
+			'%global __os_install_post %{nil}' \
+			'%global debug_package %{nil}' \
+			'%global _build_id_links none' \
+			'' \
+			'Name: bravebot' \
+			'Version: $(VERSION)' \
+			'Release: 1' \
+			'Summary: A general-purpose agent with structural resistance to indirect prompt injection' \
+			'License: MPL-2.0' \
+			'URL: https://github.com/brave/bravebot' \
+			'Packager: Brave Software, Inc. <support@brave.com>' \
+			"ExclusiveArch: $$rpmarch" \
+			'AutoReqProv: no' \
+			'Requires: glibc >= 2.30' \
+			'' \
+			'%description' \
+			'bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			'carried and written, and it never decides what happens.' \
+			'' \
+			'%install' \
+			'cp -a %{_sourcedir}/payload/. %{buildroot}/' \
+			'' \
+			'%files' \
+			'%defattr(-,root,root,-)' \
+			'/usr/bin/bravebot'; } > "$$dir/bravebot.spec"; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(DEB_IMAGE) sh -c '\
+			cp -a payload /tmp/deb && mkdir /tmp/deb/DEBIAN && cp control /tmp/deb/DEBIAN/control && \
+			dpkg-deb --build --root-owner-group /tmp/deb out.deb && \
+			chown "$$OWNER" out.deb'; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(RPM_IMAGE) sh -c '\
+			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
+			target=$$(sed -n "s/^ExclusiveArch: //p" bravebot.spec) && \
+			rpmbuild -bb --target "$${target:?bravebot.spec states no ExclusiveArch}" \
+				--define "_sourcedir /stage" --define "_topdir /tmp/rpm" \
+				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" bravebot.spec && \
+			chown "$$OWNER" out.rpm'; \
+		mv "$$dir/out.deb" dist/bravebot-linux-$$arch.deb; \
+		mv "$$dir/out.rpm" dist/bravebot-linux-$$arch.rpm; \
+		echo "wrote dist/bravebot-linux-$$arch.deb dist/bravebot-linux-$$arch.rpm"; \
 	done
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
