@@ -1719,7 +1719,7 @@ reach-lifetime-session-in = for this session in { $workspace }
 reach-lifetime-always-in = always in { $workspace }
 reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
 reach-removed = forgotten: { $command } no longer also { $access } { $entry }
-reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, a directory above it, ~/.ssh, or a credential location such as ~/.aws or ~/.gnupg.
 reach-refused-write = a credential scope is read only. Only a directory can be written.
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
