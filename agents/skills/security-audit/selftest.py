@@ -2267,6 +2267,223 @@ def test_answers_registered():
         audit.mechanics.changed_files = was
 
 
+CHANGED = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGES_HEADER = "| Answer kept | " + " | ".join(CHANGED) + " |"
+NOT_REACHED = "not reached: the key holds nothing of it"
+TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+
+
+def changes_row(name, **said):
+    """One row of the table of changes, every cell a reason unless the caller says otherwise."""
+    cells = {change: NOT_REACHED for change in CHANGED}
+    cells.update(said)
+    return "| " + name + " | " + " | ".join(cells[change] for change in CHANGED) + " |"
+
+
+def changes_findings(
+    rows=None,
+    header=CHANGES_HEADER,
+    table=True,
+    cases=(("the trust map", "Moved"),),
+    registered=("one effect", "the trust map"),
+):
+    """Run the check on what changes do to an answer in a tree holding a register and its cases."""
+    if rows is None:
+        rows = (
+            changes_row(
+                "one effect",
+                **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"},
+            ),
+            changes_row(
+                "the trust map",
+                **{
+                    "Moved": f"asked again: a rule is a path made absolute `verified-by: {TABLE_TEST}`",
+                    "Subject replaced": "accepted: [costs.md](costs.md#known-costs)",
+                    "Other directory": "by design: a directory covers what is beneath it; asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+                },
+            ),
+        )
+    register = "".join(
+        f"| {name} | `y` | the directory | the path | the session | accepted: [costs.md](costs.md#known-costs) |\n"
+        for name in registered
+    )
+    second = (
+        f"\nWhat changes do.\n\n{header}\n|---|{'---|' * len(CHANGED)}\n"
+        + "".join(f"{row}\n" for row in rows)
+        if table
+        else ""
+    )
+    literals = "".join(
+        f'        Case {{\n            row: "{row}",\n            change: "{change}",\n            asked_again: f,\n        }},\n'
+        for row, change in cases
+    )
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": "---\nid: PROMPT\ntitle: Asking\nstatus: normative\n"
+            "governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n  - Answers::trust: the trust map\n---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + register + second + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": "---\nid: PLAIN\n---\n\n### Known costs\n\nNone.\n",
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+            "crates/agent/Cargo.toml": '[package]\nname = "bravebot-agent"\n',
+            "crates/agent/src/kept_answers.rs": "fn table() {\n    let cases = vec![\n" + literals + "    ];\n}\n"
+            "#[test]\nfn changing_the_world_under_a_yes_asks_again() {}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_changes_under_a_yes(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_changes_under_a_yes():
+    """A kept answer with nothing said of a moved checkout or a replaced file is how a yes covers more.
+
+    Each fixture is the clean table with one thing wrong, and the finding it expects is the one a
+    reader would otherwise find out by a person being asked nothing. The cells are read for the
+    leader and the reason because a cell holding a mark reads as decided when nobody decided it.
+    """
+    found = changes_findings()
+    check("a table with a reasoned cell for every answer and change is silent", found == [], str(kinds(found)))
+
+    good = {
+        "Other directory": "asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+    }
+    cases = [
+        ("a register with no second table", {"table": False}, ["changes-unreadable"]),
+        (
+            "a table whose columns are not the changes",
+            {"header": CHANGES_HEADER.replace("Moved", "Relocated")},
+            ["changes-unreadable"],
+        ),
+        (
+            "an answer in the register with no row in the table",
+            {"registered": ("one effect", "the trust map", "hosts answered")},
+            ["changes-row-missing"],
+        ),
+        (
+            "a row for an answer the register does not have",
+            {"registered": ("one effect",)},
+            ["changes-row-unknown"],
+        ),
+        (
+            "a row written twice",
+            {
+                "rows": (
+                    changes_row("one effect", **good),
+                    changes_row("one effect", **good),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-row-duplicate"],
+        ),
+        (
+            "a cell left empty",
+            {"rows": (changes_row("one effect", **{"Moved": ""}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell holding n/a",
+            {"rows": (changes_row("one effect", **{"Moved": "n/a"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell that opens with none of the four words",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "see the spec for this one"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a not reached with no reason",
+            {"rows": (changes_row("one effect", **{"Moved": "not reached: no"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell past the last column",
+            {
+                "rows": (
+                    changes_row("one effect", **good).replace(" |\n", " | more |\n") + " more |",
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "an asked again that cites no test",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "asked again: the key holds the root"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-unpinned"],
+        ),
+        (
+            "an asked again citing a test that does not exist",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_nothing`"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-test-missing"],
+        ),
+        (
+            "an accepted that links no Known cost",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "accepted: it is fine"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        (
+            "an accepted linking a spec that admits none",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "accepted: [plain.md](plain.md#known-costs)"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        ("a cell citing the table test with no case for it", {"cases": ()}, ["changes-case-missing"]),
+        (
+            "a case that no cell cites",
+            {"cases": (("the trust map", "Moved"), ("one effect", "Other directory"))},
+            ["changes-case-unlisted"],
+        ),
+    ]
+    for name, change, expected in cases:
+        found = changes_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    found = changes_findings(
+        rows=(
+            changes_row("one effect", **{"Moved": "by design: the move keeps it; asked again: a copy forgets it `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"}),
+            changes_row("the trust map", **{"Moved": f"asked again: the root moves `verified-by: {TABLE_TEST}`"}),
+        ),
+    )
+    check("a cell of two statements is read as two", found == [], str(kinds(found)))
+
+
 def test_the_stop_hook():
     """A task that ends with the register broken is sent back, and one that never went near it is not.
 
@@ -2299,6 +2516,7 @@ def test_the_stop_hook():
     specs = with_cwd(ROOT, audit.load_specs)
     for touched, wanted in [
         ("crates/agent/src/answers.rs", True),
+        ("crates/agent/src/kept_answers.rs", True),
         ("crates/ui-bridge/src/running.rs", True),
         ("crates/cli/src/plain.rs", True),
         ("crates/tui/src/app.rs", True),
@@ -2843,6 +3061,7 @@ def main():
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
         test_answers_registered,
+        test_changes_under_a_yes,
         test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,

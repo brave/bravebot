@@ -888,6 +888,33 @@ mod tests {
         );
     }
 
+    /// A variable written in front of a program changes what it does, so the same steps run under
+    /// another value, or under a different variable, are a different plan.
+    #[test]
+    fn an_environment_assignment_makes_a_different_plan() {
+        let with_variable = |name: &str, value: &str| {
+            let mut only = step("prog", &[]);
+            only.environment = vec![(name.to_string(), value.to_string())];
+            plan(Steps::Pipeline(vec![only]))
+        };
+        let bare = plan(Steps::Pipeline(vec![step("prog", &[])]));
+        assert_ne!(
+            bare.canonical(),
+            with_variable("MODE", "fast").canonical(),
+            "a line gaining a variable encoded like one without"
+        );
+        assert_ne!(
+            with_variable("MODE", "fast").canonical(),
+            with_variable("MODE", "slow").canonical(),
+            "one variable under another value encoded alike"
+        );
+        assert_ne!(
+            with_variable("MODE", "fast").canonical(),
+            with_variable("OTHER", "fast").canonical(),
+            "another variable under the same value encoded alike"
+        );
+    }
+
     /// The directory decides what a relative path in the plan means, so it is part of the plan.
     #[test]
     fn the_directory_a_plan_runs_in_is_part_of_what_it_encodes() {

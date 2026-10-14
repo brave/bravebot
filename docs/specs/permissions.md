@@ -958,6 +958,10 @@ have made each of those three depend on nobody else having spoken.
   makes it sound: an entry covers one rule text from one file in one workspace, so what a second
   session honours unasked is exactly what a person read and accepted. Deleting the line, or the
   file, is the way back, and `doctor` names both.
+- **A grant names its workspace by path.** A checkout removed and cloned again at the same path,
+  with the same rule text in the same settings file, is covered by what was granted for the one
+  before it, since an entry holds no identity of the directory where the startup answer does
+  ([TRUST-23](trust-map.md#TRUST-23)).
 - **A grant given at the interface is not read by a session in lines.** `bravebot -p` installs no
   `allow` rule at all, and the session that puts its questions as lines rather than as panels
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.
