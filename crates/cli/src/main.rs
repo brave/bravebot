@@ -467,41 +467,49 @@ fn open_on(
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
-    let prompt = match prompt_to_open_on(words) {
-        Ok(prompt) => prompt,
+    let (prompt, named) = match prompt_to_open_on(words) {
+        Ok(opening) => opening,
         Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
     };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return fail(Ending::Argument, t!(cli_interactive_needs_a_terminal));
     }
     interactive(
-        bravebot_tui::app::Start::Sending(prompt),
+        bravebot_tui::app::Start::Sending(prompt, named),
         agent,
         skip_permissions,
         prompts,
     )
 }
 
-/// The prompt `-i` opens a session on, or why the words after it give none.
+/// The prompt `-i` opens a session on and the model and level named after it, or why the words after
+/// it give none.
 ///
 /// One argument, taken as written: a prompt a script assembled holds newlines, and joining words as
 /// `--bg` does would flatten them. A missing or blank prompt is refused, for the reason a blank
 /// `--model` is: a script whose variable expanded to nothing asked for a task. So is one opening
-/// with `-` and holding no whitespace, which is the next flag. Anything after the prompt is refused
-/// by name rather than ignored, because the options that describe a task are a one-shot run's, and a
-/// session that dropped `--model` would run on a model the line did not ask for.
-fn prompt_to_open_on(words: &[String]) -> Result<String, String> {
+/// with `-` and holding no whitespace, which is the next flag. `--model` and `--effort` may follow it,
+/// read as a one-shot run reads them. Anything else after the prompt is refused by name rather than
+/// ignored, because the other options that describe a task are a one-shot run's, and a session that
+/// dropped `--file` would run without a file the line asked for.
+fn prompt_to_open_on(words: &[String]) -> Result<(String, bravebot_tui::app::AskedFor), String> {
     let prompt = match words.first() {
         Some(prompt) if is_a_value(prompt) => prompt.clone(),
         _ => return Err(t!(cli_interactive_needs_a_prompt).to_string()),
     };
-    match words.get(1) {
-        Some(after) => Err(t!(
-            cli_interactive_takes_nothing_else,
-            argument = after.as_str()
-        )),
-        None => Ok(prompt),
+    let mut named = bravebot_tui::app::AskedFor::default();
+    let mut index = 1;
+    while let Some(word) = words.get(index) {
+        match word.as_str() {
+            "--model" => named.model = Some(model_name(words.get(index + 1))?),
+            "--effort" => named.effort = Some(effort_level(words.get(index + 1))?),
+            after => {
+                return Err(t!(cli_interactive_takes_nothing_else, argument = after));
+            }
+        }
+        index += 2;
     }
+    Ok((prompt, named))
 }
 
 /// Whether the words after a flag that takes text are that text, rather than nothing or the next
@@ -1387,6 +1395,37 @@ struct Invocation {
     output_schema: Option<String>,
 }
 
+/// The name after `--model`, for a one-shot run and for the session `-i` opens.
+///
+/// A blank name is refused rather than read as no choice. A stored one is allowed to be blank, where
+/// it means the file holds nothing and the configured model answers, but a script that computed an
+/// empty variable asked for a model and would otherwise be given whatever was configured without
+/// being told.
+fn model_name(next: Option<&String>) -> Result<String, String> {
+    match next.map(|name| name.trim()) {
+        Some(name) if !name.is_empty() => Ok(name.to_string()),
+        _ => Err(t!(cli_model_needs_a_name).to_string()),
+    }
+}
+
+/// The level after `--effort`, for a one-shot run and for the session `-i` opens.
+///
+/// Refused unless it is a level, for the reason a blank `--model` is, and for a stronger one: a model
+/// name the service does not know is substituted and reported, where a word that is no level would be
+/// dropped without a word and the run sent at another level.
+fn effort_level(next: Option<&String>) -> Result<bravebot_session::store::Effort, String> {
+    match next.and_then(|word| bravebot_session::store::Effort::named(word)) {
+        Some(level) => Ok(level),
+        None => {
+            let levels: Vec<&str> = bravebot_session::store::Effort::ALL
+                .iter()
+                .map(|level| level.as_str())
+                .collect();
+            Err(t!(cli_effort_needs_a_level, levels = levels.join(", ")))
+        }
+    }
+}
+
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
 /// [--effort level] [--trace] [--json] [-p]`.
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
@@ -1419,17 +1458,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     return Err(t!(cli_mode_needs_a_name, names = Mode::NAMES.join(", ")));
                 }
             },
-            // A blank name is refused rather than read as no choice. A stored one is allowed to
-            // be blank, where it means the file holds nothing and the configured model answers,
-            // but a script that computed an empty variable asked for a model and would otherwise
-            // be given whatever was configured without being told.
-            "--model" => match args.get(index + 1).map(|name| name.trim()) {
-                Some(name) if !name.is_empty() => {
-                    model = Some(name.to_string());
-                    index += 2;
-                }
-                _ => return Err(t!(cli_model_needs_a_name).to_string()),
-            },
+            "--model" => {
+                model = Some(model_name(args.get(index + 1))?);
+                index += 2;
+            }
             // Refused when blank for the reason `--model` is: a script that computed an empty
             // variable asked for an advisor and would otherwise run without one, untold.
             "--advisor" => match args.get(index + 1).map(|name| name.trim()) {
@@ -1439,25 +1471,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 _ => return Err(t!(cli_advisor_needs_a_name).to_string()),
             },
-            // Refused unless it is a level, for the reason a blank `--model` is, and for a stronger
-            // one: a model name the service does not know is substituted and reported, where a word
-            // that is no level would be dropped without a word and the run sent at another level.
-            "--effort" => match args
-                .get(index + 1)
-                .and_then(|word| bravebot_session::store::Effort::named(word))
-            {
-                Some(level) => {
-                    effort = Some(level);
-                    index += 2;
-                }
-                None => {
-                    let levels: Vec<&str> = bravebot_session::store::Effort::ALL
-                        .iter()
-                        .map(|level| level.as_str())
-                        .collect();
-                    return Err(t!(cli_effort_needs_a_level, levels = levels.join(", ")));
-                }
-            },
+            "--effort" => {
+                effort = Some(effort_level(args.get(index + 1))?);
+                index += 2;
+            }
             "--file" => match args.get(index + 1) {
                 Some(path) => {
                     files.push(path.clone());
@@ -3199,6 +3216,18 @@ fn interactive(
     if let Some(ended) = import::before_the_session(&mut config) {
         return ended;
     }
+    // The model `-i` was given is asked about as a one-shot run's is, so one nothing serves or the
+    // machine-level layer refuses ends the start here, naming the file, rather than at the first turn.
+    if let bravebot_tui::app::Start::Sending(
+        _,
+        bravebot_tui::app::AskedFor {
+            model: Some(name), ..
+        },
+    ) = &start
+        && let Some(how) = nothing_serves(&config, &config.model_named(name))
+    {
+        return fail(Ending::Configuration, how);
+    }
 
     let settings = bravebot_config::Settings::load();
     let workspace = match current_workspace(&settings, &Managed::load()) {
@@ -3443,6 +3472,8 @@ mod tests {
     use bravebot_sandbox::SandboxError;
     use bravebot_sandbox::policy::Capabilities;
     use bravebot_sandbox::policy::ConfinementLevel;
+    use bravebot_session::store::Effort;
+    use bravebot_tui::app::AskedFor;
     use std::path::PathBuf;
 
     /// The two facts about the network nothing else in the report carries. A machine behind a
@@ -6357,12 +6388,12 @@ mod tests {
         let written = "Fix the failing test.\n\n  - run it alone first\n  - then the suite";
         assert_eq!(
             prompt_to_open_on(&args(&[written])),
-            Ok(written.to_string())
+            Ok((written.to_string(), AskedFor::default()))
         );
         // A sentence opening with `-` holds a space, so it is a prompt and not the next flag.
         assert_eq!(
             prompt_to_open_on(&args(&["- one item"])),
-            Ok("- one item".to_string())
+            Ok(("- one item".to_string(), AskedFor::default()))
         );
     }
 
@@ -6388,15 +6419,77 @@ mod tests {
         }
     }
 
-    /// CLI-31. Whatever follows the prompt is refused, and named. The flags every way of starting
-    /// takes are out of the line by then, so what is left belongs to a one-shot run: a session that
-    /// let `--model opus` pass unread would run on a model the line did not name, and one that let an
-    /// unquoted second word pass would send part of the prompt.
+    /// CLI-31. `--model` and `--effort` after the prompt reach the session, in either order and
+    /// whichever is given. A session that read them and kept neither would open on the model a file
+    /// or an earlier pick chose, and the line that named one would not know.
     #[test]
-    fn anything_after_the_prompt_is_refused_by_name() {
+    fn a_model_and_a_level_after_the_prompt_reach_the_session() {
+        let asked = |model: Option<&str>, effort| AskedFor {
+            model: model.map(str::to_string),
+            effort,
+        };
+        for (words, expected) in [
+            (
+                &["fix it", "--model", "opus"][..],
+                asked(Some("opus"), None),
+            ),
+            (
+                &["fix it", "--effort", "high"][..],
+                asked(None, Some(Effort::High)),
+            ),
+            (
+                &["fix it", "--effort", "low", "--model", "brave/x"][..],
+                asked(Some("brave/x"), Some(Effort::Low)),
+            ),
+            (
+                &["fix it", "--model", "a", "--model", "b"][..],
+                asked(Some("b"), None),
+            ),
+        ] {
+            assert_eq!(
+                prompt_to_open_on(&args(words)),
+                Ok(("fix it".to_string(), expected)),
+                "{words:?}"
+            );
+        }
+    }
+
+    /// CLI-31. A `--model` with no name and an `--effort` that is no level are refused, as they are
+    /// for a one-shot run. A name the service does not know is substituted and reported, but a word
+    /// that is no level would be dropped and the session opened at another level without a word.
+    #[test]
+    fn a_blank_model_or_an_unknown_level_after_the_prompt_is_refused() {
+        for (words, refused) in [
+            (
+                &["fix it", "--model"][..],
+                t!(cli_model_needs_a_name).to_string(),
+            ),
+            (
+                &["fix it", "--model", "  "][..],
+                t!(cli_model_needs_a_name).to_string(),
+            ),
+            (
+                &["fix it", "--effort"][..],
+                effort_level(None).expect_err("no level"),
+            ),
+            (
+                &["fix it", "--effort", "turbo"][..],
+                effort_level(Some(&"turbo".to_string())).expect_err("no level"),
+            ),
+        ] {
+            assert_eq!(prompt_to_open_on(&args(words)), Err(refused), "{words:?}");
+        }
+    }
+
+    /// CLI-31. Anything else after the prompt is refused, and named. What the line could add is a
+    /// one-shot run's: a session that let `--file` pass unread would run without a file the line
+    /// asked for, and one that let an unquoted second word pass would send part of the prompt.
+    #[test]
+    fn anything_else_after_the_prompt_is_refused_by_name() {
         for (words, named) in [
-            (&["fix it", "--model", "opus"][..], "--model"),
-            (&["fix it", "--effort", "high"][..], "--effort"),
+            (&["fix it", "--file", "a.txt"][..], "--file"),
+            (&["fix it", "--mode", "plan"][..], "--mode"),
+            (&["fix it", "--model", "opus", "--json"][..], "--json"),
             (&["fix", "the", "tests"][..], "the"),
         ] {
             let refused = prompt_to_open_on(&args(words)).expect_err("must refuse");

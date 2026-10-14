@@ -2233,6 +2233,14 @@ impl Session {
         self.model = Some(model);
     }
 
+    /// Put `model` in force for this session, over every saved pick and file, and record nothing.
+    ///
+    /// The command line's own choice (CLI-31): it describes this start and no other, so unlike
+    /// [`Session::choose_model`] it does not rewrite the pick the next session opens on.
+    pub fn name_model(&mut self, model: String) {
+        self.model = Some(model);
+    }
+
     /// The model `/advisor` named, resolved, or `None` where it named none.
     pub fn advisor(&self) -> Option<&str> {
         self.advisor.as_deref()
@@ -2304,6 +2312,12 @@ impl Session {
             bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
+    }
+
+    /// Put `effort` in force for this session over every saved pick and file, and record nothing,
+    /// for the reason [`Session::name_model`] records no model.
+    pub fn name_effort(&mut self, effort: Effort) {
+        self.effort = Some(effort);
     }
 
     /// How long the turn in flight has been running, or zero when idle.

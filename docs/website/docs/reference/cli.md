@@ -479,6 +479,7 @@ running in the background, and with `--agent` or `--mode manifest`.
 ```sh
 bravebot -i "fix the failing test in crates/parser"
 bravebot --dangerously-skip-permissions --interactive "fix the failing test, then run the suite"
+bravebot -i "review the diff" --model opus --effort high
 ```
 
 Opens the session a bare `bravebot` opens and sends the prompt as its first turn, as though you had
@@ -491,9 +492,11 @@ one-shot run.
 The prompt is one argument, so quote it; its line breaks are kept. Characters a terminal draws as
 nothing are removed from it, as from a paste, and the session says how many. `-i` goes first, and
 the flags that combine with every way of starting go anywhere around it, as they do with a bare
-`bravebot`. Nothing may follow the prompt: `--model`, `--effort`, `--file` and the other options for
-a task belong to a one-shot run and are refused here rather than ignored. Use `/model` and `/effort`
-once the session is open.
+`bravebot`. Only `--model <name>` and `--effort <level>` may follow the prompt: they apply to this
+session and are not recorded, so the next session opens on the model and level it would have
+without them, and `/model` and `/effort` change them once the session is open as they always do.
+`--file` and the other options for a task belong to a one-shot run and are refused here rather
+than ignored.
 
 It is refused with the argument status when no prompt follows it, after `--resume`, `--continue`,
 `--fork`, `--from-pr` or `--bg`, and where stdin or stdout is not a terminal, since there is nothing
