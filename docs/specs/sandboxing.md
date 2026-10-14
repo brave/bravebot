@@ -303,13 +303,16 @@ cannot, the refusal arrives before the process starts, and again where a path go
 that refusal and the exec. Which of the two a backend does is in its capabilities
 ([SANDBOX-5](#SANDBOX-5)).
 
-A row that is an entry of a directory the caller listed is not a path the caller named. A caller
+A row that is an entry of a directory the caller listed is not a path the caller named, and
+neither is an entry a backend lists to grant a row around a refusal beneath it. A caller
 that grants a directory except what is refused beneath it passes the entries the directory had
 when it was listed, marked as listed. A backend that opens each row before the process starts
 leaves out a listed row whose name is no longer there, or is under something that is no longer a
-directory, and refuses one that is there and cannot be opened. The same path named by the caller is
-refused as before, in a policy that lists as in one that does not, and when a listed row names it
-too.
+directory, and refuses one that is there and cannot be opened. A backend that opens the rows again
+at the exec decides a listed row and an entry it listed the same way there. The same path named by
+the caller is refused as before, in a policy that lists as in one that does not, and when a listed
+row names it too. A row the caller named that a backend grants as its entries is refused when the
+backend cannot list it, and at the exec when it has gone.
 
 On Windows a grant is an entry that what is beneath the directory inherits, and it reaches that and
 not what a junction beneath the directory leads to.
@@ -328,6 +331,12 @@ depend on whatever else was changing that directory.
 `verified-by: bravebot_sandbox::linux::a_listed_row_whose_name_went_away_is_left_out_and_the_ones_still_there_are_granted`
 `verified-by: bravebot_sandbox::linux::a_row_the_caller_named_is_refused_when_it_went_away_in_a_policy_that_lists`
 `verified-by: bravebot_sandbox::linux::a_listed_row_that_is_there_and_cannot_be_opened_is_refused`
+`verified-by: bravebot_sandbox::linux::a_named_row_gone_between_the_check_and_the_exec_refuses_the_exec`
+`verified-by: bravebot_sandbox::linux::an_entry_listed_before_the_exec_and_gone_by_it_is_left_out`
+`verified-by: bravebot_sandbox::linux::an_entry_listed_before_the_exec_that_cannot_be_opened_by_it_refuses_the_exec`
+`verified-by: bravebot_sandbox::linux::a_named_row_above_a_refusal_that_cannot_be_listed_is_refused`
+`verified-by: bravebot_sandbox::policy::a_named_row_above_a_refusal_that_cannot_be_listed_is_an_error_naming_it`
+`verified-by: bravebot_sandbox::policy::an_enumeration_tells_the_rows_the_caller_named_from_the_entries_it_listed`
 `verified-by: bravebot_agent::confine::the_rows_a_bypass_stage_holds_without_a_request_are_marked_as_listed`
 `verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
 `verified-by: bravebot_sandbox::windows::a_path_that_is_not_on_disk_is_named_rather_than_left_out`

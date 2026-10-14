@@ -22,7 +22,8 @@ use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
     ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, PathFdError,
-    RulesetAttr, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope, path_beneath_rules,
+    RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope,
+    path_beneath_rules,
 };
 use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
@@ -192,15 +193,7 @@ fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, PathFdEr
     for (index, row) in policy.writable.iter().enumerate() {
         match PathFd::new(&row.path) {
             Ok(_) => {}
-            Err(PathFdError::OpenCall { source, .. })
-                if row.listed
-                    && matches!(
-                        source.kind(),
-                        std::io::ErrorKind::NotFound
-                            | std::io::ErrorKind::NotADirectory
-                            | std::io::ErrorKind::StaleNetworkFileHandle
-                    ) =>
-            {
+            Err(PathFdError::OpenCall { source, .. }) if row.listed && name_is_gone(&source) => {
                 gone.push(index);
             }
             Err(error) => return Err(error),
@@ -216,6 +209,42 @@ fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, PathFdEr
         !gone.contains(&(index - 1))
     });
     Ok(Some(kept))
+}
+
+/// Whether opening a path failed because its name is gone: not found, under something that is no
+/// longer a directory, or a stale handle on a network file system.
+fn name_is_gone(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::NotADirectory
+            | std::io::ErrorKind::StaleNetworkFileHandle
+    )
+}
+
+/// `ruleset` with a rule for each of `paths` whose name is still there.
+///
+/// For the rows a listing produced, which are opened again here after the fork. One whose name is
+/// gone has nothing to grant and is left out, as [`opened_rows`] leaves out a listed row before
+/// it. One that is there and cannot be opened is a grant this backend cannot install, and is the
+/// error. Each rule is added as it is built, so a large directory holds one descriptor at a time
+/// and not one for each entry.
+fn with_the_listed_rules(
+    mut ruleset: RulesetCreated,
+    paths: &[PathBuf],
+    access: BitFlags<AccessFs>,
+) -> std::io::Result<RulesetCreated> {
+    for path in paths {
+        let fd = match PathFd::new(path) {
+            Ok(fd) => fd,
+            Err(PathFdError::OpenCall { source, .. }) if name_is_gone(&source) => continue,
+            Err(error) => return Err(std::io::Error::other(format!("landlock: {error}"))),
+        };
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(fd, access))
+            .map_err(|e| std::io::Error::other(format!("landlock: {e}")))?;
+    }
+    Ok(ruleset)
 }
 
 /// Landlock-based confinement.
@@ -398,9 +427,15 @@ impl LandlockSandbox {
         }
 
         // A refusal is made by listing: Landlock grants a directory with everything beneath it.
-        let enumerated = !policy.unreadable.is_empty() || !policy.unwritable.is_empty();
-        let readable = policy.readable_by_enumeration();
-        let writable = policy.writable_by_enumeration();
+        let unlistable = |e: std::io::Error| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the policy names a path above a refusal that cannot be listed ({e}); refusing \
+                 rather than confining to less than it asked for"
+            ),
+        };
+        let readable = policy.readable_by_enumeration().map_err(unlistable)?;
+        let writable = policy.writable_by_enumeration().map_err(unlistable)?;
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -436,40 +471,46 @@ impl LandlockSandbox {
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
-                // An entry that went away between the listing and here has nothing to grant, and
-                // the rules are added as they are built so a large directory holds one
-                // descriptor at a time and not one for each entry.
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &readable,
-                            AccessFs::from_read(HANDLED_ABI),
-                        ))
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                } else if !readable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &readable,
-                            AccessFs::from_read(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                // A path the caller named is granted at the exec, or the exec is refused
+                // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
+                // asked of it is that it is still a directory: one that has gone, or become a
+                // file, leaves every entry with nothing to grant.
+                for path in readable
+                    .above_a_refusal
+                    .iter()
+                    .chain(&writable.above_a_refusal)
+                {
+                    if !std::fs::metadata(path).is_ok_and(|found| found.is_dir()) {
+                        return Err(Error::other(format!(
+                            "landlock: {} is no longer a directory",
+                            path.display()
+                        )));
+                    }
                 }
 
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &writable,
-                            AccessFs::from_all(HANDLED_ABI),
-                        ))
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                } else if !writable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &writable,
-                            AccessFs::from_all(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                }
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &readable.named,
+                        AccessFs::from_read(HANDLED_ABI),
+                    )?)
+                    .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                ruleset = with_the_listed_rules(
+                    ruleset,
+                    &readable.listed,
+                    AccessFs::from_read(HANDLED_ABI),
+                )?;
+
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &writable.named,
+                        AccessFs::from_all(HANDLED_ABI),
+                    )?)
+                    .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
+                ruleset = with_the_listed_rules(
+                    ruleset,
+                    &writable.listed,
+                    AccessFs::from_all(HANDLED_ABI),
+                )?;
 
                 let status = ruleset
                     .restrict_self()
@@ -1764,6 +1805,307 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// The rows are opened before the fork and the rules are built after it, so a row can go away
+    /// in between. A row the caller named that is gone at the exec is a process running under less
+    /// than the policy with nothing saying so (SANDBOX-6), whether the row is granted whole or, above
+    /// a refusal, as its entries. A row above a refusal that has become a file is as gone, since
+    /// none of its entries can be granted. Each case starts while its row is there, so the refusal is the
+    /// missing row's and not the program's or the policy's, and each names its row in one list
+    /// alone, because a check over one list leaves the other silently narrowing.
+    #[test]
+    fn a_named_row_gone_between_the_check_and_the_exec_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-named-row-at-exec");
+        let (listed, named, written) = (top.join("listed"), top.join("named"), top.join("written"));
+        let lists = a_policy_with_a_refusal_beneath(&listed);
+        let cases = [
+            (
+                "a read row granted whole",
+                lists.clone().allow_read(&named),
+                &named,
+                false,
+            ),
+            (
+                "a write row granted whole",
+                lists.clone().allow_write(&named),
+                &named,
+                false,
+            ),
+            (
+                "a read row granted whole, with no refusal",
+                loadable_policy().allow_read(&named),
+                &named,
+                false,
+            ),
+            (
+                "a write row granted whole, with no refusal",
+                loadable_policy().allow_write(&named),
+                &named,
+                false,
+            ),
+            ("a read row above a refusal", lists.clone(), &listed, false),
+            (
+                "a read row above a refusal that becomes a file",
+                lists.clone(),
+                &listed,
+                true,
+            ),
+            (
+                "a write row above a refusal",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                &written,
+                false,
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, row, becomes_a_file) in &cases {
+            let command = || {
+                for directory in [&listed, &named, &written] {
+                    std::fs::create_dir_all(directory).expect("the directory is creatable");
+                }
+                sandbox
+                    .command(
+                        OsStr::new("/bin/true"),
+                        &[],
+                        policy,
+                        &Environment::Inherited,
+                    )
+                    .expect("every row is there when the policy is opened")
+            };
+            let there = command().stdin(std::process::Stdio::null()).status();
+            if !matches!(&there, Ok(status) if status.success()) {
+                wrong.push(format!(
+                    "{case}: did not start while the row was there: {there:?}"
+                ));
+                continue;
+            }
+            let mut gone = command();
+            std::fs::remove_dir_all(row).expect("the row is removable");
+            if *becomes_a_file {
+                std::fs::write(row, "").expect("the file is writable");
+            }
+            let after = gone.stdin(std::process::Stdio::null()).status();
+            if after.is_ok() {
+                wrong.push(format!("{case}: started after the row went: {after:?}"));
+            }
+            if row.is_file() {
+                std::fs::remove_file(row).expect("the file is removable");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// An entry a listing produced is not a path anybody named, so one that goes away between the
+    /// listing and the exec has nothing to grant and the program starts, as does a row the caller
+    /// passed as listed, in a policy with a refusal or without one. Refusing the exec over any of
+    /// them would make starting a program depend on whatever else was changing the directory,
+    /// which is what a backend refusing every path that has no rule at the exec does. A read entry
+    /// and a write entry are each listed in one list alone.
+    #[test]
+    fn an_entry_listed_before_the_exec_and_gone_by_it_is_left_out() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-entry-at-exec");
+        let (read, written) = (top.join("read"), top.join("written"));
+        let cases = [
+            (
+                "a read entry",
+                a_policy_with_a_refusal_beneath(&read),
+                read.join("entry"),
+            ),
+            (
+                "a write entry",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                written.join("entry"),
+            ),
+            (
+                "a row passed as listed",
+                a_policy_with_a_refusal_beneath(&read).allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+            (
+                "a row passed as listed, with no refusal",
+                loadable_policy().allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, entry) in &cases {
+            for directory in [&read, &written, entry] {
+                std::fs::create_dir_all(directory).expect("the directory is creatable");
+            }
+            let mut command = sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    &Environment::Inherited,
+                )
+                .expect("every row is there when the policy is opened");
+            std::fs::remove_dir(entry).expect("the entry is removable");
+            let after = command.stdin(std::process::Stdio::null()).status();
+            if !matches!(&after, Ok(status) if status.success()) {
+                wrong.push(format!("{case}: {after:?}"));
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(
+            wrong.is_empty(),
+            "an entry gone by the exec has nothing to grant, so the program starts: {wrong:#?}"
+        );
+    }
+
+    /// An entry is left out at the exec because its name has gone, and for no other reason, as a
+    /// listed row is before the fork. One that is there and cannot be opened is a grant this
+    /// backend cannot install, and refuses the exec. A pair of links that lead to each other
+    /// stands in for it, since no account can open one. Each case starts while its entry is a
+    /// directory, so the refusal is the entry's.
+    #[test]
+    fn an_entry_listed_before_the_exec_that_cannot_be_opened_by_it_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-entry-looping");
+        let (read, written, other_end) =
+            (top.join("read"), top.join("written"), top.join("other-end"));
+        let cases = [
+            (
+                "a read entry",
+                a_policy_with_a_refusal_beneath(&read),
+                read.join("entry"),
+            ),
+            (
+                "a write entry",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                written.join("entry"),
+            ),
+            (
+                "a row passed as listed",
+                a_policy_with_a_refusal_beneath(&read).allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, entry) in &cases {
+            let command = || {
+                for directory in [&read, &written, entry] {
+                    std::fs::create_dir_all(directory).expect("the directory is creatable");
+                }
+                sandbox
+                    .command(
+                        OsStr::new("/bin/true"),
+                        &[],
+                        policy,
+                        &Environment::Inherited,
+                    )
+                    .expect("every row is there when the policy is opened")
+            };
+            let there = command().stdin(std::process::Stdio::null()).status();
+            if !matches!(&there, Ok(status) if status.success()) {
+                wrong.push(format!(
+                    "{case}: did not start while the entry was there: {there:?}"
+                ));
+                continue;
+            }
+            let mut looping = command();
+            std::fs::remove_dir(entry).expect("the entry is removable");
+            std::os::unix::fs::symlink(&other_end, entry).expect("the link is creatable");
+            std::os::unix::fs::symlink(entry, &other_end).expect("the link is creatable");
+            let after = looping.stdin(std::process::Stdio::null()).status();
+            if after.is_ok() {
+                wrong.push(format!(
+                    "{case}: started with the entry unopenable: {after:?}"
+                ));
+            }
+            for link in [entry, &other_end] {
+                std::fs::remove_file(link).expect("the link is removable");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A row the caller named above a refusal is granted as the entries a listing of it finds, so
+    /// one that cannot be listed would be granted as nothing while the policy reads as applied.
+    /// It is refused before a process exists, naming the row. The row is a file, which no account
+    /// can list, so the test does not depend on a mode that root ignores. Both lists. The same row
+    /// passed as listed is not a path anybody named, and adds nothing rather than refusing.
+    #[test]
+    fn a_named_row_above_a_refusal_that_cannot_be_listed_is_refused() {
+        let top = a_temporary_directory("bravebot-landlock-unlistable-row");
+        let named = top.join("notes");
+        std::fs::write(&named, "notes").expect("the file is writable");
+        let cases = [
+            (
+                "a read row",
+                loadable_policy()
+                    .allow_read(&named)
+                    .deny_read(named.join("inside")),
+            ),
+            (
+                "a write row",
+                loadable_policy()
+                    .allow_read(&top)
+                    .allow_write(&named)
+                    .deny_write(named.join("inside")),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy) in &cases {
+            let started = LandlockSandbox
+                .spawn(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .map(|_| ());
+            match started {
+                Err(SandboxError::SetupFailed {
+                    mechanism: "landlock",
+                    detail,
+                }) if detail.contains(&named.display().to_string()) => {}
+                other => wrong.push(format!("{case}: {other:?}")),
+            }
+        }
+        let listed = loadable_policy()
+            .allow_read(&top)
+            .allow_write_listed(&named)
+            .deny_write(named.join("inside"));
+        if let Err(error) = LandlockSandbox.command(
+            OsStr::new("/bin/true"),
+            &[],
+            &listed,
+            &Environment::Inherited,
+        ) {
+            wrong.push(format!("a row passed as listed: {error:?}"));
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(
+            wrong.is_empty(),
+            "a named row that cannot be listed refuses the policy and names the row: {wrong:#?}"
+        );
     }
 
     /// The refusal above is the right answer to a caller that named the wrong path and the
