@@ -5104,6 +5104,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&top);
     }
 
+    /// The rows bypass gives a stage without a request are every path the account can write, so
+    /// they are left out of what the plan could have written (SANDBOX-20, SANDBOX-28): a program
+    /// installed beside the session keeps its network by its name under bypass, as an installed
+    /// `curl` does. The regression it rejects is those rows counted, which would take the reason
+    /// from every program the account installed. The same program in the session's own directory
+    /// is the control that the name is read at all.
+    #[test]
+    fn a_program_in_a_row_bypass_gives_without_a_request_keeps_its_network_by_its_name() {
+        let (home, beside) = unasked_places("network");
+        let root = beside.join("project");
+        let closed = bypass_confinement(Prelude::MacOs, &home, &root).with_network(Network::Closed);
+        assert!(closed.writes_without_a_request());
+        let policy = closed.policy(&step("/bin/cat", &["f"]), &root, &[]);
+        assert!(
+            policy
+                .writable
+                .iter()
+                .any(|row| beside.join("curl").starts_with(&row.path)),
+            "bypass gave no row beside the session: {:?}",
+            policy.writable
+        );
+
+        for program in [
+            "/usr/bin/curl".to_string(),
+            beside.join("curl").to_str().unwrap().to_string(),
+        ] {
+            let step = step(&program, &["https://a.example"]);
+            assert!(closed.egress(&step), "{program}");
+            assert!(closed.policy(&step, &root, &[]).allow_network, "{program}");
+        }
+        let planted = step(root.join("curl").to_str().unwrap(), &["https://a.example"]);
+        assert!(!closed.egress(&planted), "a program in the session kept it");
+    }
+
+    /// A `denyRead` path inside an `allowWrite` directory is a write refusal too (SANDBOX-12,
+    /// SANDBOX-18), so a program there is not one the plan could have written and keeps its
+    /// network by its name, while one elsewhere in the directory does not. The regression it
+    /// rejects is the read refusal left out of the paths the plan may not write.
+    #[test]
+    fn a_program_in_a_denied_read_path_under_an_allowed_write_directory_keeps_its_network() {
+        let top = crate::testutil::scratch_dir("confine-denied-read-network");
+        let _ = std::fs::remove_dir_all(&top);
+        let place = |name: &str| {
+            std::fs::create_dir_all(top.join(name)).expect("directory");
+            top.join(name).canonicalize().expect("canonical")
+        };
+        let allowed = place("allowed");
+        let denied = place("allowed/private");
+        let closed = reading_confinement(Prelude::Linux, &["/work/project"])
+            .with_network(Network::Closed)
+            .with_filesystem(&listed(
+                &[denied.to_str().unwrap()],
+                &[allowed.to_str().unwrap()],
+                &[],
+            ));
+        let curl = |directory: &Path| step(directory.join("curl").to_str().unwrap(), &[]);
+
+        assert!(closed.egress(&curl(&denied)), "{}", denied.display());
+        assert!(
+            closed
+                .policy(&curl(&denied), Path::new("/work"), &[])
+                .allow_network,
+            "{}",
+            denied.display()
+        );
+        assert!(
+            !closed.egress(&curl(&allowed)),
+            "a program in the allowed directory kept it"
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
     /// A file the plan could have written carries no credential scope by being named `aws` or
     /// `git`: a project's `.venv/bin/aws`, or one a stage left in a toolchain cache, would
     /// otherwise be handed `~/.aws`. The same names installed outside the plan's directories keep
