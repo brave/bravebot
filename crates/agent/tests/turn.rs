@@ -443,6 +443,143 @@ fn a_named_file_a_deny_rule_covers_is_left_out_of_the_turn() {
     assert!(body.contains("fn main()"), "an uncovered file was left out");
 }
 
+/// PERM-7: a text file dropped on the window is asked of the rules like a named one, under the name
+/// it arrives with, so a covered drop from outside the workspace is not read and an uncovered one
+/// beside it still is.
+#[test]
+fn a_dropped_text_file_a_deny_rule_covers_is_left_out_of_the_turn() {
+    let elsewhere = Scratch::new("dropped-text-denied");
+    std::fs::write(elsewhere.path.join("secret.md"), "TOKEN=hunter2-the-secret").unwrap();
+    std::fs::write(elsewhere.path.join("notes.md"), "the tail of the note").unwrap();
+    let scratch = Scratch::new("dropped-text-denied-here");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("it is a stub"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let secret = elsewhere
+        .path
+        .join("secret.md")
+        .to_string_lossy()
+        .to_string();
+    let notes = elsewhere
+        .path
+        .join("notes.md")
+        .to_string_lossy()
+        .to_string();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &[format!("Read(/{secret})")],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse");
+    let task = Task::new("what do they say")
+        .with_dropped_text(secret)
+        .with_dropped_text(notes)
+        .with_permissions(permissions);
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("secret.md")),
+        "the person was not told the drop was left out: {:?}",
+        outcome.notices
+    );
+
+    let body = received.recv().expect("request body");
+    assert!(!body.contains("hunter2"), "a covered drop was read: {body}");
+    assert!(
+        body.contains("the tail of the note"),
+        "an uncovered drop was left out: {body}"
+    );
+}
+
+/// PERM-7: an attached file is asked of the rules too, so a covered one is not sent as a part of the
+/// message while an uncovered one beside it still is.
+#[test]
+fn an_attachment_a_deny_rule_covers_is_left_out_of_the_message() {
+    let scratch = Scratch::new("attachment-denied");
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(scratch.path.join("secret.png"), png).unwrap();
+    std::fs::write(scratch.path.join("shot.png"), png).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("a picture"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(secret.png)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse");
+    let task = Task::new("what are these")
+        .with_attachment("secret.png", "image/png")
+        .with_attachment("shot.png", "image/png")
+        .with_permissions(permissions);
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("secret.png")),
+        "the person was not told the attachment was left out: {:?}",
+        outcome.notices
+    );
+
+    let body = received.recv().expect("request body");
+    let sent: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let last = sent["messages"].as_array().unwrap().last().unwrap().clone();
+    let parts = last["content"]
+        .as_array()
+        .expect("the prompt carries parts");
+    let pictures = parts
+        .iter()
+        .filter(|part| part["type"] == "image_url")
+        .count();
+    assert_eq!(
+        pictures, 1,
+        "only the uncovered attachment is sent: {parts:?}"
+    );
+    let named: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| part["text"].as_str())
+        .collect();
+    assert!(
+        named.iter().any(|said| said.contains("shot.png")),
+        "the uncovered attachment was left out: {named:?}"
+    );
+    assert!(
+        named.iter().all(|said| !said.contains("secret.png")),
+        "the covered attachment was named to the planner: {named:?}"
+    );
+}
+
 /// A session named with `@session:<id>` reaches the planner inside the person's own message, and
 /// the trail records the id and the count and none of the words.
 #[test]

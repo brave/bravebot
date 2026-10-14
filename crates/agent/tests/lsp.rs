@@ -1182,6 +1182,160 @@ fn a_name_out_of_an_unvouched_tree_is_not_in_the_planners_context() {
     }
 }
 
+/// PERM-7: the `lsp` tool leaves out a location in a file a `deny` rule covers and withholds hover
+/// text while any rule covers reading a path, and with no rule the same questions are answered in
+/// full.
+///
+/// Asked about `src/b.rs`, which no rule covers, so the question itself is not refused: the covered
+/// file is only named by the server's answer. The unruled run is the control, so a tool that drops
+/// every location or every hover answer fails it.
+#[test]
+fn the_lsp_tool_leaves_a_denied_file_out_of_its_answer() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+
+    let mut answers = Vec::new();
+    for denied in [true, false] {
+        let scratch = Scratch::new(&format!("agent-lsp-deny-rule-{denied}"));
+        let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+        std::fs::write(scratch.path.join("src/b.rs"), "pub fn asks() {}\n").expect("write b.rs");
+        // Beside the workspace and not in it: a program found in a directory a stage may write, which
+        // the workspace is, is not one bravebot starts.
+        let installed = Scratch::new(&format!("agent-lsp-deny-rule-{denied}-installed"));
+        let program = installed.path.join("rust-analyzer");
+        let hovering = FAKE_SERVER.replacen(
+            "*'\"shutdown\"'*)",
+            r#"*'"textDocument/hover"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"contents\":\"the doc comment\"}}"
+      ;;
+    *'"shutdown"'*)"#,
+            1,
+        );
+        std::fs::write(&program, hovering).expect("write the server");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        // SAFETY: PATH_LOCK is held for the whole of this body, so nothing else in this binary reads
+        // or writes the environment while this runs.
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    installed.path.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            );
+        }
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request(
+                "lsp",
+                r#"{"operation":"goToDefinition","path":"src/b.rs","line":1,"character":8}"#,
+            ),
+            tool_request(
+                "lsp",
+                r#"{"operation":"hover","path":"src/b.rs","line":1,"character":8}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut asking = AskedAboutServers {
+            asked: 0,
+            reject: false,
+            approve_writes: false,
+        };
+        let rules = if denied {
+            vec!["Read(src/a.rs)".to_string()]
+        } else {
+            Vec::new()
+        };
+        let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+            &rules,
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "the rule did not parse");
+
+        let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is src/b.rs").with_permissions(permissions),
+            &mut Conversation::new(),
+            &mut asking,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(&workspace),
+            TrustedPrograms::new(),
+            Some(&mut servers),
+            &Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let _first = received.recv().expect("the first question");
+        let definition = received.recv().expect("the definition answer");
+        let hover = received.recv().expect("the hover answer");
+        answers.push((
+            denied,
+            tool_results_in(&definition),
+            tool_results_in(&hover),
+        ));
+    }
+
+    for (denied, definition, hover) in answers {
+        let located = definition.iter().any(|said| said.contains("src/a.rs:1:11"));
+        if denied {
+            assert!(
+                !located,
+                "a location in a covered file reached the planner: {definition:?}"
+            );
+            assert!(
+                definition
+                    .iter()
+                    .any(|said| said.contains("answered with no locations")),
+                "the covered location was not dropped from the answer: {definition:?}"
+            );
+            assert!(
+                hover
+                    .iter()
+                    .all(|said| !said.contains("the doc comment") && !said.contains("ref:")),
+                "hover text was handed over while a rule covers reading: {hover:?}"
+            );
+        } else {
+            assert!(
+                located,
+                "the control answer lost its location: {definition:?}"
+            );
+            assert!(
+                hover
+                    .iter()
+                    .any(|said| said.contains("ref:") || said.contains("the doc comment")),
+                "the control hover answer carried no text: {hover:?}"
+            );
+        }
+    }
+}
+
+/// Every tool-result message in a request body, as the model would read them.
+fn tool_results_in(request: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request body");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter(|content| content.starts_with("Result of lsp"))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The tool-result message in a request body, as the model would read it.
 ///
 /// Read out of the JSON rather than off the raw body, because a newline inside a JSON string is
