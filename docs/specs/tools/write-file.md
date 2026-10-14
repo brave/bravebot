@@ -114,4 +114,5 @@ they cannot read and a change of format nobody wanted.
 
 `verified-by: bravebot_agent::turn::a_crlf_file_rewritten_with_lf_contents_keeps_crlf`
 `verified-by: bravebot_agent::turn::an_untrusted_pre_image_converts_nothing`
+`verified-by: bravebot_agent::turn::a_contents_ref_write_over_a_trusted_crlf_file_keeps_its_own_endings`
 `verified-by: bravebot_agent::workspace::a_replaced_files_format_is_detected_and_applied`
