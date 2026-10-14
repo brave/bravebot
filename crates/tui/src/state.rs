@@ -2774,17 +2774,19 @@ impl Session {
 
     /// Put the turn's own view back at its tail as a piece of work begins or a command line lands.
     ///
-    /// Nothing while the delegate view is open, because `scroll` is that view's position then and
-    /// the turn's own is held aside until it closes. A person who went to read a delegate or what
-    /// a command printed asked for that screen, and a row arriving under the turn is not them
-    /// asking for another.
+    /// Nothing while the delegate view or the scroller is open. Under the delegate view `scroll` is
+    /// that view's position and the turn's own is held aside until it closes; under the scroller it
+    /// is the row somebody is reading, in the transcript or in the request `/request` opened. A
+    /// person who went to read a delegate, what a command printed, an earlier part of the
+    /// transcript or the last request asked for that screen, and a row arriving under the turn is
+    /// not them asking for another.
     ///
     /// Each of those happens once and changes what the session is doing, so the tail is where its
     /// own view belongs afterwards. Nothing a running turn adds below the view is one of them: a
     /// person who scrolled back while it runs asked to read that place, and with nothing open over
     /// it a view at the tail follows what arrives unmoved, since `scroll` is 0 there.
     fn back_to_the_tail(&mut self) {
-        if self.watching.is_none() {
+        if self.watching.is_none() && !self.scrolling() {
             self.scroll = 0;
         }
     }
@@ -9109,6 +9111,149 @@ mod tests {
                         looking_at,
                         "{event} moved a view scrolled back {place}"
                     );
+                }
+            }
+        }
+
+        /// Each of these puts the transcript back at its tail, and each happens with nobody pressing
+        /// anything for it. Under the scroller no key reaches the box at all, whether it is showing
+        /// the transcript or the last request, so the one press the reader made was the one that
+        /// took them to the row they are on, and moving them off it takes away what they opened the
+        /// scroller to do. With nothing open the tail is still where each of them takes the
+        /// transcript, so that state is checked too: a fix that stopped putting the view back at all
+        /// would hold the scroller and leave the transcript short of its tail.
+        #[test]
+        fn what_starts_without_a_press_leaves_an_open_scroller_where_its_reader_put_it() {
+            type Step = fn(&mut Session);
+            let events: [(&str, Step, Step); 9] = [
+                (
+                    "the queue starting a turn",
+                    |session| {
+                        queue(session, "and tidy up");
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .send_queued()
+                            .expect("the queued prompt did not begin a turn");
+                    },
+                ),
+                (
+                    "a loop's tick",
+                    |session| {
+                        session.start_loop(
+                            crate::loops::request("5m /status"),
+                            Vec::new(),
+                            Vec::new(),
+                        );
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .dispatch_tick()
+                            .expect("the tick did not begin a turn");
+                    },
+                ),
+                (
+                    "a watch firing",
+                    |session| session.arm_watch("notes.md", "/work", saw("first")),
+                    |session| {
+                        session
+                            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+                                saw("second")
+                            })
+                            .expect("the change did not begin a turn");
+                    },
+                ),
+                (
+                    "a goal sending the work back",
+                    |session| session.start_goal("cargo test exits 0".to_string()),
+                    |session| {
+                        session
+                            .goal_not_met("nothing above runs the tests".to_string())
+                            .expect("the goal did not send the work back");
+                    },
+                ),
+                (
+                    "the queue giving up a command line",
+                    |session| {
+                        queue_shell(session, "ls -1");
+                        session.complete("an answer", Vec::new(), 0);
+                    },
+                    |session| {
+                        session
+                            .take_queued_shell()
+                            .expect("the queued command line was not taken");
+                    },
+                ),
+                ("a command starting", |_| {}, Session::begin_command),
+                (
+                    "what a command printed",
+                    |_| {},
+                    |session| session.printed("first\nsecond"),
+                ),
+                (
+                    "what a command run privately printed",
+                    |_| {},
+                    |session| session.printed_privately("first\nsecond"),
+                ),
+                ("an aside beginning", |_| {}, Session::begin_aside),
+            ];
+            for (event, before, starts) in events {
+                for place in ["at rest", "the scroller", "the request view"] {
+                    let mut session = Session::new("none");
+                    before(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 100,
+                        ..Laid::default()
+                    });
+                    match place {
+                        "at rest" => session.scroll_up(40),
+                        "the scroller" => {
+                            session.open_scroller();
+                            session.scroller_back(40);
+                        }
+                        _ => {
+                            session.set_last_request(a_request());
+                            session.show_request();
+                            session.scroller_to_last_row();
+                            session.scroller_back(40);
+                        }
+                    }
+                    assert_eq!(
+                        session.top_row(),
+                        50,
+                        "the view is not scrolled back off the tail"
+                    );
+
+                    starts(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 130,
+                        ..Laid::default()
+                    });
+                    if place == "at rest" {
+                        assert_eq!(
+                            session.top_row(),
+                            120,
+                            "{event} left the transcript short of its tail"
+                        );
+                    } else {
+                        assert!(session.scrolling(), "{event} closed {place}");
+                        assert_eq!(
+                            session.viewing_request(),
+                            place == "the request view",
+                            "{event} changed what {place} was showing"
+                        );
+                        assert_eq!(
+                            session.top_row(),
+                            50,
+                            "{event} moved the row {place} was holding"
+                        );
+                    }
                 }
             }
         }
