@@ -188,7 +188,6 @@ impl Connectors {
                         described(&resource.bound, |field, words| format!("{field} ({words})"))
                     ));
                 }
-                // What an act takes, after the lines every resource has.
                 if resource.step == StepKind::Act {
                     let narrows = !resource.narrow.is_empty();
                     let takes_on = resource.uses_field("on");

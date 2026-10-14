@@ -1905,6 +1905,9 @@ mod tests {
         assert_eq!(plan.describe_step(0), plan.steps()[0].describe());
     }
 
+    /// The person approving an act needs to see which item it lands on apart from the text it
+    /// sends, so the line names the fetch in `on` as the target and the processor's slot as the
+    /// source.
     #[test]
     fn an_act_reads_on_the_item_it_lands_on_and_from_the_slot_it_sends() {
         let plan = validate(&Draft::new(vec![

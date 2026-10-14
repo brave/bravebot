@@ -236,8 +236,9 @@ each run, so remembering an answer would be approving steps nobody has seen.
 
 Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
 does not replace the gates inside it, so each write is still put to the person as its step reaches it.
-A connector act is sent to the authority in every mode, bypass included, and its request carries no
-answer: the driver asks nothing about the act, and the person is asked in the authority's popup.
+A connector act is sent to the authority in every mode that runs the plan, bypass included, and its
+request carries no answer: the driver asks nothing about the act, and the person is asked in the
+authority's popup. Plan mode runs no such plan ([permission-modes.md](permission-modes.md)).
 
 Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal
 is somebody: the plan goes out beside the progress and the answer is read back, which is the one
