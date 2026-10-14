@@ -2698,15 +2698,12 @@ fn event_loop(
                     stored.id(),
                     &typed,
                 ) {
-                    // What was opened here is this session's, and the record chosen restores its
-                    // own, as a start with `--resume` does.
-                    workspace.end_session();
-                    *servers = std::mem::take(&mut session.servers);
-                    *switch = Some(Switch {
+                    *switch = Some(switch_session(
+                        &mut session,
+                        &mut workspace,
+                        servers,
                         record,
-                        workspace: workspace.clone(),
-                        sandbox: session.sandbox().clone(),
-                    });
+                    ));
                     return Ok(left_behind(&stored));
                 }
                 needs_draw = true;
@@ -2988,24 +2985,11 @@ fn event_loop(
                     Action::HandOver(brief) => (Some(brief), stored.to_resume().map(|r| r.id)),
                     _ => (None, None),
                 };
-                // A new handle means a new id, so the session so far keeps its own files and stays
-                // resumable. Nothing is deleted: what the user asked for is a clean context, and
-                // throwing away the record would be answering a question they did not ask.
-                session.clear();
-                conversation = Conversation::new();
-                stored = handle_after_clear(workspace.root(), &session);
-                match (&brief, &source) {
-                    (Some(_), Some(from)) => {
-                        stored.hand_off_from(from);
-                        session.note(t!(handoff_started, id = from));
-                    }
-                    _ => session.note(t!(session_cleared)),
-                }
-
-                // A new session, so it is asked what a new session is asked. The map goes with the
-                // context and the directories opened under it go too, since opening one is a grant
-                // and leaving it reachable with nothing vouching for it would outlive its answer.
-                workspace.end_session();
+                (conversation, stored) = clear_session(
+                    &mut session,
+                    &mut workspace,
+                    brief.as_ref().and(source.as_deref()),
+                );
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.
@@ -4955,6 +4939,49 @@ enum Beginning {
     /// A resume, holding the map the record being picked up kept. `None` where that record
     /// predates maps being kept, which is asked about like anything else unanswered.
     Resumed(Option<TrustStore>),
+}
+
+/// What `/resume` does with the session it leaves once a record is chosen: what was opened here is
+/// this session's, and the record chosen restores its own, as a start with `--resume` does. The
+/// paths programs were let reach and the hosts answered go with it, and the workspace handed on is
+/// a clone that shares them, so it is cleared first.
+fn switch_session(
+    session: &mut Session,
+    workspace: &mut Workspace,
+    servers: &mut crate::state::Servers,
+    record: Box<bravebot_session::sessions::Record>,
+) -> Switch {
+    workspace.end_session();
+    *servers = std::mem::take(&mut session.servers);
+    Switch {
+        record,
+        workspace: workspace.clone(),
+        sandbox: session.sandbox().clone(),
+    }
+}
+
+/// What `/clear` and a handoff do before the new session is asked anything: the context goes, the
+/// record gets a new id so the session so far keeps its own files and stays resumable, and the
+/// directories opened, the checkouts kept and the paths and hosts answered go with the context,
+/// since opening one is a grant and leaving it reachable with nothing vouching for it would
+/// outlive its answer. `handed_from` is the session a handoff came from, which the new record
+/// links back to.
+fn clear_session(
+    session: &mut Session,
+    workspace: &mut Workspace,
+    handed_from: Option<&str>,
+) -> (Conversation, bravebot_session::sessions::Handle) {
+    session.clear();
+    let mut stored = handle_after_clear(workspace.root(), session);
+    match handed_from {
+        Some(from) => {
+            stored.hand_off_from(from);
+            session.note(t!(handoff_started, id = from));
+        }
+        None => session.note(t!(session_cleared)),
+    }
+    workspace.end_session();
+    (Conversation::new(), stored)
 }
 
 /// The record a cleared session writes to: a new id, and the definition every turn is still
@@ -25243,6 +25270,121 @@ mod tests {
             session.recall_answer("pick one: Cache: Which?"),
             None,
             "the copy kept an answer to the planner's question"
+        );
+    }
+
+    /// SANDBOX-24, SANDBOX-28: `/clear` and a handoff end the paths programs were let reach and the
+    /// hosts answered, and begin a record of their own.
+    #[test]
+    fn clearing_ends_the_reach_and_the_host_answers_and_begins_a_new_record() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-clear-reach");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, stored, _conversation, _answers) =
+            a_session_to_branch(&root);
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            false,
+            "reads in".to_string(),
+        );
+        workspace.grant_hosts(&["yes.example".to_string()]);
+        workspace.decline_hosts(&["no.example".to_string()]);
+
+        let (conversation, fresh) = clear_session(&mut session, &mut workspace, None);
+
+        assert!(
+            workspace.path_reach().is_empty(),
+            "the cleared session kept a path programs were let reach"
+        );
+        assert_eq!(
+            workspace.unanswered_hosts(&["yes.example".to_string(), "no.example".to_string()]),
+            ["yes.example".to_string(), "no.example".to_string()],
+            "the cleared session kept a host answer"
+        );
+        assert_ne!(
+            fresh.id(),
+            stored.id(),
+            "the cleared session kept the record"
+        );
+        assert!(
+            conversation.recounted().is_empty(),
+            "the cleared session kept the context"
+        );
+    }
+
+    /// A handoff is a clear that links back to the session it came from, and ends the same grants.
+    #[test]
+    fn a_handoff_ends_the_reach_and_the_host_answers_too() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-handoff-reach");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, _stored, _conversation, _answers) =
+            a_session_to_branch(&root);
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            true,
+            "writes in".to_string(),
+        );
+        workspace.grant_hosts(&["yes.example".to_string()]);
+
+        let (_conversation, _fresh) =
+            clear_session(&mut session, &mut workspace, Some("an-earlier-id"));
+
+        assert!(
+            workspace.path_reach().is_empty(),
+            "the handoff kept a path programs were let reach"
+        );
+        assert_eq!(
+            workspace.unanswered_hosts(&["yes.example".to_string()]),
+            ["yes.example".to_string()],
+            "the handoff kept a host answer"
+        );
+    }
+
+    /// SANDBOX-24, SANDBOX-28: `/resume` hands on a workspace that holds no path programs were let
+    /// reach and no host answered. The workspace handed on is a clone that shares them with the
+    /// one left, so the answer is read from the clone the next session starts with.
+    #[test]
+    fn resuming_hands_on_a_workspace_without_the_reach_or_the_host_answers() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-reach");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, stored, _conversation, _answers) =
+            a_session_to_branch(&root);
+        workspace.grant_path_reach(
+            std::path::PathBuf::from("/data/in"),
+            false,
+            "reads in".to_string(),
+        );
+        workspace.grant_hosts(&["yes.example".to_string()]);
+        workspace.decline_hosts(&["no.example".to_string()]);
+        let record = Box::new(
+            bravebot_session::sessions::load(&root, stored.id()).expect("the record to resume"),
+        );
+        let mut servers = crate::state::Servers::default();
+
+        let switch = switch_session(&mut session, &mut workspace, &mut servers, record);
+
+        assert!(
+            switch.workspace.path_reach().is_empty(),
+            "the resumed session was handed a path programs were let reach"
+        );
+        assert_eq!(
+            switch
+                .workspace
+                .unanswered_hosts(&["yes.example".to_string(), "no.example".to_string()]),
+            ["yes.example".to_string(), "no.example".to_string()],
+            "the resumed session was handed a host answer"
+        );
+        assert!(
+            workspace.path_reach().is_empty(),
+            "the session left kept a path programs were let reach"
         );
     }
 
