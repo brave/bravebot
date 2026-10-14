@@ -11,7 +11,9 @@
 
 use crate::workspace::Workspace;
 use bravebot_core::credentials::Exposed;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 /// One answer, one change to the world, and what happens to the answer afterwards.
 struct Case {

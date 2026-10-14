@@ -2700,9 +2700,7 @@ fn event_loop(
                 ) {
                     // What was opened here is this session's, and the record chosen restores its
                     // own, as a start with `--resume` does.
-                    workspace.close_added_directories();
-                    workspace.forget_session_checkouts();
-                    workspace.forget_reach_and_hosts();
+                    workspace.end_session();
                     *servers = std::mem::take(&mut session.servers);
                     *switch = Some(Switch {
                         record,
@@ -3007,9 +3005,7 @@ fn event_loop(
                 // A new session, so it is asked what a new session is asked. The map goes with the
                 // context and the directories opened under it go too, since opening one is a grant
                 // and leaving it reachable with nothing vouching for it would outlive its answer.
-                workspace.close_added_directories();
-                workspace.forget_session_checkouts();
-                workspace.forget_reach_and_hosts();
+                workspace.end_session();
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.

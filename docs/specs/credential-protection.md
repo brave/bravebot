@@ -1199,8 +1199,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   question about a credential. Keying on the value instead would ask again at every rotation, which
   is the question the person pressed the key to stop. A directory removed and made again at the same
   path is covered by the entries recorded for the one before it: the record names a directory by its
-  path and holds nothing that identifies the directory standing there, as the startup answer does
-  ([TRUST-23](trust-map.md#TRUST-23)).
+  path and holds nothing that identifies the directory standing there, where the startup answer holds
+  its identity ([TRUST-23](trust-map.md#TRUST-23)).
 
 - **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
   turn wrote in its own words, and a redirection is a file a program the turn started opened for

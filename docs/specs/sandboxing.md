@@ -2282,7 +2282,7 @@ person once that run has stopped. Nothing waits on the answer: the program was r
 a yes lets the lines that follow reach the hosts, so the person runs it again. The question names
 each host on a row of its own, up to eight at a time, and says that a yes holds until the session
 ends and writes nothing to disk. `/clear`, `/branch` and `/resume` begin another session in the same
-process, and end the answers, a no included. A yes adds the hosts to the allowed set of every stage
+process, and a host answered before, a no included, is asked about again. A yes adds the hosts to the allowed set of every stage
 from the next line on, which starts another proxy because the list is another list. A host the denied list
 names stays refused, and a granted name is held to the addresses it resolves to as a listed one
 is. A no is kept for the session, so the same host is not asked about again. The hosts asked about
@@ -2712,7 +2712,8 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   the person's rows are applied after the session's.
 - **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
   file is written; the grant is held by the session and gone with it. `/clear`, `/branch` and
-  `/resume` begin another session in the same process, and end every grant. Asking again for a path
+  `/resume` begin another session in the same process, and a run started after one is asked again
+  for a path granted before it. Asking again for a path
   already held is asked like the first request, and a yes only ever widens the grant held: a read
   answered beside a write held leaves the write. The person may end a grant with
   `/reach paths remove <number>`.
