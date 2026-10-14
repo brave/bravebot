@@ -58,6 +58,15 @@ untrusted content can name no reference at all.
 
 An unknown tool is reported to the planner rather than ignored.
 
+When the planner asks for several calls in one reply, they run in the order it asked, except that two
+or more consecutive [`list_files`](#list_files) and [`search`](#search) calls are read at the same
+time, eight at most. Their results are added in the order the calls were asked, and what is
+quarantined, what the [audit trail](../security/audit-trail.md) records and what is drawn are what
+they would be if the calls had run one after another. Every other call, [`read_file`](#read_file)
+included, runs alone, after the calls before it and before the calls after it. So does a call that
+has a [`tool-finished` hook](../customize/hooks.md) declared for its tool, since the hook could
+change the files the next read looks at.
+
 There is **no shell tool**, and there never will be. Nothing the planner writes is handed to an
 interpreter. [`run`](#run) takes a command line, and bravebot compiles it itself. See
 [Shell mode](../using/shell-mode.md).

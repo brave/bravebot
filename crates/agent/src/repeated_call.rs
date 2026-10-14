@@ -34,7 +34,7 @@ const RUN_IT: usize = 1;
 const STOP: usize = 2;
 
 /// The last call the planner made and how many times in a row it has made it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Repeats {
     last: Option<(String, String)>,
     count: usize,

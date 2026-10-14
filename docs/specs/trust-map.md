@@ -187,7 +187,10 @@ remain available. A later complete trusted replacement can trust the path again.
 
 Byte capture and label lookup share a boundary with effect entry and successful publication.
 No reader can capture replacement bytes under an earlier grant. This covers context files,
-attachments, deferred references and searches as well as direct reads. Collection never merges
+attachments, deferred references and searches as well as direct reads. A capture that only reads
+holds the boundary shared with other such captures, and every capture that enters or completes an
+effect holds it exclusive, so listings and searches overlap ([TURN-10](turns.md#TURN-10)) and an
+effect still waits for every reader and is waited for by every reader. Collection never merges
 a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
 same authority after turn-owned children finish, including on failure or cancellation, and save
 its current file decisions rather than substituting the map from before the turn. Manifest runs
@@ -212,6 +215,9 @@ to one file under two such spellings is refused as a second writer to it.
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
 `verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
 `verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
+`verified-by: bravebot_core::file_authority::readers_hold_the_boundary_at_the_same_time`
+`verified-by: bravebot_core::file_authority::an_effect_cannot_enter_while_a_reader_holds_the_boundary`
+`verified-by: bravebot_core::file_authority::a_reader_cannot_capture_while_an_effect_holds_the_boundary`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
 
