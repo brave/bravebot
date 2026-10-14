@@ -22991,6 +22991,104 @@ mod tests {
         }
     }
 
+    /// The undo chord puts back what a delete took, pressed through the key handler rather than
+    /// called on the session directly, so the wiring from the chord to the step is covered too.
+    #[test]
+    fn the_undo_chord_puts_back_what_a_delete_took() {
+        let mut session = typed_into("one two three");
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "one two ");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "one two three");
+    }
+
+    /// A run of typing is one step back, not one for every character, the same way vi folds a
+    /// whole INSERT session into the one `u` after it reaches.
+    #[test]
+    fn the_undo_chord_takes_back_a_whole_typing_run() {
+        let mut session = typed_into("hello");
+        assert_eq!(session.input(), "hello");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "");
+    }
+
+    /// A second run after an undo opens a step of its own, pressed through the key handler. The
+    /// flag that marks a run open must be closed by the undo that just put the first run's step
+    /// back, or the second run's keys would find it still open, share no step at all, and the
+    /// second press of the chord would have nothing to undo.
+    #[test]
+    fn the_undo_chord_leaves_the_next_run_able_to_open_its_own_step() {
+        let mut session = typed_into("hello");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "");
+
+        for c in "abc".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(session.input(), "abc");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(
+            session.input(),
+            "",
+            "the second run opened no step of its own"
+        );
+    }
+
+    /// The chord reaches vi's own undo stack as well as the ordinary box's, so a change already on
+    /// it comes back without first pressing Escape to reach `u` from NORMAL mode, and the session
+    /// stays in INSERT mode exactly where it found it. What the open INSERT session has typed since
+    /// is not itself on the stack until Escape closes it (INPUT-28), so this reaches past the
+    /// session rather than into it.
+    #[test]
+    fn the_undo_chord_works_in_vi_insert_mode_without_leaving_it() {
+        let mut session = editing_vis_way();
+        for c in "one".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
+
+        // `x` deletes the character under the caret, which Escape left on the last one typed, as
+        // its own completed change, pushed to the stack at the press rather than deferred to an
+        // Escape that never comes for it.
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        assert_eq!(session.input(), "on");
+
+        handle_key(&mut session, key(KeyCode::Char('i')));
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Insert));
+
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "one");
+        assert_eq!(
+            session.vi_mode(),
+            Some(crate::vim::Mode::Insert),
+            "the chord left insert mode"
+        );
+    }
+
+    /// Editing a line is one of the things a running turn still allows, undoing an edit among
+    /// them, so the chord reaches the same step through the mid-turn handler as it does at rest.
+    #[test]
+    fn the_undo_chord_works_while_a_turn_is_running() {
+        let mut session = Session::new("kernel-enforced");
+        for c in "one two".chars() {
+            session.type_char(c);
+        }
+        session.status = Status::Working;
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl('w')),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "one ");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl('_')),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "one two");
+    }
+
     /// Kills in one direction join, and a change of direction starts a new buffer.
     #[test]
     fn consecutive_kills_join_in_the_direction_they_went() {

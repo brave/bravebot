@@ -78,6 +78,10 @@ The row beneath the box goes with the marker. What is drawn there is what the li
 carries, so a file whose marker has been rubbed out is drawn nowhere, and one whose marker is still
 there is drawn whether or not a turn is running.
 
+What a marker named is not itself taken off: the attachment stores keep it until the line is sent or
+cleared, and the row and the turn both read the line for which markers still name one. Undoing the
+edit that deleted a marker is enough to have the attachment back with it (INPUT-44).
+
 **Why.** The turn was always built from the markers the line still held, so a deleted one already
 sent nothing. What lingered was the row, which is the only place a person can see whether rubbing
 the marker out worked: left drawn, it says a file is going that is not.
@@ -89,6 +93,7 @@ the marker out worked: left drawn, it says a file is going that is not.
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
 `verified-by: bravebot_tui::render::deleting_the_marker_takes_the_row_out_from_under_the_box`
+`verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
 
 
 <a id="INPUT-4"></a>
@@ -2009,12 +2014,12 @@ to remember.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move ten chords, and nothing else
+### INPUT-32: a settings file can move eleven chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other nine. There is no second file and no other spelling of the
-block, so one place answers what a key does. Ten actions can be moved, and nothing else can:
+action's key says nothing about the other ten. There is no second file and no other spelling of the
+block, so one place answers what a key does. Eleven actions can be moved, and nothing else can:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2028,6 +2033,7 @@ block, so one place answers what a key does. Ten actions can be moved, and nothi
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
+- `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2072,14 +2078,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the ten rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the eleven rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the ten, it names the default.
+of the eleven, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -2542,3 +2548,70 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
 `verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
 `verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`
+
+<a id="INPUT-44"></a>
+### INPUT-44: the ordinary box has an undo step too, one per edit and one for a run of typing
+
+Ctrl-_ puts the line and the caret back as they stood before the last edit, as far back as a
+thousand edits, the depth vi's own `u` keeps (INPUT-28). Backspace, Delete, Ctrl-W, Alt-D, Ctrl-U
+and Ctrl-K each open a step before taking what they take, and a paste, a dropped file or a pasted
+picture opens one before writing the marker or the stretch of text it writes, so one press of the
+chord puts back the whole of what any of them took or wrote. Ctrl-Y opens a step before putting
+text back, as do the presses above. A run of characters typed one after another is one step
+rather than one per character, the first key of the run opening it and the rest sharing it, the
+way everything typed in one vi INSERT session shares the step that session opened.
+
+Sending the line, clearing it, putting it away, bringing it back, choosing the other style or
+recalling an earlier prompt leaves nothing to undo, the way each already does for vi (INPUT-28): the
+line in the box did not stand under any step still on the stack once one of these has run.
+
+A marker a step puts back names its attachment again while that attachment is still staged, for the
+reason INPUT-3 keeps a deleted marker's attachment staged at all: nothing takes it off until the line
+is sent or cleared, so a step that puts the marker's text back is the whole of what has to happen.
+
+Ctrl-_ reaches both styles rather than only the ordinary box's, since the stack it puts back a step
+from is the one `u` already does. Pressed in vi's INSERT mode it reaches back past the session open
+there to the last change already on the stack, without first pressing Escape to reach `u`, and the
+session stays open in INSERT mode. What the session has typed since it opened is not itself on the
+stack until Escape closes it (INPUT-28), so Ctrl-_ there does not reach it either, the same as `u`
+could not reach it if INSERT read letters as anything but themselves. It carries no count, so one
+press is one step back in either style, where a count in front of `u` asks vi for several. Ctrl-Z is
+not used for it: that chord suspends the process on a terminal that has not had job control turned
+off, which this program does not take.
+
+`undo` is one of the eleven chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
+the `?` list shows it (INPUT-13). While it stands on that default, the chord also answers to Ctrl-7,
+Ctrl-Shift-_, Ctrl-/ and Ctrl-Shift-/, the spellings a terminal reports for the same byte or the same
+key by another name, so the key that undoes on a terminal reporting one answers on a terminal
+reporting another. An alternate is read only where a settings file has not moved another action onto
+that exact chord: moving `trail` onto `ctrl-/` takes the chord from undo, which goes on answering to
+its remaining alternates and to its default.
+
+A settings file that moves another action onto `ctrl-_` contests undo's default, so that request
+gives way as every contested request does (INPUT-32), and the action keeps its own default instead.
+Undo keeps `ctrl-_`, since nothing was asked of it to give up.
+
+**Why.** With no step kept, one wrong key loses a paragraph for good, which Claude Code, Gemini CLI
+and OpenCode each document a key against. Folding a run of typing into one step is what makes the
+key worth having rather than one that only ever takes back the last character of a sentence somebody
+has otherwise finished typing.
+
+`verified-by: bravebot_tui::keybindings::the_undo_chord_is_ctrl_underscore_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::every_spelling_a_terminal_sends_for_ctrl_underscore_answers_the_default`
+`verified-by: bravebot_tui::state::a_typing_run_in_the_ordinary_box_is_one_change_to_undo`
+`verified-by: bravebot_tui::state::ctrl_u_then_undo_restores_the_line_and_caret_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_a_send_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
+`verified-by: bravebot_tui::app::the_undo_chord_puts_back_what_a_delete_took`
+`verified-by: bravebot_tui::app::the_undo_chord_takes_back_a_whole_typing_run`
+`verified-by: bravebot_tui::app::the_undo_chord_leaves_the_next_run_able_to_open_its_own_step`
+`verified-by: bravebot_tui::app::the_undo_chord_works_in_vi_insert_mode_without_leaving_it`
+`verified-by: bravebot_tui::app::the_undo_chord_works_while_a_turn_is_running`
+`verified-by: bravebot_tui::state::a_second_typing_run_after_undo_opens_its_own_step`
+`verified-by: bravebot_tui::state::typing_after_a_yank_opens_its_own_run`
+`verified-by: bravebot_tui::state::undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_stashing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`
+`verified-by: bravebot_tui::keybindings::a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up`

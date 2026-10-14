@@ -1403,7 +1403,11 @@ impl Session {
     }
 
     /// Put the line back as it stood before the last change, and say whether there was one.
-    fn undo_last_change(&mut self) -> bool {
+    ///
+    /// The ordinary box reaches this too, through its own undo chord: vi's `u` loops it by the
+    /// count typed before the key, which the ordinary box has no count in front of a chord for,
+    /// so one press is one step back for either style.
+    pub fn undo_last_change(&mut self) -> bool {
         let Some((line, caret)) = self.undo.pop_back() else {
             return false;
         };
@@ -1411,7 +1415,17 @@ impl Session {
         self.caret = caret;
         self.history.leave();
         self.completion = 0;
-        self.step_back_off_the_end();
+        // The step just popped is not an open run any more, whichever kind of step it was, so the
+        // next character typed in the ordinary box must open one of its own rather than finding
+        // this one still marked open and sharing it, which would leave that typing with no step to
+        // undo at all once the stack is otherwise empty.
+        self.ordinary_run_open = false;
+        // Only where vi's own rule holds that the caret rests on a character rather than past the
+        // last one. The ordinary box has no such rule, and the caret a step was taken with is
+        // wherever the person had put it, past the last character being nowhere unusual there.
+        if self.editing == crate::vim::Editing::Vi {
+            self.step_back_off_the_end();
+        }
         true
     }
 
