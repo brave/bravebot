@@ -648,7 +648,8 @@ impl Confinement {
     /// `None` where it asks nothing (SANDBOX-16).
     ///
     /// Asked where every `git` step of the line that carries the remote scope by its argv and is
-    /// left unchosen names one host and owner, no `git.identities` entry names that owner, and ssh
+    /// left unchosen, or was chosen at an earlier prompt and the planner asked for `ssh-key`, names
+    /// one host and owner, no `git.identities` entry names that owner, and ssh
     /// could offer between two and [`KEY_CHOICES`] public keys: those at its default names and those
     /// an `IdentityFile` line of the person's ssh configuration names, judged as an entry's key is.
     /// The candidates come from the person's own files and the address from the argv, so nothing a
@@ -656,8 +657,14 @@ impl Confinement {
     pub fn key_choice(&self, steps: &[&Step], record: &Path) -> Option<KeyChoice> {
         let home = self.home.as_deref()?;
         let mut asked: Option<bravebot_sandbox::scope::Address> = None;
+        let asked_again = self.requested.contains(&Requested::SshKey);
         for step in steps {
-            if self.identified(step) != Some(Identified::Unchosen) {
+            let open = match self.identified(step) {
+                Some(Identified::Unchosen) => true,
+                Some(Identified::Chosen { .. } | Identified::LeftToSsh(_)) => asked_again,
+                _ => false,
+            };
+            if !open {
                 continue;
             }
             let address = ssh_address(&step.args)?;
@@ -1035,6 +1042,8 @@ impl Confinement {
             for request in self.requested_for(step) {
                 policy = match *request {
                     Requested::Loopback => policy.allow_loopback(),
+                    // Lends nothing: it only has the prompt number the keys again.
+                    Requested::SshKey => policy,
                     Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
                     Requested::Scope(scope) => {
                         let mut policy = scope.grant(policy, home, &place);
@@ -1295,6 +1304,7 @@ impl Confinement {
                     Requested::Scope(scope) => scopes.insert(scope.name()),
                     Requested::Toolchain(toolchain) => toolchains.insert(toolchain.name()),
                     Requested::Loopback => !std::mem::replace(&mut loopback, true),
+                    Requested::SshKey => false,
                 };
             }
         }
@@ -1857,7 +1867,8 @@ const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, th
      one any account holds, so a retry offers the same key. Only the person chooses the key, for a \
      git step whose argv names the ssh address: at its run prompt in the terminal interface, which \
      offers the public keys ssh could use where there is more than one and no key was chosen for \
-     the owner, or with an entry \
+     the owner, or for one already chosen where the retry's `scopes` names `ssh-key`, or with an \
+     entry \
      `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
      ~/.bravebot/settings.json. In the terminal interface `/reach keys` lists the keys chosen at a \
      prompt and `/reach keys remove <number>` forgets one, so the next prompt asks again. In either \
@@ -7317,6 +7328,77 @@ mod tests {
             many.confinement(&[]).key_choice(&[&push], &record),
             None,
             "more keys than digits"
+        );
+    }
+
+    /// SANDBOX-16, SANDBOX-26: a line that asks for `ssh-key` has the prompt number the keys again
+    /// for an owner chosen at an earlier prompt, whether the choice was a key or ssh's own order,
+    /// and for no other owner. An entry in the settings still decides without a question, and a
+    /// line that does not ask is not asked again. The regressions it rejects are a request that
+    /// does nothing, one that overrides an entry the person wrote, one that offers the choice for
+    /// a stage with an assignment in front of it, and a choice made without the request being
+    /// needed.
+    #[test]
+    #[cfg(unix)]
+    fn a_request_for_ssh_key_asks_again_for_an_owner_already_chosen_and_for_no_entry() {
+        let places = IdentityPlaces::with_two_keys("choice-again");
+        let record = places.home.join("reach.jsonl");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let mut assigned = push.clone();
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        let asks = [Requested::SshKey];
+        for chosen in [
+            places.chosen("acme", None),
+            places.chosen("acme", Some(&places.work_key())),
+        ] {
+            let held = places.confinement(&[]).with_chosen_keys(vec![chosen]);
+            assert_eq!(held.key_choice(&[&push], &record), None, "asked unprompted");
+            let choice = held
+                .clone()
+                .with_requested(&asks)
+                .key_choice(&[&push], &record)
+                .expect("the request asks again");
+            assert_eq!(choice.owner(), "github.com/acme");
+            assert_eq!(choice.candidates, [places.default_key(), places.work_key()]);
+            assert_eq!(
+                held.clone()
+                    .with_requested(&asks)
+                    .key_choice(&[&assigned], &record),
+                None,
+                "a stage with an assignment carries no scope"
+            );
+        }
+        let by_entry = places
+            .confinement(&[("github.com/acme", "~/.ssh/work")])
+            .with_requested(&asks);
+        assert_eq!(
+            by_entry.key_choice(&[&push], &record),
+            None,
+            "the request overrode an entry"
+        );
+        // An owner nothing chose is asked about with or without the request, so the request adds
+        // no question where there was none to ask again, and a choice for another owner is no
+        // reason to ask about this one a second time.
+        let other = places
+            .confinement(&[])
+            .with_chosen_keys(vec![places.chosen("other", None)]);
+        assert_eq!(
+            other
+                .clone()
+                .with_requested(&asks)
+                .key_choice(&[&push], &record),
+            other.key_choice(&[&push], &record),
+        );
+        let held = other.with_chosen_keys(vec![places.chosen("acme", None)]);
+        let both = step(
+            "/usr/bin/git",
+            &["push", "git@github.com:other/widgets.git"],
+        );
+        assert_eq!(
+            held.with_requested(&asks)
+                .key_choice(&[&push, &both], &record),
+            None,
+            "two owners asked again at once"
         );
     }
 

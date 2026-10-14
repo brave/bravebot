@@ -445,6 +445,9 @@ impl Confined {
                 Requested::Loopback => {
                     t!(run_carries_loopback, program = program.as_str()).to_string()
                 }
+                Requested::SshKey => {
+                    t!(run_carries_ssh_key, program = program.as_str()).to_string()
+                }
                 Requested::Scope(scope) => self.scope_sentence(*scope, program),
                 Requested::Toolchain(toolchain) => t!(
                     run_carries_toolchain,
@@ -730,6 +733,7 @@ impl RunRequest {
                         bravebot_sandbox::scope::Scope::Signing
                     )
                     | bravebot_sandbox::scope::Requested::Loopback
+                    | bravebot_sandbox::scope::Requested::SshKey
             ) && !names.contains(&request.name())
             {
                 names.push(request.name());

@@ -44,11 +44,15 @@ pub enum Requested {
     /// Listening on, and connecting to, a port of this machine's own loopback interface. It
     /// reaches no other host and no file.
     Loopback,
+    /// The person choosing again which ssh key a push offers its owner. It lends nothing and adds
+    /// no row: the run prompt numbers the keys ssh could offer even for an owner already chosen
+    /// at an earlier prompt, and the answer is the person's.
+    SshKey,
 }
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 12] = [
+    pub const MENU: [&'static str; 13] = [
         "remote",
         "signing",
         "aws",
@@ -61,15 +65,19 @@ impl Requested {
         "maven",
         "gradle",
         Self::LOOPBACK,
+        Self::SSH_KEY,
     ];
 
     const LOOPBACK: &'static str = "loopback";
+
+    const SSH_KEY: &'static str = "ssh-key";
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
         match word {
             "signing" => Some(Self::Scope(Scope::Signing)),
             Self::LOOPBACK => Some(Self::Loopback),
+            Self::SSH_KEY => Some(Self::SshKey),
             _ => Scope::named(word)
                 .map(Self::Scope)
                 .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
@@ -82,6 +90,7 @@ impl Requested {
             Self::Scope(scope) => scope.name(),
             Self::Toolchain(toolchain) => toolchain.name(),
             Self::Loopback => Self::LOOPBACK,
+            Self::SshKey => Self::SSH_KEY,
         }
     }
 }
@@ -926,7 +935,8 @@ mod tests {
     #[test]
     fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
         for word in [
-            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh",
+            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh", "Ssh-key",
+            "ssh_key",
         ] {
             assert_eq!(Requested::named(word), None, "{word:?} named a request");
         }
@@ -955,7 +965,8 @@ mod tests {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
         assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
-        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1);
+        assert_eq!(Requested::named("ssh-key"), Some(Requested::SshKey));
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";
