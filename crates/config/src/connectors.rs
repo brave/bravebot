@@ -185,37 +185,48 @@ pub fn installed(home: &Path) -> BTreeMap<String, Result<Connector, String>> {
         else {
             continue;
         };
-        let read = read_one(&path, &name);
+        let read = read_one(home, &path, &name);
         found.insert(name, read);
     }
     found
 }
 
-/// Refuse a definition that somebody other than its owner could have written: the file names the
-/// program that is handed a write's text, so a file or folder open to the group or the world is a
-/// way to swap that program. A mode that cannot be read is refused as an open one.
+/// Refuse a definition that somebody other than the person could have written: the file names the
+/// program that is handed a write's text, so a file or folder another account owns, one open to the
+/// group or the world, or a link that could point anywhere is a way to swap that program. The
+/// person is whoever owns the state directory, which this process made for them. Anything whose
+/// owner or mode cannot be read is refused as an open one.
 #[cfg(unix)]
-fn owner_only_writable(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let open = |p: &Path| {
-        std::fs::metadata(p)
-            .map(|m| m.permissions().mode() & 0o022 != 0)
-            .unwrap_or(true)
+fn owner_only_writable(home: &Path, path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = std::fs::metadata(home).map(|m| m.uid()).ok();
+    let open = |p: &Path| match (std::fs::symlink_metadata(p), owner) {
+        (Ok(m), Some(owner)) => {
+            open_to_others(m.mode(), m.uid(), owner, m.file_type().is_symlink())
+        }
+        _ => true,
     };
     if open(path) || path.parent().is_some_and(open) {
         return Err(format!(
-            "{} or its folder can be written by others or could not be checked; make them \
-             writable by their owner only",
+            "{} or its folder is a link, belongs to another account, can be written by others or \
+             could not be checked; make them the person's own, writable by them only",
             path.display()
         ));
     }
     Ok(())
 }
 
+/// Whether a file with `mode`, owned by `uid`, is open to anyone but `owner`: a link, another
+/// account's, or writable by the group or the world.
+#[cfg(unix)]
+fn open_to_others(mode: u32, uid: u32, owner: u32, link: bool) -> bool {
+    link || uid != owner || mode & 0o022 != 0
+}
+
 /// Off Unix there is no mode to read, so no definition can be shown to be its owner's alone, and
 /// every one is refused.
 #[cfg(not(unix))]
-fn owner_only_writable(path: &Path) -> Result<(), String> {
+fn owner_only_writable(_home: &Path, path: &Path) -> Result<(), String> {
     Err(format!(
         "{}: connectors need the owner-only file check this platform does not have",
         path.display()
@@ -406,8 +417,8 @@ fn name_and_item(file: &Connector) -> Result<(), String> {
     Ok(())
 }
 
-fn read_one(path: &Path, name: &str) -> Result<Connector, String> {
-    owner_only_writable(path)?;
+fn read_one(home: &Path, path: &Path, name: &str) -> Result<Connector, String> {
+    owner_only_writable(home, path)?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let file: Connector =
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -455,7 +466,7 @@ mod off_unix {
     #[test]
     fn a_definition_is_refused_where_the_owner_only_check_cannot_run() {
         let path = std::path::Path::new("connectors").join("github.json");
-        let refused = super::read_one(&path, "github").unwrap_err();
+        let refused = super::read_one(std::path::Path::new("."), &path, "github").unwrap_err();
         assert!(refused.contains("owner-only file check"), "{refused}");
     }
 }
@@ -511,6 +522,39 @@ mod tests {
         let folder = dir.path().join("connectors");
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(installed(dir.path())["github"].is_err());
+    }
+
+    #[test]
+    fn a_definition_that_is_a_link_is_refused_though_it_points_at_one_that_reads() {
+        let dir = home(&[]);
+        std::fs::write(dir.path().join("elsewhere.json"), GITHUB).unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("elsewhere.json"),
+            dir.path().join("connectors").join("github.json"),
+        )
+        .unwrap();
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("is a link"), "{refused}");
+    }
+
+    #[test]
+    fn only_the_persons_own_file_writable_by_them_alone_is_closed_to_others() {
+        let person = 501;
+        assert!(!open_to_others(0o100644, person, person, false));
+        assert!(!open_to_others(0o40700, person, person, false));
+        assert!(
+            open_to_others(0o100644, 0, person, false),
+            "another account's"
+        );
+        assert!(
+            open_to_others(0o100664, person, person, false),
+            "the group's"
+        );
+        assert!(
+            open_to_others(0o100646, person, person, false),
+            "the world's"
+        );
+        assert!(open_to_others(0o120777, person, person, true), "a link");
     }
 
     #[test]
@@ -727,11 +771,56 @@ mod tests {
                 r#"{ "step": "act", "uses": ["place", "with|item"], "summary": "x", "with": { "at": "date" } }"#,
                 "one of an either-or",
             ),
+            (
+                r#"{ "step": "act", "uses": ["place", "with"], "summary": "x", "with": { "title": [] } }"#,
+                "offers a with value that can be nothing",
+            ),
+            (
+                r#"{ "step": "act", "uses": ["place", "on", "with"], "summary": "x",
+                     "with": { "to": "address" }, "bound": { "to": "who" } }"#,
+                "cannot take a with value named 'to'",
+            ),
+            (
+                r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x", "records": { "at": "when" } }"#,
+                "records fields only as a fetch with a receipt",
+            ),
+            (
+                r#"{ "step": "fetch", "uses": ["place", "with"], "summary": "x", "with": { "at": "date" },
+                     "takes": ["at"] }"#,
+                "takes only with values it declares, as an act",
+            ),
+            (
+                r#"{ "step": "act", "uses": ["place", "with"], "summary": "x", "with": { "at": "date" },
+                     "takes": ["on"] }"#,
+                "takes only with values it declares, as an act",
+            ),
+            (
+                r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x", "text": false }"#,
+                "only an act is high-impact, takes no text or narrows by option",
+            ),
+            (
+                r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x",
+                     "narrow_when": { "A": ["state:*"] } }"#,
+                "only an act is high-impact, takes no text or narrows by option",
+            ),
+            (
+                r#"{ "step": "act", "uses": ["place", "item", "option"], "summary": "x",
+                     "values": { "option": ["A"] }, "narrow_when": { "B": ["state:*"] } }"#,
+                "narrows by 'B', which it does not offer",
+            ),
         ] {
             let dir = home(&[("github.json", &with_resource(resource))]);
             let refused = installed(dir.path())["github"].clone().unwrap_err();
             assert!(refused.contains(why), "{resource}: {refused}");
         }
+
+        let either_default = GITHUB.replace(
+            r#""forms": { "place""#,
+            r#""defaults": { "place|item": "x" }, "forms": { "place""#,
+        );
+        let dir = home(&[("github.json", &either_default)]);
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("names an either-or"), "{refused}");
 
         let renamed = GITHUB.replace(r#""name": "github""#, r#""name": "Git.Hub""#);
         let dir = home(&[("Git.Hub.json", &renamed)]);

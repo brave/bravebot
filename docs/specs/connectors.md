@@ -153,14 +153,18 @@ not having happened, and a hung authority never holds the run.
 ### CONNECTOR-10: a definition is read from the person's own directory, writable by them alone
 
 A definition is one file under `connectors/` in the person's state directory, and no settings layer
-a checkout may carry can add one. A file or folder others could write to, or whose mode cannot be
-read, is refused, and so is every definition on a platform with no such mode to read.
+a checkout may carry can add one. The file and that folder must each be the person's own, owned by
+whoever owns the state directory, writable by nobody else and not a link. One that is not, or whose
+owner or mode cannot be read, is refused, and so is every definition on a platform with no such
+mode to read.
 
 **Why.** A definition names the program a run hands its text to. Anyone who could write one could
 choose that program.
 
 `verified-by: bravebot_config::connectors::a_definition_others_could_have_written_is_refused`
 `verified-by: bravebot_config::connectors::a_definition_whose_mode_cannot_be_read_is_refused`
+`verified-by: bravebot_config::connectors::a_definition_that_is_a_link_is_refused_though_it_points_at_one_that_reads`
+`verified-by: bravebot_config::connectors::only_the_persons_own_file_writable_by_them_alone_is_closed_to_others`
 `verified-by: bravebot_config::connectors::no_connectors_directory_means_nothing_installed`
 
 <a id="CONNECTOR-11"></a>
