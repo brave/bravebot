@@ -14,8 +14,10 @@ allowed-tools: Bash(python3 agents/skills/session-review/*), Bash(git status*)
 Every bravebot session is recorded under `~/.bravebot/sessions`, one directory per working
 directory, as `<id>.json` and `<id>.audit.jsonl`. Those records show where bravebot failed the
 person using it, including a task left unfinished or finished in part that another coding agent
-would probably have finished. This skill reads them, files what it finds, and remembers which it
-has read.
+would probably have finished. They also show turns the person did not expect, which appear as the
+person asking why bravebot did or did not do something. The review looks for those and proposes a
+change that would have avoided each. This skill reads them, files what it finds, and remembers
+which it has read.
 
 The memory is `<id>.analysis.jsonl` beside the session: one line per review, holding the date, the
 main commit, the number of turns reviewed, the issues filed and the counts dropped and held back.
