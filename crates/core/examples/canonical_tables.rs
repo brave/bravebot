@@ -77,7 +77,9 @@ fn main() {
     println!("];");
 }
 
-/// Add an entry to the line being filled, starting a new line at 100 columns.
+/// Add an entry to the line being filled, starting a new line when the entry would take it past
+/// 96 columns. `flush` indents a line by four more, which keeps each generated line within
+/// rustfmt's 100.
 fn push(line: &mut String, entry: String) {
     if !line.is_empty() && line.len() + 1 + entry.len() > 96 {
         flush(line);
