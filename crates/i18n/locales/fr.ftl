@@ -1116,7 +1116,6 @@ mcp-tools-offered =
        *[other] { $alias } propose { $count } outils
     }
 mcp-tools-none = { $alias } ne liste aucun outil qu'il puisse proposer
-mcp-tools-changed = ce n'est pas la liste que vous avez acceptée auparavant : les outils proposés ont changé
 mcp-tools-explained =
     Le modèle lira le nom de chaque outil, ses arguments et ce qu'en dit le serveur, tels qu'ils
     sont affichés ici. Chaque appel vous sera encore soumis. Répondez non si une description donne
@@ -1137,9 +1136,6 @@ mcp-tools-yes = Oui, les proposer
 mcp-tools-no = Non, continuer sans eux
 mcp-tools-declined = { $alias } ne propose aucun outil dans cette session : sa liste n'a pas été approuvée
 mcp-tools-refused = { $alias } ne propose aucun outil dans cette session : { $reason }
-mcp-tools-not-recorded =
-    les outils de { $alias } sont approuvés pour cette session seulement, car la réponse n'a pas pu
-    être enregistrée : { $error }
 
 ## One call to a tool of an MCP server
 

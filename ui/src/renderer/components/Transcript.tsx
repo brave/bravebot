@@ -2457,10 +2457,6 @@ function Card({
             <VettingVerdict vetting={request.vetting} />
           </div>
 
-          {request.changed && (
-            <p className="warn" data-deciding="all">This is not the list you approved before: the tools it offers have changed.</p>
-          )}
-
           <p className="permission-scope" data-deciding="all">
             The model will read each tool’s name, its arguments and what the server says about
             it, exactly as shown here. The descriptions are the server’s own text. Say no if one

@@ -720,8 +720,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
 /// Each tool as the client drew it: its name under the alias, each argument as one line, and the
 /// server's own sentence about it. That sentence is the server's text, and a front end draws it
 /// as text and nowhere a reader would take it for the application's own words. `refused` counts
-/// the tools the client would not draw, and `changed` says a list was vouched for under this
-/// declaration before and this is not it.
+/// the tools the client would not draw.
 pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
     let tools: Vec<Value> = request
         .tools
@@ -740,7 +739,6 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "tools": tools,
         "refused": request.refused,
         "withheld": request.withheld,
-        "changed": request.changed,
         "vetting": vetting(request.verdict, request.reason.as_deref()),
     })
 }

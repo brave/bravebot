@@ -1394,7 +1394,6 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             tools: &tools,
             refused: request.refused,
             withheld: request.withheld,
-            changed: request.changed,
             check: checked(request.verdict),
         });
         self.about(Held::Tools);
@@ -2894,7 +2893,6 @@ mod tests {
                     tools: Vec::new(),
                     refused: 0,
                     withheld: 0,
-                    changed: false,
                     verdict,
                     reason: None,
                 });

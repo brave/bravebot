@@ -1143,8 +1143,6 @@ pub struct ToolListRequest {
     pub refused: usize,
     /// How many tools were withheld by the server's allow or deny list.
     pub withheld: usize,
-    /// Whether a list for this declaration was vouched for before and this one is not it.
-    pub changed: bool,
     /// What a check said about the list, or that none was made.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1614,9 +1612,8 @@ pub trait Confirmer {
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
     ///
-    /// A yes promotes the list as drawn, descriptions and all, and records a digest of it, so an
-    /// unchanged list asks nothing next session. That makes it a standing decision, like the vouch
-    /// offer, and a verdict travels with it on the same footing.
+    /// A yes promotes the list as drawn, descriptions and all, for the rest of the session and
+    /// records nothing, so the next session asks again.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
 
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and

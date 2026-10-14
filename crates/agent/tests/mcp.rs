@@ -575,10 +575,6 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         );
     };
     assert_eq!(list.alias, "weather");
-    assert!(
-        !list.changed,
-        "a list nobody vouched for before was drawn as changed"
-    );
     let [tool] = list.tools.as_slice() else {
         panic!("the list was drawn as {:?}", list.tools);
     };
@@ -629,10 +625,11 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     assert!(call.contains(r#""name":"get_forecast""#), "{call}");
     assert!(call.contains(r#""city":"Paris""#), "{call}");
 
-    let vouched = Approvals::read(&scratch.state()).vouched_list(&declaration());
     assert!(
-        vouched.is_some(),
-        "a person's yes to the list was not recorded"
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a person's yes to the list was recorded"
     );
     assert!(
         !tools_file(&scratch.state()).exists(),
@@ -1345,10 +1342,11 @@ fn a_record_that_cannot_be_read_is_not_written_over() {
     }
 }
 
-/// A list vouched for under this declaration before is offered with nobody asked, and one that
-/// changed since is asked about again and drawn as changed.
+/// A list is put to the person every session: a yes records nothing, and a `tools` line an
+/// earlier version wrote does not stand in for the answer, since deciding from a server's bytes
+/// whether it was seen before is the driver's decision taken from untrusted content.
 #[test]
-fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
+fn a_list_is_asked_about_every_session_and_a_yes_records_nothing() {
     let scratch = Scratch::new("recorded");
     let (url, _server) = serve_weather();
 
@@ -1361,6 +1359,12 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         &mut vouching,
     );
     assert_eq!(vouching.lists.len(), 1);
+    assert!(
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a yes was recorded"
+    );
 
     let next = session(&url, &scratch, true);
     let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
@@ -1370,21 +1374,22 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("second session").with_mcp(Some(next.clone())),
         &mut refusing,
     );
-    assert!(
-        refusing.lists.is_empty(),
-        "the list vouched for before was asked about again"
+    assert_eq!(
+        refusing.lists.len(),
+        1,
+        "the list said yes to before was not asked about again"
     );
     assert_eq!(
         next.offering(),
-        [("weather".to_string(), Offering::Tools(1))]
+        [("weather".to_string(), Offering::Declined)]
     );
 
-    let mut approvals = Approvals::read(&scratch.state());
-    approvals.vouch_list(
-        declaration(),
-        Digest::of_list("the list as it was last week"),
-    );
-    std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("rewrite");
+    let digest = declaration();
+    std::fs::write(
+        approvals_file(&scratch.state()),
+        format!("tools {digest} {digest}\n"),
+    )
+    .expect("write a line an earlier version wrote");
     let (endpoint, _chat) = serve_chat(vec![reply_with("three")]);
     let mut asked = Answering::new(Decision::Reject, CallDecision::reject());
     run_turn(
@@ -1393,10 +1398,11 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("third session").with_mcp(Some(session(&url, &scratch, true))),
         &mut asked,
     );
-    let [list] = asked.lists.as_slice() else {
-        panic!("a changed list was not asked about: {:?}", asked.lists);
-    };
-    assert!(list.changed, "a changed list was drawn as new");
+    assert_eq!(
+        asked.lists.len(),
+        1,
+        "a recorded line answered for the list"
+    );
 }
 
 /// Bypassing answers the list and the call and records neither, so the next session that asks
@@ -1441,9 +1447,9 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
         "a list nobody reads was checked"
     );
     assert!(
-        Approvals::read(&scratch.state())
-            .vouched_list(&declaration())
-            .is_none(),
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
         "bypassing recorded a vouch for the list"
     );
     assert!(

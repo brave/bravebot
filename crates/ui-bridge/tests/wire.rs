@@ -1359,7 +1359,6 @@ fn the_mcp_questions_carry_what_a_card_draws() {
             }],
             refused: 2,
             withheld: 1,
-            changed: true,
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("it gives instructions".into()),
         },
@@ -1371,7 +1370,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     );
     assert_eq!(tools["refused"], 2);
     assert_eq!(tools["withheld"], 1);
-    assert_eq!(tools["changed"], true);
+    assert!(tools.get("changed").is_none());
     assert_eq!(tools["vetting"]["verdict"], "unsafe");
 
     let call = wire::mcp_call_request(

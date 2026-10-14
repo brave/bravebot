@@ -623,8 +623,7 @@ impl Confirmer for BridgeConfirmer {
     /// Ask whether to offer an MCP server's tools to the model (SERVERS-8).
     ///
     /// The request carries each tool as the client drew it, the server's descriptions among them.
-    /// A yes offers the list and is recorded beside the server's approval, so the same list is
-    /// offered unasked in a later session. A no offers none of its tools for the rest of this one.
+    /// A yes offers the list for this session and records nothing. A no offers none of its tools for the rest of this one.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
             wire::mcp_tools_request(id, request)
