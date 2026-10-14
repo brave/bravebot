@@ -1117,6 +1117,16 @@ fn title_state_during(message: &crate::remote_confirm::ToMain) -> crate::title::
     }
 }
 
+/// Whether `message` is an approval a manifest run's step puts to the person: drawn, and holding
+/// the worker until it is answered.
+fn manifest_step_asks(message: &crate::remote_confirm::ToMain) -> bool {
+    use crate::remote_confirm::ToMain;
+    matches!(
+        message,
+        ToMain::Write(_) | ToMain::Fetch(_) | ToMain::Vouch(_) | ToMain::Exposure(_)
+    )
+}
+
 /// Say in the title what the session is doing. A title that cannot be written is not a reason to
 /// stop a turn or leave a question unasked.
 fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crate::title::State) {
@@ -6057,6 +6067,13 @@ fn manifest_animated(
             let Some(message) = run.progress(session, message) else {
                 return;
             };
+            // The approvals a step reaches are drawn and block the worker on the person, so the title
+            // says so for as long as they are open, as it does in a turn. The plan question marks
+            // itself, and the questions this mode cannot ask are refused undrawn.
+            let asks = manifest_step_asks(&message);
+            if asks {
+                mark_title(terminal, crate::title::State::Waiting);
+            }
             match message {
                 // The one question this mode asks that a turn does not, and the reason the session
                 // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
@@ -6123,6 +6140,9 @@ fn manifest_animated(
                         let _ = answer_tx.send(reply);
                     }
                 }
+            }
+            if asks {
+                mark_title(terminal, crate::title::State::Working);
             }
         });
 
@@ -13811,6 +13831,35 @@ mod tests {
             title_state_during(&ToMain::Streaming("text".into())),
             State::Working
         );
+    }
+
+    /// A manifest run's steps put writes, fetches, vouches and credential exposures to the person,
+    /// and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
+    /// messages that ask nothing must not.
+    #[test]
+    fn every_approval_a_manifest_step_draws_turns_the_title_to_waiting() {
+        use crate::remote_confirm::ToMain;
+        assert!(manifest_step_asks(&write_question("notes.md")));
+        assert!(manifest_step_asks(&fetch_question()));
+        assert!(manifest_step_asks(&ToMain::Vouch(
+            bravebot_agent::confirm::VouchRequest {
+                path: "notes.md".into(),
+                preview: String::new(),
+                truncated: false,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::Exposure(
+            bravebot_agent::confirm::ExposureRequest {
+                path: "notes.md".into(),
+                credentials: Vec::new(),
+            }
+        )));
+        assert!(!manifest_step_asks(&ToMain::Streaming("text".into())));
+        assert!(!manifest_step_asks(&ToMain::Ask(
+            bravebot_core::ask::Asking::default()
+        )));
     }
 
     /// The mode lasts one command. Leaving it on would send the next thing typed to a shell, which
