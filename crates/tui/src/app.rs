@@ -1216,6 +1216,16 @@ fn copy_reply(session: &mut Session, text: &str, copy: impl FnOnce(&str) -> bool
     }
 }
 
+/// The model and level the command line named for the session it opens, which outrank every file
+/// and what `/model` and `/effort` recorded, and are recorded nowhere (CLI-31).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AskedFor {
+    /// The model as typed, resolved against the configuration when the session opens.
+    pub model: Option<String>,
+    /// The level, already checked to be one.
+    pub effort: Option<bravebot_aichat::protocol::Effort>,
+}
+
 /// What a session begins with.
 #[derive(Debug, Default)]
 pub enum Start {
@@ -1223,8 +1233,9 @@ pub enum Start {
     #[default]
     Fresh,
     /// A new session that sends this prompt as its first turn once the questions it opens with are
-    /// answered, as the person's own line (CLI-31).
-    Sending(String),
+    /// answered, as the person's own line, under the model and level the command line named
+    /// (CLI-31).
+    Sending(String, AskedFor),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
@@ -2015,9 +2026,20 @@ fn begin_session(
         .in_workspace(workspace.root())
         .on_tier(config)
         .with_model_labels(config);
+    // What the command line named for this session, which outranks the saved pick and is not
+    // recorded (CLI-31). Read off `start` before the match below consumes it.
+    let asked = match &start {
+        Start::Sending(_, asked) => asked.clone(),
+        _ => AskedFor::default(),
+    };
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
-    // below is asked for, which is the window of whichever model this settles on.
-    session.adopt_model(&settings, config);
+    // below is asked for, which is the window of whichever model this settles on. Not read at all
+    // where the command line named a model, so a pick set aside is not reported for a model that
+    // was never going to be asked for.
+    match &asked.model {
+        Some(name) => session.name_model(config.model_named(name)),
+        None => session.adopt_model(&settings, config),
+    }
     session.set_reference_sources(workspace.reference_sources());
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
@@ -2053,7 +2075,7 @@ fn begin_session(
         _ => None,
     };
     let first_turn = match &start {
-        Start::Sending(prompt) => Some(prompt.clone()),
+        Start::Sending(prompt, _) => Some(prompt.clone()),
         _ => None,
     };
 
@@ -2062,7 +2084,7 @@ fn begin_session(
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2178,6 +2200,10 @@ fn begin_session(
     // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
     // and `/effort` is how this one is changed.
     session.adopt_effort(&settings);
+    if let Some(level) = asked.effort {
+        session.name_effort(level);
+        say_if_unread(&mut session);
+    }
     session.adopt_limit(&settings);
     // No unit test reaches this call, because this function needs a real terminal. A scripted
     // session (`contrib/drive_tui.py`) with a `style` in settings and `/style` typed checks it.
@@ -5007,7 +5033,9 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Sending(_) | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
+        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => {
+            Beginning::New
+        }
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),

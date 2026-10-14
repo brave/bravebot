@@ -164,7 +164,7 @@ cli-option-tools = Offer the agent only these tools, comma separated. It cannot 
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
-cli-option-interactive = Open the interactive session and send this prompt as its first turn
+cli-option-interactive = Open the interactive session and send this prompt as its first turn; --model and --effort may follow it
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
@@ -315,15 +315,16 @@ cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; t
 cli-nothing-to-continue = no session to continue in this directory
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
 cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
-# Said where something follows the prompt of -i. The session it opens takes the flags every way of
-# starting takes, which are already out of the line by then; what is left describes a one-shot run.
+# Said where something other than --model or --effort follows the prompt of -i. The session it opens
+# takes the flags every way of starting takes, which are already out of the line by then; what is
+# left describes a one-shot run.
 cli-interactive-takes-nothing-else =
-    -i takes one prompt, quoted where it has spaces, and nothing after it, so '{ $argument }' is
-    refused. --model, --effort, --file and the other options for a task go with a one-shot run (-p).
+    -i takes one prompt, quoted where it has spaces, and then --model and --effort, so '{ $argument }'
+    is refused. --file and the other options for a task go with a one-shot run (-p).
 # Said where -i came after a task's own options rather than first.
 cli-interactive-not-with-a-task =
-    -i opens a session and comes first, followed by its prompt. --model, --effort, --file and the
-    other options for a task go with a one-shot run (-p).
+    -i opens a session and comes first, followed by its prompt and then --model and --effort. --file
+    and the other options for a task go with a one-shot run (-p).
 # Said where -i came after another way of starting a session, such as --resume or --fork.
 cli-interactive-not-with-another-start = -i opens a new session and comes first, so it does not go with { $flag }.
 # Said where -i was given with something other than a terminal on stdin or stdout, where there is
