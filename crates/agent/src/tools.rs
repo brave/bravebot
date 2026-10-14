@@ -8772,15 +8772,14 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // printed.
             let outcome = if let Some(after) = ran.stopped {
                 crate::report::Outcome::Stopped(after)
-            } else if ran.ended_well {
-                crate::report::Outcome::Succeeded
             } else {
-                crate::report::Outcome::Failed {
-                    detail: failed_steps(&ran.codes),
-                    confinement: confinement
-                        .as_ref()
-                        .map(|confinement| confinement.profile(&plan.steps())),
-                }
+                // The codes and not `ended_well`: that is the verdict of the part that ran last, so
+                // `make test ; echo done` would be told it exited 0 with the failed stage unnamed
+                // (RUN-13).
+                let confinement = confinement
+                    .as_ref()
+                    .map(|confinement| confinement.profile(&plan.steps()));
+                how_it_ended(&ran.codes, confinement.as_deref())
             };
             let lines = text.lines().count();
             let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
