@@ -6744,6 +6744,7 @@ impl Session {
             .to_string(),
             None => name.to_string(),
         };
+        let turn_is_running = self.a_turn_is_running();
         let job = self.outputs[self.jobs_from..]
             .iter_mut()
             .rev()
@@ -6759,6 +6760,11 @@ impl Session {
                     job.state = JobState::Stopping;
                     (t!(job_stop_asked, name = label).to_string(), true)
                 }
+                // The token is already set. With a turn in flight it reads it; with none, nothing
+                // will, so the stop is carried out below rather than answered with a refusal.
+                JobState::Stopping if !turn_is_running && self.kept_jobs.is_some() => {
+                    (t!(job_stop_asked, name = label).to_string(), true)
+                }
                 JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
                 JobState::Ended | JobState::EndedWithTurn => {
                     (t!(jobs_already_ended, name = label).to_string(), false)
@@ -6768,19 +6774,27 @@ impl Session {
         self.note(said);
         // Between turns nothing reads the token, so the stop is carried out here and the row says
         // so. The planner is told at the next turn's first round, as it is of any finish (RUN-27).
-        if asked
-            && !self.a_turn_is_running()
-            && let Some(kept) = &self.kept_jobs
-        {
-            let stopped = kept.stop_requested();
-            for (name, ran_for) in stopped {
-                self.job(bravebot_agent::report::JobEvent::Ended {
-                    name,
-                    outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
-                });
-            }
+        if asked && !turn_is_running {
+            self.carry_out_stops();
         }
         asked
+    }
+
+    /// Kill every job whose stop token is set and say each was the person's stop (RUN-27).
+    ///
+    /// For the moments no turn is left to read a token: between turns, and at a turn's end, where a
+    /// reply with no tool calls ends the turn without another step and a kept session's jobs
+    /// outlive it.
+    fn carry_out_stops(&mut self) {
+        let Some(kept) = &self.kept_jobs else {
+            return;
+        };
+        for (name, ran_for) in kept.stop_requested() {
+            self.job(bravebot_agent::report::JobEvent::Ended {
+                name,
+                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
+            });
+        }
     }
 
     /// Say where each listed memory is kept and what the map says of it (MEMORY-12), one note
@@ -7125,6 +7139,9 @@ impl Session {
                     job.state = JobState::EndedWithTurn;
                 }
             }
+        } else {
+            // A stop asked for while the last reply was in flight was never read by the turn.
+            self.carry_out_stops();
         }
     }
 
@@ -9981,6 +9998,26 @@ mod tests {
                 said[2].ends_with(&format!(", started by delegate {id}")),
                 "{said:?}"
             );
+        }
+
+        /// RUN-27. A row at "being stopped" with no turn in flight is one nothing will read the
+        /// token of, so the person's second try is carried out and not answered "already being
+        /// stopped", which was the whole of what typing it again did.
+        #[test]
+        fn a_second_stop_with_no_turn_in_flight_is_not_refused() {
+            let mut session = Session::new("none");
+            session.keep_jobs_between_turns();
+            job_with_stop(&mut session, "job:1", "sleep 600");
+            assert!(!session.a_turn_is_running());
+            // The first stop finds nothing registered to kill, which leaves the row Stopping.
+            assert!(session.stop_job("job:1", None));
+            let (_, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Stopping);
+
+            let said = noted(&mut session, |session| {
+                assert!(session.stop_job("job:1", None));
+            });
+            assert_eq!(said, [t!(job_stop_asked, name = "job:1")]);
         }
 
         /// RUN-27. A stop sets the job's token and nothing more, so the row says it is being
