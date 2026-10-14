@@ -85,7 +85,7 @@ fn positive_integer(value: &str) -> bool {
 }
 
 // branch: at most 100; segments of [A-Za-z0-9._-], none empty, "." or ".."; not starting with "-";
-// not ending in ".lock" or "."; not "HEAD"; no "..", "@{" or segment starting with "."; not starting
+// no segment ending in ".lock" and not ending in "."; not "HEAD"; no "..", "@{" or segment starting with "."; not starting
 // with "refs/", "heads/", "tags/" or "remotes/", which git reads as another ref.
 fn branch(value: &str) -> bool {
     value.len() <= 100
@@ -95,7 +95,9 @@ fn branch(value: &str) -> bool {
         && value != "HEAD"
         && !value.contains("..")
         && !value.contains("@{")
-        && !value.split('/').any(|segment| segment.starts_with('.'))
+        && !value
+            .split('/')
+            .any(|segment| segment.starts_with('.') || segment.ends_with(".lock"))
         && !["refs/", "heads/", "tags/", "remotes/"]
             .iter()
             .any(|prefix| value.starts_with(prefix))
@@ -311,6 +313,7 @@ mod tests {
             "fix.",
             "-x",
             "fix.lock",
+            "a.lock/b",
             "a//b",
             "a/../b",
             &"x".repeat(101),
@@ -470,5 +473,84 @@ mod tests {
             "names a form nothing defines, 'integer'"
         );
         assert!(check("integer", "").unwrap_err().contains("space"));
+    }
+
+    /// A repository is one owner and one name, and neither can climb out of its path segment.
+    #[test]
+    fn an_owner_name_is_two_plain_segments() {
+        for good in ["brave/bravebot", "a-b/c.d_e"] {
+            assert!(check("owner/name", good).is_ok(), "{good} refused");
+        }
+        for bad in [
+            "brave",
+            "brave/bravebot/x",
+            "../x",
+            "a/..",
+            "a/.",
+            "/a",
+            "a/",
+            "a/b?c",
+        ] {
+            assert!(check("owner/name", bad).is_err(), "{bad} passed");
+        }
+    }
+
+    /// A path in a service is plain segments, so it cannot reach above its root.
+    #[test]
+    fn a_relative_path_never_climbs_out() {
+        for good in ["docs/x.md", "a", "a.b/c_d-e"] {
+            assert!(check("relative-path", good).is_ok(), "{good} refused");
+        }
+        for bad in [
+            "../x",
+            "docs/../x",
+            "./x",
+            "/etc/passwd",
+            "a//b",
+            "a\\b",
+            &"a".repeat(256),
+        ] {
+            assert!(check("relative-path", bad).is_err(), "{bad} passed");
+        }
+    }
+
+    /// Numbers and ids are what a call puts in one path segment, so nothing else passes.
+    #[test]
+    fn a_number_an_id_and_a_hash_are_one_segment_each() {
+        for good in ["1", "914", "4294967295"] {
+            assert!(check("positive-integer", good).is_ok(), "{good} refused");
+        }
+        for bad in ["0", "01", "-1", "1.5", "12345678901"] {
+            assert!(check("positive-integer", bad).is_err(), "{bad} passed");
+        }
+        assert!(check("opaque-id", "18c1f2a3_b4-d5").is_ok());
+        for bad in ["a.b", "a/b", "a?b", &"a".repeat(65)] {
+            assert!(check("opaque-id", bad).is_err(), "{bad} passed");
+        }
+        for good in ["abc1234", "0123456789abcdef0123456789abcdef01234567"] {
+            assert!(check("hex-id", good).is_ok(), "{good} refused");
+        }
+        for bad in ["abc123", "abcdefg", &"a".repeat(65)] {
+            assert!(check("hex-id", bad).is_err(), "{bad} passed");
+        }
+    }
+
+    /// A list of recipients is up to ten distinct ones, each one recipient, so an approved list
+    /// cannot grow or repeat a recipient under another case.
+    #[test]
+    fn addresses_are_up_to_ten_distinct_recipients() {
+        assert!(check("addresses", "a@b.co,c@d.co").is_ok());
+        let ten: Vec<String> = (0..10).map(|n| format!("p{n}@b.co")).collect();
+        assert!(check("addresses", &ten.join(",")).is_ok());
+        let eleven: Vec<String> = (0..11).map(|n| format!("p{n}@b.co")).collect();
+        assert!(check("addresses", &eleven.join(",")).is_err());
+        for bad in [
+            "a@b.co,A@B.co",
+            "a@b.co,",
+            "a@b.co;c@d.co",
+            "a@b.co,not-an-address",
+        ] {
+            assert!(check("addresses", bad).is_err(), "{bad} passed");
+        }
     }
 }

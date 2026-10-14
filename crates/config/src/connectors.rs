@@ -200,11 +200,11 @@ pub fn installed(home: &Path) -> BTreeMap<String, Result<Connector, String>> {
 fn owner_only_writable(home: &Path, path: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let owner = std::fs::metadata(home).map(|m| m.uid()).ok();
-    let open = |p: &Path| match (std::fs::symlink_metadata(p), owner) {
-        (Ok(m), Some(owner)) => {
-            open_to_others(m.mode(), m.uid(), owner, m.file_type().is_symlink())
-        }
-        _ => true,
+    let open = |p: &Path| {
+        let found = std::fs::symlink_metadata(p)
+            .ok()
+            .map(|m| (m.mode(), m.uid(), m.file_type().is_symlink()));
+        open_to_others(found, owner)
     };
     if open(path) || path.parent().is_some_and(open) {
         return Err(format!(
@@ -216,11 +216,51 @@ fn owner_only_writable(home: &Path, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether a file with `mode`, owned by `uid`, is open to anyone but `owner`: a link, another
-/// account's, or writable by the group or the world.
+/// Whether a file `found` as its mode, its owner and whether it is a link is open to anyone but
+/// `owner`: a link, another account's, or writable by the group or the world. A file or an owner
+/// that could not be read is open.
 #[cfg(unix)]
-fn open_to_others(mode: u32, uid: u32, owner: u32, link: bool) -> bool {
-    link || uid != owner || mode & 0o022 != 0
+fn open_to_others(found: Option<(u32, u32, bool)>, owner: Option<u32>) -> bool {
+    match (found, owner) {
+        (Some((mode, uid, link)), Some(owner)) => link || uid != owner || mode & 0o022 != 0,
+        _ => true,
+    }
+}
+
+/// Refuse an authority program that anyone but the person or the system could replace: it is
+/// handed a write's text, so the program and the folder it is in, followed through any link, and
+/// the folder the definition names it in, must each be owned by the person or by root and
+/// writable by nobody else. A program that does not exist is refused too.
+#[cfg(unix)]
+fn authority_closed(home: &Path, authority: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = std::fs::metadata(home).map(|m| m.uid()).ok();
+    let real = std::fs::canonicalize(authority).map_err(|e| {
+        format!(
+            "the authority '{}' cannot be read: {e}",
+            authority.display()
+        )
+    })?;
+    let closed = |p: &Path| {
+        std::fs::metadata(p)
+            .is_ok_and(|m| (Some(m.uid()) == owner || m.uid() == 0) && m.mode() & 0o022 == 0)
+    };
+    let places = [Some(real.as_path()), real.parent(), authority.parent()];
+    if places.into_iter().flatten().all(closed) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the authority '{}' or its folder belongs to another account or can be written by \
+             others; make them the person's own or the system's, writable by their owner only",
+            authority.display()
+        ))
+    }
+}
+
+/// Off Unix every definition is refused before its authority is looked at.
+#[cfg(not(unix))]
+fn authority_closed(_home: &Path, _authority: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// Off Unix there is no mode to read, so no definition can be shown to be its owner's alone, and
@@ -370,9 +410,13 @@ fn surface_rules(surface: &Surface) -> Result<(), String> {
                 "the resource '{name}' offers with as one of an either-or"
             ));
         }
-        if !act && (resource.high_impact || !resource.text || !resource.narrow_when.is_empty()) {
+        let act_only = resource.high_impact
+            || !resource.text
+            || !resource.narrow_when.is_empty()
+            || !resource.bound.is_empty();
+        if !act && act_only {
             return Err(format!(
-                "the resource '{name}' is a fetch, and only an act is high-impact, takes no text or narrows by option"
+                "the resource '{name}' is a fetch, and only an act is high-impact, takes no text, narrows by option or binds values"
             ));
         }
         if !resource.bound.is_empty() && !resource.uses_field("on") {
@@ -453,6 +497,7 @@ fn read_one(home: &Path, path: &Path, name: &str) -> Result<Connector, String> {
             file.authority.display()
         ));
     }
+    authority_closed(home, &file.authority).map_err(|why| format!("{}: {why}", path.display()))?;
     forms_known(&file.surface).map_err(|why| format!("{}: {why}", path.display()))?;
     narrow_offered(&file.surface).map_err(|why| format!("{}: {why}", path.display()))?;
     with_declared(&file.surface).map_err(|why| format!("{}: {why}", path.display()))?;
@@ -475,12 +520,29 @@ mod off_unix {
 mod tests {
     use super::*;
 
+    /// A state directory holding `files` under `connectors/`, each naming an authority program
+    /// made beside it. Every mode is set rather than left to the umask, which may let the group
+    /// write.
     fn home(files: &[(&str, &str)]) -> scratch::Dir {
+        use std::os::unix::fs::PermissionsExt;
         let dir = scratch::Dir::new();
+        let mode = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let authority = dir.path().join("authority");
+        std::fs::create_dir_all(&authority).unwrap();
+        std::fs::write(authority.join("agent"), "#!/bin/sh\n").unwrap();
+        mode(&authority.join("agent"), 0o755);
+        mode(&authority, 0o755);
         std::fs::create_dir_all(dir.path().join("connectors")).unwrap();
         for (name, text) in files {
+            let named = authority.join("agent").display().to_string();
+            let text = text.replace("/opt/authority/agent", &named);
             std::fs::write(dir.path().join("connectors").join(name), text).unwrap();
+            mode(&dir.path().join("connectors").join(name), 0o644);
         }
+        mode(&dir.path().join("connectors"), 0o755);
+        mode(dir.path(), 0o755);
         dir
     }
 
@@ -498,7 +560,7 @@ mod tests {
     }"#;
 
     #[test]
-    fn a_definition_whose_mode_cannot_be_read_is_refused() {
+    fn a_definition_that_is_a_dangling_link_is_refused() {
         let dir = home(&[]);
         std::os::unix::fs::symlink(
             dir.path().join("nowhere.json"),
@@ -506,7 +568,52 @@ mod tests {
         )
         .unwrap();
         let refused = installed(dir.path())["github"].clone().unwrap_err();
-        assert!(refused.contains("could not be checked"), "{refused}");
+        assert!(refused.contains("is a link"), "{refused}");
+    }
+
+    /// A file or an owner that could not be read is treated as open, never as the person's own.
+    #[test]
+    fn a_file_or_owner_that_cannot_be_read_is_open_to_others() {
+        assert!(open_to_others(None, Some(501)));
+        assert!(open_to_others(Some((0o100644, 501, false)), None));
+        assert!(open_to_others(None, None));
+    }
+
+    /// The program a definition names is handed a write's text, so one anybody but the person or
+    /// the system could replace is refused, and so is one that is not there.
+    #[test]
+    fn an_authority_others_could_replace_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let set = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let dir = home(&[("github.json", GITHUB)]);
+        assert!(installed(dir.path())["github"].is_ok());
+        let agent = dir.path().join("authority").join("agent");
+        set(&agent, 0o777);
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("can be written by others"), "{refused}");
+        set(&agent, 0o755);
+        set(&dir.path().join("authority"), 0o775);
+        assert!(
+            installed(dir.path())["github"].is_err(),
+            "a folder the group can write"
+        );
+        set(&dir.path().join("authority"), 0o755);
+        std::fs::remove_file(&agent).unwrap();
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("cannot be read"), "{refused}");
+    }
+
+    /// A program the system owns, writable by nobody else, is one the person may name.
+    #[test]
+    fn an_authority_the_system_owns_is_accepted() {
+        let dir = home(&[(
+            "github.json",
+            &GITHUB.replace("/opt/authority/agent", "/bin/sh"),
+        )]);
+        let read = installed(dir.path())["github"].clone();
+        assert!(read.is_ok(), "{read:?}");
     }
 
     #[test]
@@ -539,22 +646,23 @@ mod tests {
 
     #[test]
     fn only_the_persons_own_file_writable_by_them_alone_is_closed_to_others() {
-        let person = 501;
-        assert!(!open_to_others(0o100644, person, person, false));
-        assert!(!open_to_others(0o40700, person, person, false));
+        let person = Some(501);
+        let file = |mode: u32, uid: u32, link: bool| Some((mode, uid, link));
+        assert!(!open_to_others(file(0o100644, 501, false), person));
+        assert!(!open_to_others(file(0o40700, 501, false), person));
         assert!(
-            open_to_others(0o100644, 0, person, false),
+            open_to_others(file(0o100644, 0, false), person),
             "another account's"
         );
         assert!(
-            open_to_others(0o100664, person, person, false),
+            open_to_others(file(0o100664, 501, false), person),
             "the group's"
         );
         assert!(
-            open_to_others(0o100646, person, person, false),
+            open_to_others(file(0o100646, 501, false), person),
             "the world's"
         );
-        assert!(open_to_others(0o120777, person, person, true), "a link");
+        assert!(open_to_others(file(0o120777, 501, true), person), "a link");
     }
 
     #[test]
@@ -627,7 +735,12 @@ mod tests {
             r#""summary": "x", "sumary": "y""#,
         );
         let dir = home(&[("github.json", &unknown)]);
-        assert!(installed(dir.path())["github"].is_err());
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("unknown field `sumary`"), "{refused}");
+        let unknown = GITHUB.replace(r#""forms": {"#, r#""colour": "red", "forms": {"#);
+        let dir = home(&[("github.json", &unknown)]);
+        let refused = installed(dir.path())["github"].clone().unwrap_err();
+        assert!(refused.contains("unknown field `colour`"), "{refused}");
     }
 
     #[test]
@@ -795,13 +908,17 @@ mod tests {
                 "takes only with values it declares, as an act",
             ),
             (
+                r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x", "bound": { "to": "who" } }"#,
+                "only an act is high-impact, takes no text, narrows by option or binds values",
+            ),
+            (
                 r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x", "text": false }"#,
-                "only an act is high-impact, takes no text or narrows by option",
+                "only an act is high-impact, takes no text, narrows by option or binds values",
             ),
             (
                 r#"{ "step": "fetch", "uses": ["place", "item"], "summary": "x",
                      "narrow_when": { "A": ["state:*"] } }"#,
-                "only an act is high-impact, takes no text or narrows by option",
+                "only an act is high-impact, takes no text, narrows by option or binds values",
             ),
             (
                 r#"{ "step": "act", "uses": ["place", "item", "option"], "summary": "x",

@@ -156,13 +156,18 @@ A definition is one file under `connectors/` in the person's state directory, an
 a checkout may carry can add one. The file and that folder must each be the person's own, owned by
 whoever owns the state directory, writable by nobody else and not a link. One that is not, or whose
 owner or mode cannot be read, is refused, and so is every definition on a platform with no such
-mode to read.
+mode to read. The authority it names must exist, and the program and its folder, followed through
+any link, and the folder the definition names it in, must each be owned by the person or by the
+system and writable by nobody else.
 
 **Why.** A definition names the program a run hands its text to. Anyone who could write one could
 choose that program.
 
 `verified-by: bravebot_config::connectors::a_definition_others_could_have_written_is_refused`
-`verified-by: bravebot_config::connectors::a_definition_whose_mode_cannot_be_read_is_refused`
+`verified-by: bravebot_config::connectors::a_definition_that_is_a_dangling_link_is_refused`
+`verified-by: bravebot_config::connectors::a_file_or_owner_that_cannot_be_read_is_open_to_others`
+`verified-by: bravebot_config::connectors::an_authority_others_could_replace_is_refused`
+`verified-by: bravebot_config::connectors::an_authority_the_system_owns_is_accepted`
 `verified-by: bravebot_config::connectors::a_definition_that_is_a_link_is_refused_though_it_points_at_one_that_reads`
 `verified-by: bravebot_config::connectors::only_the_persons_own_file_writable_by_them_alone_is_closed_to_others`
 `verified-by: bravebot_config::connectors::no_connectors_directory_means_nothing_installed`
@@ -225,7 +230,7 @@ character has no form.
 
 | Form | A value of it |
 |---|---|
-| `owner/name`, `relative-path`, `branch` | slash-separated segments of letters, digits, `.`, `_` and `-`, none empty, `.` or `..`; a branch is one git reads as a new branch and nothing else |
+| `owner/name`, `relative-path`, `branch` | slash-separated segments of letters, digits, `.`, `_` and `-`, none empty, `.` or `..`; a branch is one git reads as a new branch and nothing else, with no segment ending in `.lock` |
 | `positive-integer`, `opaque-id`, `service-id`, `hex-id` | a number with no leading zero; an id of letters, digits, `_` and `-`; one path segment; 7 to 64 hexadecimal digits |
 | `address`, `addresses` | one recipient at a real domain, or up to ten distinct ones |
 | `date`, `datetime`, `date-dmy`, `local-datetime`, `time-zone` | a day that exists; an instant with its offset; a wall-clock time read in a named IANA zone |
@@ -243,6 +248,10 @@ sides know is one a value cannot slip between.
 `verified-by: bravebot_config::connectors::forms::a_personal_name_and_an_e164_number`
 `verified-by: bravebot_config::connectors::forms::an_iata_code_and_a_day_month_year_date`
 `verified-by: bravebot_config::connectors::forms::a_service_id_is_one_path_segment`
+`verified-by: bravebot_config::connectors::forms::an_owner_name_is_two_plain_segments`
+`verified-by: bravebot_config::connectors::forms::a_relative_path_never_climbs_out`
+`verified-by: bravebot_config::connectors::forms::a_number_an_id_and_a_hash_are_one_segment_each`
+`verified-by: bravebot_config::connectors::forms::addresses_are_up_to_ten_distinct_recipients`
 
 <a id="CONNECTOR-16"></a>
 ### CONNECTOR-16: a surface the authority would refuse is refused here
@@ -256,8 +265,8 @@ is made against one the authority would refuse:
 - only a fetch with a receipt records fields, and only an act takes them, among its own `with`
   values;
 - a resource taking an option lists its values, and narrows by option only for a value it offers;
-- only an act is high-impact, takes no text or narrows by option, and only one naming an item binds
-  values from it;
+- only an act is high-impact, takes no text, narrows by option or binds values from an item, and
+  only one that takes `on` binds them;
 - `with` is never half of an either-or, and a default names one field.
 
 `verified-by: bravebot_config::connectors::a_fetch_narrows_only_by_terms_its_own_select_offers`
