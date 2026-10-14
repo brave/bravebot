@@ -2569,11 +2569,15 @@ A marker a step puts back names its attachment again while that attachment is st
 reason INPUT-3 keeps a deleted marker's attachment staged at all: nothing takes it off until the line
 is sent or cleared, so a step that puts the marker's text back is the whole of what has to happen.
 
-Ctrl-_ reaches both styles rather than only the ordinary box's: pressed in vi's INSERT mode it is a
-second way to ask for what `u` asks for from NORMAL mode, without first pressing Escape to reach it.
-It carries no count, so one press is one step back in either style, where a count in front of `u`
-asks vi for several. Ctrl-Z is not used for it: that chord suspends the process on a terminal that
-has not had job control turned off, which this program does not take.
+Ctrl-_ reaches both styles rather than only the ordinary box's, since the stack it puts back a step
+from is the one `u` already does. Pressed in vi's INSERT mode it reaches back past the session open
+there to the last change already on the stack, without first pressing Escape to reach `u`, and the
+session stays open in INSERT mode. What the session has typed since it opened is not itself on the
+stack until Escape closes it (INPUT-28), so Ctrl-_ there does not reach it either, the same as `u`
+could not reach it if INSERT read letters as anything but themselves. It carries no count, so one
+press is one step back in either style, where a count in front of `u` asks vi for several. Ctrl-Z is
+not used for it: that chord suspends the process on a terminal that has not had job control turned
+off, which this program does not take.
 
 `undo` is one of the eleven chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
 the `?` list shows it (INPUT-13).
@@ -2591,3 +2595,8 @@ character of a sentence somebody has otherwise finished typing.
 `verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
 `verified-by: bravebot_tui::app::the_undo_chord_puts_back_what_a_delete_took`
 `verified-by: bravebot_tui::app::the_undo_chord_takes_back_a_whole_typing_run`
+`verified-by: bravebot_tui::app::the_undo_chord_leaves_the_next_run_able_to_open_its_own_step`
+`verified-by: bravebot_tui::app::the_undo_chord_works_in_vi_insert_mode_without_leaving_it`
+`verified-by: bravebot_tui::app::the_undo_chord_works_while_a_turn_is_running`
+`verified-by: bravebot_tui::state::a_second_typing_run_after_undo_opens_its_own_step`
+`verified-by: bravebot_tui::state::typing_after_a_yank_opens_its_own_run`

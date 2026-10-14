@@ -1153,9 +1153,9 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         // In the shared ladder so it works mid-turn, like every other key that edits the line
-        // rather than sends it. Reaches vi's own undo stack as well as the ordinary box's, so the
-        // chord works in INSERT mode without needing Escape to NORMAL mode first; `undo_last_change`
-        // says whether there was a step to put back.
+        // rather than sends it. Reaches vi's own undo stack as well as the ordinary box's, so a
+        // change already on it comes back in INSERT mode without first pressing Escape to reach
+        // `u` from NORMAL mode; `undo_last_change` says whether there was a step to put back.
         _ if session.bindings().is_undo(&key) => {
             if session.undo_last_change() {
                 Action::Redraw

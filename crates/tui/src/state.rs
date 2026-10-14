@@ -4203,6 +4203,10 @@ impl Session {
             return;
         }
         self.begin_a_change();
+        // Closes whatever run was open in the ordinary box, the way `begin_an_ordinary_edit` does:
+        // a yank is not a run of typing, and leaving the flag set would have the next character
+        // typed find a run already open and share a step this press already closed.
+        self.ordinary_run_open = false;
         self.abandon_the_selection();
         self.input.insert_str(self.caret, &yanked.text);
         self.caret += yanked.text.len();
@@ -19769,6 +19773,53 @@ mod tests {
             s.pasted_named(&s.input).len(),
             1,
             "the picture did not come back with its marker"
+        );
+    }
+
+    /// Undoing a run closes it, so the next run opens a step of its own rather than finding one
+    /// still marked open from before the undo and sharing it, which would leave the second run
+    /// with no step on the stack to put back at all.
+    #[test]
+    fn a_second_typing_run_after_undo_opens_its_own_step() {
+        let mut s = session();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "");
+
+        for c in "abc".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "", "the second run opened no step of its own");
+    }
+
+    /// A yank closes whatever run was open the same way a delete or a paste does, so typing after
+    /// one opens a step of its own rather than finding the run from before the yank still marked
+    /// open and sharing it.
+    #[test]
+    fn typing_after_a_yank_opens_its_own_run() {
+        let mut s = session();
+        for c in "one".chars() {
+            s.type_char(c);
+        }
+        s.register = Some(Yanked {
+            text: "X".to_string(),
+            lines: false,
+        });
+        s.yank();
+        assert_eq!(s.input, "oneX");
+
+        for c in "yz".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "oneXyz");
+
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "oneX",
+            "typing after the yank opened no step of its own"
         );
     }
 

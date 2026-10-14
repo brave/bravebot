@@ -1415,6 +1415,11 @@ impl Session {
         self.caret = caret;
         self.history.leave();
         self.completion = 0;
+        // The step just popped is not an open run any more, whichever kind of step it was, so the
+        // next character typed in the ordinary box must open one of its own rather than finding
+        // this one still marked open and sharing it, which would leave that typing with no step to
+        // undo at all once the stack is otherwise empty.
+        self.ordinary_run_open = false;
         // Only where vi's own rule holds that the caret rests on a character rather than past the
         // last one. The ordinary box has no such rule, and the caret a step was taken with is
         // wherever the person had put it, past the last character being nowhere unusual there.
