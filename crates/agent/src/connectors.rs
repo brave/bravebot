@@ -7,11 +7,11 @@
 //! in their own directory against text the planner wrote from the task alone decides nothing from
 //! anything a service sent.
 
-use bravebot_config::connectors::{Connector, Resource, StepKind, forms};
+use bravebot_config::connectors::{Connector, Resource, StepKind, WithRule, forms};
 use bravebot_core::manifest::{
     Arg, CONNECTOR_ACT, CONNECTOR_FETCH, Draft, Manifest, Step, Tier, is_connector,
 };
-use bravebot_core::selector;
+use bravebot_core::selector::{self, take_terms};
 use bravebot_core::slot::SlotId;
 use bravebot_core::value::Labelled;
 use std::collections::BTreeMap;
@@ -176,6 +176,23 @@ impl Connectors {
                         resource.select.join(" ")
                     ));
                 }
+                if !resource.with.is_empty() {
+                    let each: Vec<String> = resource
+                        .with
+                        .iter()
+                        .map(|(key, rule)| match rule {
+                            WithRule::OneOf(values) => format!("{key}:<{}>", values.join("|")),
+                            WithRule::Form(form) => match forms::example(form) {
+                                Some(example) => format!("{key}:{example}"),
+                                None => format!("{key}:<{form}>"),
+                            },
+                        })
+                        .collect();
+                    lines.push_str(&format!(
+                        "      with gives every one of these, as key:value terms like a select: {}\n",
+                        each.join(" ")
+                    ));
+                }
                 if resource.step == StepKind::Fetch && !resource.narrow.is_empty() {
                     lines.push_str(&format!(
                         "      select must use one of: {}\n",
@@ -186,6 +203,20 @@ impl Connectors {
                     lines.push_str(&format!(
                         "      filled in from the fetch named in on, so never give: {}\n",
                         described(&resource.bound, |field, words| format!("{field} ({words})"))
+                    ));
+                }
+                if !resource.records.is_empty() {
+                    lines.push_str(&format!(
+                        "      records, for an act to take as out_slot.field: {}\n",
+                        described(&resource.records, |field, words| format!(
+                            "{field} ({words})"
+                        ))
+                    ));
+                }
+                if !resource.takes.is_empty() {
+                    lines.push_str(&format!(
+                        "      may take instead of giving in with: {}; take \"key:slot.field\" names a field an earlier fetch of any connector records, whose value only the authority sees\n",
+                        resource.takes.join(", ")
                     ));
                 }
                 if resource.step == StepKind::Act {
@@ -351,13 +382,42 @@ impl Connectors {
             if !is_connector(step.tool()) {
                 continue;
             }
-            self.check_step(plan, step)
+            self.check_step(plan, index, step)
                 .map_err(|why| format!("step {}: {why}", index + 1))?;
         }
         Ok(())
     }
 
-    fn check_step(&self, plan: &Manifest, step: &Step) -> Result<(), String> {
+    /// That `from`, as `slot.field`, names a field the fetch filling `slot` records, where that
+    /// fetch comes before the step at `index`. The fetch may be of any connector: what it read
+    /// reaches the act only through the authority's receipt, under the plan's release.
+    fn check_taken(
+        &self,
+        plan: &Manifest,
+        index: usize,
+        slot: &SlotId,
+        field: &str,
+    ) -> Result<(), String> {
+        let fetch = plan.steps()[..index]
+            .iter()
+            .find(|s| s.out_slot() == Some(slot) && s.tool() == CONNECTOR_FETCH)
+            .ok_or_else(|| format!("'take' names '{slot}', which no earlier fetch filled"))?;
+        let records = self
+            .connector(fetch.text("connector"))?
+            .surface
+            .resources
+            .get(fetch.text("resource"))
+            .map(|r| &r.records);
+        if !records.is_some_and(|r| r.contains_key(field)) {
+            return Err(format!(
+                "'take' names {slot}.{field}, but '{}' records no {field}",
+                fetch.text("resource")
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_step(&self, plan: &Manifest, index: usize, step: &Step) -> Result<(), String> {
         let connector = self.connector(step.text("connector"))?;
         let surface = &connector.surface;
         let name = step.text("resource");
@@ -377,13 +437,20 @@ impl Connectors {
                 ));
             }
         }
-        for field in ["place", "item", "select", "path", "option", "on", "title"] {
+        for field in [
+            "place", "item", "select", "with", "path", "option", "on", "title",
+        ] {
             if given(field) && !resource.uses_field(field) {
                 return Err(format!("'{name}' does not take '{field}'"));
             }
         }
+        if given("take") && resource.takes.is_empty() {
+            return Err(format!("'{name}' does not take 'take'"));
+        }
+        // A step that takes every with value it gives has given them all.
+        let given_or_taken = |field: &str| given(field) || (field == "with" && given("take"));
         for alternatives in resource.alternatives() {
-            let present = alternatives.iter().filter(|f| given(f)).count();
+            let present = alternatives.iter().filter(|f| given_or_taken(f)).count();
             let fine = match alternatives.as_slice() {
                 // A fetch's selector only narrows what it reads, as the authority holds it too.
                 [only] => present == 1 || (resource.step == StepKind::Fetch && *only == "select"),
@@ -432,6 +499,46 @@ impl Connectors {
                 return Err(format!(
                     "'{name}' does not take the selector term '{key}:{value}'"
                 ));
+            }
+        }
+        // Every value the definition asks for, once each, in its form, and nothing else. A taken
+        // value is checked by the authority, which alone holds it; here, only that it names a field
+        // a fetch earlier in the plan records, and is one the definition lets the act take.
+        let with = selector::terms(step.text("with"))?;
+        for (at, (key, value)) in with.iter().enumerate() {
+            let form = resource
+                .with
+                .get(key)
+                .ok_or_else(|| format!("'{name}' takes no with value '{key}'"))?;
+            if with[..at].iter().any(|(earlier, _)| earlier == key) {
+                return Err(format!("'with' gives '{key}' twice"));
+            }
+            form.check(value)
+                .map_err(|why| format!("'with' {key} {why}"))?;
+        }
+        let taken = take_terms(step.text("take"))?;
+        for (at, (key, slot, field)) in taken.iter().enumerate() {
+            if !resource.takes.contains(key) {
+                return Err(format!("'{name}' cannot take '{key}'"));
+            }
+            if with.iter().any(|(given, _)| given == key)
+                || taken[..at].iter().any(|(earlier, _, _)| earlier == key)
+            {
+                return Err(format!("'{key}' is given or taken twice"));
+            }
+            self.check_taken(plan, index, slot, field)?;
+        }
+        if given("with") || given("take") {
+            for (key, rule) in &resource.with {
+                if !with.iter().any(|(given, _)| given == key)
+                    && !taken.iter().any(|(taken, _, _)| taken == key)
+                {
+                    let what = match rule {
+                        WithRule::Form(form) => format!("a {form}"),
+                        WithRule::OneOf(values) => format!("one of {}", values.join(", ")),
+                    };
+                    return Err(format!("'{name}' needs with {key}, {what}"));
+                }
             }
         }
         // A fetch the definition holds to narrowing, such as a search across every place, uses one
@@ -1750,5 +1857,224 @@ mod tests {
         ])
         .unwrap_err();
         assert!(refused.contains("takes no text"), "{refused}");
+    }
+
+    /// Every value a resource asks for in `with` is given once, in its form or among its listed
+    /// values, and the planner is shown each with an example of its form.
+    #[test]
+    fn with_values_are_each_given_once_in_their_form_and_shown_to_the_planner() {
+        let surface: Surface = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "add_event": { "step": "act", "uses": ["place", "with", "title"], "summary": "add an event",
+                               "text": false, "with": { "start": "datetime", "end": "datetime", "show": ["busy", "free"] } }
+            },
+            "forms": { "place": "opaque-id" }
+        }))
+        .unwrap();
+        let calendar = Connector {
+            name: "calendar".into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: "svc:calendar:me@example.com".into(),
+            surface,
+        };
+        let connectors = Connectors::from(BTreeMap::from([("calendar".to_string(), Ok(calendar))]));
+        let check = |with: &str| {
+            let mut step = DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "calendar")
+                .with_text("resource", "add_event")
+                .with_text("place", "primary")
+                .with_text("title", "Dentist");
+            if !with.is_empty() {
+                step = step.with_text("with", with);
+            }
+            let plan = validate_for_tests(&connectors.with_defaults(Draft::new(vec![step])))?;
+            connectors.check(&plan)
+        };
+        let both = "start:2026-10-09T10:00:00+01:00 end:2026-10-09T11:00:00+01:00 show:busy";
+        assert!(check(both).is_ok());
+        for (with, why) in [
+            ("", "needs exactly one of with"),
+            (
+                "start:2026-10-09T10:00:00+01:00 show:busy",
+                "needs with end, a datetime",
+            ),
+            (
+                "start:2026-10-09T10:00:00+01:00 end:2026-10-09T11:00:00+01:00",
+                "needs with show, one of busy, free",
+            ),
+            (
+                "start:2026-10-09T10:00:00+01:00 end:2026-10-09T11:00:00+01:00 show:away",
+                "'with' show is not one of busy, free",
+            ),
+            (
+                "start:tomorrow end:2026-10-09T11:00:00+01:00 show:busy",
+                "'with' start is not a datetime",
+            ),
+            (&format!("{both} room:5"), "takes no with value 'room'"),
+            (
+                &format!("{both} start:2026-10-09T12:00:00Z"),
+                "gives 'start' twice",
+            ),
+        ] {
+            let refused = check(with).unwrap_err();
+            assert!(refused.contains(why), "{with}: {refused}");
+        }
+        assert!(
+            connectors.catalogue().contains(&format!(
+                "Today's date is {} (UTC)",
+                crate::preamble::today()
+            )),
+            "the planner is told the date a plan's times are fixed from"
+        );
+        assert!(
+            connectors.catalogue().contains(
+                "with gives every one of these, as key:value terms like a select: \
+                 end:2026-10-09T14:00:00+01:00 show:<busy|free> start:2026-10-09T14:00:00+01:00"
+            ),
+            "{}",
+            connectors.catalogue()
+        );
+    }
+
+    /// An act takes a value a fetch of another connector recorded, naming its field; it cannot
+    /// take one its definition does not allow, one no earlier fetch records, or one it also gives.
+    #[test]
+    fn an_act_takes_only_what_an_earlier_fetch_records_and_its_definition_allows() {
+        let connector = |name: &str, surface: serde_json::Value| Connector {
+            name: name.into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: format!("svc:{name}:me"),
+            surface: serde_json::from_value(surface).unwrap(),
+        };
+        let kiwi = connector(
+            "kiwi",
+            serde_json::json!({
+                "resources": {
+                    "find_flight": { "step": "fetch", "uses": ["place"], "summary": "a flight", "receipt": true,
+                                     "records": { "departs": "its departure", "arrives": "its arrival" } }
+                },
+                "forms": { "place": "opaque-id" }
+            }),
+        );
+        let calendar = connector(
+            "calendar",
+            serde_json::json!({
+                "resources": {
+                    "add_event": { "step": "act", "uses": ["place", "with", "title"], "summary": "add an event",
+                                   "text": false, "takes": ["start", "end"],
+                                   "with": { "start": "local-datetime", "end": "local-datetime", "start_zone": "time-zone", "end_zone": "time-zone" } }
+                },
+                "forms": { "place": "opaque-id" }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([
+            ("kiwi".to_string(), Ok(kiwi)),
+            ("calendar".to_string(), Ok(calendar)),
+        ]));
+        let flight = DraftStep::new(CONNECTOR_FETCH)
+            .with_text("connector", "kiwi")
+            .with_text("resource", "find_flight")
+            .with_text("place", "kiwi")
+            .with_text("out_slot", "flight");
+        let add = |take: &str, with: &str| {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "calendar")
+                .with_text("resource", "add_event")
+                .with_text("place", "primary")
+                .with_text("title", "Flight")
+                .with_text("take", take)
+                .with_text("with", with)
+        };
+        let check = |steps: Vec<DraftStep>| {
+            let plan = validate_for_tests(&connectors.with_defaults(Draft::new(steps)))?;
+            connectors.check(&plan).map(|()| plan)
+        };
+        let good = "start:flight.departs end:flight.arrives";
+        let plan = check(vec![
+            flight.clone(),
+            add(good, "start_zone:Europe/London end_zone:Europe/Paris"),
+        ])
+        .expect("checked");
+        assert_eq!(
+            plan.describe_step(1)
+                .matches("content from kiwi kiwi to calendar primary")
+                .count(),
+            1,
+            "{}",
+            plan.describe_step(1)
+        );
+        for (steps, why) in [
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        "start:other.departs end:flight.arrives",
+                        "start_zone:Europe/London end_zone:Europe/Paris",
+                    ),
+                ],
+                "no earlier fetch",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        "start:flight.departs end:flight.price",
+                        "start_zone:Europe/London end_zone:Europe/Paris",
+                    ),
+                ],
+                "records no price",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        "start:flight.departs end:flight",
+                        "start_zone:Europe/London end_zone:Europe/Paris",
+                    ),
+                ],
+                "a slot and a field",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        &format!("{good} start_zone:flight.zone"),
+                        "end_zone:Europe/Paris",
+                    ),
+                ],
+                "cannot take 'start_zone'",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        good,
+                        "start_zone:Europe/London end_zone:Europe/Paris start:2026-11-20T10:00:00",
+                    ),
+                ],
+                "given or taken twice",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
+                        "start:flight.departs",
+                        "start_zone:Europe/London end_zone:Europe/Paris",
+                    ),
+                ],
+                "needs with end",
+            ),
+        ] {
+            let refused = check(steps).unwrap_err();
+            assert!(refused.contains(why), "{why}: {refused}");
+        }
+        let catalogue = connectors.catalogue();
+        assert!(catalogue.contains("records, for an act to take as out_slot.field: arrives (its arrival); departs (its departure)"), "{catalogue}");
+        assert!(
+            catalogue.contains("may take instead of giving in with: start, end"),
+            "{catalogue}"
+        );
     }
 }

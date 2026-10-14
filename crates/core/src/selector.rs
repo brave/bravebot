@@ -1,5 +1,8 @@
-//! Selector terms: `key:value`, where a value is a bare word or a double-quoted phrase. The
-//! grammar a connector step's `select` is read in, the same as the credential authority's.
+//! Selector terms: `key:value`, where a value is a bare word or a double-quoted phrase. The one
+//! grammar a connector step's `select`, `with` and `take` are read in, the same as the credential
+//! authority's.
+
+use crate::slot::SlotId;
 
 /// The terms of a selector, in order.
 pub fn terms(select: &str) -> Result<Vec<(String, String)>, String> {
@@ -48,6 +51,22 @@ pub fn matches(pattern: &str, key: &str, value: &str) -> bool {
     }
 }
 
+/// The terms of an act's `take`, each `key:slot.field`: a `with` value, the fetch slot it is taken
+/// from, and the field that fetch recorded. Read as a selector, so its keys and values are held to
+/// the same rules as every other term.
+pub fn take_terms(take: &str) -> Result<Vec<(String, SlotId, String)>, String> {
+    terms(take)?
+        .into_iter()
+        .map(|(key, from)| {
+            let (slot, field) = from
+                .split_once('.')
+                .filter(|(slot, field)| !slot.is_empty() && !field.is_empty())
+                .ok_or_else(|| format!("'take' {key}:{from} does not name a slot and a field"))?;
+            Ok((key, SlotId::new(slot), field.to_string()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +101,18 @@ mod tests {
         assert!(matches("sort:created-*", "sort", "created-asc"));
         assert!(!matches("sort:created-*", "sort", "updated-asc"));
         assert!(!matches("no-colon", "no-colon", ""));
+    }
+
+    /// A take names a slot and a field for every value, so a value cannot be taken from nowhere or
+    /// from a whole slot.
+    #[test]
+    fn a_take_names_a_slot_and_a_field_for_each_value() {
+        assert_eq!(
+            take_terms("branch:pr.head").unwrap(),
+            vec![("branch".to_string(), SlotId::new("pr"), "head".to_string())]
+        );
+        for bad in ["branch:pr", "branch:.head", "branch:pr.", "branch"] {
+            assert!(take_terms(bad).is_err(), "{bad}");
+        }
     }
 }

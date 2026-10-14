@@ -615,7 +615,8 @@ const CONTRACTS: &[Contract] = &[
     // `place` is always routing and never a slot: it is the repository, mailbox or channel
     // the step reads from or lands in. A fetch may have none, as a search across places does;
     // the definition says which resources need one. `select` is a selector in the definition's
-    // vocabulary.
+    // vocabulary, and `with` the named values the definition asks for, such as an event's start,
+    // each held to its form.
     Contract {
         tool: CONNECTOR_FETCH,
         tier: Tier::Fetch,
@@ -626,6 +627,7 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "out_slot",
         ],
         slot_output: Some("out_slot"),
@@ -634,7 +636,7 @@ const CONTRACTS: &[Contract] = &[
         paths: &[],
         counts: &[],
         alternatives: &[],
-        routing: &["connector", "resource", "place", "item", "select"],
+        routing: &["connector", "resource", "place", "item", "select", "with"],
         headline: &["resource"],
         verb: "fetch",
     },
@@ -644,7 +646,9 @@ const CONTRACTS: &[Contract] = &[
     // are read and an empty default would name a slot called "".
     //
     // `path` is a place in the service, such as a file in a branch, not a workspace path.
-    // `title` is carried content the plan wrote, like `contents`.
+    // `title` is carried content the plan wrote, like `contents`. `take` is routing: which field of
+    // which earlier fetch fills which `with` value is fixed before the run, and the value itself
+    // is known only to the authority, which takes it from that fetch's receipt.
     Contract {
         tool: CONNECTOR_ACT,
         tier: Tier::Act,
@@ -655,8 +659,10 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "path",
             "option",
+            "take",
             "on",
             "title",
             "contents",
@@ -674,8 +680,10 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "path",
             "option",
+            "take",
         ],
         headline: &["resource"],
         verb: "act",
@@ -719,8 +727,8 @@ fn routing_default(tool: &str, field: &str) -> Option<&'static str> {
         ("list_files", "pattern") | ("search", "include") => Some(""),
         // A connector step's optional routing is locked as the absence of a value, and the
         // definition decides whether the resource needs it.
-        (CONNECTOR_FETCH, "place" | "item" | "select")
-        | (CONNECTOR_ACT, "item" | "select" | "path" | "option") => Some(""),
+        (CONNECTOR_FETCH, "place" | "item" | "select" | "with")
+        | (CONNECTOR_ACT, "item" | "select" | "with" | "path" | "option" | "take") => Some(""),
         _ => None,
     }
 }
@@ -1097,9 +1105,9 @@ impl Manifest {
         }
     }
 
-    /// Every connector act that carries a slot, with where that slot's content came from, as
-    /// [`Manifest::origins`] finds it. An act that carries text the plan wrote releases nothing,
-    /// since that text was written before anything was read.
+    /// Every connector act that carries a slot or takes a value from one, with where that content
+    /// came from, as [`Manifest::origins`] finds it. An act that carries text the plan wrote
+    /// releases nothing, since that text was written before anything was read.
     pub fn releases(&self) -> Vec<Release> {
         let origins = self.origins();
         (0..self.steps.len())
@@ -1107,8 +1115,9 @@ impl Manifest {
             .collect()
     }
 
-    /// The release the step at `index` makes, where it is a connector act carrying a slot, with
-    /// that slot's origins looked up in `origins`.
+    /// The release the step at `index` makes, where it is a connector act carrying a slot or taking
+    /// values from fetches, with the origins of each looked up in `origins`. Its slot is the one it
+    /// carries, or else the first it takes from.
     fn release_at(
         &self,
         index: usize,
@@ -1118,10 +1127,20 @@ impl Manifest {
         if step.tool != CONNECTOR_ACT {
             return None;
         }
-        let slot = SlotId::new(step.args.get("from_slot").and_then(Arg::text)?);
+        let carried = step
+            .args
+            .get("from_slot")
+            .and_then(Arg::text)
+            .map(SlotId::new);
+        let taken = taken_slots(step.text("take"));
+        let slot = carried.clone().or_else(|| taken.first().cloned())?;
         Some(Release {
             step: index,
-            origins: origins.get(&slot).cloned().unwrap_or_default(),
+            origins: carried
+                .iter()
+                .chain(&taken)
+                .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
+                .collect(),
             slot,
             connector: step.text("connector").to_string(),
             place: step.text("place").to_string(),
@@ -1154,6 +1173,16 @@ impl Manifest {
         }
         origins
     }
+}
+
+/// The slots an act's `take` names. A malformed `take` names none here; the connector check
+/// refuses it.
+fn taken_slots(take: &str) -> Vec<SlotId> {
+    crate::selector::take_terms(take)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, slot, _)| slot)
+        .collect()
 }
 
 /// Whether a path stays inside the workspace.
