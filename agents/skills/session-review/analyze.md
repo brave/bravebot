@@ -43,12 +43,33 @@ task only by letting a file, web page or command output steer its next step has 
 Do not propose a fix that gives untrusted content to the planner or the driver, or that lets a
 person approve something that does not decide where the effect lands.
 
+## Turns where the person asked why
+
+Search the turns to review for places where the person asked why bravebot or the model did
+something, or why something did not happen. Examples are "why did you do that", "why didn't you
+do X", "why did it ask me", "why was that refused", and "what does this message mean". Each is a
+sign that a turn went in a way the person did not expect. For each one:
+
+1. Find the action they asked about in the turns and audit events before the question, and what the model answered when asked.
+2. Decide where the cause is. It is in bravebot where a tool description, prompt, refusal message, default, setting or the context the model was given was missing, unclear or misleading, or where a message pointed to a route that was closed. It is the model's where bravebot gave it what it needed and it chose badly, and it is the person's where the request could be read two ways.
+3. Check the model's answer to the question against the audit trail. An answer that states a reason the events do not support is a problem of its own.
+
+Report it only where the cause is in bravebot, or where a change in bravebot would have prevented
+the surprise. Set `turn` to the turn of the unexpected action, not the turn of the question. Have
+`fix` name a change that would have avoided it before it happened, such as a clearer tool
+description, a message that names the setting responsible, a check before the action, a prompt
+that shows what will happen, or a different default. "The model should have chosen differently" is
+not a fix. The conditions in the previous section on untrusted content apply to the fix.
+
+Describe the person's question in your own words and do not quote it.
+
 ## What is a problem
 
 - A task the person set that was left unfinished or finished in part, under the conditions above. Set `turn` to the turn where it stopped, and have `fix` say what bravebot would need to do for the task to succeed.
 - A tool call that failed, was refused, or was approved for something other than what was shown, and the cause is in bravebot.
 - A turn that stalled, looped, repeated itself, ran far longer or cost far more than the others for no reason the person gave, or stopped without finishing.
 - The person correcting, repeating or abandoning a request because of what bravebot did, or asking how to do something bravebot has no way to do.
+- The person asking why something unexpected happened, where the cause is in bravebot or a change in bravebot would have prevented it, as the previous section describes.
 - Output that is wrong, truncated, mislabelled or hard to read, in the transcript or in the interface.
 - A prompt, message or command that told the person something untrue or nothing useful.
 - A setting, resume, compaction, handoff or export that lost or changed what the person had.
