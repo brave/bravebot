@@ -68,7 +68,8 @@ the answer decorative.
 
 Rules are keyed by path prefix and matched by whole segments. Both polarities are expressible, so
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
-spellings of a path are one rule, and a later decision replaces an earlier one.
+spellings of a path are one rule, except the names the table below lists as not handled, and a
+later decision replaces an earlier one.
 Undo may also record an undecided boundary, overriding a broader rule without granting trust or
 recording a refusal. Reads there stay quarantined and writes still require a decision. This boundary
 also overrides scratch-directory fallback trust.
@@ -108,6 +109,41 @@ that spelling and leaves a lower rule about another in force, since a name that 
 not always the same file: NTFS holds `claß.md` and `class.md` apart, and a directory added from a
 case-sensitive volume holds `Docs` and `docs` apart.
 
+**Every way a file has two names.** A rule is read under the name a call used, so each name a
+volume or a path gives one file is a row here, with what the map and the writer reservation
+(TRUST-4) do with it and what a deny rule ([permissions.md](permissions.md)) does with it, in a
+read and in a write. A row that is not handled names the issue that tracks it. A map cell marked
+Known cost is accepted until this spec changes. Any other cell that is not handled, and any
+deny-rule cell that is not covered, is a defect. A change that fixes a spelling edits its row, and
+a spelling with no row gets one in the same commit as its test.
+
+The rows a volume can make without a person opening another directory are `ALIASES` in
+`crates/agent/test-support/aliases.rs`. Four tests ask each consumer about every row, skip a row
+the volume holds apart, and fail on a row listed as unhandled once it is handled. The other rows are
+pinned by the test the last column names.
+
+| Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
+|---|---|---|---|---|
+| `.` segment | `src/./a.md` for `src/a.md` | one rule | covered | `bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted` |
+| Doubled or trailing separator | `src//a.md`, a rule about `src/` | one rule | covered | `bravebot_core::trust::equivalent_path_spellings_are_the_same_rule` |
+| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18) | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key` |
+| Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
+| Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
+| Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
+| NFC and NFD | `café.md` in either form | not handled | covered when the rule spells the form the file is stored in, otherwise not covered | #2312, #2337 |
+| Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
+| Hard link | a second entry for the file | not handled (Known cost) | not covered | #2328, #2327 |
+| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | not covered | #2328, #2327 |
+| 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
+| Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
+| Trailing dot or space | `.env.` | refused on Windows | refused | same |
+
+The three Windows rows are refused where a path is resolved and where a redirection target is
+opened, before any key is made, so the map is not asked about those names. Path resolution passes
+the host's own answer, so only a Windows host takes the refusing branch there; the predicate is
+tested on every host with the answer supplied. A short name for a directory a person opened is
+accepted, since it names that one directory.
+
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
 
@@ -140,6 +176,10 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
 `verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
+`verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
 `verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`
 `verified-by: bravebot_core::trust::a_rule_outside_the_working_directory_decides_nothing_inside_it`
@@ -214,6 +254,8 @@ to one file under two such spellings is refused as a second writer to it.
 `verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
@@ -1488,9 +1530,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   resolves a path to where it lands, but the record is written and read under the name the
   operation used below the open directory that name reaches. A symlink under that directory
   therefore gives one file two spellings and two rules: content written as untrusted through one is
-  read back as trusted under the other, which is the round trip TRUST-4 exists to close. Keying the
-  record on the destination instead is what closes it, and that is a change to every rule the map
-  holds rather than to confinement.
+  read back as trusted under the other, which is the round trip TRUST-4 exists to close. So does a
+  hard link, and so does a second path to a tree that canonicalisation does not join, such as a
+  macOS firmlink or a Linux bind mount, once a person has opened both. Keying the record on the
+  destination instead is what closes it, and that is a change to every rule the map holds rather
+  than to confinement. Rules can name paths that do not exist yet and directory prefixes, which
+  have no identity to key on.
 - **A share has no key, so a directory on one cannot be opened by name.** Every rule is keyed
   under a `/`-spelled name (TRUST-18). A drive letter has one and a share and a device path do not,
   so `/add-dir` and `/cd` refuse a resolved path on either: admitting one would key its rule under a

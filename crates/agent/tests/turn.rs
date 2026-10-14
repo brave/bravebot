@@ -7,6 +7,10 @@
 mod repository;
 
 #[allow(dead_code)]
+#[path = "../test-support/aliases.rs"]
+mod aliases;
+
+#[allow(dead_code)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 
@@ -3493,6 +3497,81 @@ fn a_denied_file_is_not_read_through_a_link_to_it() {
             !body.contains("hunter2"),
             "a denied file reached the planner under another name: {body}"
         );
+    }
+}
+
+/// A deny rule is about the file (PERM-7), so every name the volume opens it by is refused with the
+/// name the rule spells, in a read and in a write. The planner is sent nothing from the file and
+/// the file keeps its bytes. The rules are read for the volume the file is on, as a session reads
+/// them. A row the rules do not cover lists the issue that tracks it, and fails once the rules
+/// cover it, so the TRUST-2 table is revised with the fix.
+#[test]
+fn each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap() {
+    use bravebot_core::permissions::{Anchors, Permissions};
+
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-deny-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let folds_case = bravebot_agent::workspace::trust_store(workspace.root()).folds_case();
+        let denying = |verb: &str| {
+            let (permissions, rejected) = Permissions::parse(
+                &[format!("{verb}({})", row.name)],
+                &[],
+                &[],
+                &Anchors {
+                    folds_case,
+                    ..Anchors::none()
+                },
+            );
+            assert!(rejected.is_empty(), "{}: the rule did not parse", row.kind);
+            permissions
+        };
+        let reads = |permissions: Permissions, named: &str| {
+            let arguments = json!({ "path": named }).to_string();
+            let bodies = run_calls_under(
+                &workspace,
+                permissions,
+                trusting_the_workspace(),
+                &[("read_file", arguments.as_str())],
+            );
+            assert!(!bodies.is_empty(), "the planner was never sent a request");
+            bodies.iter().any(|body| body.contains(aliases::CONTENT))
+        };
+        let replaces = |permissions: Permissions, named: &str, file: &str| {
+            std::fs::write(scratch.path.join(file), aliases::CONTENT).expect("file");
+            let arguments = json!({ "path": named, "contents": "replaced" }).to_string();
+            run_calls_under(
+                &workspace,
+                permissions,
+                trusting_the_workspace(),
+                &[("write_file", arguments.as_str())],
+            );
+            std::fs::read_to_string(scratch.path.join(file)).expect("file") != aliases::CONTENT
+        };
+
+        assert!(
+            reads(rules(&[], &[], &[]), row.alias),
+            "{}: {:?} does not open without a rule, so a refusal shows nothing",
+            row.kind,
+            row.alias
+        );
+        assert!(
+            reads(denying("Read"), aliases::CONTROL)
+                && replaces(denying("Edit"), aliases::CONTROL, aliases::CONTROL),
+            "{}: a rule refused a file it does not spell",
+            row.kind
+        );
+        assert!(
+            !reads(denying("Read"), row.name) && !replaces(denying("Edit"), row.name, row.alias),
+            "{}: a rule did not refuse the name it spells",
+            row.kind
+        );
+        let covered =
+            !reads(denying("Read"), row.alias) && !replaces(denying("Edit"), row.alias, row.alias);
+        aliases::expect(row, aliases::Consumer::DenyRule, covered);
     }
 }
 

@@ -420,6 +420,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_created_through_a_link_to_it`

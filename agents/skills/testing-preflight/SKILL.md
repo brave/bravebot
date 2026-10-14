@@ -21,6 +21,13 @@ tested. If two different inputs must produce different decisions, keep them dist
 the fixture and assertions. Read [the worked examples](references/examples.md) when designing
 redirect, cancellation, or similar state-dependent tests.
 
+For a fix to a path spelling that got past a rule, list the other names the filesystem gives the
+same file before choosing tests. The rows of the table of spellings in
+[TRUST-2](../../../docs/specs/trust-map.md#TRUST-2) are that list. A row the fix handles needs a
+row in the table-driven tests, so every consumer of a file's name is asked about it, and a row it
+leaves needs the issue the table names. A test for the reported spelling alone passes on an
+implementation that fixes only that spelling.
+
 List the distinct behaviours and states the affected requirement promises, then map their entry
 points to tests. A requirement covering both failure and cancellation needs evidence for each,
 even when the reported bug concerns only one. Shared code does not prove that every caller uses
