@@ -627,6 +627,11 @@ because the file holds what looks like a credential, and gets none of its text. 
 the person and never to the planner, whichever way it was answered, which is what CRED-19 requires
 of a finding however it arose.
 
+The lines `edit_file` returns around a change are such a read: they are text from the file, and they
+are scanned and asked about in the same way, under the same answer per file
+([EDIT-4](tools/edit-file.md#EDIT-4)). The edit stays whichever way the question is answered, and
+the planner is told it landed.
+
 **Why the ordering is the whole design.** The planner's context goes to whoever performs inference,
 so a file handed to it has been handed to them. A scan that ran afterwards would be reporting a
 disclosure that had already happened, which is why this runs at the read rather than at the end of
@@ -663,6 +668,8 @@ to a planner working on one, and a scan people have to fight is a scan they turn
 owns the tree and is the one who can say which it is.
 
 `verified-by: bravebot_agent::turn::a_read_that_would_expose_a_credential_is_held_back_until_the_person_agrees`
+`verified-by: bravebot_agent::turn::an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_person_agrees`
+`verified-by: bravebot_agent::turn::an_agreement_to_show_a_file_covers_the_lines_an_edit_shows`
 `verified-by: bravebot_agent::turn::what_a_read_would_expose_is_told_to_the_person_and_never_to_the_planner`
 `verified-by: bravebot_agent::turn::the_read_prompt_says_which_value_it_is_asking_about`
 `verified-by: bravebot_agent::turn::a_file_agreed_to_once_is_not_asked_about_again_this_session`
@@ -1262,10 +1269,12 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it needs the durable salt and the store above, so this is the cost of not having them yet rather
   than a separate gap.
 
-- **`read_file`, `read_git` and `repo_map` are the only reads that are scanned.** CRED-15 runs at
-  the tools whose whole purpose is putting a file's text in front of the planner, now or as it stood
-  in a commit, and at the map, which drops a file with a finding without asking, since it shows
-  declaration lines and not one path a person could answer for. Three other results carry a vouched file's
+- **`read_file`, `read_git`, `repo_map` and the lines `edit_file` returns are the only reads that
+  are scanned.** CRED-15 runs at the tools whose whole purpose is putting a file's text in front of
+  the planner, now or as it stood in a commit, at the map, which drops a file with a finding without
+  asking, since it shows declaration lines and not one path a person could answer for, and at the
+  lines an edit comes back with, which are the one place a tool for changing a file also hands back
+  its text. Three other results carry a vouched file's
   bytes there and are not scanned: `search` quotes the lines it matched, `load_skill` carries the
   body of a skill, and `read_output` hands over what a program printed. Each needs its own answer
   rather than the same one. A search walks many files at once and mixes vouched ones with
@@ -1295,5 +1304,6 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   write tools and at the two places a `run` line writes, and one performer: a credential a vault
   obtained itself, and a mail send carried out against it so that the asking agent never holds the
   token, and the record CRED-19 writes each finding to. The scan of what a turn reads runs at
-  `read_file` and nowhere else. There is no baseline over that record, and no authority at the tier
-  these clauses describe. The rest of every clause here is a target.
+  `read_file`, `read_git`, `repo_map` and the lines `edit_file` returns, and nowhere else. There is
+  no baseline over that record, and no authority at the tier these clauses describe. The rest of
+  every clause here is a target.
