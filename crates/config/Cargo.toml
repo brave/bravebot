@@ -12,5 +12,7 @@ repository.workspace = true
 # itself. It brings libc, landlock and windows-sys with it, and adds no crate to the lockfile:
 # every binary that ships this one links it already.
 bravebot-sandbox = { path = "../sandbox" }
+# Reads the person-owned part of an installed connector definition.
+serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

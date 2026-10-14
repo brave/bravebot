@@ -1,23 +1,29 @@
 ---
 id: CONNECTOR
-title: Connector authority client
+title: Connectors
 status: normative
 governs:
   - crates/connector/Cargo.toml
   - crates/connector/src/lib.rs
+  - crates/config/src/connectors.rs
+  - crates/config/src/connectors/forms.rs
 documented-by: none (gap: a page is owed once a manifest run calls a connector; until then nothing a person runs reaches this client)
 ---
 
 ## Scope
 
-The client half of a connector call. A credential authority, a separate program the person
+The client half of a connector call, and the installed definitions it is made against. A
+credential authority, a separate program the person
 installed, holds every credential a connector uses and makes every call to the service. This
-client starts it, hands it one request, and reads one reply. What a definition is, how a plan names
-a connector step, and what the authority enforces on its own side are
+client starts it, hands it one request, and reads one reply. This process reads only the surface of
+a connector's definition, what a plan may name; the wire part, how to call the service, is in the
+authority's own copy. How a plan names a connector step, and what the authority enforces on its own
+side, are
 [../design/connectors.md](../design/connectors.md) and
 [../design/credential-brokering.md](../design/credential-brokering.md).
 
-Nothing in a run calls this client yet. These clauses are what it owes the driver that will.
+Nothing in a run calls the client or reads a definition yet. These clauses are what each owes the
+driver that will.
 
 ## Clauses
 
@@ -142,3 +148,127 @@ not having happened, and a hung authority never holds the run.
 `verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
 `verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`
 `verified-by: bravebot_connector::lib::a_reply_is_kept_though_a_program_the_authority_started_holds_its_output`
+
+<a id="CONNECTOR-10"></a>
+### CONNECTOR-10: a definition is read from the person's own directory, writable by them alone
+
+A definition is one file under `connectors/` in the person's state directory, and no settings layer
+a checkout may carry can add one. The file and that folder must each be the person's own, owned by
+whoever owns the state directory, writable by nobody else and not a link. One that is not, or whose
+owner or mode cannot be read, is refused, and so is every definition on a platform with no such
+mode to read. The authority it names must exist, and the program and its folder, followed through
+any link, and the folder the definition names it in, must each be owned by the person or by the
+system and writable by nobody else.
+
+**Why.** A definition names the program a run hands its text to. Anyone who could write one could
+choose that program.
+
+`verified-by: bravebot_config::connectors::a_definition_others_could_have_written_is_refused`
+`verified-by: bravebot_config::connectors::a_definition_that_is_a_dangling_link_is_refused`
+`verified-by: bravebot_config::connectors::a_file_or_owner_that_cannot_be_read_is_open_to_others`
+`verified-by: bravebot_config::connectors::an_authority_others_could_replace_is_refused`
+`verified-by: bravebot_config::connectors::an_authority_the_system_owns_is_accepted`
+`verified-by: bravebot_config::connectors::a_definition_that_is_a_link_is_refused_though_it_points_at_one_that_reads`
+`verified-by: bravebot_config::connectors::only_the_persons_own_file_writable_by_them_alone_is_closed_to_others`
+`verified-by: bravebot_config::connectors::no_connectors_directory_means_nothing_installed`
+
+<a id="CONNECTOR-11"></a>
+### CONNECTOR-11: a definition holds its five fields and nothing else
+
+A definition holds a `name`, a `definition_id`, an `authority`, an `item` and a `surface`. A file
+holding any other field, at the top or anywhere in its surface, is refused rather than read in
+part.
+
+**Why.** A field this process does not read is one it cannot be shown to ignore safely, and a
+credential copied into the file by mistake is refused rather than kept beside a run.
+
+`verified-by: bravebot_config::connectors::a_definition_carrying_a_field_beside_its_five_is_refused`
+`verified-by: bravebot_config::connectors::a_surface_with_a_key_nothing_knows_is_refused`
+
+<a id="CONNECTOR-12"></a>
+### CONNECTOR-12: a definition is known by its file name, and spelled as the authority spells it
+
+A connector's name is its file's name, and a file naming itself otherwise is refused. A name is
+lower-case letters, digits, `_` and `-`, and its credential item is `svc:<name>:<account>`. The
+authority is an absolute path.
+
+**Why.** A grant is written against the name, so the name has to be one the person chose by
+installing the file.
+
+`verified-by: bravebot_config::connectors::a_definition_is_read_by_its_file_name`
+`verified-by: bravebot_config::connectors::a_definition_naming_itself_otherwise_or_a_relative_authority_is_kept_as_an_error`
+`verified-by: bravebot_config::connectors::a_surface_or_name_the_authority_would_refuse_is_refused`
+
+<a id="CONNECTOR-13"></a>
+### CONNECTOR-13: a definition carries the id the authority checks
+
+A definition without a `definition_id`, or with one that is not 64 lower-case hexadecimal
+characters, is refused with a reason that says to reinstall it. This process checks the id's form
+and sends it on every call, and never computes it.
+
+**Why.** The authority refuses a call made against a copy of a definition other than the one it
+holds, which only works if every call names the copy it was planned against.
+
+`verified-by: bravebot_config::connectors::a_definition_without_a_well_formed_definition_id_is_refused`
+
+<a id="CONNECTOR-14"></a>
+### CONNECTOR-14: a refused definition is kept as its reason
+
+A definition that cannot be read is kept, by its name, as the reason it was refused, rather than
+dropped, so a plan naming that connector is refused with the reason and a plan naming another is
+not affected.
+
+`verified-by: bravebot_config::connectors::a_definition_naming_itself_otherwise_or_a_relative_authority_is_kept_as_an_error`
+`verified-by: bravebot_config::connectors::a_definition_naming_a_form_nothing_defines_is_kept_as_an_error`
+
+<a id="CONNECTOR-15"></a>
+### CONNECTOR-15: a value's form is one of a closed set
+
+A surface may require a field's value to have a named form, and the names are a closed set every
+definition shares. A definition naming any other form is refused. A value with a space or a control
+character has no form.
+
+| Form | A value of it |
+|---|---|
+| `owner/name`, `relative-path`, `branch` | slash-separated segments of letters, digits, `.`, `_` and `-`, none empty, `.` or `..`; a branch is one git reads as a new branch and nothing else, with no segment ending in `.lock` |
+| `positive-integer`, `opaque-id`, `service-id`, `hex-id` | a number with no leading zero; an id of letters, digits, `_` and `-`; one path segment; 7 to 64 hexadecimal digits |
+| `address`, `addresses` | one recipient at a real domain, or up to ten distinct ones |
+| `date`, `datetime`, `date-dmy`, `local-datetime`, `time-zone` | a day that exists; an instant with its offset; a wall-clock time read in a named IANA zone |
+| `iata`, `country-code`, `e164`, `personal-name` | three or two upper-case letters; a phone number; one word of a name |
+
+**Why.** The authority checks the same forms before it puts a value into a call, so a form both
+sides know is one a value cannot slip between.
+
+`verified-by: bravebot_config::connectors::a_definition_naming_a_form_nothing_defines_is_kept_as_an_error`
+`verified-by: bravebot_config::connectors::forms::a_form_nothing_defines_is_refused_after_the_value_is_held_to_no_space`
+`verified-by: bravebot_config::connectors::forms::a_branch_is_one_git_would_read_as_a_new_branch_and_nothing_else`
+`verified-by: bravebot_config::connectors::forms::an_address_is_one_recipient_and_a_real_domain`
+`verified-by: bravebot_config::connectors::forms::a_date_and_a_datetime_are_real_instants_with_their_zone`
+`verified-by: bravebot_config::connectors::forms::a_local_datetime_and_a_time_zone`
+`verified-by: bravebot_config::connectors::forms::a_personal_name_and_an_e164_number`
+`verified-by: bravebot_config::connectors::forms::an_iata_code_and_a_day_month_year_date`
+`verified-by: bravebot_config::connectors::forms::a_service_id_is_one_path_segment`
+`verified-by: bravebot_config::connectors::forms::an_owner_name_is_two_plain_segments`
+`verified-by: bravebot_config::connectors::forms::a_relative_path_never_climbs_out`
+`verified-by: bravebot_config::connectors::forms::a_number_an_id_and_a_hash_are_one_segment_each`
+`verified-by: bravebot_config::connectors::forms::addresses_are_up_to_ten_distinct_recipients`
+
+<a id="CONNECTOR-16"></a>
+### CONNECTOR-16: a surface the authority would refuse is refused here
+
+A surface is held to the rules the authority holds it to when it loads the definition, so no plan
+is made against one the authority would refuse:
+
+- a fetch that has to narrow takes a selector, and narrows only by terms that selector offers;
+- a resource declares its `with` values exactly when it takes `with`, none can be nothing, and none
+  is named for a field a call already fills;
+- only a fetch with a receipt records fields, and only an act takes them, among its own `with`
+  values;
+- a resource taking an option lists its values, and narrows by option only for a value it offers;
+- only an act is high-impact, takes no text, narrows by option or binds values from an item, and
+  only one that takes `on` binds them;
+- `with` is never half of an either-or, and a default names one field.
+
+`verified-by: bravebot_config::connectors::a_fetch_narrows_only_by_terms_its_own_select_offers`
+`verified-by: bravebot_config::connectors::with_values_are_declared_with_a_form_exactly_when_a_resource_uses_with`
+`verified-by: bravebot_config::connectors::a_surface_or_name_the_authority_would_refuse_is_refused`
