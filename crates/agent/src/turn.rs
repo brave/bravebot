@@ -320,9 +320,9 @@ const PREVIEW_LINES: usize = 12;
 pub(crate) const PREVIEW_WIDTH: usize = 160;
 
 /// The first lines of some quarantined content, released for a screen.
-struct Preview {
-    preview: Vec<String>,
-    lines: usize,
+pub(crate) struct Preview {
+    pub(crate) preview: Vec<String>,
+    pub(crate) lines: usize,
 }
 
 /// Shape quarantined content into a few lines and release those.
@@ -330,7 +330,7 @@ struct Preview {
 /// The shaping happens inside the kernel, so the driver never holds the whole of it, and what
 /// comes out is released for display and for nothing else: it goes to a terminal, and no part of
 /// it reaches the planner's context or a processor's input.
-fn preview_for<S: Sink>(
+pub(crate) fn preview_for<S: Sink>(
     policy: &mut Policy<'_, S>,
     tool: &str,
     content: &Labelled<String>,

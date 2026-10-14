@@ -33,7 +33,7 @@
 //!   consequence outside the slot store, and they are the ones a person endorses.
 
 use crate::slot::SlotId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Which of the three tiers a step belongs to.
@@ -463,6 +463,17 @@ impl std::error::Error for ManifestError {}
 /// that will disagree with itself: the release plan, and the driver's choice of what to print.
 pub const ANSWER: &str = "answer";
 
+/// The step that fetches from an account through a connector.
+///
+/// Named as a constant for the reason [`ANSWER`] is: the driver's dispatch and where a slot's
+/// content came from both depend on the name.
+pub const CONNECTOR_FETCH: &str = "connector_fetch";
+
+/// Whether a step reaches an account through a connector rather than the workspace.
+pub fn is_connector(tool: &str) -> bool {
+    tool == CONNECTOR_FETCH
+}
+
 /// The static contract for one tool.
 ///
 /// This is the specification's `TOOL_SCHEMA`, and it plays the same role: the single place that
@@ -577,6 +588,35 @@ const CONTRACTS: &[Contract] = &[
         headline: &["path"],
         verb: "write",
     },
+    // A connector's provider and resource are argument values, so a second service adds no row
+    // here. Which fields a resource takes, and in what form, is the connector definition's to
+    // say, and the driver checks a plan against it before the plan is put to anybody.
+    //
+    // `place` is always routing and never resolved: it is the repository, mailbox or channel
+    // the step reads from. A fetch may have none, as a search across places does; the definition
+    // says which resources need one. `select` is a selector in the definition's vocabulary.
+    Contract {
+        tool: CONNECTOR_FETCH,
+        tier: Tier::Fetch,
+        required: &["connector", "resource", "out_slot"],
+        accepted: &[
+            "connector",
+            "resource",
+            "place",
+            "item",
+            "select",
+            "out_slot",
+        ],
+        slot_output: Some("out_slot"),
+        slot_inputs: &[],
+        slot_refs: &[],
+        paths: &[],
+        counts: &[],
+        alternatives: &[],
+        routing: &["connector", "resource", "place", "item", "select"],
+        headline: &["resource"],
+        verb: "fetch",
+    },
     Contract {
         tool: ANSWER,
         tier: Tier::Act,
@@ -598,6 +638,12 @@ fn contract_for(tool: &str) -> Option<&'static Contract> {
     CONTRACTS.iter().find(|contract| contract.tool == tool)
 }
 
+/// The fields a tool's step locks into routing before the run, in the contract's order. None for
+/// a tool the schema does not know.
+pub fn routing_fields(tool: &str) -> &'static [&'static str] {
+    contract_for(tool).map_or(&[], |contract| contract.routing)
+}
+
 /// The value locked when the plan left a routing field out.
 ///
 /// Optional routing still has to go through `Routing::insert`. Inventing the default in the
@@ -608,6 +654,9 @@ fn routing_default(tool: &str, field: &str) -> Option<&'static str> {
     match (tool, field) {
         ("search", "directory") => Some("."),
         ("list_files", "pattern") | ("search", "include") => Some(""),
+        // A connector step's optional routing is locked as the absence of a value, and the
+        // definition decides whether the resource needs it.
+        (CONNECTOR_FETCH, "place" | "item" | "select") => Some(""),
         _ => None,
     }
 }
@@ -878,6 +927,89 @@ pub(crate) fn validate(draft: &Draft) -> Result<Manifest, ManifestError> {
     }
 
     Ok(Manifest { steps })
+}
+
+/// Where the content in a slot came from.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Origin {
+    /// Read out of the workspace.
+    Workspace,
+    /// Fetched through a connector, from one place.
+    Place { connector: String, place: String },
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Workspace => f.write_str("workspace"),
+            Self::Place { connector, place } if place.is_empty() => f.write_str(connector),
+            Self::Place { connector, place } => write!(f, "{connector} {place}"),
+        }
+    }
+}
+
+/// Where a slot's content came from, as a plan line names it.
+fn named(origins: &BTreeSet<Origin>) -> String {
+    if origins.is_empty() {
+        "nowhere".to_string()
+    } else {
+        let from: Vec<String> = origins.iter().map(Origin::to_string).collect();
+        from.join(", ")
+    }
+}
+
+impl Manifest {
+    /// One step as the line a person approves reads: its own description, and for a file write
+    /// that carries a slot, where that slot's content came from, wherever that is anything but the
+    /// workspace.
+    ///
+    /// Here rather than on [`Step`] because where a slot's content came from is a fact about the
+    /// whole plan: it depends on every step before it.
+    pub fn describe_step(&self, index: usize) -> String {
+        let step = &self.steps[index];
+        let described = step.describe();
+        let carried = step.args.get("from_slot").and_then(Arg::text);
+        if step.tool == "write_file"
+            && let Some(name) = carried
+        {
+            let from = self
+                .origins()
+                .get(&SlotId::new(name))
+                .cloned()
+                .unwrap_or_default();
+            if from != BTreeSet::from([Origin::Workspace]) {
+                return format!("{described}; content from {}", named(&from));
+            }
+        }
+        described
+    }
+
+    /// Where the content in each slot came from. A workspace read gives the workspace, a
+    /// connector fetch gives its connector and place, and a processor's slot gets the union of
+    /// the slots it reads. A slot is written once and before anything reads it, so the map for
+    /// the whole plan holds what each slot held when it was read.
+    fn origins(&self) -> BTreeMap<SlotId, BTreeSet<Origin>> {
+        let mut origins: BTreeMap<SlotId, BTreeSet<Origin>> = BTreeMap::new();
+        for step in &self.steps {
+            if let Some(out) = &step.out_slot {
+                let from = if step.tool == CONNECTOR_FETCH {
+                    BTreeSet::from([Origin::Place {
+                        connector: step.text("connector").to_string(),
+                        place: step.text("place").to_string(),
+                    }])
+                } else if step.tier == Tier::Fetch {
+                    BTreeSet::from([Origin::Workspace])
+                } else {
+                    step.reads
+                        .iter()
+                        .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
+                        .collect()
+                };
+                origins.insert(out.clone(), from);
+            }
+        }
+        origins
+    }
 }
 
 /// Whether a path stays inside the workspace.
@@ -1441,5 +1573,74 @@ mod tests {
         for (tool, _) in tools() {
             assert!(contract_for(tool).is_some(), "{tool} is listed only");
         }
+    }
+
+    fn fetch(resource: &str, place: &str, out: &str) -> DraftStep {
+        DraftStep::new(CONNECTOR_FETCH)
+            .with_text("connector", "github")
+            .with_text("resource", resource)
+            .with_text("place", place)
+            .with_text("select", "state:open no:label sort:created-asc")
+            .with_text("out_slot", out)
+    }
+
+    #[test]
+    fn a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value() {
+        let plan = validate(&Draft::new(vec![
+            fetch("find_issue", "brave/bravebot", "issue"),
+            DraftStep::new(CONNECTOR_FETCH)
+                .with_text("connector", "github")
+                .with_text("resource", "search")
+                .with_text("out_slot", "found"),
+        ]))
+        .expect("two fetches");
+
+        let routing: BTreeMap<String, String> = plan.routing().into_iter().collect();
+        assert_eq!(routing["step_0_connector"], "github");
+        assert_eq!(routing["step_0_resource"], "find_issue");
+        assert_eq!(routing["step_0_place"], "brave/bravebot");
+        assert_eq!(
+            routing["step_0_select"],
+            "state:open no:label sort:created-asc"
+        );
+        assert_eq!(routing["step_0_item"], "");
+        for field in ["place", "item", "select"] {
+            assert_eq!(routing[&format!("step_1_{field}")], "", "{field}");
+        }
+        assert_eq!(plan.steps()[0].out_slot(), Some(&SlotId::new("issue")));
+    }
+
+    #[test]
+    fn a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace() {
+        let write = |path: &str, slot: &str| {
+            DraftStep::new("write_file")
+                .with_text("path", path)
+                .with_text("from_slot", slot)
+        };
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("issue", "brave/bravebot", "issue"),
+            process(&["doc", "issue"], "both"),
+            write("a.md", "doc"),
+            write("b.md", "issue"),
+            write("c.md", "both"),
+        ]))
+        .unwrap();
+
+        assert_eq!(plan.describe_step(3), plan.steps()[3].describe());
+        assert_eq!(
+            plan.describe_step(4),
+            format!(
+                "{}; content from github brave/bravebot",
+                plan.steps()[4].describe()
+            )
+        );
+        assert_eq!(
+            plan.describe_step(5),
+            format!(
+                "{}; content from workspace, github brave/bravebot",
+                plan.steps()[5].describe()
+            )
+        );
     }
 }
