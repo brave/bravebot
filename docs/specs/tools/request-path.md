@@ -123,9 +123,12 @@ is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner
 reach the path, so it does not ask the person to run `/add-dir`.
 
 The planner cannot see the permission mode and is not told it. The tool's description states the
-exception as applying where the person has turned permission prompts off, and tells the planner to
-call the tool for the directory a file tool refused and read the result before asking the person to
-run `/add-dir`. A skill that depends on the exception says the same and does not branch on the mode.
+exception as applying where the person has turned permission prompts off. A file tool's refusal for
+a path outside the workspace says that a `request_path` for the directory is granted without a
+question and opens it to the file tools, and says it only where the session does grant one unasked,
+so the planner makes the call when it would succeed and does not put the person a question that
+opens nothing. Elsewhere the refusal names `/add-dir` alone. A skill that depends on the exception
+says the same and does not branch on the mode.
 
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
 Linux: the lead session's stages are given at the start what a request for writing would be
@@ -137,15 +140,11 @@ person's yes does not vouch for it. In bypass the person has already declared th
 does needs their word, and a session that stops on a question nobody is there to answer is the one
 failure the mode exists to avoid: `pr-fix` makes a worktree outside the project when
 `BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool.
-A planner that read a flat denial never made the call in a session where it would have succeeded,
-and stopped to ask for `/add-dir`. It cannot tell which session it is in, so it is told to make the
-call and read the result. In any other mode the call asks the person a question about programs
-reaching the path, which opens nothing for the file tools, and the request for `/add-dir` follows as
-it did before.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
 `verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::turn::a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked`
 `verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`

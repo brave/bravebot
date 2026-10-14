@@ -1319,9 +1319,7 @@ fn table(
              workspace and the directories the user added with /add-dir, unless the user has \
              turned permission prompts off: there a request is granted without a question, also \
              opens the directory to those tools and trusts it, as /add-dir does, and the result \
-             says whether they now reach it. When a file tool refuses a path outside the \
-             workspace, call this for its directory and read the result before asking the user \
-             to run /add-dir.",
+             says whether they now reach it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -3435,6 +3433,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
 
     // Read once, so a write refused below is recorded under the mode that refused it.
     let mode = tools.permission_mode.get();
+    // A delegate is not given the tool a refusal would send it to.
+    policy.grant_path_requests_unasked(!tools.delegated && mode.answers_a_run_unasked());
     let mut produced = match name.as_str() {
         // A server's tool is not one of this program's, so no definition's `tools:` line names
         // it, and it was offered only where the run holds its server.
@@ -4228,7 +4228,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             }
             Err(e) => Produced::problem(format!(
                 "error: {}",
-                workspace_failure(
+                file_tool_failure(
                     policy,
                     "read_file",
                     path_field(destination),
@@ -4260,7 +4260,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             // A path that names nothing is said so now, exactly as an eager read would have.
             Err(e) => Produced::problem(format!(
                 "error: {}",
-                workspace_failure(
+                file_tool_failure(
                     policy,
                     "read_file",
                     path_field(destination),
@@ -4315,7 +4315,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         Err(e) => {
             return priced(Produced::problem(format!(
                 "error: {}",
-                workspace_failure(
+                file_tool_failure(
                     policy,
                     "read_file",
                     path_field(destination),
@@ -4740,6 +4740,41 @@ fn workspace_failure<S: Sink>(
     e.describe(named)
 }
 
+/// [`workspace_failure`] for a file tool, which adds what the planner can do itself where a
+/// `request_path` for the directory is granted without a question (PATHREQ-7).
+fn file_tool_failure<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    field: &str,
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+) -> String {
+    use crate::workspace::{Remedy, WorkspaceError};
+    let opens = matches!(
+        e,
+        WorkspaceError::Escapes {
+            remedy: Remedy::Open
+                | Remedy::OpenOrDrop
+                | Remedy::OpenEndsCheckouts
+                | Remedy::DropOrOpenEndsCheckouts,
+            ..
+        }
+    );
+    // Worded to follow [`WorkspaceError::describe`], which ends without a full stop, and to end
+    // without one so a caller can go on.
+    let grant = if opens && policy.path_requests_are_granted_unasked() {
+        ". In this session a request_path for that directory is granted without asking the \
+         person and opens it to the file tools too, so call it instead of asking the person to \
+         run /add-dir"
+    } else {
+        ""
+    };
+    format!(
+        "{}{grant}",
+        workspace_failure(policy, tool, field, e, named)
+    )
+}
+
 /// The argument a path arrived in.
 fn path_field(destination: Destination) -> &'static str {
     match destination {
@@ -5077,7 +5112,7 @@ fn list_files<S: Sink>(
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => Produced::problem(format!(
             "error: {}",
-            workspace_failure(policy, "list_files", "directory", &e, &proposed_dir)
+            file_tool_failure(policy, "list_files", "directory", &e, &proposed_dir)
         )),
     }
 }
@@ -5145,7 +5180,7 @@ fn repo_map<S: Sink>(
         }
         Err(e) => Produced::problem(format!(
             "error: {}",
-            workspace_failure(policy, "repo_map", "directory", &e, &proposed_dir)
+            file_tool_failure(policy, "repo_map", "directory", &e, &proposed_dir)
         )),
     }
 }
@@ -5632,7 +5667,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             };
             Produced::problem(format!(
                 "error: {}{way_out}",
-                workspace_failure(
+                file_tool_failure(
                     policy,
                     "write_file",
                     path_field(destination),
@@ -6165,7 +6200,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         Err(e) => {
             return Produced::problem(format!(
                 "error: {}",
-                workspace_failure(
+                file_tool_failure(
                     policy,
                     "edit_file",
                     path_field(destination),
@@ -6385,7 +6420,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         // arm that reaches here in practice, and it carries the path the write was routed on.
         Err(e) => Produced::problem(format!(
             "error: {}",
-            workspace_failure(
+            file_tool_failure(
                 policy,
                 "edit_file",
                 path_field(destination),
@@ -6711,7 +6746,7 @@ fn watch_file<S: Sink>(
     if let Err(e) = workspace.resolve(&path) {
         return Produced::problem(format!(
             "refused: {}",
-            workspace_failure(policy, "watch_file", "path", &e, &found.shown)
+            file_tool_failure(policy, "watch_file", "path", &e, &found.shown)
         ));
     }
 
@@ -11253,7 +11288,7 @@ fn search<S: Sink>(
         // Worded about the name typed. The error carries where it landed, which a link can choose.
         Err(e) => Produced::problem(format!(
             "error: {}",
-            workspace_failure(policy, "search", "directory", &e, &proposed_where)
+            file_tool_failure(policy, "search", "directory", &e, &proposed_where)
         )),
     }
 }
@@ -11450,7 +11485,7 @@ fn read_git<S: Sink, C: Confirmer>(
     let answer = match workspace.read_git(policy, &question) {
         Ok(answer) => answer,
         Err(e) => {
-            let said = workspace_failure(policy, "read_git", "repository", &e, &shown);
+            let said = file_tool_failure(policy, "read_git", "repository", &e, &shown);
             return Produced::problem(format!("error: {}", git_failure(said, &e, running)));
         }
     };
@@ -12046,11 +12081,11 @@ mod tests {
         assert!(!required.contains(&"write"));
     }
 
-    /// PATHREQ-7: the planner cannot see the permission mode, so the description is the only place
-    /// it learns that a granted request opens the directory to the file tools where prompts are
-    /// off. A description that denied it flatly sent the planner to ask for `/add-dir` in a session
-    /// where nobody could answer, and one that promised it everywhere would have it wait for a
-    /// reach a person's yes does not give.
+    /// PATHREQ-7: the planner cannot see the permission mode, so the description is where it learns
+    /// that a granted request opens the directory to the file tools only where prompts are off. A
+    /// description that denied it flatly never has the planner make the call where it would
+    /// succeed, and one that promised it everywhere has the planner wait on a reach a person's yes
+    /// does not give.
     #[test]
     fn request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off() {
         let offered = available(
@@ -12082,10 +12117,6 @@ mod tests {
                 && exception.contains("opens the directory")
                 && exception.contains("trusts it"),
             "the exception does not say what a request does there: {described}"
-        );
-        assert!(
-            exception.contains("before asking the user to run /add-dir"),
-            "the planner is not told to try the request before asking for /add-dir: {described}"
         );
         for file_tool in [
             "read_file",

@@ -30,10 +30,9 @@ the person does with `/add-dir <worktree>`. Once it is open, a file in it is rea
 path or by a `../<worktree>/...` path, which is taken as the absolute one. A person's yes to
 `request_path` reaches programs and not the file tools, so it does not open the worktree, but where
 the person has turned permission prompts off a `request_path` for the worktree is granted without a
-question and opens it for the file tools too. You cannot see which of the two applies. If a file tool
-refuses the worktree, call `request_path` for it and read the result: when it says the file tools
-reach the worktree, carry on; when it does not, ask the person to run `/add-dir` on it and say which
-directory.
+question and opens it for the file tools too. The refusal of a file tool says which applies: where
+it names `request_path`, call it for the worktree and read the result; otherwise ask the person to
+run `/add-dir` on it and say which directory.
 
 `<pr>` is a number or a pull request URL. Several can be given, separated by commas or spaces
 (`12,13 https://github.com/brave/bravebot/pull/14`), and `all` stands for every open

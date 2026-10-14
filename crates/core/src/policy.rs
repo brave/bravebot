@@ -315,6 +315,12 @@ pub struct Policy<'sink, S: Sink> {
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
     /// nothing.
     backslash_separates: bool,
+    /// Whether a `request_path` is granted here without a question and opens its directory to the
+    /// file tools, as of the tool call being answered.
+    ///
+    /// Said by the caller before each call, since the permission mode can change between two of
+    /// them, and read only to word a refusal ([`Policy::path_requests_are_granted_unasked`]).
+    path_requests_unasked: bool,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// Which command lines this session has already put to the user at a run prompt.
@@ -482,6 +488,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: Vec::new(),
             sink,
             denials: 0,
+            path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
@@ -6317,6 +6324,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// program wrote.
     pub fn record_requested_scopes(&mut self, detail: String) {
         self.allow("requested_scopes", detail);
+    }
+
+    /// Say whether a `request_path` is granted without a question for the call about to be
+    /// answered (PATHREQ-7).
+    pub fn grant_path_requests_unasked(&mut self, unasked: bool) {
+        self.path_requests_unasked = unasked;
+    }
+
+    /// Whether a `request_path` is granted without a question and opens its directory to the file
+    /// tools, which is what a refusal of a file tool tells the planner to rely on (PATHREQ-7).
+    pub fn path_requests_are_granted_unasked(&self) -> bool {
+        self.path_requests_unasked
     }
 
     /// Record the permission mode a turn begins with, by its name.

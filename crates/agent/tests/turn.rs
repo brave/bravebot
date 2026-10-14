@@ -52624,6 +52624,63 @@ fn outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools() {
     }
 }
 
+/// PATHREQ-7: a file tool's refusal names `request_path` where the session grants one unasked and
+/// opens the directory with it, and only there, so the planner makes the call when it would succeed
+/// and asks for `/add-dir` when it would not.
+#[test]
+fn a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked() {
+    if cannot_confine_here() {
+        return;
+    }
+    for permission in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::Bypass,
+    ] {
+        let places = PathPlaces::new("refusal-names-grant");
+        let target = places.beside.join("notes.txt");
+        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let calls = [(
+            "read_file",
+            serde_json::json!({ "path": target.display().to_string() }),
+        )];
+        let turn = if permission == bravebot_agent::PermissionMode::Bypass {
+            path_turn(
+                "refusal-names-grant",
+                &places,
+                &calls,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                permission,
+                trusting_the_workspace(),
+                None,
+                &mut bypassing(&mut asked),
+            )
+        } else {
+            path_turn(
+                "refusal-names-grant",
+                &places,
+                &calls,
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                permission,
+                trusting_the_workspace(),
+                None,
+                &mut asked,
+            )
+        };
+        let read = message_from(&turn.results[0], "Result of read_file");
+        assert!(
+            read.contains("resolves outside the workspace") && read.contains("/add-dir"),
+            "{permission:?}: the refusal is not the one asked about: {read}"
+        );
+        assert_eq!(
+            read.contains("request_path"),
+            permission == bravebot_agent::PermissionMode::Bypass,
+            "{permission:?}: {read}"
+        );
+    }
+}
+
 /// PATHREQ-3: a path that is refused unasked is refused in bypass too. The mode answers a question
 /// that was asked, and these are never asked, so nothing is granted and nothing is opened.
 #[test]
