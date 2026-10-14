@@ -136,7 +136,7 @@ guards:
       - crates/agent/src/compact.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/agent/src/turn.rs: 3
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
