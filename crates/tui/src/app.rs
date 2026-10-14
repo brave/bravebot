@@ -7309,11 +7309,14 @@ fn watch_to_start(wakeup: Option<turn::Wakeup>, offered: bool) -> Option<turn::W
 ///
 /// The same refusals [`crate::state::Session::watch_again`] makes once the turn has ended, in one
 /// place ahead of it, and the answer [`watch_to_start`] reads then: the line has to be the
-/// person's, and the session has to have nothing else of its own already running, since it does
-/// one of a watch, a loop and a goal at a time. A turn that is a tick of a loop is not this question at all, the loop being
-/// already the thing that asks again, and the agent reads this only where there is no tick.
+/// person's, which `/init` and `/review` are not, since the person's keystroke sends a prompt this
+/// program wrote; and the session has to have nothing else of its own already running, since it
+/// does one of a watch, a loop and a goal at a time. A turn that is a tick of a loop is not this
+/// question at all, the loop being already the thing that asks again, and the agent reads this
+/// only where there is no tick.
 fn will_look_again(session: &Session, wrote: Wrote) -> bool {
     wrote == Wrote::ThePerson
+        && !session.driver_prompt_is_pending()
         && session.looping().is_none()
         && session.goal().is_none()
         && session.watches().is_empty()
@@ -26919,6 +26922,25 @@ mod tests {
         assert!(
             !will_look_again(&idle, Wrote::TheDriver),
             "a sentence this program wrote was offered a loop over itself"
+        );
+
+        let mut init = Session::new("none");
+        assert!(
+            init.start_init().is_some(),
+            "the fixture's workspace already had an AGENTS.md"
+        );
+        assert!(
+            !will_look_again(&init, Wrote::ThePerson),
+            "a /init turn was offered a loop over the prompt this program wrote"
+        );
+        let mut review = Session::new("none");
+        review.start_review(&crate::review_command::Asked {
+            target: crate::review_command::Target::Uncommitted,
+            focus: None,
+        });
+        assert!(
+            !will_look_again(&review, Wrote::ThePerson),
+            "a /review turn was offered a loop over the prompt this program wrote"
         );
 
         let mut looping = Session::new("none");

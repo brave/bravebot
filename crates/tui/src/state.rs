@@ -6135,6 +6135,11 @@ impl Session {
         )
     }
 
+    /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
+    pub fn driver_prompt_is_pending(&self) -> bool {
+        self.driver_prompt_pending
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
     /// Taken once.
     pub fn take_driver_prompt(&mut self) -> bool {
