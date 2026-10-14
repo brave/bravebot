@@ -2587,10 +2587,9 @@ reporting another. An alternate is read only where a settings file has not moved
 that exact chord: moving `trail` onto `ctrl-/` takes the chord from undo, which goes on answering to
 its remaining alternates and to its default.
 
-A block written before this clause that moved another action onto `ctrl-_` is read as any block
-naming a chord two actions would answer is: the request contests undo's default and gives it up,
-the way INPUT-32 already has every such request give way, and that action falls back to its own
-default instead. Undo keeps `ctrl-_` either way, since nothing was ever asked of it to give up.
+A settings file that moves another action onto `ctrl-_` contests undo's default, so that request
+gives way as every contested request does (INPUT-32), and the action keeps its own default instead.
+Undo keeps `ctrl-_`, since nothing was asked of it to give up.
 
 **Why.** With no step kept, one wrong key loses a paragraph for good, which Claude Code, Gemini CLI
 and OpenCode each document a key against. Folding a run of typing into one step is what makes the
