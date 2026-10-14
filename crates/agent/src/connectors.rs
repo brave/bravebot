@@ -6,13 +6,13 @@
 //! terms a fetch accepts, and this compares a plan's text against it. Comparing text a person put
 //! in their own directory against text the planner wrote from the task alone decides nothing from
 //! anything a service sent.
-//!
-//! A plan may fetch through a connector and not yet act through one, so only a definition's fetch
-//! resources are offered.
 
-use bravebot_config::connectors::{Connector, StepKind, forms};
-use bravebot_core::manifest::{Arg, Draft, Manifest, Step, is_connector};
+use bravebot_config::connectors::{Connector, Resource, StepKind, forms};
+use bravebot_core::manifest::{
+    Arg, CONNECTOR_ACT, CONNECTOR_FETCH, Draft, Manifest, Step, Tier, is_connector,
+};
 use bravebot_core::selector;
+use bravebot_core::slot::SlotId;
 use bravebot_core::value::Labelled;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -22,6 +22,7 @@ use std::path::Path;
 pub struct Connectors {
     installed: BTreeMap<String, Result<Connector, String>>,
     run: String,
+    receipts: BTreeMap<SlotId, String>,
     /// The detail an authority reported about a call, held for the person's screen.
     heard: Vec<(String, Labelled<String>)>,
     /// The run's stop request, which an authority call waiting on a person or a service honours.
@@ -85,8 +86,8 @@ impl Connectors {
         lines
     }
 
-    /// Keep the detail an authority reported about a fetch it did not accept, for the person to
-    /// read.
+    /// Keep the detail an authority reported about a call, for the person to read. A fetch keeps
+    /// it where the call was not accepted, and an act keeps it whatever the outcome.
     ///
     /// It may quote the service, so it arrives labelled as the connector's output is and goes to
     /// a screen and nowhere else: never into the step's own failure line, which is the driver's
@@ -118,8 +119,16 @@ impl Connectors {
         &self.run
     }
 
+    pub fn keep_receipt(&mut self, slot: SlotId, receipt: String) {
+        self.receipts.insert(slot, receipt);
+    }
+
+    pub fn receipt(&self, slot: &SlotId) -> Option<&str> {
+        self.receipts.get(slot).map(String::as_str)
+    }
+
     /// What the goal call is told about the installed connectors: each one's name and what its
-    /// fetches read, in the definition's own summaries, and no step or field name, since that call
+    /// resources do, in the definition's own summaries, and no step or field name, since that call
     /// describes the work and names no tools.
     pub fn in_plain_words(&self) -> String {
         let mut lines = String::from("Connectors:\n");
@@ -128,7 +137,6 @@ impl Connectors {
                 .surface
                 .resources
                 .values()
-                .filter(|resource| resource.step == StepKind::Fetch)
                 .map(|resource| resource.summary.as_str())
                 .collect();
             lines.push_str(&format!("  {}: {}\n", connector.name, summaries.join("; ")));
@@ -136,7 +144,7 @@ impl Connectors {
         lines
     }
 
-    /// What the planner is told about the installed connectors, under the capability that fetches.
+    /// What the planner is told about the installed connectors, under the two capabilities.
     pub fn catalogue(&self) -> String {
         let mut lines = String::from(
             "\nConnectors installed. Name them in connector and resource exactly as written. A select \
@@ -155,14 +163,10 @@ impl Connectors {
         }
         for connector in self.usable() {
             lines.push_str(&format!("  {}:\n", connector.name));
-            let fetches = connector
-                .surface
-                .resources
-                .iter()
-                .filter(|(_, resource)| resource.step == StepKind::Fetch);
-            for (name, resource) in fetches.clone() {
+            for (name, resource) in &connector.surface.resources {
                 lines.push_str(&format!(
-                    "    {name} (CONNECTOR_FETCH) - {}. uses: {}\n",
+                    "    {name} ({}) - {}. uses: {}\n",
+                    tool_for(resource.step).to_ascii_uppercase(),
                     resource.summary,
                     resource.uses.join(", ")
                 ));
@@ -172,10 +176,56 @@ impl Connectors {
                         resource.select.join(" ")
                     ));
                 }
-                if !resource.narrow.is_empty() {
+                if resource.step == StepKind::Fetch && !resource.narrow.is_empty() {
                     lines.push_str(&format!(
                         "      select must use one of: {}\n",
                         resource.narrow.join(" ")
+                    ));
+                }
+                if !resource.bound.is_empty() {
+                    lines.push_str(&format!(
+                        "      filled in from the fetch named in on, so never give: {}\n",
+                        described(&resource.bound, |field, words| format!("{field} ({words})"))
+                    ));
+                }
+                // What an act takes, after the lines every resource has.
+                if resource.step == StepKind::Act {
+                    let narrows = !resource.narrow.is_empty();
+                    let takes_on = resource.uses_field("on");
+                    if !resource.text {
+                        let no_text = "      takes no text: give neither contents nor from_slot\n";
+                        lines.push_str(no_text);
+                    }
+                    if narrows && resource.uses_field("select") {
+                        lines.push_str(&format!(
+                            "      acts on every match, so select must use one of: {}\n",
+                            resource.narrow.join(" ")
+                        ));
+                    }
+                    if takes_on {
+                        lines.push_str(&format!(
+                            "      on names the out_slot of one of these fetches: {}; to act on an item you can name, give item instead where uses allows it\n",
+                            connector
+                                .surface
+                                .resources
+                                .iter()
+                                .filter(|(_, r)| r.step == StepKind::Fetch && r.receipt)
+                                .map(|(n, _)| n.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    if narrows && takes_on {
+                        lines.push_str(&format!(
+                            "      the fetch named in on either names its item or its select uses one of: {}; a selector with none of them is refused\n",
+                            resource.narrow.join(" ")
+                        ));
+                    }
+                }
+                for (option, terms) in &resource.narrow_when {
+                    lines.push_str(&format!(
+                        "      with option {option}, the fetch named in on either names its item or its select uses one of: {}; anything else is refused\n",
+                        terms.join(" ")
                     ));
                 }
                 for (field, values) in &resource.values {
@@ -188,14 +238,7 @@ impl Connectors {
                     lines.push_str(&format!("      example: {example}\n"));
                 }
             }
-            // A field's values are told only where a fetch offered here takes that field.
             for (field, values) in &connector.surface.values {
-                if !fetches
-                    .clone()
-                    .any(|(_, resource)| resource.uses_field(field))
-                {
-                    continue;
-                }
                 let open = if values.iter().any(|v| v.ends_with('*')) {
                     " (a trailing * stands for any name you give in its place)"
                 } else {
@@ -259,19 +302,60 @@ impl Connectors {
         draft
     }
 
+    /// For each connector act, the words the plan line adds: the text and title the plan wrote,
+    /// where it wrote them, and what the definition fills in from the item the act lands on and
+    /// from which fetch. Text a slot carries is not known until the run, and the release on the
+    /// line already names where it comes from. The words are the plan's and the definition's;
+    /// nothing here names a service.
+    pub fn notes(&self, plan: &Manifest) -> BTreeMap<usize, String> {
+        let mut notes = BTreeMap::new();
+        for (index, step) in plan.steps().iter().enumerate() {
+            if step.tool() != CONNECTOR_ACT {
+                continue;
+            }
+            let resource = self
+                .connector(step.text("connector"))
+                .ok()
+                .and_then(|connector| connector.surface.resources.get(step.text("resource")));
+            let mut said = Vec::new();
+            if resource.is_some_and(|resource| resource.high_impact) {
+                said.push("high-impact write".to_string());
+            }
+            for (field, words) in [("contents", "sends"), ("title", "title")] {
+                if !step.text(field).is_empty() {
+                    said.push(format!("{words}: “{}”", one_line(step.text(field))));
+                }
+            }
+            let bound = resource
+                .map(|resource| &resource.bound)
+                .filter(|bound| !bound.is_empty());
+            if let Some(bound) = bound {
+                said.push(format!(
+                    "the authority fills in, from the item '{}' chose: {}",
+                    step.text("on"),
+                    described(bound, |field, words| format!("{field} = {words}"))
+                ));
+            }
+            if !said.is_empty() {
+                notes.insert(index, said.join("; "));
+            }
+        }
+        notes
+    }
+
     /// Hold every connector step in a frozen plan to its definition's surface.
     pub fn check(&self, plan: &Manifest) -> Result<(), String> {
         for (index, step) in plan.steps().iter().enumerate() {
             if !is_connector(step.tool()) {
                 continue;
             }
-            self.check_step(step)
+            self.check_step(plan, step)
                 .map_err(|why| format!("step {}: {why}", index + 1))?;
         }
         Ok(())
     }
 
-    fn check_step(&self, step: &Step) -> Result<(), String> {
+    fn check_step(&self, plan: &Manifest, step: &Step) -> Result<(), String> {
         let connector = self.connector(step.text("connector"))?;
         let surface = &connector.surface;
         let name = step.text("resource");
@@ -279,21 +363,28 @@ impl Connectors {
             .resources
             .get(name)
             .ok_or_else(|| format!("'{}' offers no resource '{name}'", connector.name))?;
-        if resource.step != StepKind::Fetch {
+        if step.tool() != tool_for(resource.step) {
             return Err(format!("'{name}' is not a resource this step can use"));
         }
 
         let given = |field: &str| !step.text(field).trim().is_empty();
-        for field in ["place", "item", "select"] {
+        for field in resource.bound.keys() {
+            if given(field) {
+                return Err(format!(
+                    "'{name}' takes '{field}' from the item it acts on; the plan does not give it"
+                ));
+            }
+        }
+        for field in ["place", "item", "select", "path", "option", "on", "title"] {
             if given(field) && !resource.uses_field(field) {
                 return Err(format!("'{name}' does not take '{field}'"));
             }
         }
         for alternatives in resource.alternatives() {
             let present = alternatives.iter().filter(|f| given(f)).count();
-            // A fetch's selector only narrows what it reads, as the authority holds it too.
             let fine = match alternatives.as_slice() {
-                [only] => present == 1 || *only == "select",
+                // A fetch's selector only narrows what it reads, as the authority holds it too.
+                [only] => present == 1 || (resource.step == StepKind::Fetch && *only == "select"),
                 _ => present == 1,
             };
             if !fine {
@@ -343,18 +434,101 @@ impl Connectors {
         }
         // A fetch the definition holds to narrowing, such as a search across every place, uses one
         // of its terms.
-        if !resource.narrow.is_empty()
-            && !terms.iter().any(|(key, value)| {
-                resource
-                    .narrow
-                    .iter()
-                    .any(|p| selector::matches(p, key, value))
-            })
+        if resource.step == StepKind::Fetch
+            && !resource.narrow.is_empty()
+            && !uses_one_of(&terms, &resource.narrow)
         {
             return Err(format!(
                 "'{name}' has to be narrowed with one of {}",
                 resource.narrow.join(" ")
             ));
+        }
+
+        // The step an act lands on, with its resource: the fetch named in `on`, or the act itself.
+        let mut target = (step, resource);
+        if given("on") {
+            let on = SlotId::new(step.text("on"));
+            let fetch = plan
+                .steps()
+                .iter()
+                .find(|s| s.out_slot() == Some(&on) && s.tier() == Tier::Fetch)
+                .ok_or_else(|| format!("'on' names '{on}', which no fetch filled"))?;
+            // The item an act lands on comes from a fetch of its own connector and place, so it
+            // cannot reach outside the place the plan locked for the act.
+            if fetch.tool() != CONNECTOR_FETCH
+                || fetch.text("connector") != step.text("connector")
+                || fetch.text("place") != step.text("place")
+            {
+                return Err(format!(
+                    "'on' names '{on}', which no fetch from this act's connector and place filled"
+                ));
+            }
+            let fetched = surface
+                .resources
+                .get(fetch.text("resource"))
+                .ok_or_else(|| {
+                    format!("'on' names '{on}', which no resource of this connector filled")
+                })?;
+            if !fetched.receipt {
+                return Err(format!(
+                    "'on' names '{on}', filled by '{}', which chooses no single item",
+                    fetch.text("resource")
+                ));
+            }
+            if !resource.narrow.is_empty() && !names_or_narrows(fetched, fetch, &resource.narrow)? {
+                return Err(format!(
+                    "the fetch it acts on has to name its item or narrow its choice with one of {}",
+                    resource.narrow.join(" ")
+                ));
+            }
+            target = (fetch, fetched);
+        }
+        // An option the definition holds to stricter narrowing, such as an approval, lands only
+        // on an item a fetch named or chose by one of its terms.
+        // A key may be one of the definition's option patterns, as `add_label:*` is, matched as the
+        // authority matches it.
+        let option = step.text("option");
+        for (_, wanted) in resource
+            .narrow_when
+            .iter()
+            .filter(|(key, _)| !option.is_empty() && value_matches(key, option))
+        {
+            if !names_or_narrows(target.1, target.0, wanted)? {
+                return Err(format!(
+                    "'{name}' with {option} has to land on an item a fetch chose by one of {}, or one it named",
+                    wanted.join(" ")
+                ));
+            }
+        }
+        if resource.step == StepKind::Act {
+            let carried = ["contents", "from_slot"]
+                .iter()
+                .filter(|f| given(f))
+                .count();
+            match (resource.text, carried) {
+                (true, 1) | (false, 0) => {}
+                (true, _) => {
+                    return Err(format!(
+                        "'{name}' needs exactly one of contents or from_slot"
+                    ));
+                }
+                (false, _) => {
+                    return Err(format!(
+                        "'{name}' takes no text; its option says what it does"
+                    ));
+                }
+            }
+            // An act on every match of its own selector lands on all of them, so the selector
+            // has to narrow as a resolve's must.
+            if given("select")
+                && !resource.narrow.is_empty()
+                && !uses_one_of(&terms, &resource.narrow)
+            {
+                return Err(format!(
+                    "'{name}' acts on every match, so its selector has to narrow with one of {}",
+                    resource.narrow.join(" ")
+                ));
+            }
         }
         Ok(())
     }
@@ -385,6 +559,57 @@ fn value_matches(pattern: &str, value: &str) -> bool {
         Some(prefix) => value.len() > prefix.len() && value.starts_with(prefix),
         None => pattern == value,
     }
+}
+
+/// The manifest tool a resource's step is planned as.
+fn tool_for(step: StepKind) -> &'static str {
+    match step {
+        StepKind::Fetch => CONNECTOR_FETCH,
+        StepKind::Act => CONNECTOR_ACT,
+    }
+}
+
+/// The first 200 characters of text the plan wrote, on one line: a control character or a line or
+/// paragraph separator is shown as its escape, so the text cannot draw a line of its own.
+fn one_line(text: &str) -> String {
+    let mut shown = String::new();
+    for c in text.chars().take(200) {
+        if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
+    if text.chars().count() > 200 {
+        shown.push('…');
+    }
+    shown
+}
+
+/// Whether a selector's terms use one of a definition's narrowing terms.
+fn uses_one_of(terms: &[(String, String)], narrow: &[String]) -> bool {
+    terms
+        .iter()
+        .any(|(key, value)| narrow.iter().any(|p| selector::matches(p, key, value)))
+}
+
+/// Whether a step names its item, where its resource takes one, or its select uses one of
+/// `narrow`, so an act landing on what it chose does not land on whichever item sorted first. A
+/// step with neither, an empty select included, does not narrow.
+fn names_or_narrows(resource: &Resource, step: &Step, narrow: &[String]) -> Result<bool, String> {
+    if resource.uses_field("item") && !step.text("item").trim().is_empty() {
+        return Ok(true);
+    }
+    Ok(uses_one_of(&selector::terms(step.text("select"))?, narrow))
+}
+
+/// Each field with its words, shaped by `each`, joined as one line.
+fn described(fields: &BTreeMap<String, String>, each: fn(&str, &str) -> String) -> String {
+    fields
+        .iter()
+        .map(|(field, words)| each(field, words))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]
@@ -424,13 +649,14 @@ mod tests {
         }
     }
 
-    /// A definition with fetches and an act, so what is not offered yet is in it too.
+    /// A definition with fetches and acts of every shape the checks tell apart.
     fn github() -> Connector {
         connector(
             "github",
             serde_json::json!({
                 "resources": {
                     "issue": { "step": "fetch", "uses": ["place", "item"], "summary": "one issue" },
+                    "pull": { "step": "fetch", "uses": ["place", "item"], "summary": "one pull", "receipt": true },
                     "find_issue": { "step": "fetch", "uses": ["place", "select"], "summary": "first issue",
                         "select": ["state:*", "label:*", "no:label", "sort:created-*"], "receipt": true },
                     "find_pull": { "step": "fetch", "uses": ["place", "select"], "summary": "first pull",
@@ -440,12 +666,21 @@ mod tests {
                         "select": ["state:*", "sort:comments-*"] },
                     "search": { "step": "fetch", "uses": ["select"], "summary": "across places",
                         "select": ["text:*", "user:*"] },
-                    "comment": { "step": "act", "uses": ["place", "item"], "summary": "comment" },
-                    "review": { "step": "act", "uses": ["place", "item", "option"], "summary": "review" }
+                    "comment": { "step": "act", "uses": ["place", "item|on"], "summary": "comment" },
+                    "review": { "step": "act", "uses": ["place", "on", "option"], "summary": "review",
+                        "high_impact": true,
+                        "narrow": ["head:*", "sort:created-*", "sort:updated-*"],
+                        "narrow_when": { "APPROVE": ["head:*"] } },
+                    "modify": { "step": "act", "uses": ["place", "item|on", "option"], "summary": "close",
+                        "text": false, "values": { "option": ["close", "reopen"] } },
+                    "put_file": { "step": "act", "uses": ["place", "item", "path", "title"], "summary": "commit",
+                        "forms": { "item": "branch" } },
+                    "reply": { "step": "act", "uses": ["place", "on"], "summary": "answer the item it acts on",
+                        "bound": { "recipient": "the author of that item", "title": "Re: and that item's title" } }
                 },
                 "values": { "option": ["COMMENT", "REQUEST_CHANGES", "APPROVE"] },
                 "defaults": { "option": "COMMENT" },
-                "forms": { "place": "owner/name", "item": "positive-integer" }
+                "forms": { "place": "owner/name", "item": "positive-integer", "path": "relative-path" }
             }),
         )
     }
@@ -460,6 +695,14 @@ mod tests {
             .with_text("resource", resource)
             .with_text("place", "brave/bravebot")
             .with_text("out_slot", out)
+    }
+
+    fn act(resource: &str) -> DraftStep {
+        DraftStep::new(CONNECTOR_ACT)
+            .with_text("connector", "github")
+            .with_text("resource", resource)
+            .with_text("place", "brave/bravebot")
+            .with_text("contents", "text")
     }
 
     fn checked(steps: Vec<DraftStep>) -> Result<(), String> {
@@ -495,14 +738,14 @@ mod tests {
         );
     }
 
-    /// The goal call describes the work and names no tools, so it is told what each connector reads in
-    /// the definition's words, and nothing a plan may not yet do.
+    /// The goal call describes the work and names no tools, so it is told what each connector does in
+    /// the definition's words.
     #[test]
-    fn the_goal_call_is_told_each_connector_and_what_it_fetches_in_plain_words() {
+    fn the_goal_call_is_told_each_connector_and_what_it_does_in_plain_words() {
         let told = connectors().in_plain_words();
         assert!(told.starts_with("Connectors:\n  github: "), "{told}");
         assert!(told.contains("one issue"), "{told}");
-        assert!(!told.contains("comment"), "an act is not offered: {told}");
+        assert!(told.contains("comment"), "{told}");
         assert!(
             !told.contains("CONNECTOR_"),
             "the goal call names no tools: {told}"
@@ -549,7 +792,7 @@ mod tests {
                 .contains("no resource")
         );
         assert!(
-            checked(vec![fetch("comment", "c").with_text("item", "1")])
+            checked(vec![act("issue").with_text("item", "1")])
                 .unwrap_err()
                 .contains("not a resource this step can use")
         );
@@ -559,20 +802,26 @@ mod tests {
     /// cannot pass as a message id.
     #[test]
     fn mail_reads_take_a_selector_or_an_opaque_id_and_nothing_else() {
-        let gmail = connector(
-            "gmail",
-            serde_json::json!({
-                "resources": {
-                    "inbox": { "step": "fetch", "uses": ["place", "select"], "summary": "recent mail",
-                               "forms": { "place": "opaque-id" },
-                               "select": ["in:inbox", "is:unread", "from:*", "limit:*"] },
-                    "message": { "step": "fetch", "uses": ["place", "item"], "summary": "one email",
-                                 "forms": { "place": "opaque-id" } }
-                },
-                "forms": { "item": "opaque-id" },
-                "defaults": { "place": "me" }
-            }),
-        );
+        let surface: Surface = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "inbox": { "step": "fetch", "uses": ["place", "select"], "summary": "recent mail",
+                           "forms": { "place": "opaque-id" },
+                           "select": ["in:inbox", "is:unread", "from:*", "limit:*"] },
+                "message": { "step": "fetch", "uses": ["place", "item"], "summary": "one email",
+                             "forms": { "place": "opaque-id" } },
+                "send": { "step": "act", "uses": ["place", "title"], "summary": "send one email" }
+            },
+            "forms": { "place": "address", "item": "opaque-id" },
+            "defaults": { "place": "me" }
+        }))
+        .unwrap();
+        let gmail = Connector {
+            name: "gmail".into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: "svc:gmail:me@example.com".into(),
+            surface,
+        };
         let connectors = Connectors::from(BTreeMap::from([("gmail".to_string(), Ok(gmail))]));
         let check = |resource: &str, field: &str, value: &str| {
             let step = DraftStep::new(CONNECTOR_FETCH)
@@ -591,6 +840,14 @@ mod tests {
         for bad in ["../settings", "a.b", "a?b"] {
             assert!(check("message", "item", bad).is_err(), "{bad} passed");
         }
+        // The default mailbox is no recipient: a send that names none is refused, not sent to it.
+        let send = DraftStep::new(CONNECTOR_ACT)
+            .with_text("connector", "gmail")
+            .with_text("resource", "send")
+            .with_text("title", "Hi")
+            .with_text("contents", "text");
+        let plan = validate_for_tests(&connectors.with_defaults(Draft::new(vec![send]))).unwrap();
+        assert!(connectors.check(&plan).unwrap_err().contains("address"));
     }
 
     /// A default fills a field the plan left out, and never the second half of an either-or the plan
@@ -662,6 +919,24 @@ mod tests {
             assert!(refused.is_err(), "{place} passed");
         }
         assert!(checked(vec![fetch("issue", "i").with_text("item", "01")]).is_err());
+        assert!(
+            checked(vec![
+                act("put_file")
+                    .with_text("item", "bravebot/fix")
+                    .with_text("path", "docs/../secret")
+                    .with_text("title", "t")
+            ])
+            .is_err()
+        );
+        assert!(
+            checked(vec![
+                act("put_file")
+                    .with_text("item", "bravebot/fix")
+                    .with_text("path", "docs/x.md")
+                    .with_text("title", "t")
+            ])
+            .is_ok()
+        );
     }
 
     /// The planner is told how to quote a value with a space, and the grammar reads it back as one term.
@@ -812,23 +1087,599 @@ mod tests {
         assert!(Connectors::default().refused().is_empty());
     }
 
-    /// A plan may fetch and may not yet act, so the planner is offered each fetch resource and none of a
-    /// definition's acts, nor a field only an act takes.
+    /// The planner is told each resource under the capability that plans it, and the values a field
+    /// takes, and no tool name.
     #[test]
-    fn the_catalogue_offers_each_fetch_and_no_act() {
+    fn the_catalogue_lists_each_resource_under_the_capability_it_uses() {
         let shown = connectors().catalogue();
         assert!(shown.contains("find_issue (CONNECTOR_FETCH) - first issue. uses: place, select"));
-        assert!(
-            !shown.contains("comment (") && !shown.contains("review"),
-            "{shown}"
-        );
-        assert!(
-            !shown.contains("option is one of"),
-            "a field only an act takes is not told: {shown}"
-        );
+        assert!(shown.contains("comment (CONNECTOR_ACT)"));
+        assert!(shown.contains("option is one of: COMMENT, REQUEST_CHANGES"));
         assert!(
             !shown.contains(CONNECTOR_FETCH),
             "a tool name leaked into the catalogue"
+        );
+    }
+
+    /// An act's own list of values replaces the definition's for its option, so an option another
+    /// resource offers is refused here.
+    #[test]
+    fn an_acts_own_values_replace_the_definitions_for_its_option() {
+        let state = |option: &str| {
+            vec![
+                DraftStep::new(CONNECTOR_ACT)
+                    .with_text("connector", "github")
+                    .with_text("resource", "modify")
+                    .with_text("place", "brave/bravebot")
+                    .with_text("item", "4")
+                    .with_text("option", option),
+            ]
+        };
+        assert!(checked(state("close")).is_ok());
+        assert!(
+            checked(state("COMMENT"))
+                .unwrap_err()
+                .contains("must be one of close, reopen")
+        );
+        let review = vec![
+            fetch("pull", "p").with_text("item", "7"),
+            act("review")
+                .with_text("on", "p")
+                .with_text("option", "close"),
+        ];
+        assert!(checked(review).unwrap_err().contains("COMMENT"));
+        assert!(
+            connectors()
+                .catalogue()
+                .contains("option here is one of: close, reopen")
+        );
+    }
+
+    /// A definition with no item form is held to the same rules, so a send names its recipients in their
+    /// form and nothing slips through for want of one.
+    #[test]
+    fn a_mail_definition_is_checked_by_the_same_rules_with_no_item() {
+        let surface: Surface = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "send": { "step": "act", "uses": ["place", "title"], "summary": "send one email" }
+            },
+            "forms": { "place": "address" }
+        }))
+        .unwrap();
+        let gmail = Connector {
+            name: "gmail".into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: "svc:gmail:me@example.com".into(),
+            surface,
+        };
+        let connectors = Connectors::from(BTreeMap::from([("gmail".to_string(), Ok(gmail))]));
+        let check = |step: DraftStep| {
+            let draft = connectors.with_defaults(Draft::new(vec![step]));
+            let plan = validate_for_tests(&draft)?;
+            connectors.check(&plan)
+        };
+        let send = |to: &str| {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "gmail")
+                .with_text("resource", "send")
+                .with_text("place", to)
+                .with_text("contents", "text")
+        };
+        assert!(check(send("someone@example.com").with_text("title", "Hi")).is_ok());
+        assert!(check(send("someone@example.com")).is_err());
+        assert!(check(send("someone").with_text("title", "Hi")).is_err());
+        assert!(
+            check(
+                send("someone@example.com")
+                    .with_text("title", "Hi")
+                    .with_text("item", "1")
+            )
+            .unwrap_err()
+            .contains("does not take 'item'")
+        );
+    }
+
+    /// A send may name several recipients, and each is one mailbox in its form, so one approved address
+    /// cannot carry another.
+    #[test]
+    fn a_plan_may_send_to_several_but_each_is_one_mailbox() {
+        let surface: Surface = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "send": { "step": "act", "uses": ["place", "title"], "summary": "send one email",
+                          "forms": { "place": "addresses" } }
+            },
+            "forms": { "place": "address" }
+        }))
+        .unwrap();
+        let gmail = Connector {
+            name: "gmail".into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: "svc:gmail:me@example.com".into(),
+            surface,
+        };
+        let connectors = Connectors::from(BTreeMap::from([("gmail".to_string(), Ok(gmail))]));
+        let check = |to: &str| {
+            let send = DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "gmail")
+                .with_text("resource", "send")
+                .with_text("place", to)
+                .with_text("title", "Notes")
+                .with_text("contents", "text");
+            let draft = connectors.with_defaults(Draft::new(vec![send]));
+            let plan = validate_for_tests(&draft)?;
+            connectors.check(&plan)
+        };
+        assert!(check("bob@example.org").is_ok());
+        assert!(check("bob@example.org,carol@example.org").is_ok());
+        assert!(
+            check("bob@example.org, carol@example.org")
+                .unwrap_err()
+                .contains("space")
+        );
+        assert!(check("bob@example.org,bob@example.org").is_err());
+        assert!(check("not an address").is_err());
+    }
+
+    /// An act whose option says what it does carries no text, and one that lands on every match of its
+    /// own selector narrows it, so it cannot land on everything.
+    #[test]
+    fn an_act_with_no_text_takes_an_option_and_one_on_every_match_narrows_its_selector() {
+        let surface: Surface = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "find_message": { "step": "fetch", "uses": ["place", "select"], "summary": "newest match",
+                                  "select": ["from:*", "is:unread"], "receipt": true },
+                "reply": { "step": "act", "uses": ["place", "on"], "summary": "reply" },
+                "modify": { "step": "act", "uses": ["place", "on|select", "option"], "summary": "label it or all",
+                            "text": false, "narrow": ["from:*"], "select": ["from:*", "is:unread"] }
+            },
+            "values": { "option": ["archive", "add_label:*"] },
+            "forms": { "place": "opaque-id" },
+            "defaults": { "place": "me" }
+        }))
+        .unwrap();
+        let gmail = Connector {
+            name: "gmail".into(),
+            definition_id: "0".repeat(64),
+            authority: "/opt/authority/agent".into(),
+            item: "svc:gmail:me@example.com".into(),
+            surface,
+        };
+        let connectors = Connectors::from(BTreeMap::from([("gmail".to_string(), Ok(gmail))]));
+        let check = |steps: Vec<DraftStep>| {
+            let draft = connectors.with_defaults(Draft::new(steps));
+            let plan = validate_for_tests(&draft)?;
+            connectors.check(&plan)
+        };
+        let found = DraftStep::new(CONNECTOR_FETCH)
+            .with_text("connector", "gmail")
+            .with_text("resource", "find_message")
+            .with_text("select", "from:a@example.com")
+            .with_text("out_slot", "mail");
+        let on_mail = |resource: &str| {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "gmail")
+                .with_text("resource", resource)
+                .with_text("on", "mail")
+        };
+        let modify = |option: &str| on_mail("modify").with_text("option", option);
+        assert!(check(vec![found.clone(), modify("archive")]).is_ok());
+        assert!(check(vec![found.clone(), modify("add_label:Receipts")]).is_ok());
+        for bad in ["add_label:", "delete"] {
+            assert!(
+                check(vec![found.clone(), modify(bad)])
+                    .unwrap_err()
+                    .contains("must be one of"),
+                "{bad}"
+            );
+        }
+        assert!(
+            check(vec![
+                found.clone(),
+                modify("archive").with_text("contents", "x")
+            ])
+            .unwrap_err()
+            .contains("takes no text")
+        );
+        assert!(
+            check(vec![found.clone(), on_mail("reply")])
+                .unwrap_err()
+                .contains("exactly one of contents or from_slot")
+        );
+
+        let unread = found.clone().with_text("select", "is:unread");
+        assert!(
+            check(vec![unread, modify("archive")])
+                .unwrap_err()
+                .contains("narrow"),
+            "a fetch in on narrows as a selector does"
+        );
+
+        let every = |select: &str| {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "gmail")
+                .with_text("resource", "modify")
+                .with_text("select", select)
+                .with_text("option", "archive")
+        };
+        assert!(check(vec![every("from:news@example.com is:unread")]).is_ok());
+        assert!(
+            check(vec![every("is:unread")])
+                .unwrap_err()
+                .contains("acts on every match")
+        );
+        assert!(
+            check(vec![
+                found.clone(),
+                modify("archive").with_text("select", "from:a@example.com")
+            ])
+            .unwrap_err()
+            .contains("exactly one of on")
+        );
+
+        let told = connectors.catalogue();
+        assert!(told.contains("takes no text"), "{told}");
+        assert!(told.contains("select must use one of: from:*"), "{told}");
+        assert!(
+            told.contains("the fetch named in on either names its item"),
+            "{told}"
+        );
+        assert!(told.contains("a trailing * stands for"), "{told}");
+    }
+
+    /// The planner is told which fetches choose a single item, so `on` names one an act can land on.
+    #[test]
+    fn the_planner_is_told_which_fetches_an_act_may_name_in_on() {
+        let shown = connectors().catalogue();
+        assert!(
+            shown.contains("on names the out_slot of one of these fetches: "),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("to act on an item you can name, give item instead"),
+            "{shown}"
+        );
+    }
+
+    /// The planner is told how the fetch an act lands on has to narrow, so it plans one the check passes.
+    #[test]
+    fn the_planner_is_told_how_the_fetch_an_act_lands_on_must_narrow() {
+        let shown = connectors().catalogue();
+        assert!(
+            shown.contains("names its item or its select uses one of: head:*"),
+            "{shown}"
+        );
+        let review = |select: &str| {
+            vec![
+                fetch("find_pull", "p").with_text("select", select),
+                act("review")
+                    .with_text("on", "p")
+                    .with_text("option", "COMMENT"),
+            ]
+        };
+        assert!(checked(review("state:open sort:created-desc")).is_ok());
+        assert!(checked(review("head:fix")).is_ok());
+        let unnarrowed = checked(review("state:open")).unwrap_err();
+        assert!(unnarrowed.contains("narrow"), "{unnarrowed}");
+        assert!(
+            shown.contains("a selector with none of them is refused"),
+            "{shown}"
+        );
+    }
+
+    /// A fetch an act lands on names its item or narrows by one of the act's terms, so the act does not
+    /// land on whichever item sorted first.
+    #[test]
+    fn a_fetch_an_act_lands_on_narrows_only_by_naming_its_item_or_by_a_narrowing_term() {
+        let connectors = connectors();
+        let github = connectors.connector("github").unwrap();
+        let resources = &github.surface.resources;
+        let narrow = &resources["review"].narrow;
+        let plan = validate_for_tests(&Draft::new(vec![
+            fetch("find_pull", "a"),
+            fetch("find_pull", "b").with_text("select", "head:fix"),
+            fetch("pull", "c").with_text("item", "7"),
+            // An item given to a fetch whose resource takes none does not name what it chose.
+            fetch("find_pull", "d").with_text("item", "7"),
+        ]))
+        .unwrap();
+        let narrows = |index: usize, resource: &str| {
+            names_or_narrows(&resources[resource], &plan.steps()[index], narrow).unwrap()
+        };
+        assert!(!narrows(0, "find_pull"), "an empty select narrows nothing");
+        assert!(narrows(1, "find_pull"));
+        assert!(narrows(2, "pull"));
+        assert!(!narrows(3, "find_pull"));
+
+        // A resolve that takes no selector at all chooses whichever item comes first, so an act
+        // that has to narrow is refused on it before approval, and lands on one named by number.
+        let mut newest =
+            Connectors::from(BTreeMap::from([("github".to_string(), Ok(github.clone()))]));
+        if let Some(Ok(github)) = newest.installed.get_mut("github") {
+            let mut resolve = github.surface.resources["find_pull"].clone();
+            resolve.uses = vec!["place".into()];
+            resolve.select.clear();
+            github
+                .surface
+                .resources
+                .insert("newest_pull".into(), resolve);
+        }
+        let review = |fetched: DraftStep| {
+            let draft = newest.with_defaults(Draft::new(vec![
+                fetched,
+                act("review").with_text("on", "p"),
+            ]));
+            newest.check(&validate_for_tests(&draft).unwrap())
+        };
+        let refused = review(fetch("newest_pull", "p")).unwrap_err();
+        assert!(refused.contains("name its item or narrow"), "{refused}");
+        assert!(review(fetch("pull", "p").with_text("item", "7")).is_ok());
+    }
+
+    /// An act whose effect reaches further than its text says so on the line a person approves.
+    #[test]
+    fn a_high_impact_act_says_so_on_its_plan_line() {
+        let connectors = connectors();
+        let draft = connectors.with_defaults(Draft::new(vec![
+            fetch("pull", "p").with_text("item", "7"),
+            act("review")
+                .with_text("on", "p")
+                .with_text("contents", "Looks right."),
+            act("comment")
+                .with_text("item", "7")
+                .with_text("contents", "Thanks."),
+        ]));
+        let plan = validate_for_tests(&draft).unwrap();
+        let notes = connectors.notes(&plan);
+        assert!(
+            notes[&1].starts_with("high-impact write; "),
+            "{}",
+            notes[&1]
+        );
+        assert!(!notes[&2].contains("high-impact"), "{}", notes[&2]);
+    }
+
+    /// An approval lands only on a pull request chosen by its branch or named, so a label cannot pick
+    /// what gets approved.
+    #[test]
+    fn an_approval_lands_only_on_a_pull_chosen_by_its_branch_or_named() {
+        let review = |fetched: DraftStep, option: &str| {
+            vec![
+                fetched,
+                act("review")
+                    .with_text("on", "p")
+                    .with_text("option", option),
+            ]
+        };
+        let found = |select: &str| fetch("find_pull", "p").with_text("select", select);
+        let refused = checked(review(found("label:x sort:updated-desc"), "APPROVE")).unwrap_err();
+        assert!(
+            refused.contains(
+                "'review' with APPROVE has to land on an item a fetch chose by one of head:*, or one it named"
+            ),
+            "{refused}"
+        );
+        assert!(checked(review(found("head:fix"), "APPROVE")).is_ok());
+        assert!(checked(review(fetch("pull", "p").with_text("item", "7"), "APPROVE")).is_ok());
+        assert!(checked(review(found("label:x sort:updated-desc"), "COMMENT")).is_ok());
+        assert!(
+            connectors().catalogue().contains(
+                "with option APPROVE, the fetch named in on either names its item or its select uses one of: head:*"
+            )
+        );
+        let mut plain = connectors();
+        if let Some(Ok(github)) = plain.installed.get_mut("github") {
+            for resource in github.surface.resources.values_mut() {
+                resource.narrow_when.clear();
+            }
+        }
+        assert!(
+            !plain.catalogue().contains("with option"),
+            "a definition with no narrow_when is told nothing about it"
+        );
+    }
+
+    /// An option is one the definition lists, and one the plan left out takes the definition's default,
+    /// shown on the line as if the plan had given it.
+    #[test]
+    fn an_option_is_one_the_definition_lists_and_an_omitted_one_takes_its_default() {
+        let review = |option: Option<&str>| {
+            let mut step = act("review").with_text("on", "p");
+            if let Some(option) = option {
+                step = step.with_text("option", option);
+            }
+            vec![fetch("pull", "p").with_text("item", "7"), step]
+        };
+        assert!(
+            checked(review(Some("DISMISS")))
+                .unwrap_err()
+                .contains("COMMENT")
+        );
+        assert!(checked(review(Some("REQUEST_CHANGES"))).is_ok());
+
+        let connectors = connectors();
+        let draft = connectors.with_defaults(Draft::new(review(None)));
+        let plan = validate_for_tests(&draft).unwrap();
+        let routing: BTreeMap<_, _> = plan.routing().into_iter().collect();
+        assert_eq!(routing["step_1_option"], "COMMENT");
+        assert!(connectors.check(&plan).is_ok());
+    }
+
+    /// An act's `on` names a fetch of its own connector and place that chose one item, so it cannot reach
+    /// an item from anywhere its locked place does not cover.
+    #[test]
+    fn an_act_lands_only_on_an_item_a_fetch_chose_and_narrowed() {
+        // A listing chooses no single item.
+        assert!(
+            checked(vec![
+                fetch("list", "l").with_text("select", "state:open"),
+                act("comment").with_text("on", "l"),
+            ])
+            .unwrap_err()
+            .contains("chooses no single item")
+        );
+        // A review of "some pull request" picked by state alone is refused, and one narrowed by
+        // its branch is not.
+        assert!(
+            checked(vec![
+                fetch("find_pull", "p").with_text("select", "state:open"),
+                act("review").with_text("on", "p"),
+            ])
+            .unwrap_err()
+            .contains("narrow")
+        );
+        assert!(
+            checked(vec![
+                fetch("find_pull", "p").with_text("select", "state:open head:brave:fix"),
+                act("review").with_text("on", "p"),
+            ])
+            .is_ok()
+        );
+        // A pull request named by number needs no narrowing.
+        assert!(
+            checked(vec![
+                fetch("pull", "p").with_text("item", "7"),
+                act("review").with_text("on", "p"),
+            ])
+            .is_ok()
+        );
+    }
+
+    fn reply_plan() -> Vec<DraftStep> {
+        vec![
+            fetch("find_issue", "i").with_text("select", "state:open"),
+            DraftStep::new("process")
+                .with(
+                    "reads",
+                    bravebot_core::manifest::Arg::List(vec!["i".to_string()]),
+                )
+                .with_text("instruction", "draft an answer")
+                .with_text("out_slot", "draft"),
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "github")
+                .with_text("resource", "reply")
+                .with_text("place", "brave/bravebot")
+                .with_text("on", "i")
+                .with_text("from_slot", "draft"),
+        ]
+    }
+
+    /// Values the authority takes from the item an act lands on are never given by the plan, so a plan
+    /// cannot address a reply somewhere else.
+    #[test]
+    fn an_act_that_takes_values_from_its_item_is_planned_without_them() {
+        assert!(checked(reply_plan()).is_ok());
+        // The plan names a value the authority fills in: refused before anybody is asked.
+        let mut with_title = reply_plan();
+        with_title[2] = with_title[2].clone().with_text("title", "Anything");
+        let refused = checked(with_title).unwrap_err();
+        assert!(
+            refused.contains("takes 'title' from the item it acts on"),
+            "{refused}"
+        );
+        // It needs the item: no `on`, no plan.
+        let mut no_item = reply_plan();
+        no_item[2].args.remove("on");
+        assert!(checked(no_item).unwrap_err().contains("on"));
+        // And the item has to be one a fetch chose, not a listing.
+        let mut listing = reply_plan();
+        listing[0] = fetch("list", "i").with_text("select", "state:open");
+        assert!(
+            checked(listing)
+                .unwrap_err()
+                .contains("chooses no single item")
+        );
+    }
+
+    /// The line a person approves says what the authority fills in for an act, and from which fetch's
+    /// item, so nothing it sends is a surprise.
+    #[test]
+    fn the_plan_line_says_what_the_authority_fills_in_and_from_which_fetch() {
+        let connectors = connectors();
+        let draft = connectors.with_defaults(Draft::new(reply_plan()));
+        let plan = validate_for_tests(&draft).unwrap();
+        connectors.check(&plan).unwrap();
+        let notes = connectors.notes(&plan);
+        assert_eq!(
+            notes.keys().copied().collect::<Vec<_>>(),
+            vec![2],
+            "only the reply has one"
+        );
+        let plan = plan.with_notes(notes);
+        let line = plan.describe_step(2);
+        assert!(
+            line.contains("the authority fills in, from the item 'i' chose"),
+            "{line}"
+        );
+        assert!(
+            line.contains("recipient = the author of that item"),
+            "{line}"
+        );
+        assert!(line.contains("title = Re: and that item's title"), "{line}");
+        // The content leaves only to the place the plan named, as for any act.
+        assert!(
+            line.contains("content from github brave/bravebot to github brave/bravebot"),
+            "{line}"
+        );
+        assert_eq!(plan.releases()[0].destination(), "github brave/bravebot");
+        assert_eq!(
+            plan.describe_step(0),
+            plan.steps()[0].describe(),
+            "a fetch gets no note"
+        );
+    }
+
+    /// The text and title a plan wrote are shown on its line, on one line with control characters
+    /// escaped, so they cannot draw a line of their own.
+    #[test]
+    fn the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line() {
+        let connectors = connectors();
+        let long = "x".repeat(250);
+        let draft = connectors.with_defaults(Draft::new(vec![
+            fetch("issue", "i").with_text("item", "4"),
+            act("put_file")
+                .with_text("item", "bravebot/fix")
+                .with_text("path", "docs/x.md")
+                .with_text("title", "Fix the docs")
+                .with_text("contents", "line one\nline two\u{2028}\u{1b}[2J"),
+            act("comment")
+                .with_text("item", "4")
+                .with_text("contents", &long),
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "github")
+                .with_text("resource", "comment")
+                .with_text("place", "brave/bravebot")
+                .with_text("item", "4")
+                .with_text("from_slot", "i"),
+        ]));
+        let plan = validate_for_tests(&draft).unwrap();
+        connectors.check(&plan).unwrap();
+        let notes = connectors.notes(&plan);
+        assert_eq!(
+            notes[&1],
+            "sends: “line one\\nline two\\u{2028}\\u{1b}[2J”; title: “Fix the docs”"
+        );
+        assert_eq!(notes[&2], format!("sends: “{}…”", "x".repeat(200)));
+        assert!(
+            !notes.contains_key(&3),
+            "text a slot carries is not known before the run: {notes:?}"
+        );
+        let plan = plan.with_notes(notes);
+        assert!(
+            plan.describe_step(1).ends_with("; title: “Fix the docs”"),
+            "{}",
+            plan.describe_step(1)
+        );
+    }
+
+    /// The planner is told which values the authority fills in, so it does not give them.
+    #[test]
+    fn the_planner_is_told_which_values_it_must_not_give() {
+        let shown = connectors().catalogue();
+        assert!(
+            shown.contains("filled in from the fetch named in on, so never give: recipient (the author of that item); title (Re: and that item's title)"),
+            "{shown}"
         );
     }
 }

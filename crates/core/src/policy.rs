@@ -193,6 +193,8 @@ struct Grant {
 #[derive(Debug, Default)]
 pub struct ReleasePlan {
     sources: BTreeSet<SlotId>,
+    /// Slots a connector act may carry, each with the one destination it may go to.
+    into: BTreeSet<(SlotId, String)>,
 }
 
 impl ReleasePlan {
@@ -208,6 +210,16 @@ impl ReleasePlan {
 
     pub fn contains(&self, slot: &SlotId) -> bool {
         self.sources.contains(slot)
+    }
+
+    /// Declare a slot releasable to one connector destination, and to nowhere else.
+    pub fn allow_into(mut self, slot: SlotId, destination: impl Into<String>) -> Self {
+        self.into.insert((slot, destination.into()));
+        self
+    }
+
+    fn allows_into(&self, slot: &SlotId, destination: &str) -> bool {
+        self.into.contains(&(slot.clone(), destination.to_string()))
     }
 }
 
@@ -5213,6 +5225,46 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(value.declassify(&proof), to)
     }
 
+    /// Release a quarantined value into the connector destination its plan named for it.
+    ///
+    /// The precommitted release safehouse calls `declassify_slot`: the slot and its one
+    /// destination were entered into the [`ReleasePlan`] from the frozen plan, before anything
+    /// was read, and a person approved the plan with the release named on its line. So content
+    /// can change what the slot says and never where it goes. Anything not precommitted, a
+    /// different slot or the same slot to a different place, is refused.
+    ///
+    /// The witness unwraps the bytes for one place: the standard input of the credential
+    /// authority, which carries them into the HTTP body it sends (LABEL-6). The caller unwraps
+    /// them there and nowhere else, exactly as [`Policy::authorise_program_input`]'s caller does.
+    pub fn declassify_into_place(
+        &mut self,
+        slot: &SlotId,
+        destination: &str,
+        from: Label,
+    ) -> Gated<Declassification> {
+        if !self.release.allows_into(slot, destination) {
+            return Err(self.deny(
+                "declassify",
+                Principle::Confinement,
+                format!("slot '{slot}' was not precommitted as releasable to {destination}"),
+            ));
+        }
+        let to = Label::new(from.integrity, Confidentiality::Public);
+        self.sink.emit(Event::Declassified {
+            slot: slot.clone(),
+            from,
+            to,
+            reason: "precommitted release to a connector place",
+        });
+        self.allow(
+            "declassify",
+            format!("{slot} released to {destination}, as its plan named"),
+        );
+        Ok(Declassification::authorise(
+            "precommitted release to a connector place",
+        ))
+    }
+
     /// [`Policy::declassify_into_workspace`], for what the planner wrote rather than a slot.
     ///
     /// A planner shown private content writes private text ([`Policy::label_model_output`]), and a
@@ -8552,6 +8604,45 @@ five
             .declassify(&SlotId::new("other"), Label::untrusted_private())
             .expect_err("unlisted slot must be refused");
         assert_eq!(err.principle, Principle::Confinement);
+    }
+
+    /// A connector act's slot leaves only to the one place its plan named, fixed before anything
+    /// was read. Another slot, or the same slot to another place, is content choosing where it
+    /// goes, and is refused.
+    #[test]
+    fn a_connector_release_is_refused_unless_precommitted_to_that_place() {
+        let mut sink = RecordingSink::new();
+        let summary = SlotId::new("summary");
+        let mut policy = Policy::begin(
+            routing_with("path", "out.txt"),
+            ReleasePlan::new().allow_into(summary.clone(), "github brave/bravebot"),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap();
+        let from = Label::untrusted_private();
+
+        assert!(
+            policy
+                .declassify_into_place(&summary, "github brave/bravebot", from)
+                .is_ok(),
+            "precommitted to this place"
+        );
+
+        let elsewhere = policy
+            .declassify_into_place(&summary, "github brave/other", from)
+            .expect_err("another place was not precommitted");
+        assert_eq!(elsewhere.principle, Principle::Confinement);
+        let other = policy
+            .declassify_into_place(&SlotId::new("issue"), "github brave/bravebot", from)
+            .expect_err("another slot was not precommitted");
+        assert_eq!(other.principle, Principle::Confinement);
+        // A release to a screen says nothing about a release to a place.
+        assert!(
+            policy
+                .declassify(&summary, Label::untrusted_private())
+                .is_err()
+        );
     }
 
     fn simple_draft() -> crate::manifest::Draft {

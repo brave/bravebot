@@ -92,12 +92,13 @@ use crate::workspace::Workspace;
 /// What the goal call is told where a connector is installed. Added to [`SHAPE_PROMPT`] rather
 /// than written into it, because a planner with no connector must not be told it can reach one.
 const CONNECTOR_SHAPE: &str = "\
-It can also read from the person's accounts at the services listed under connectors below, and \
-only in the ways listed there for each: a step may fetch what a connector offers to read. It \
-reaches them directly, so there is nothing to look up and nothing to ask for: fetching is a step. \
-It cannot yet change anything in those accounts. The connectors listed are installed and usable \
-now: never say that one of them is unavailable. Do not refuse a connector task for a limit the \
-listing does not state: plan it, and the checks refuse what is not allowed and say why.";
+It can also read from and act on the person's accounts at the services listed under connectors \
+below, and only in the ways listed there for each: a step may fetch what a connector offers to \
+read, or act with what it offers to do. It reaches them directly, so there is nothing to look up \
+and nothing to ask for: fetching is a step. Every act is approved by the person, against the exact \
+text, before it is sent. The connectors listed are installed and usable now: never say that one \
+of them is unavailable. Do not refuse a connector task for a limit the listing does not state: plan \
+it, and the checks refuse what is not allowed and say why.";
 
 /// What the first planning call is told.
 ///
@@ -270,6 +271,17 @@ const REGISTRY: &[Advertised] = &[
         gate: Some(Capability::FileWrite),
         summary: "Write a workspace file, from a slot or from a body you give here",
         args: "path*, and exactly one of contents or from_slot",
+    },
+    Advertised {
+        capability: "CONNECTOR_ACT",
+        tool: manifest::CONNECTOR_ACT,
+        tier: Tier::Act,
+        gate: None,
+        summary: "Act on an account through an installed connector. A person approves exactly \
+                  what changes in the credential authority before anything is sent",
+        args: "connector*, resource*, place*, item, select, path, option, on (the slot of a \
+               fetch whose item this acts on), title, and exactly one of contents or from_slot \
+               unless the resource takes no text",
     },
     Advertised {
         capability: "ANSWER",
@@ -974,6 +986,10 @@ fn plan<S: Sink, R: Reporter>(
         let plan = policy
             .adopt_manifest(&Labelled::new(concrete, label))
             .map_err(|d| TurnError::Precommit(d.to_string()))?;
+        // Words after each connector act: the text the plan wrote, and what its definition fills
+        // in from the item it lands on, so the plan a person reads says both.
+        let notes = connectors.notes(&plan);
+        let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
 
@@ -1015,15 +1031,18 @@ fn plan<S: Sink, R: Reporter>(
     // the refusal (TRACE-1).
     let mode = task.permission_mode.get();
     if mode.refuses_writes()
-        && let Some((index, step)) = plan
-            .steps()
-            .iter()
-            .enumerate()
-            .find(|(_, step)| crate::tools::writes_a_file(step.tool()))
+        && let Some((index, step)) = plan.steps().iter().enumerate().find(|(_, step)| {
+            crate::tools::writes_a_file(step.tool()) || step.tool() == manifest::CONNECTOR_ACT
+        })
     {
         policy.refuse_write_in_mode(&format!("step {}: {}", index + 1, step.tool()), mode.name());
+        let what = if step.tool() == manifest::CONNECTOR_ACT {
+            "acts on an account through a connector"
+        } else {
+            "writes a file"
+        };
         return Err(TurnError::Precommit(format!(
-            "plan mode refuses a write, and step {} of this plan writes a file, so nothing ran. \
+            "plan mode refuses a write, and step {} of this plan {what}, so nothing ran. \
              Leave plan mode and ask again.",
             index + 1
         )));
@@ -1180,6 +1199,15 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     for slot in plan.released() {
         release = release.allow(slot);
     }
+    // Each connector act's slot, to the one place its plan named, fixed from the frozen plan and
+    // named on the line the person approves below.
+    let releases = plan.releases();
+    for connector_release in &releases {
+        release = release.allow_into(
+            connector_release.slot.clone(),
+            connector_release.destination(),
+        );
+    }
 
     // A grant for each connector the frozen plan names and for no other, the way a turn holds one
     // per server it reached. The plan was already held to the installed definitions, so a name
@@ -1279,6 +1307,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         .and_then(|()| {
             run_step(
                 connectors,
+                releases.iter().find(|release| release.step == index),
                 &mut policy,
                 workspace,
                 recording,
@@ -1456,6 +1485,7 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 #[allow(clippy::too_many_arguments)]
 fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     connectors: &mut crate::connectors::Connectors,
+    release: Option<&manifest::Release>,
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
@@ -1655,6 +1685,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             step,
         ),
         manifest::CONNECTOR_FETCH => connector_fetch(policy, slots, connectors, index, step),
+        manifest::CONNECTOR_ACT => connector_act(policy, slots, connectors, release, index, step),
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -1750,22 +1781,47 @@ fn connector_grants(plan: &Manifest) -> Vec<Capability> {
         .collect()
 }
 
-/// A fetch through a connector. The authority calls the service, applies the definition's
-/// floor, projection and bounds, and answers; the payload goes into one slot, unread.
+/// What a connector step locked, and whether its resource carries text.
+struct Locked {
+    name: String,
+    resource: String,
+    place: String,
+    takes_text: bool,
+}
+
+/// One call through a connector: the request built from the step's locked connector, resource
+/// and routing and its definition's item and id, whatever `carry` adds to it once those are known
+/// along with the text it returns, and the authority's reply where the call was accepted.
 ///
-/// The request carries the step's locked connector, resource and routing and its definition's
-/// item and id. The detail the authority reported is kept for the person's screen where the call
-/// was not accepted.
-fn connector_fetch<S: Sink>(
+/// The detail the authority reported is kept for the person's screen, by a fetch only where the
+/// call was not accepted and by an act whatever the outcome.
+fn call_connector<S: Sink>(
     policy: &mut Policy<'_, S>,
-    slots: &mut SlotStore,
     connectors: &mut crate::connectors::Connectors,
     index: usize,
     step: &Step,
-) -> Result<Done, String> {
+    carry: impl FnOnce(
+        &mut Policy<'_, S>,
+        &crate::connectors::Connectors,
+        &Locked,
+        &mut bravebot_connector::Request,
+    ) -> Result<Option<bravebot_connector::Text>, String>,
+) -> Result<(Locked, bravebot_connector::Reply), String> {
+    let kind = if step.tool() == manifest::CONNECTOR_ACT {
+        bravebot_connector::StepKind::Act
+    } else {
+        bravebot_connector::StepKind::Fetch
+    };
     let name = locked(policy, index, "connector")?;
     let resource = locked(policy, index, "resource")?;
     let connector = connectors.connector(&name)?;
+    // The plan check has held the resource to the surface, so an unknown one is a bug; it is sent
+    // no text rather than any.
+    let takes_text = connector
+        .surface
+        .resources
+        .get(&resource)
+        .is_some_and(|resource| resource.text);
     let (authority, item, definition) = (
         connector.authority.clone(),
         connector.item.clone(),
@@ -1777,40 +1833,72 @@ fn connector_fetch<S: Sink>(
         .filter(|field| !matches!(**field, "connector" | "resource"))
         .map(|field| Ok((field.to_string(), locked(policy, index, field)?)))
         .collect::<Result<_, String>>()?;
-    let place = routing.get("place").cloned().unwrap_or_default();
-    let request = bravebot_connector::Request {
+    let target = Locked {
+        place: routing.get("place").cloned().unwrap_or_default(),
+        name,
+        resource,
+        takes_text,
+    };
+    let mut request = bravebot_connector::Request {
         protocol: bravebot_connector::PROTOCOL,
         run: connectors.run().to_string(),
-        connector: name.clone(),
+        connector: target.name.clone(),
         definition,
         item,
-        resource: resource.clone(),
-        step: bravebot_connector::StepKind::Fetch,
+        resource: target.resource.clone(),
+        step: kind,
         routing,
         receipt: None,
         taken: BTreeMap::new(),
         title: None,
         release: None,
     };
+    let text = carry(policy, connectors, &target, &mut request)?;
     let reply = bravebot_connector::Authority::new(authority)
         .map_err(|e| e.to_string())?
         .with_cancel(connectors.cancel().clone())
         .call(
             policy,
-            Capability::Connector(ConnectorName::new(name.clone())),
+            Capability::Connector(ConnectorName::new(target.name.clone())),
             &request,
-            None,
+            text,
         )
         .map_err(|e| e.to_string())?;
-    if reply.outcome != bravebot_connector::Outcome::Accepted {
-        if let Some(detail) = reply.detail.clone() {
-            connectors.heard(
-                format!("what the authority said about {name} {resource}"),
-                detail,
-            );
-        }
-        return Err(not_accepted(&name, &resource, &reply));
+    let accepted = reply.outcome == bravebot_connector::Outcome::Accepted;
+    if (kind == bravebot_connector::StepKind::Act || !accepted)
+        && let Some(detail) = reply.detail.clone()
+    {
+        connectors.heard(
+            format!(
+                "what the authority said about {} {}",
+                target.name, target.resource
+            ),
+            detail,
+        );
     }
+    if !accepted {
+        return Err(not_accepted(&target.name, &target.resource, &reply));
+    }
+    Ok((target, reply))
+}
+
+/// A fetch through a connector. The authority calls the service, applies the definition's
+/// floor, projection and bounds, and answers; the payload goes into one slot, unread, and the
+/// receipt it returned is kept for an act that names that slot in `on`.
+fn connector_fetch<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    slots: &mut SlotStore,
+    connectors: &mut crate::connectors::Connectors,
+    index: usize,
+    step: &Step,
+) -> Result<Done, String> {
+    let (target, reply) = call_connector(policy, connectors, index, step, |_, _, _, _| Ok(None))?;
+    let Locked {
+        name,
+        resource,
+        place,
+        ..
+    } = target;
     let payload = reply
         .payload
         .ok_or_else(|| format!("{name} {resource}: accepted with nothing fetched"))?;
@@ -1818,12 +1906,15 @@ fn connector_fetch<S: Sink>(
     policy
         .quarantine(
             step.tool(),
-            out_slot,
+            out_slot.clone(),
             format!("{name} {resource} {place}").trim_end(),
             &payload,
             slots,
         )
         .map_err(|d| d.to_string())?;
+    if let Some(receipt) = reply.receipt {
+        connectors.keep_receipt(out_slot, receipt);
+    }
 
     // What was withheld is said, with its reason, and the standing is recorded where the run's
     // record of the step is kept. Neither is read by anything.
@@ -1849,6 +1940,73 @@ fn connector_fetch<S: Sink>(
     }
     Ok(Done {
         note,
+        ..Done::default()
+    })
+}
+
+/// An act through a connector. A slot's content is released to the one place its plan named, and
+/// the authority puts the exact text to the person before it sends anything. That popup is the
+/// per-write question for this step, so nothing is asked here.
+fn connector_act<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    connectors: &mut crate::connectors::Connectors,
+    release: Option<&manifest::Release>,
+    index: usize,
+    step: &Step,
+) -> Result<Done, String> {
+    let carry = |policy: &mut Policy<'_, S>,
+                 connectors: &crate::connectors::Connectors,
+                 target: &Locked,
+                 request: &mut bravebot_connector::Request| {
+        let destination = manifest::destination(&target.name, &target.place);
+        let text = match step.arg("from_slot").and_then(Arg::text) {
+            Some(slot) => {
+                let slot = SlotId::new(slot);
+                let value = policy
+                    .resolve(step.tool(), &slot, slots)
+                    .map_err(|d| d.to_string())?;
+                let proof = policy
+                    .declassify_into_place(&slot, &destination, value.label())
+                    .map_err(|d| d.to_string())?;
+                Some(bravebot_connector::Text::Released(
+                    bravebot_connector::Released { value, proof },
+                ))
+            }
+            // Text the plan carried, written before anything was read.
+            None if target.takes_text => Some(bravebot_connector::Text::Planned(
+                step.text("contents").to_string(),
+            )),
+            // A resource that takes no text is sent none, and says what it does by its option.
+            None => None,
+        };
+        request.receipt = match step.arg("on").and_then(Arg::text) {
+            Some(on) => Some(
+                connectors
+                    .receipt(&SlotId::new(on))
+                    .ok_or_else(|| format!("'{on}' returned no item to act on"))?
+                    .to_string(),
+            ),
+            None => None,
+        };
+        request.title =
+            Some(step.text("title").trim().to_string()).filter(|title| !title.is_empty());
+        request.release = release.map(|release| bravebot_connector::ReleaseLine {
+            from: release.origins.iter().map(ToString::to_string).collect(),
+            to: release.destination(),
+        });
+        Ok(text)
+    };
+    let (target, reply) = call_connector(policy, connectors, index, step, carry)?;
+    let destination = manifest::destination(&target.name, &target.place);
+    // The link is the authority's own field, held to its form by the client, and goes to the
+    // step's line and nowhere else.
+    let link = reply
+        .link
+        .map(|link| format!(" · {link}"))
+        .unwrap_or_default();
+    Ok(Done {
+        note: format!("{} on {destination}: accepted{link}", target.resource),
         ..Done::default()
     })
 }
@@ -2087,15 +2245,17 @@ mod tests {
     /// is refused as one before the connector check could ask for the plan again.
     #[test]
     fn a_connector_step_where_no_connector_is_usable_is_not_a_capability() {
-        let draft = Draft::new(vec![
-            DraftStep::new("CONNECTOR_FETCH").with_text("connector", "github"),
-        ]);
-        let failure = map_to_concrete(draft, &crate::connectors::Connectors::default())
-            .expect_err("no connector is usable");
-        assert!(
-            matches!(&failure, PlanError::UnknownCapability(name) if name == "CONNECTOR_FETCH"),
-            "{failure}"
-        );
+        for capability in ["CONNECTOR_FETCH", "CONNECTOR_ACT"] {
+            let draft = Draft::new(vec![
+                DraftStep::new(capability).with_text("connector", "github"),
+            ]);
+            let failure = map_to_concrete(draft, &crate::connectors::Connectors::default())
+                .expect_err("no connector is usable");
+            assert!(
+                matches!(&failure, PlanError::UnknownCapability(name) if name == capability),
+                "{failure}"
+            );
+        }
     }
 
     /// The planner's own way of saying no. Treating it as a malformed plan would tell a person
@@ -2247,6 +2407,7 @@ mod tests {
     fn the_catalogue_offers_no_connector_step_where_none_is_installed() {
         let shown = catalogue(&crate::connectors::Connectors::default());
         assert!(!shown.contains("CONNECTOR_FETCH"));
+        assert!(!shown.contains("CONNECTOR_ACT"));
     }
 
     /// A definition installed but refused offers no connector step either, and the planner is told

@@ -24,8 +24,7 @@ side, are
 [../design/credential-brokering.md](../design/credential-brokering.md).
 
 A manifest run reads the installed definitions, tells the planner what they offer, holds the plan
-to them, and fetches through the client ([manifest.md](manifest.md)). A plan may not yet act
-through a connector.
+to them, and fetches and acts through the client ([manifest.md](manifest.md)).
 
 ## Clauses
 
@@ -288,6 +287,12 @@ where it lists any. A field the definition gives a default for is filled before 
 unless the plan gave it in any shape or it is half of an either-or whose other half was given, so
 the line a person approves holds the value that will be sent.
 
+An act carries exactly one of `contents` or `from_slot` where its resource takes text, and neither
+where it does not, and never gives a value the authority takes from the item it lands on. An act on
+every match of its own selector narrows it by one of its resource's terms. The fetch an act's `on`
+names is of the same connector and place, chooses a single item, and either names it or narrows by
+one of the act's terms, and by the stricter ones an option asks for.
+
 **Why.** The authority holds every request to the same rules, so a plan that breaks one would only
 fail at its step, after earlier steps had run. Here it fails before anything has.
 
@@ -303,19 +308,35 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_agent::connectors::a_connector_that_is_not_installed_or_could_not_be_read_refuses_the_plan`
 `verified-by: bravebot_agent::manifest::a_plan_that_breaks_a_connector_surface_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::connectors::a_mail_definition_is_checked_by_the_same_rules_with_no_item`
+`verified-by: bravebot_agent::connectors::a_plan_may_send_to_several_but_each_is_one_mailbox`
+`verified-by: bravebot_agent::connectors::an_act_with_no_text_takes_an_option_and_one_on_every_match_narrows_its_selector`
+`verified-by: bravebot_agent::connectors::a_fetch_an_act_lands_on_narrows_only_by_naming_its_item_or_by_a_narrowing_term`
+`verified-by: bravebot_agent::connectors::an_approval_lands_only_on_a_pull_chosen_by_its_branch_or_named`
+`verified-by: bravebot_agent::connectors::an_option_is_one_the_definition_lists_and_an_omitted_one_takes_its_default`
+`verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_a_fetch_chose_and_narrowed`
+`verified-by: bravebot_agent::connectors::an_act_that_takes_values_from_its_item_is_planned_without_them`
+`verified-by: bravebot_agent::connectors::an_acts_own_values_replace_the_definitions_for_its_option`
+`verified-by: bravebot_agent::manifest::plans_the_checks_refuse_reach_neither_the_authority_nor_a_person`
+`verified-by: bravebot_agent::manifest::a_plan_that_gives_a_value_the_item_supplies_is_refused_before_anybody_is_asked`
 
 <a id="CONNECTOR-18"></a>
 ### CONNECTOR-18: the planner is told what a definition offers, and only that
 
-Where a connector is usable, the planner is told each one's fetch resources in the definition's own
-words, with the fields, selector terms, narrowing terms and listed values each takes, and today's
-date and the machine's time zone where it names one. The goal call is told the same resources in
-the definition's summaries and no step or field name. Where none is usable, no connector step is
-offered at all. Both calls are told which definitions are installed but refused, with why, whether
-or not another is usable.
+Where a connector is usable, the planner is told each one's resources in the definition's own
+words, with the fields, selector terms, narrowing terms and listed values each takes, and for each
+act whether it takes text, which fetches its `on` may name and how they must narrow, and the values
+the authority fills in, which the plan must not give. It is told today's date and the machine's
+time zone where it names one. The goal call is told the same resources in the definition's
+summaries and no step or field name. Where none is usable, no connector step is offered at all.
+Both calls are told which definitions are installed but refused, with why, whether or not another is
+usable.
 
-`verified-by: bravebot_agent::connectors::the_catalogue_offers_each_fetch_and_no_act`
-`verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_fetches_in_plain_words`
+`verified-by: bravebot_agent::connectors::the_catalogue_lists_each_resource_under_the_capability_it_uses`
+`verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_does_in_plain_words`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_which_fetches_an_act_may_name_in_on`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_how_the_fetch_an_act_lands_on_must_narrow`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_which_values_it_must_not_give`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses`
 `verified-by: bravebot_agent::manifest::the_catalogue_offers_no_connector_step_where_none_is_installed`
 `verified-by: bravebot_agent::manifest::a_refused_definition_offers_no_step_and_is_named_with_its_reason`
@@ -331,3 +352,16 @@ the service passes this process's network path.
 `verified-by: bravebot_core::capability::a_connector_is_an_untrusted_private_effect_that_this_process_sends_nowhere`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_run_is_granted_only_the_connectors_its_plan_names`
+
+<a id="CONNECTOR-20"></a>
+### CONNECTOR-20: an act's plan line says what the person is approving
+
+The line a person approves for a connector act says whether its effect reaches further than its
+text, the text and title the plan wrote for it, and what the authority fills in from the item it
+lands on and from which fetch. The words are the plan's and the definition's, and nothing on the
+line names a service.
+
+`verified-by: bravebot_agent::connectors::a_high_impact_act_says_so_on_its_plan_line`
+`verified-by: bravebot_agent::connectors::the_plan_line_says_what_the_authority_fills_in_and_from_which_fetch`
+`verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
+`verified-by: bravebot_agent::manifest::a_reply_is_sent_with_no_recipient_or_title_and_the_plan_line_says_who_fills_them_in`
