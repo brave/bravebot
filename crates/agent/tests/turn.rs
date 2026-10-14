@@ -52506,6 +52506,13 @@ fn under_bypass_a_granted_path_is_open_to_the_file_tools() {
                     "directory": places.beside.display().to_string(),
                 }),
             ),
+            (
+                "write_file",
+                serde_json::json!({
+                    "path": places.beside.join("created.txt").display().to_string(),
+                    "contents": "CREATED-CONTENT",
+                }),
+            ),
         ],
         bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
@@ -52519,6 +52526,18 @@ fn under_bypass_a_granted_path_is_open_to_the_file_tools() {
     assert!(
         said.contains("file tools") && said.contains("do not ask the person to run /add-dir"),
         "the planner was not told the directory is open: {said}"
+    );
+    assert!(
+        [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_files",
+            "search"
+        ]
+        .iter()
+        .all(|tool| said.contains(tool)),
+        "the planner was not told every file tool reaches the directory: {said}"
     );
     assert!(
         !said.contains("no delegate is given a checkout"),
@@ -52535,6 +52554,13 @@ fn under_bypass_a_granted_path_is_open_to_the_file_tools() {
     assert!(listed.contains("notes.txt"), "list_files: {listed}");
     let searched = message_from(&turn.results[4], "Result of search");
     assert!(searched.contains("notes.txt"), "search: {searched}");
+    assert_eq!(
+        std::fs::read_to_string(places.beside.join("created.txt"))
+            .ok()
+            .as_deref(),
+        Some("CREATED-CONTENT"),
+        "write_file did not write the granted directory"
+    );
 
     assert_eq!(
         turn.workspace.added_directories(),

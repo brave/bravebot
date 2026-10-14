@@ -122,6 +122,11 @@ that holds the project is opened, and the result says that no delegate is given 
 is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
 reach the path, so it does not ask the person to run `/add-dir`.
 
+The planner cannot see the permission mode and is not told it. The tool's description states the
+exception as applying where the person has turned permission prompts off, and tells the planner to
+call the tool for the directory a file tool refused and read the result before asking the person to
+run `/add-dir`. A skill that depends on the exception says the same and does not branch on the mode.
+
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
 Linux: the lead session's stages are given at the start what a request for writing would be
 granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused before the planner
@@ -132,10 +137,16 @@ person's yes does not vouch for it. In bypass the person has already declared th
 does needs their word, and a session that stops on a question nobody is there to answer is the one
 failure the mode exists to avoid: `pr-fix` makes a worktree outside the project when
 `BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool.
+A planner that read a flat denial never made the call in a session where it would have succeeded,
+and stopped to ask for `/add-dir`. It cannot tell which session it is in, so it is told to make the
+call and read the result. In any other mode the call asks the person a question about programs
+reaching the path, which opens nothing for the file tools, and the request for `/add-dir` follows as
+it did before.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
 `verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`
