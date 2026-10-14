@@ -2556,10 +2556,10 @@ Ctrl-_ puts the line and the caret back as they stood before the last edit, as f
 thousand edits, the depth vi's own `u` keeps (INPUT-28). Backspace, Delete, Ctrl-W, Alt-D, Ctrl-U
 and Ctrl-K each open a step before taking what they take, and a paste, a dropped file or a pasted
 picture opens one before writing the marker or the stretch of text it writes, so one press of the
-chord puts back the whole of what any of them took or wrote. Ctrl-Y already opened a step before
-this clause, and still does. A run of characters typed one after another is one step rather than one
-per character, the first key of the run opening it and the rest sharing it, the way everything typed
-in one vi INSERT session shares the step that session opened.
+chord puts back the whole of what any of them took or wrote. Ctrl-Y opens a step before putting
+text back, as do the presses above. A run of characters typed one after another is one step
+rather than one per character, the first key of the run opening it and the rest sharing it, the
+way everything typed in one vi INSERT session shares the step that session opened.
 
 Sending the line, clearing it, putting it away, bringing it back, choosing the other style or
 recalling an earlier prompt leaves nothing to undo, the way each already does for vi (INPUT-28): the
