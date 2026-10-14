@@ -329,13 +329,13 @@ deadline says it was cut.
 ## `lsp`
 
 Asks a language server about a symbol: where it is defined, what refers to it, what implements it,
-what calls it. **Starting a server is put to you.**
+what calls it. It also asks what the server makes of a file. **Starting a server is put to you.**
 
 | Parameter | |
 |---|---|
-| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls` |
-| `path` | workspace-relative file holding the symbol; required for every operation but `workspaceSymbol` |
-| `line`, `character` | 1-based position of the symbol, as a search or a read reported it |
+| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls`, `diagnostics` |
+| `path` | workspace-relative file holding the symbol, or the file to check for `diagnostics`; required for every operation but `workspaceSymbol` |
+| `line`, `character` | 1-based position of the symbol, as a search or a read reported it; not used by `diagnostics` |
 | `query` | for `workspaceSymbol`, the name to look for |
 
 This answers what [`search`](#search) cannot. A search for a name finds every comment and string that
@@ -348,6 +348,35 @@ rather than an error, since a file changes under an agent and a stale line numbe
 The operation list is closed and every entry on it is a read. LSP is an open protocol and a server
 advertises methods of its own, one of which applies edits to your files, so forwarding a name would
 make what this tool can reach a property of whichever server you installed.
+
+### Checking a file with `diagnostics`
+
+`diagnostics` takes a path and no position. The agent uses it after an edit to learn whether the file
+still compiles before running a build. The server is sent the file as it is on disk and the notice it
+publishes in reply is the answer:
+
+```text
+language server: 2 errors at line 12, 40; 1 warning. Fix them before moving on
+```
+
+The agent is told how many errors the server found and the line each starts on, how many warnings
+and how many other notes. These are numbers the server reports, so they are given for a file in a
+tree you have not vouched for as for one you have. **The messages are not shown to the agent.** A
+message is a sentence the server composed out of your files, and it can quote a name defined in
+another file, so the file that was checked does not vouch for it. It comes back as a reference the
+agent hands to a processor or asks you to show it, as hover text does. While a `deny` rule covers
+reading any path, the messages are left out, and the agent is told so. A file that does not exist is
+reported as such before any server is started, so you are not asked about one.
+
+A server that publishes nothing about the file in a few seconds is reported as not having reported,
+which is not the same as a file with no errors, and a report with no errors says "no errors reported
+yet" because a server can refine a quick pass later. A server still indexing says the report may be
+short. A server that publishes late, or only when its diagnostics change, can stay silent about an
+edit, so a build is still the check that does not depend on the server.
+
+A `write_file` result already carries the same counts and lines when a server for that file's
+language is running, and never starts one. `diagnostics` is the way to ask for them after an edit,
+or for a file that was not just written, and it starts the server after you agree to it.
 
 ### Which server, and what starting one costs
 
