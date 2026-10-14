@@ -121,9 +121,13 @@ test('a block says where its content went only where that is not the ordinary an
   assert.ok(!ordinary.includes('planner'), ordinary)
   assert.ok(!ordinary.includes('no model'), ordinary)
 
-  // Content in no model's context is the exception and still says so.
+  // Content in no model's context is the exception and says so in the heading (VIEW-7), where
+  // the other words about the block are, and not in the foot under the content.
   const unread = draw(confined(['first line'], 'no_model'))
-  assert.ok(unread.includes('in no model’s context'), unread)
+  const [head, rest] = unread.split('<pre class="preview">')
+  assert.ok(head.includes('class="quarantine-head"'), unread)
+  assert.ok(head.includes('in no model’s context'), unread)
+  assert.ok(!rest.includes('no model’s context'), unread)
 })
 
 /** A write of bytes a processor produced, which is the card the clause marks explicitly. */

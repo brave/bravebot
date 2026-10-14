@@ -174,6 +174,7 @@ went is still in the audit trail, which is what the record is for.
 `verified-by: bravebot_tui::render::a_result_the_planner_may_not_read_still_says_so`
 `verified-by: bravebot_tui::render::a_block_states_its_reach_only_where_that_is_the_exception`
 `verified-by: bravebot_cli::progress::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/marking.test.mjs, which renders the real transcript row through react-dom and asserts that a block of content kept from the planner draws no sentence about it, and that a block of content in no model's context draws that sentence in its heading and not under the content; make check-ui and the Front end CI job both run it)`
 
 <a id="VIEW-8"></a>
 ### VIEW-8: a note from the session is drawn in one ink of its own

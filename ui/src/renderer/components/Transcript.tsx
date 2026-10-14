@@ -1857,18 +1857,16 @@ function Card({
             <span className="origin" data-tooltip={shown.origin}>
               {shown.origin}
             </span>
+            {shown.reach === 'no_model' && <span className="reach">in no model’s context</span>}
             <span className="label">{shown.label}</span>
           </div>
           <pre className="preview">{shown.preview.join('\n')}</pre>
           <div className="quarantine-foot">
             {shown.lines} line{shown.lines === 1 ? '' : 's'} total
             {shown.reach === 'no_model' && (
-              <>
-                {' · '}in no model’s context
-                <Collapse className="card-details" title="Details" isOpen={undefined}>
-                  Nothing can be sent to read this. Only its line count and origin are known to the conversation.
-                </Collapse>
-              </>
+              <Collapse className="card-details" title="Details" isOpen={undefined}>
+                Nothing can be sent to read this. Only its line count and origin are known to the conversation.
+              </Collapse>
             )}
           </div>
         </div>
