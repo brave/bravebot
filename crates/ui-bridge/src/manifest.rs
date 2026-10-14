@@ -109,7 +109,7 @@ pub(crate) fn walk(walk: Walk) {
         // The rules the session opened under, as the terminal passes them. The agent's manifest
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.
-        .with_permissions(state.rules.permissions.clone())
+        .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone());
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
@@ -136,7 +136,7 @@ pub(crate) fn walk(walk: Walk) {
         &mut confirmer,
         &mut reporter,
         &mut sink,
-        &mut state.trust,
+        &mut state.answers.trust,
         &cancel,
     );
 
@@ -174,7 +174,7 @@ pub(crate) fn walk(walk: Walk) {
                 "notices": done.notices,
                 "attempt": done.attempt.as_ref().map(attempt_json),
                 "record": recorded,
-                "trust": { "rules": rules_json(&state.trust) },
+                "trust": { "rules": rules_json(&state.answers.trust) },
             }),
         ),
         Err(error) => {
@@ -202,7 +202,7 @@ pub(crate) fn walk(walk: Walk) {
                     "attempt": attempt.map(attempt_json),
                     "record": recorded,
                     "notices": reporter.notices(),
-                    "trust": { "rules": rules_json(&state.trust) },
+                    "trust": { "rules": rules_json(&state.answers.trust) },
                 }),
             );
             Event::new("manifest.error", &session, data)

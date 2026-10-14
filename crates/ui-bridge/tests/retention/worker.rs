@@ -205,7 +205,7 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
             std::fs::remove_file(root.join("approved.txt")).unwrap();
             {
                 let mut held = state.lock().unwrap();
-                assert_ne!(held.asked_about, AskedAbout::new());
+                assert_ne!(held.answers.asked_about, AskedAbout::new());
                 let record = bravebot_session::sessions::load(
                     workspace.root(),
                     held.handle.as_ref().unwrap().id(),
@@ -225,7 +225,7 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
                         &record,
                         record.trust_map(workspace.root()).unwrap(),
                     );
-                    assert_eq!(held.asked_about, AskedAbout::new());
+                    assert_eq!(held.answers.asked_about, AskedAbout::new());
                 }
             }
             let events = take_turn(state.clone(), &workspace, &config, Cancel::new(), false);

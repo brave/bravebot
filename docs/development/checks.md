@@ -169,9 +169,9 @@ or a secret installs or runs an npm or pnpm dependency, which every step in that
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, whether the check contexts a merge is held to are written down,
 name jobs that exist, and cover every job whose purpose is running a check, and whether every
-method of the agent's confirmer, every remembered set the terminal holds and every question its trust
-prompts ask has a row in the register of kept answers in `docs/specs/prompting.md`, with each cell
-filled and each test it names one that exists. CI runs it
+method of the agent's confirmer, every remembered set the front ends hold in `Answers` and every
+question the terminal's trust prompts ask has a row in the register of kept answers in
+`docs/specs/prompting.md`, with each cell filled and each test it names one that exists. CI runs it
 too, so a pull request that moves a workflow step or a build image onto a movable tag, that puts an
 install back beside the publish credential, that points a checkout at a name instead of a ref, that
 gives a crate a network client the egress register does not admit, that drops the entry pinning a
@@ -181,8 +181,10 @@ only for whoever remembers to run this. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
-check contexts, the trust specs, the confirmer, the terminal's remembered answers, or
-`docs/specs/prompting.md`.
+check contexts, the trust specs, the confirmer, the remembered answers
+(`crates/agent/src/answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical half
+itself when a task ends on a branch that changes a file where an answer is kept
+([agent-configuration.md](agent-configuration.md#checking-the-register-when-a-task-ends)).
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances

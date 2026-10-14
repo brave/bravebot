@@ -36,6 +36,7 @@ import json
 import os
 import re
 import shlex
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from itertools import zip_longest
@@ -337,9 +338,9 @@ REGISTERED = {
         re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
     ),
     "Answers": (
-        Path("crates/tui/src/app.rs"),
-        re.compile(r"^struct Answers\s*\{"),
-        re.compile(r"^    ([a-z_][a-z0-9_]*)\s*:"),
+        Path("crates/agent/src/answers.rs"),
+        re.compile(r"^pub struct Answers\b[^{]*\{"),
+        re.compile(r"^    (?:pub(?:\([a-z:]+\))? )?([a-z_][a-z0-9_]*)\s*:"),
     ),
     "trust_prompt": (
         Path("crates/tui/src/trust_prompt.rs"),
@@ -350,9 +351,11 @@ REGISTERED = {
 # Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
 # declarations above.
 REMEMBERED_SETS = (
+    "crates/tui/src/app.rs",
     "crates/tui/src/state.rs",
     "crates/tui/src/sandbox_command.rs",
     "crates/cli/src/plain.rs",
+    "crates/ui-bridge/src/bridge.rs",
     "crates/ui-bridge/src/running.rs",
     "crates/session/src/sessions.rs",
     "crates/agent/src/tools.rs",
@@ -2339,9 +2342,9 @@ def check_answers_registered(specs, sources):
     A yes is kept under a key, and the defect this repository keeps being sent is a key that later
     matches something the person was never shown. Each was fixed where it was found, and none left
     anything that would make the next prompt, or the next set a session keeps, say what its answer
-    is kept under. So every method of the confirmer, every field of the terminal's remembered
-    answers and every question its trust prompts ask is listed against the row it lands in, or as
-    keeping nothing, and every row names the tests that pin it or the Known cost that accepts it.
+    is kept under. So every method of the confirmer, every field of the remembered answers and every
+    question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
+    nothing, and every row names the tests that pin it or the Known cost that accepts it.
     """
     spec, header, rows, entries = register_of(specs)
 
@@ -2713,10 +2716,111 @@ def changed_lanes(base, specs):
         lanes.add("supply-chain")
     if touched & set(prompt_files(specs) + prompt_spec_files(specs)):
         lanes.add("shown-before-answered")
-    binding = set(REMEMBERED_SETS) | {str(one[0]) for one in REGISTERED.values()}
-    if touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))):
+    if touches_kept_answers(touched, specs):
         lanes.add("approval-binding")
     return sorted(lanes) or list(LANES)
+
+
+def touches_kept_answers(touched, specs):
+    """Whether any of these paths is where an answer is kept, asked for or registered."""
+    binding = set(REMEMBERED_SETS) | {str(one[0]) for one in REGISTERED.values()}
+    return bool(touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))))
+
+
+def uncommitted_files():
+    """Every path the working tree differs from `HEAD` in: staged, unstaged and untracked.
+
+    A rename names both paths, since the one it left is as much a change as the one it arrived at.
+    """
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    entries = done.stdout.split("\0")
+    paths = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            paths.append(entries[index])
+            index += 1
+    return paths
+
+
+def branch_files():
+    """Every path this branch has changed since it left the default branch, committed or not.
+
+    A session that commits before it stops leaves a clean working tree, so the uncommitted files
+    alone would say it touched nothing. The default branch is `upstream/main` where the checkout
+    has one and `origin/main` otherwise, as `make check-affected` measures from.
+    """
+    paths = set(uncommitted_files())
+    for base in ("upstream/main", "origin/main"):
+        done = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode == 0:
+            paths.update(line for line in done.stdout.split("\n") if line)
+            break
+    return paths
+
+
+def stop_response(payload, findings):
+    """What the `Stop` hook tells Claude Code about a tree the mechanical pass found fault with.
+
+    The first stop is blocked and given the findings, so the session fixes them before it ends. A
+    stop that follows a block is let through with the findings shown to the person, because a session
+    that cannot fix one would otherwise never end. CI runs the same pass and is the backstop.
+    """
+    errors = [one for one in findings if one["severity"] == ERROR]
+    if not errors:
+        return None
+    report = render(errors)
+    if payload.get("stop_hook_active"):
+        return {"systemMessage": f"make check-security still fails:\n{report}"}
+    return {
+        "decision": "block",
+        "reason": f"make check-security fails on this working tree. Fix these, then stop again.\n{report}",
+    }
+
+
+def stop_hook():
+    """Run for Claude Code's `Stop` event, from `agents/settings.json`.
+
+    Reads the event on standard input and writes the response on standard output. A branch that
+    touches none of the paths that bind an answer to a key is not checked, so a task that never went
+    near them stops as quickly as it would without the hook. Where git cannot say what changed the
+    hook says so on standard error and lets the stop through, since a hook that fails on every stop
+    in a checkout git will not read teaches its reader to ignore it.
+    """
+    os.chdir(Path(__file__).resolve().parents[3])
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        touched = branch_files()
+    except (OSError, subprocess.CalledProcessError) as problem:
+        print(f"the Stop hook could not ask git what changed: {problem}", file=sys.stderr)
+        return 0
+    specs = load_specs()
+    if not touches_kept_answers(touched, specs):
+        return 0
+    response = stop_response(payload, mechanical_findings(specs, mechanics.load_sources()))
+    if response:
+        print(json.dumps(response))
+    return 0
 
 
 def render(findings):
@@ -2736,22 +2840,8 @@ def render(findings):
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
-    parser.add_argument("--work-dir", default=None)
-    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
-    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
-    parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
-
-    if not Path("docs/specs").is_dir():
-        print("run this from the repository root", file=sys.stderr)
-        return 2
-
-    specs = load_specs()
-    sources = mechanics.load_sources()
-
+def mechanical_findings(specs, sources):
+    """Everything a tool can decide about the tree, which is what `make check-security` runs."""
     findings = list(check_exception_counts())
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
@@ -2768,6 +2858,34 @@ def main():
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
     findings += list(check_answers_registered(specs, sources))
+    return findings
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
+    parser.add_argument("--work-dir", default=None)
+    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
+    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--stop-hook",
+        action="store_true",
+        help="answer Claude Code's Stop event: check a branch touching the paths that keep answers",
+    )
+    args = parser.parse_args()
+
+    if args.stop_hook:
+        return stop_hook()
+
+    if not Path("docs/specs").is_dir():
+        print("run this from the repository root", file=sys.stderr)
+        return 2
+
+    specs = load_specs()
+    sources = mechanics.load_sources()
+
+    findings = mechanical_findings(specs, sources)
 
     unknown = [one for one in args.lanes if one not in LANES]
     if unknown:
