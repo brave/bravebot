@@ -38,8 +38,11 @@ Colour is never what makes that marking hold. A colour can be imitated by the co
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
 note drawn in the wrong one would still be outside a block.
 
-Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
-and an ordinary one does not clutter the transcript saying what always happens.
+Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so
+on its call, and an ordinary one does not clutter the transcript saying what always happens. The
+marked block holding quarantined content does not repeat it: its heading says `untrusted` and the
+margin marks every row. A block whose content is in no model's context at all, such as a
+processor's remark, says so in its heading.
 
 **Each call says why it was made.** In the terminal, and in a headless run's progress, the model's own
 words are the call's headline and the call itself (its verb and what it is about) is drawn under it,

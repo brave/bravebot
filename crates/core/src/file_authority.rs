@@ -3,11 +3,15 @@
 //! Capture holds the short access lock across reading bytes and assigning their label.
 //! An entered effect publishes distrust before releasing that lock. Long effects keep a
 //! path reservation, so unrelated captures proceed while that path remains quarantined.
+//!
+//! The lock is shared by captures that only read and exclusive for everything that enters or
+//! completes an effect. Readers exclude effects and are excluded by them; they do not exclude
+//! each other, because a reader changes no decision.
 
 use crate::label::Integrity;
 use crate::trust::TrustStore;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug)]
 struct State {
@@ -59,7 +63,7 @@ impl State {
 
 #[derive(Debug)]
 struct Shared {
-    access: Mutex<()>,
+    access: RwLock<()>,
     state: Mutex<State>,
 }
 
@@ -77,7 +81,7 @@ impl FileAuthority {
     pub fn new(trust: TrustStore) -> Self {
         Self {
             shared: Arc::new(Shared {
-                access: Mutex::new(()),
+                access: RwLock::new(()),
                 state: Mutex::new(State {
                     trust,
                     active: BTreeSet::new(),
@@ -175,7 +179,24 @@ impl FileAuthority {
             _guard: self
                 .shared
                 .access
-                .lock()
+                .write()
+                .unwrap_or_else(|error| error.into_inner()),
+        }
+    }
+
+    /// Order a capture that only reads against every effect, and against nothing else that reads.
+    ///
+    /// Bytes and their label are still taken within one boundary no effect can enter, so no reader
+    /// captures replacement bytes under an earlier grant. What it gives up is the exclusion between
+    /// readers, which protected nothing: a read publishes no decision and reserves no path, and the
+    /// handle it returns cannot enter an effect. Never keep this guard across a prompt, model
+    /// request or process wait.
+    pub fn capture_shared(&self) -> SharedCapture<'_> {
+        SharedCapture {
+            _guard: self
+                .shared
+                .access
+                .read()
                 .unwrap_or_else(|error| error.into_inner()),
         }
     }
@@ -303,7 +324,14 @@ impl FileAuthority {
 /// A capture boundary held against effect entry and successful publication.
 pub struct FileCapture<'a> {
     authority: &'a FileAuthority,
-    _guard: MutexGuard<'a, ()>,
+    _guard: RwLockWriteGuard<'a, ()>,
+}
+
+/// A capture boundary shared with other readers and held against every effect.
+///
+/// Carries no way to enter an effect, so holding one cannot change a decision.
+pub struct SharedCapture<'a> {
+    _guard: RwLockReadGuard<'a, ()>,
 }
 
 impl FileCapture<'_> {
@@ -562,5 +590,76 @@ mod tests {
         assert_eq!(authority.revision(), before);
         assert!(!authority.withdraw_beneath("/state/c1"));
         assert_eq!(authority.revision(), before);
+    }
+
+    /// Readers hold the boundary together. A second reader that waited for the first would make
+    /// the reads of a round take turns again.
+    #[test]
+    fn readers_hold_the_boundary_at_the_same_time() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let first = authority.capture_shared();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _second = authority.capture_shared();
+                sent.send(()).unwrap();
+            });
+            let arrived = received.recv_timeout(std::time::Duration::from_secs(5));
+            drop(first);
+            assert!(arrived.is_ok(), "a second reader waited for the first");
+        });
+    }
+
+    /// A reader keeps an effect from entering until it is done, so no reader captures replacement
+    /// bytes under an earlier grant. A shared capture that took no lock lets the effect in at once.
+    #[test]
+    fn an_effect_cannot_enter_while_a_reader_holds_the_boundary() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let reader = authority.capture_shared();
+        let (entered, noticed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let effect = authority.capture().begin("src/a.rs").expect("a free path");
+                entered.send(()).unwrap();
+                effect.complete(Integrity::Trusted);
+            });
+            let early = noticed.recv_timeout(std::time::Duration::from_millis(300));
+            drop(reader);
+            let late = noticed.recv_timeout(std::time::Duration::from_secs(5));
+            assert!(
+                early.is_err(),
+                "an effect entered while a reader held the boundary"
+            );
+            assert!(
+                late.is_ok(),
+                "the effect never entered once the reader was done"
+            );
+        });
+    }
+
+    /// An effect entering keeps a reader out until it has published its distrust, so the reader
+    /// reads the path under the decision the effect made.
+    #[test]
+    fn a_reader_cannot_capture_while_an_effect_holds_the_boundary() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let entering = authority.capture();
+        let (captured, noticed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _reader = authority.capture_shared();
+                captured.send(()).unwrap();
+            });
+            let early = noticed.recv_timeout(std::time::Duration::from_millis(300));
+            drop(entering);
+            let late = noticed.recv_timeout(std::time::Duration::from_secs(5));
+            assert!(
+                early.is_err(),
+                "a reader captured while an effect held the boundary"
+            );
+            assert!(
+                late.is_ok(),
+                "the reader never captured once the effect was done"
+            );
+        });
     }
 }

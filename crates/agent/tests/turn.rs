@@ -32198,6 +32198,77 @@ fn a_delegate_naming_fetch_url_reaches_no_host() {
     );
 }
 
+/// DOWNLOAD-5, DELEGATE-4: a worker is the kind that may write, and it holds the network
+/// capability like every kind, so no gate refuses a `download_url` it names anyway. The dispatch
+/// does, answering it as an unknown name, so nothing is fetched, written or put to the person.
+#[test]
+fn a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing() {
+    let scratch = Scratch::new("delegate-downloads");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-DOWNLOAD",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DO-THE-DOWNLOAD"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-DOWNLOAD",
+            vec![
+                tool_request(
+                    "download_url",
+                    r#"{"url":"https://notes.example/page","path":"fetched.md"}"#,
+                ),
+                reply_with("I could not download it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut confirmer = AnswersWith::new(Vec::new());
+    let mut reporter = RecordsTaskLists::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-DOWNLOAD"),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect("turn runs");
+
+    assert!(
+        confirmer.hosts.is_empty(),
+        "a delegate put a host to the person: {:?}",
+        confirmer.hosts
+    );
+    assert!(
+        !scratch.path.join("fetched.md").exists(),
+        "a delegate's download wrote a file"
+    );
+    let asked = every_request(&received);
+    let delegates: Vec<&String> = asked
+        .iter()
+        .filter(|body| !body.contains("DELEGATE-THE-DOWNLOAD"))
+        .collect();
+    assert!(
+        delegates.iter().any(|body| body.contains("no such tool")),
+        "a delegate's call to download_url was not refused as an unknown name: {delegates:?}"
+    );
+}
+
 /// Delegation saves context and never an approval. The write happens inside the delegate and
 /// still goes to a person, with the path and the diff, exactly as it would from the turn.
 #[test]

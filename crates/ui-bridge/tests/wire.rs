@@ -47,7 +47,7 @@ fn a_tag_is_sent_rather_than_the_sentence_meant_for_a_screen() {
         assert!(!wire::landing(landing).contains(' '), "a tag has no spaces");
     }
     for reach in [Reach::NotThePlanner, Reach::NoModel] {
-        assert_ne!(wire::reach(reach), reach.describe());
+        assert_ne!(Some(wire::reach(reach)), reach.note());
         assert!(!wire::reach(reach).contains(' '), "a tag has no spaces");
     }
 }

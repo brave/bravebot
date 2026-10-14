@@ -1197,7 +1197,10 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   with `r` for every session in the directory until the line is deleted from the record. That is
   what the keys say they do, and it is why they are keyed by the resolved file and offered only on a
   question about a credential. Keying on the value instead would ask again at every rotation, which
-  is the question the person pressed the key to stop.
+  is the question the person pressed the key to stop. A directory removed and made again at the same
+  path is covered by the entries recorded for the one before it: the record names a directory by its
+  path and holds nothing that identifies the directory standing there, where the startup answer holds
+  its identity ([TRUST-23](trust-map.md#TRUST-23)).
 
 - **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
   turn wrote in its own words, and a redirection is a file a program the turn started opened for
@@ -1293,6 +1296,15 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   all, including an answer about a file the new directory still reaches, which is asked about
   again: telling those apart would mean renaming each answer for the new directory, to save one
   question per file.
+
+- **An answer to read a file is filed under its name, so what the name leads to later is covered.**
+  Agreeing that a file may be read is kept under the name it has from the root. After a link on that
+  path is pointed somewhere else, the same name reaches another file without a question, and a file
+  whose bytes are replaced at the same path is covered in the same way for the rest of the session.
+  A write is kept under the file it lands in, so a retargeted link asks again there, and replaced
+  bytes are covered as they are for a read. Keying a read on where it lands, as a write is, would
+  close the link case. Only keying on the bytes closes the other, and it asks again after every edit
+  the agent makes itself.
 
 - **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
   this agent starts. That what it holds reaches no session record rests on

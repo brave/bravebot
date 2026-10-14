@@ -2724,6 +2724,41 @@ mod tests {
         );
     }
 
+    /// DELEGATE-27: the effort a delegate asks for is the latest definition's, in both directions,
+    /// because how hard a model is asked to think changes what a run costs and not what it may
+    /// do. A project naming a level replaces a person's own, and one naming none returns the
+    /// delegate to the level of the turn that starts it.
+    #[test]
+    fn a_later_definition_takes_over_the_effort_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_effort("low"),
+        );
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_effort("high"),
+        );
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").effort(),
+            Some("high")
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").effort(),
+            None
+        );
+    }
+
     /// MEMORY-2: whether a memory is kept is the latest definition's, in both directions, because
     /// keeping one changes what a run knows and adds nothing it may do. A project keeping none
     /// stops a person's own habit from writing into its checkout, and one keeping a memory its

@@ -17,6 +17,11 @@ use std::path::{Path, PathBuf};
 /// towards a name, which is what closes the list. `completes` is whether Enter on that row
 /// completes the name rather than sending the line (NAME-7).
 ///
+/// Each entry carries `written`, the path as it is written in a line (a space behind a backslash,
+/// NAME-8), and the answer carries `word`, the last word of the line, which is the part a completion
+/// replaces. Both come from `bravebot-mentions`, as they do in the terminal, so the window splices
+/// them rather than working out where the word begins or how a name is written (NAME-9).
+///
 /// `sources` is asked for only once a name is being typed, because it opens the session's
 /// workspace and the window asks about every line, most of which name nothing.
 pub fn offer(
@@ -26,16 +31,23 @@ pub fn offer(
     sources: impl FnOnce() -> Result<Vec<(String, PathBuf)>, Failure>,
 ) -> Result<Value, Failure> {
     let Some(typed) = bravebot_mentions::typed_reference(line) else {
-        return Ok(json!({ "typed": null, "entries": [], "completes": false }));
+        return Ok(json!({ "typed": null, "word": null, "entries": [], "completes": false }));
     };
     let sources = sources()?;
     let entries = bravebot_mentions::matching(project, &typed, &sources);
     let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, &sources);
     let entries: Vec<Value> = entries
         .into_iter()
-        .map(|entry| json!({ "path": entry.path, "directory": entry.is_directory }))
+        .map(|entry| {
+            json!({
+                "path": entry.path,
+                "written": bravebot_mentions::escape(&entry.path),
+                "directory": entry.is_directory,
+            })
+        })
         .collect();
-    Ok(json!({ "typed": typed, "entries": entries, "completes": completes }))
+    let word = &line[bravebot_mentions::last_word_starts_at(line)..];
+    Ok(json!({ "typed": typed, "word": word, "entries": entries, "completes": completes }))
 }
 
 /// The files `prompt` names with `@`, in the order written, each surveyed by the read a turn
@@ -76,6 +88,21 @@ mod tests {
     use super::*;
     use crate::protocol::ErrorCode;
     use std::cell::Cell;
+
+    /// The window splices what the bridge hands it, so a name holding a space has to arrive
+    /// escaped, and the word being replaced has to be the whole last word, escaped space and all.
+    #[test]
+    fn an_entry_with_a_space_is_offered_escaped_over_the_whole_word() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-space-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::create_dir_all(root.path().join("My Documents")).expect("directory");
+        let answer = offer(root.path(), "read @My\\ Doc", 0, || Ok(Vec::new())).expect("answers");
+        assert_eq!(answer["word"], "@My\\ Doc");
+        assert_eq!(answer["entries"][0]["path"], "My Documents/");
+        assert_eq!(answer["entries"][0]["written"], "My\\ Documents/");
+    }
 
     /// The window asks about every line it holds, and opening the session's workspace for each one
     /// made a turn waiting on an approval unable to be stopped. Only a name being typed needs it.

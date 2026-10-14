@@ -1130,7 +1130,11 @@ hand-audited table ([command-line.md](command-line.md)) knows and what this key 
 pressing `r` is a decision about the tree as much as about the command.
 
 **Other known costs.** A binary replaced in place at the recorded path is covered without anybody
-being asked again, which is a longer exposure than a session's and is what the answer lasting costs. A
+being asked again, which is a longer exposure than a session's and is what the answer lasting costs.
+A directory removed and made again at the same path is covered by what was recorded for the one
+before it, since an entry names its directory by path and holds nothing that identifies the
+directory standing there, where the startup answer holds its identity
+([TRUST-23](../trust-map.md#TRUST-23)). A
 covered line is never put to that person again, so it can no longer be vouched for and its output
 stays quarantined: `read_output` still puts one result to them, which is [RUN-14](#RUN-14)'s advice,
 and the way back is to delete the line. The record is keyed by a directory, so a person working in

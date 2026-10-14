@@ -230,14 +230,12 @@ impl<W: Write> Reporter for Progress<W> {
         // The heading is marked like the content, because the origin is not this module's text:
         // it can be a filename read out of a quarantined listing. So it is neutralised too, and a
         // long one continues on another marked row rather than outside the block.
-        let mut block = vec![
-            t!(
-                quarantined_heading,
-                origin = &shown.origin,
-                label = &shown.label
-            ),
-            format!("  {}", shown.reach.describe()),
-        ];
+        let mut block = vec![t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        )];
+        block.extend(shown.reach.note().map(|note| format!("  {note}")));
         block.extend(shown.preview.iter().cloned());
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
@@ -386,6 +384,21 @@ mod tests {
                 "a row of the block begins with content rather than the margin: {row:?}"
             );
         }
+    }
+
+    /// Content kept from the planner is what every block holds, so its heading does not repeat
+    /// that on each one. Content in no model's context is the exception and says so.
+    #[test]
+    fn a_block_states_its_reach_only_where_that_is_the_exception() {
+        let ordinary =
+            log(|p| p.quarantined(quarantining(vec!["api_key = hunter2".to_string()], 1)));
+        assert!(!ordinary.contains("planner"), "got: {ordinary}");
+        assert!(!ordinary.contains("no model"), "got: {ordinary}");
+
+        let mut unread = quarantining(vec!["a remark".to_string()], 1);
+        unread.reach = Reach::NoModel;
+        let written = log(|p| p.quarantined(unread));
+        assert!(written.contains("no model's context"), "got: {written}");
     }
 
     /// A preview line that clears the row it is written on could erase the margin above it, which

@@ -20,7 +20,7 @@ guards:
       - crates/agent/tests/workspace.rs: 37
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 111
+      - crates/core/src/policy.rs: 112
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
@@ -39,7 +39,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 57
+      - crates/agent/tests/workspace.rs: 58
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 62
@@ -59,7 +59,7 @@ guards:
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 250
+      - crates/agent/tests/workspace.rs: 252
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -121,7 +121,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 10
+      - crates/agent/src/turn.rs: 11
       - crates/core/src/policy.rs: 8
   - symbol: Policy::render_in_place
     sites:

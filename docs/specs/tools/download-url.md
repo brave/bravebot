@@ -106,5 +106,6 @@ refuses it before anything is read or sent ([MODE-3](../permission-modes.md#MODE
 the sandbox mode `read-only` ([SANDBOX-22](../sandboxing.md#SANDBOX-22)).
 
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
+`verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_download_before_anything_is_sent`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`

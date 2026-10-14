@@ -381,6 +381,30 @@ mod tests {
         assert!(shown.contains("LINE 199"), "the end is missing: {shown}");
     }
 
+    /// The note names how many lines the cut took, which is the region less the lines shown, and
+    /// the region counts the context either side of the change and not the changed lines alone.
+    #[test]
+    fn a_cut_excerpt_says_how_many_lines_it_dropped() {
+        let before: String = (1..=300).map(|n| format!("line {n}\n")).collect();
+        let mut after = String::new();
+        for n in 1..=300 {
+            match n {
+                101..=200 => after.push_str(&format!("LINE {n}\n")),
+                _ => after.push_str(&format!("line {n}\n")),
+            }
+        }
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        let region = 100 + 2 * CONTEXT_LINES;
+        let dropped = region - MAX_EXCERPT_LINES;
+        assert!(
+            shown.contains(&format!("… {dropped} more lines …")),
+            "the note did not name {dropped} dropped lines: {shown}"
+        );
+        assert_eq!(shown.lines().count(), MAX_EXCERPT_LINES + 1);
+    }
+
     /// What is scanned for a credential has to be what the planner is shown, at the numbers the
     /// person would open their editor at. Lines counted from the top of the excerpt rather than of
     /// the file would send them to the wrong place.

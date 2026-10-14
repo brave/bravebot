@@ -1884,6 +1884,39 @@ fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
     );
 }
 
+/// How many calls from the front of `calls` are reads that can run beside each other, or none
+/// where that is fewer than two (TURN-10).
+///
+/// A call joins the run when it is a read that asks no one anything and the person has no hook for
+/// its finishing, which could change a file the next read is about to look at. A call that would
+/// be held as a third repeat ends the run, because holding it asks a question. Held-ness is taken
+/// from a copy of the count advanced over the run, as the loop will advance the real one.
+fn reads_that_run_together(
+    calls: &[ToolCall],
+    repeats: &crate::repeated_call::Repeats,
+    confined_to: Option<&[String]>,
+    hooks: &bravebot_config::hooks::Hooks,
+) -> usize {
+    let mut counting = repeats.clone();
+    let mut together = 0;
+    for call in calls {
+        if !tools::can_read_ahead(call, confined_to)
+            || hooks
+                .firing(
+                    bravebot_config::hooks::Moment::ToolFinished,
+                    Some(&call.function.name),
+                )
+                .next()
+                .is_some()
+            || counting.is_held(call)
+        {
+            break;
+        }
+        together += 1;
+    }
+    if together < 2 { 0 } else { together }
+}
+
 /// Run the hooks a person attached to `moment`, and answer with what went wrong where something
 /// did.
 ///
@@ -3589,12 +3622,47 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Held until every call in the round has its result, since a picture goes in a
                     // message of its own after them and never between a call and its answer.
                     let mut attached = Vec::new();
-                    for call in &completion.calls {
+                    // Reads that already ran beside each other, by the call they answer (TURN-10).
+                    let mut ahead: Vec<Option<tools::Ahead>> =
+                        completion.calls.iter().map(|_| None).collect();
+                    let mut examined = 0;
+                    for (index, call) in completion.calls.iter().enumerate() {
                         // Checked per call, because a tool may write. Stopping here means the remaining
                         // calls in this round never run.
                         if cancel.is_cancelled() {
                             attach_vetted_pictures(&mut policy, conversation, &mut attached);
                             return Err(TurnError::Cancelled { attempts: Some(0) });
+                        }
+
+                        // At the first of a run of reads that no one has to be asked about, the whole run
+                        // is read at once. The calls before it have finished and the ones after it have
+                        // not started, so this is the only place the run can be told apart from the rest.
+                        if index >= examined {
+                            let reads = reads_that_run_together(
+                                &completion.calls[index..],
+                                &repeats,
+                                addressed.as_ref().map(|addressed| addressed.tools()),
+                                hooks,
+                            );
+                            examined = index + reads.max(1);
+                            if reads > 0 {
+                                let started = Instant::now();
+                                let together: Vec<&ToolCall> =
+                                    completion.calls[index..index + reads].iter().collect();
+                                for (place, read) in tools::read_ahead(
+                                    &policy,
+                                    workspace,
+                                    &together,
+                                    tools::READS_AT_ONCE,
+                                    cancel,
+                                )
+                                .into_iter()
+                                .enumerate()
+                                {
+                                    ahead[index + place] = read;
+                                }
+                                spent.tools += started.elapsed();
+                            }
                         }
 
                         // Wrapped per call rather than once for the turn, because the borrow has to be given
@@ -3640,9 +3708,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             None
                         };
                         let (quarantine, reads) = conversation.for_a_tool();
+                        // Used only while the context is what it was when the read ran. A call after one
+                        // whose result the planner was shown runs under the context that result left, and
+                        // the read was taken under the one before it.
+                        let read = ahead[index]
+                            .take()
+                            .and_then(|read| read.if_still_current(&policy));
                         let mut output = match refused {
                             Some(refused) => refused,
-                            None => tools::dispatch(
+                            None => tools::dispatch_with(
                                 &mut policy,
                                 &mut tools::Tools {
                                     workspace,
@@ -3694,6 +3768,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut asking,
                                 &mut reporter,
                                 call,
+                                read,
                             ),
                         };
                         let took = ran_at.elapsed();
@@ -4122,6 +4197,37 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 _ => None,
                             };
 
+                            // Content the result carries beside its own text, under a label of its own.
+                            // It goes through the same gate as a result of its own, so the planner is
+                            // handed what the label allows: the text where it may read it, otherwise a
+                            // reference to it. The person watching is shown what the planner is not.
+                            let apart = match (&presented, &output.apart) {
+                                (Presentation::Visible(_), Some(apart)) => {
+                                    let kept = policy
+                                        .present(
+                                            "tool_result",
+                                            conversation.next_reference(),
+                                            &apart.origin,
+                                            &apart.text,
+                                            conversation.quarantine(),
+                                        )
+                                        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                                    if let Presentation::Quarantined(reference) = &kept {
+                                        let shown =
+                                            preview_for(&mut policy, &output.tool, &apart.text);
+                                        reporter.quarantined(crate::report::Shown {
+                                            origin: apart.origin.clone(),
+                                            reach: crate::report::Reach::NotThePlanner,
+                                            label: reference.label.to_string(),
+                                            lines: shown.lines,
+                                            preview: shown.preview,
+                                        });
+                                    }
+                                    Some(kept)
+                                }
+                                _ => None,
+                            };
+
                             // Nothing to keep from anybody, so no reference to it and no advice about
                             // one. From the size the slot states, which the reference would have put
                             // in front of the planner as "0 bytes" anyway, so no byte is read to decide.
@@ -4231,8 +4337,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                             whole,
                                         });
                                     }
+                                    let beside = match (&apart, &output.apart) {
+                                        (Some(kept), Some(apart)) => format!(
+                                            "\n\n{}\n{}",
+                                            apart.introduced_by,
+                                            kept.for_context()
+                                        ),
+                                        _ => String::new(),
+                                    };
                                     format!(
-                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}",
+                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}",
                                         output.tool
                                     )
                                 }
@@ -6214,5 +6328,383 @@ mod tests {
             said.contains("a shorter answer") && !said.contains("smaller parts"),
             "{said}"
         );
+    }
+
+    /// TURN-10: the reads of one round run beside each other.
+    mod reading_together {
+        use super::ceiling::said;
+        use super::*;
+        use bravebot_core::event::Event;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Files under `a`, `b`, `c` and `w`, and `m1` and `m2`, which the map distrusts so that a
+        /// listing of either is quarantined.
+        fn workspace(name: &str) -> (PathBuf, Workspace) {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            for (path, text) in [
+                ("a/one.txt", "needle in a\n"),
+                ("b/two.txt", "needle in b\n"),
+                ("c/three.txt", "needle in c\n"),
+                ("w/old.txt", "needle already here\n"),
+                ("m1/x.txt", "x\n"),
+                ("m2/y.txt", "y\n"),
+            ] {
+                let at = scratch.join(path);
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                std::fs::write(at, text).unwrap();
+            }
+            let workspace = Workspace::new(&scratch).unwrap();
+            (scratch, workspace)
+        }
+
+        struct Round {
+            outcome: Result<Outcome, TurnError>,
+            requests: Vec<String>,
+            trail: Vec<Event>,
+        }
+
+        /// Takes a turn whose planner answers with `calls` in one round and then ends it.
+        fn take(
+            workspace: &Workspace,
+            calls: &[(&str, &str)],
+            cancel: &Cancel,
+            confirmer: &mut (impl Confirmer + Send),
+        ) -> Round {
+            let config = Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+                _ => None,
+            })
+            .unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            trust.distrust("m1");
+            trust.distrust("m2");
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            crate::backend::scripted::script(vec![said("", calls, None), said("done", &[], None)]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                workspace,
+                &Task::new("look around"),
+                &mut Conversation::new(),
+                confirmer,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                cancel,
+            )
+            .outcome;
+            crate::backend::scripted::clear();
+            Round {
+                outcome,
+                requests: crate::backend::scripted::asked(),
+                trail: sink.events().to_vec(),
+            }
+        }
+
+        fn greps(round: &Round) -> usize {
+            round
+                .trail
+                .iter()
+                .filter(|event| {
+                    matches!(event, Event::ActionField { tool, field, .. }
+                        if tool == "file_grep" && field == "directory")
+                })
+                .count()
+        }
+
+        /// What the planner was given for each call, in the order it was given.
+        fn results(request: &str) -> Vec<String> {
+            let body: serde_json::Value = serde_json::from_str(request).unwrap();
+            body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .map(|message| message["content"].to_string())
+                .collect()
+        }
+
+        fn search(directory: &str) -> String {
+            format!(r#"{{"pattern":"needle","directory":"{directory}"}}"#)
+        }
+
+        /// The regression it rejects: results added in the order the reads finished, which is the
+        /// order a thread pool hands them back. The first call is held until the other two have
+        /// finished, so the finishing order is the reverse of the call order. Holding it also needs
+        /// the other two to run while it waits, so reads that take turns give up and fail the test.
+        #[test]
+        fn results_come_back_in_the_order_the_calls_were_made() {
+            let (scratch, workspace) = workspace("together-order");
+            let entered = Arc::new(AtomicUsize::new(0));
+            let gave_up = Arc::new(AtomicUsize::new(0));
+            let (seen, failed) = (entered.clone(), gave_up.clone());
+            workspace.hold_reads(move |directory| {
+                if directory == "a" {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while seen.load(Ordering::SeqCst) < 2 {
+                        if Instant::now() >= deadline {
+                            failed.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    // Long enough for the others to finish their reads. Nothing is asserted from
+                    // it: if they have not, the results still have to come back in call order.
+                    std::thread::sleep(Duration::from_millis(100));
+                } else {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("search", &search("a")),
+                    ("search", &search("b")),
+                    ("search", &search("c")),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            assert_eq!(gave_up.load(Ordering::SeqCst), 0, "the others never ran");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 3, "{told:?}");
+            for (result, expected) in told
+                .iter()
+                .zip(["needle in a", "needle in b", "needle in c"])
+            {
+                assert!(result.contains(expected), "{result} lacks {expected}");
+            }
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
+        /// The regression it rejects: reference numbers handed out in the order the reads finished.
+        /// A quarantined listing is named by the reference it is given, so the first call has to
+        /// be `ref:0` and the second `ref:1` however the reads finish.
+        #[test]
+        fn references_are_numbered_in_the_order_the_calls_were_made() {
+            let (scratch, workspace) = workspace("together-references");
+            let entered = Arc::new(AtomicUsize::new(0));
+            let gave_up = Arc::new(AtomicUsize::new(0));
+            let (seen, failed) = (entered.clone(), gave_up.clone());
+            workspace.hold_reads(move |directory| {
+                if directory == "m1" {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while seen.load(Ordering::SeqCst) < 1 {
+                        if Instant::now() >= deadline {
+                            failed.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    // Long enough for the second read to finish. Nothing is asserted from it.
+                    std::thread::sleep(Duration::from_millis(100));
+                } else {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("list_files", r#"{"directory":"m1"}"#),
+                    ("list_files", r#"{"directory":"m2"}"#),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            assert_eq!(gave_up.load(Ordering::SeqCst), 0, "the second never ran");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 2, "{told:?}");
+            assert!(
+                told[0].contains("[ref:1] an entry in") && told[0].contains("m1"),
+                "{}",
+                told[0]
+            );
+            assert!(
+                told[1].contains("[ref:2] an entry in") && told[1].contains("m2"),
+                "{}",
+                told[1]
+            );
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
+        /// The regression it rejects: a read hoisted over a call that writes. The write is a
+        /// barrier, so the searches before it do not see what it wrote and the searches after it
+        /// do. Taking every read of the round at the front would leave the last two without it.
+        /// The patterns differ so that no search is a repeat of the one before it, which would end
+        /// a run for another reason.
+        #[test]
+        fn a_call_that_writes_separates_the_reads_before_it_from_the_reads_after() {
+            let (scratch, workspace) = workspace("together-barrier");
+            let looking = |pattern: &str| format!(r#"{{"pattern":"{pattern}","directory":"w"}}"#);
+
+            let round = take(
+                &workspace,
+                &[
+                    ("search", &looking("needle")),
+                    ("search", &looking("needl")),
+                    (
+                        "write_file",
+                        r#"{"path":"w/new.txt","contents":"needle written mid-round\n"}"#,
+                    ),
+                    ("search", &looking("eedle")),
+                    ("search", &looking("edle")),
+                ],
+                &Cancel::new(),
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            round.outcome.as_ref().expect("the turn ended");
+            let told = results(&round.requests[1]);
+            assert_eq!(told.len(), 5, "{told:?}");
+            for before in [&told[0], &told[1]] {
+                assert!(
+                    before.contains("needle already here")
+                        && !before.contains("needle written mid-round"),
+                    "{before}"
+                );
+            }
+            for after in [&told[3], &told[4]] {
+                assert!(
+                    after.contains("needle already here")
+                        && after.contains("needle written mid-round"),
+                    "{after}"
+                );
+            }
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
+        /// The regression it rejects: the trail holding the lines of reads a cancelled round never
+        /// reached. All three reads are inside their captures when the first cancels, so they have
+        /// all run. The turn ends at the second call, as it does when they run one after another,
+        /// and the trail holds one search and not three.
+        #[test]
+        fn a_cancel_during_the_reads_leaves_only_the_calls_before_it_in_the_trail() {
+            let (scratch, workspace) = workspace("together-cancel");
+            let cancel = Cancel::new();
+            let stopping = cancel.clone();
+            let reads = Arc::new(AtomicUsize::new(0));
+            let gave_up = Arc::new(AtomicUsize::new(0));
+            let (counted, failed) = (reads.clone(), gave_up.clone());
+            workspace.hold_reads(move |directory| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while counted.load(Ordering::SeqCst) < 3 {
+                    if Instant::now() >= deadline {
+                        failed.fetch_add(1, Ordering::SeqCst);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                if directory == "a" {
+                    stopping.cancel();
+                }
+            });
+
+            let round = take(
+                &workspace,
+                &[
+                    ("search", &search("a")),
+                    ("search", &search("b")),
+                    ("search", &search("c")),
+                ],
+                &cancel,
+                &mut crate::confirm::ApproveWrites,
+            );
+
+            assert!(
+                matches!(round.outcome, Err(TurnError::Cancelled { .. })),
+                "{:?}",
+                round.outcome.as_ref().err()
+            );
+            assert_eq!(
+                gave_up.load(Ordering::SeqCst),
+                0,
+                "the reads never ran together"
+            );
+            assert_eq!(reads.load(Ordering::SeqCst), 3);
+            assert_eq!(greps(&round), 1);
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+
+        /// One call per name, each with arguments of its own so that no two are a repeat.
+        fn calls(names: &[&str]) -> Vec<ToolCall> {
+            names
+                .iter()
+                .enumerate()
+                .map(|(at, name)| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": "c",
+                        "function": {
+                            "name": name,
+                            "arguments": format!("{{\"directory\":\"a\",\"pattern\":\"x{at}\"}}")
+                        }
+                    }))
+                    .unwrap()
+                })
+                .collect()
+        }
+
+        /// The regression it rejects: a run that takes in a call that asks a question, a call the
+        /// person has a hook for, or a repeat that would be held. Each ends the run where it
+        /// stands, and a single read is not a run.
+        #[test]
+        fn a_run_of_reads_ends_at_a_call_that_asks_or_is_hooked_or_would_be_held() {
+            let none = bravebot_config::hooks::Hooks::default();
+            let repeats = crate::repeated_call::Repeats::default();
+            let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
+                reads_that_run_together(&calls(names), &repeats, None, hooks)
+            };
+
+            assert_eq!(run(&["search", "list_files", "search"], &none), 3);
+            assert_eq!(run(&["search", "read_file", "search", "search"], &none), 0);
+            assert_eq!(run(&["search", "search", "write_file", "search"], &none), 2);
+            assert_eq!(run(&["search"], &none), 0);
+            assert_eq!(run(&["read_file", "search", "search"], &none), 0);
+
+            let hooked = bravebot_config::hooks::Hooks::parse(
+                r#"{"hooks": [{"on": "tool-finished", "tool": "list_files", "run": ["notify"]}]}"#,
+            );
+            assert_eq!(hooked.declared().len(), 1, "the hook did not parse");
+            assert_eq!(
+                run(&["search", "search", "list_files", "search"], &hooked),
+                2
+            );
+            assert_eq!(run(&["search", "search", "search"], &hooked), 3);
+
+            // The same call three times running is held at the third, which asks the person.
+            let same = |count: usize| -> Vec<ToolCall> {
+                (0..count)
+                    .map(|_| {
+                        serde_json::from_value(serde_json::json!({
+                            "id": "c",
+                            "function": {"name": "search", "arguments": "{\"pattern\":\"x\"}"}
+                        }))
+                        .unwrap()
+                    })
+                    .collect()
+            };
+            assert_eq!(reads_that_run_together(&same(4), &repeats, None, &none), 2);
+            let mut after_two = crate::repeated_call::Repeats::default();
+            after_two.is_held(&same(1)[0]);
+            after_two.is_held(&same(1)[0]);
+            assert_eq!(
+                reads_that_run_together(&same(3), &after_two, None, &none),
+                0
+            );
+        }
     }
 }

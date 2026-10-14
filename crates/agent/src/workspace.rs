@@ -442,6 +442,8 @@ enum Reach {
 pub struct Workspace {
     #[cfg(test)]
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
+    #[cfg(test)]
+    while_reading: Arc<Mutex<Option<ReadingHook>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -967,6 +969,19 @@ struct WriteInterruption {
     resume: std::sync::mpsc::Receiver<bool>,
 }
 
+/// Called with the directory a listing or a search has opened its capture on, so a test can hold
+/// that read there until the others it runs beside have arrived.
+#[cfg(test)]
+#[derive(Clone)]
+struct ReadingHook(Arc<dyn Fn(&str) + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for ReadingHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReadingHook")
+    }
+}
+
 /// What a path held before a turn wrote to it.
 ///
 /// Carried, never read. The driver hands the bytes back to the path they came from and has no
@@ -1194,6 +1209,8 @@ impl Workspace {
         Ok(Self {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            while_reading: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -1687,6 +1704,26 @@ impl Workspace {
             .filter(|host| !held.allowed.contains(host) && !held.declined.contains(*host))
             .cloned()
             .collect()
+    }
+
+    /// For starting over inside one process (`/clear`, `/resume`): everything the ending session
+    /// opened or was let reach goes with it. The directories added by name and the checkouts are
+    /// the session's own, and so are the paths and hosts it was let reach (SANDBOX-24, SANDBOX-28).
+    pub fn end_session(&mut self) {
+        self.close_added_directories();
+        self.forget_session_checkouts();
+        self.forget_reach_and_hosts();
+    }
+
+    /// The paths programs were let reach and the hosts answered, which `/branch` also ends since no
+    /// record holds them. A clone shares them, which is why a session handed on by `/resume` has to
+    /// be cleared of them as well.
+    pub fn forget_reach_and_hosts(&self) {
+        self.path_reach
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        *self.host_grants.lock().unwrap_or_else(|e| e.into_inner()) = HostGrants::default();
     }
 
     /// End the grant numbered `number`, counting from one in `path_reach` order.
@@ -3033,6 +3070,25 @@ impl Workspace {
         Ok(resolved)
     }
 
+    /// Run `hook` with the directory, inside the capture of every listing and search from here on.
+    #[cfg(test)]
+    pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *self.while_reading.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(ReadingHook(Arc::new(hook)));
+    }
+
+    #[cfg(test)]
+    fn hold_while_reading(&self, directory: &str) {
+        let hook = self
+            .while_reading
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(ReadingHook(hook)) = hook {
+            hook(directory);
+        }
+    }
+
     #[cfg(test)]
     fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
         let synchronization_failed = |detail: &str| WorkspaceError::Io {
@@ -3781,7 +3837,7 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -3793,6 +3849,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             let glob =
                 match pattern {
@@ -4090,7 +4149,7 @@ impl Workspace {
             context.min(MAX_SEARCH_CONTEXT)
         };
         let offset = if output.summarises() { 1 } else { offset };
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
                 policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -4105,6 +4164,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             if patterns.is_empty() {
                 return Err(WorkspaceError::Invalid {
@@ -5913,6 +5975,58 @@ mod tests {
             Workspace::new(root).expect("workspace")
         };
         assert!(second.path_reach().is_empty());
+    }
+
+    /// SANDBOX-24 and SANDBOX-28: the reach and the host answers belong to the session that was
+    /// asked, so one that ends inside this process takes them with it, and the directories it
+    /// opened by name. A yes and a no are both asked about again, and the clone `/resume` hands to
+    /// the next session sees none of them.
+    #[test]
+    fn a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it() {
+        let root = crate::testutil::scratch_dir("reach-and-hosts-forgotten");
+        let opened = crate::testutil::scratch_dir("reach-and-hosts-forgotten-opened");
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::fs::create_dir_all(&opened).expect("scratch");
+        let mut workspace = Workspace::new(root).expect("workspace");
+        let handed_on = workspace.clone();
+        let hosts = |names: &[&str]| names.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+        workspace
+            .add_directory(opened.to_str().expect("utf-8 path"))
+            .expect("a directory to open");
+        workspace.grant_path_reach(PathBuf::from("/data/in"), true, "reads in".to_string());
+        workspace.grant_hosts(&hosts(&["yes.example"]));
+        workspace.decline_hosts(&hosts(&["no.example"]));
+        assert!(
+            handed_on
+                .unanswered_hosts(&hosts(&["yes.example", "no.example"]))
+                .is_empty(),
+            "the fixture must hold both answers"
+        );
+        assert!(
+            !handed_on.added_directories().is_empty(),
+            "the fixture must hold a directory opened by name"
+        );
+
+        workspace.end_session();
+
+        assert!(
+            handed_on.added_directories().is_empty(),
+            "the next session kept a directory opened by name"
+        );
+        assert!(
+            handed_on.path_reach().is_empty(),
+            "the next session kept a path programs were let reach"
+        );
+        assert!(
+            handed_on.granted_hosts().is_empty(),
+            "the next session kept a host that was allowed"
+        );
+        assert_eq!(
+            handed_on.unanswered_hosts(&hosts(&["yes.example", "no.example"])),
+            hosts(&["yes.example", "no.example"]),
+            "the next session kept a host answer, a no included"
+        );
+        std::fs::remove_dir_all(&opened).ok();
     }
 
     /// SANDBOX-24: a host answer is held by the workspace and shared by a clone (a delegate's view).

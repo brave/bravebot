@@ -16,8 +16,8 @@ import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
   const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor })
   return typeof ok?.typed === 'string' && Array.isArray(ok.entries)
-    ? { typed: ok.typed, entries: ok.entries, completes: ok.completes === true }
-    : { typed: null, entries: [], completes: false }
+    ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
+    : { typed: null, word: null, entries: [], completes: false }
 }
 
 /** How many lines the field grows to before it starts to scroll. */
@@ -225,16 +225,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
   const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
     at === 0 && offer?.session === session && offer.line === line ? offer.value : askOffer(session, line, at)
-  const choose = (entry: MentionEntry) => {
+  /** Writes the entry into the draft and says whether the draft changed. */
+  const choose = (entry: MentionEntry, word: string | null): boolean => {
     setCursor(0)
-    latest.current.onDraft(acceptMention(latest.current.draft, entry))
+    const draft = latest.current.draft
+    const completed = acceptMention(draft, entry, word)
+    if (completed === draft) return false
+    latest.current.onDraft(completed)
+    return true
   }
   /** Enter: complete a half-typed name, or send a line whose last name is finished (NAME-7). */
   const enter = async (line: string, at: number) => {
     if (session) {
       const value = await freshOffer(line, at)
       const entry = value.entries[Math.min(at, value.entries.length - 1)]
-      if (value.typed !== null && dismissed !== value.typed && value.completes && entry) return choose(entry)
+      if (value.typed !== null && dismissed !== value.typed && value.completes && entry && choose(entry, value.word)) return
     }
     const props = latest.current
     if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
@@ -341,7 +346,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 const at = list.active
                 void list.freshOffer(now.draft, at).then((value) => {
                   const entry = value.entries[Math.min(at, value.entries.length - 1)]
-                  if (value.typed !== null && entry) mention.current.choose(entry)
+                  if (value.typed !== null && entry) mention.current.choose(entry, value.word)
                 })
                 return
               }
@@ -376,7 +381,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         </div>
         {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
-        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={choose} />}
+        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={(entry) => { choose(entry, offer?.value.word ?? null) }} />}
       </div>
     </footer>
   )
