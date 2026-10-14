@@ -126,9 +126,9 @@ python3 agents/skills/session-review/session-review.py draft --work-dir "$WORK_D
 
 Print its output: one title and label set per confirmed problem, then any problems held back as
 security concerns. The labels follow
-[labelling-issues.md](../../../docs/development/labelling-issues.md): `bug` or `enhancement`, an
-`area/*` where one is clear, and never an `importance`, `urgency` or `size`. Tell the user about each
-held-back problem.
+[labelling-issues.md](../../../docs/development/labelling-issues.md): `bug` or `enhancement`,
+`session-analysis` on every issue, an `area/*` where one is clear, and never an `importance`,
+`urgency` or `size`. Tell the user about each held-back problem.
 
 ### Step 6: file (zero model tokens)
 
