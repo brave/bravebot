@@ -260,8 +260,9 @@ leaves the continuing session with the file decisions the run ended with: attach
 unrelated grants, explicit distrust, and the downgrade of any path a completed write changed. A stop
 before any effect keeps the earlier decisions. A downgrade survives a later error or stop, and a
 session save and resume. The terminal and the desktop bridge adopt these decisions before the
-session continues or is saved, and the bridge reports them in `trust.rules` on both `manifest.done`
-and `manifest.error`. Trust comes from the retained authority and effect metadata, never from file
+session continues or is saved. The bridge writes the session's record as the run ends, where the
+session has one, so a session closed before its next turn resumes with them, and it reports them in
+`trust.rules` on both `manifest.done` and `manifest.error`. Trust comes from the retained authority and effect metadata, never from file
 contents or hashes.
 
 A panic or a lost worker is not one of these endings. A release build aborts on a panic, and when
@@ -291,6 +292,7 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::sessions::cancellation_before_manifest_effect_keeps_exact_file_decisions`
 `verified-by: bravebot_tui::sessions::a_lost_manifest_worker_leaves_the_session_map_as_it_was`
 `verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
+`verified-by: bravebot_ui_bridge::manifest::a_downgrade_a_run_records_survives_close_and_resume_without_another_turn`
 `verified-by: bravebot_session::sessions::failed_manifest_records_distinguish_unknown_timing_from_measured_zero`
 `verified-by: bravebot_cli::running::failed_manifest_usage_survives_json_and_reload`
 `verified-by: bravebot_cli::running::manifest_usage_controls_survive_storage`

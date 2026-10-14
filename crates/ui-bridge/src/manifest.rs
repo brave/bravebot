@@ -5,13 +5,14 @@
 //!
 //! - The conversation is not sent to the planner and nothing is added to it.
 //! - The run is saved as its own record, by the function the terminal and the command line use.
-//! - The session's record is not written. Its trust map keeps current decisions on every ordinary
-//!   ending.
+//! - The session's record is written again once the run ends, however it ends, so the decisions the
+//!   run left in the trust map survive a close and a resume. A session with no record yet has
+//!   nothing to update and gets none.
 //!
 //! The worker reports through the same events a turn uses for progress and questions. It ends
 //! with `manifest.done` or `manifest.error`, and both carry what the run produced (MANIFEST-3).
 
-use crate::bridge::{failure_fields, merge, rules_json};
+use crate::bridge::{failure_fields, merge, rules_json, save};
 use crate::emit::Emitter;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::State;
@@ -157,6 +158,23 @@ pub(crate) fn walk(walk: Walk) {
             crate::agent_build(),
         ),
     };
+
+    // The run's decisions are in `state.trust` whichever way it ended, and the session's record
+    // still holds the map from before it. Written here, not left for the next turn, because a
+    // session closed first would resume without them (MANIFEST-11).
+    if state
+        .handle
+        .as_ref()
+        .is_some_and(|handle| handle.resumable().is_some())
+    {
+        let turns = state.turns;
+        save(
+            &project,
+            &mut state,
+            turns,
+            &bravebot_session::audit::Trail::default(),
+        );
+    }
 
     let event = match &outcome {
         Ok(done) => Event::new(
