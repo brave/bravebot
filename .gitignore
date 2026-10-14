@@ -15,6 +15,9 @@
 # Build output
 /dist/
 
+# Linked worktrees, such as the ones the pr-fix and rebase skills create
+/.worktrees/
+
 # Node (npm distribution wrapper)
 node_modules/
 npm/bin/*-bin

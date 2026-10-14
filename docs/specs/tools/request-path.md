@@ -130,8 +130,8 @@ asks. The file tools are not given that reach, and the request is still how they
 **Why.** The text a planner chose is the only thing that decides the path, which is the reason a
 person's yes does not vouch for it. In bypass the person has already declared that nothing a session
 does needs their word, and a session that stops on a question nobody is there to answer is the one
-failure the mode exists to avoid: `pr-fix` makes a worktree beside the project, and its edits stop at
-the first file tool.
+failure the mode exists to avoid: `pr-fix` makes a worktree outside the project when
+`BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
 `verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`

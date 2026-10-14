@@ -11,13 +11,19 @@ allowed-tools: Bash(python3 agents/skills/rebase/rebase.py *), Bash(git *), Read
 # Rebase a pull request
 
 `rebase.py` does everything that needs no judgement: it finds whichever remote points at
-brave/bravebot and the one holding the head, puts the branch in `../<checkout>-<pr>`, fetches,
+brave/bravebot and the one holding the head, puts the branch in `.worktrees/pr-<pr>` of the main
+clone, fetches,
 rebases, and pushes over only the head it fetched. Spend tokens on the conflicts and nothing else.
+The directory is inside the workspace and ignored by git. `BRAVEBOT_PR_WORKTREES` names another
+one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and a worktree outside the workspace needs
+`/add-dir` before the file tools reach it.
 
 Each `rebase.py` step runs `git` against the remote or signs the commits it rewrites from inside
 the script, so its command line shows no operation for the sandbox to lend a credential for. When
 the `run` tool takes a `scopes` argument, pass `scopes: ["remote", "signing"]` on `start`,
-`continue`, `check` and `push`. The person is asked about the line each time.
+`continue`, `check` and `push`. The person is asked about the line each time. On macOS the sandbox
+also refuses a write under `.git` from any program other than `git`, which these scopes do not
+lift, so run `start`, `continue` and `push` with `unconfined: true` where the session accepts it.
 
 1. `python3 agents/skills/rebase/rebase.py start <pr>`
 2. For each `path:start-end` it prints, Read only that range of the worktree's file and Edit it

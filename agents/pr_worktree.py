@@ -15,7 +15,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 BASE_REPO = "brave/bravebot"
-GITHUB_URL = re.compile(r"(?:^|[@/])github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+# `github.com`, or an ssh config alias for it such as `github-work` (`git@github-work:owner/repo.git`).
+# An alias is a single word after `github-`, so `github-evil.example.com` is a different host.
+GITHUB_URL = re.compile(r"(?:^|[@/])github(?:\.com|-[\w-]+)[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+# A directory to hold the pull request worktrees. Relative to the main clone unless absolute.
+WORKTREES_ENV = "BRAVEBOT_PR_WORKTREES"
 PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
 OURS = re.compile(r"^<{7}(?: |$)")
 THEIRS = re.compile(r"^>{7}(?: |$)")
@@ -70,9 +74,23 @@ def github_remotes(listing):
 
 
 def fork_url(repo, like):
+    # Only the scheme is taken from the base remote. An ssh alias there names the account that owns
+    # the base remote's key, which is not necessarily the account that owns the fork.
     if like.startswith("https://"):
         return f"https://github.com/{repo}.git"
     return f"git@github.com:{repo}.git"
+
+
+def worktree_path(main, number):
+    """Where a pull request's worktree goes: `.worktrees/pr-<n>` in the main clone, which git ignores.
+
+    That is inside the workspace, so the file tools reach it. `BRAVEBOT_PR_WORKTREES` names another
+    directory, where the name also carries the clone's so that clones can share one.
+    """
+    chosen = os.environ.get(WORKTREES_ENV)
+    if chosen:
+        return main / Path(chosen).expanduser() / f"{main.name}-{number}"
+    return main / ".worktrees" / f"pr-{number}"
 
 
 def local_branch(head, base, number):
@@ -141,7 +159,7 @@ def pull(number, view, here, remotes, create, script):
         head_remote=head_remote,
         onto=f"{base_remote}/{base}",
         tip=f"{head_remote}/{head}",
-        tree=checked_out.get(branch) or main.parent / f"{main.name}-{number}",
+        tree=checked_out.get(branch) or worktree_path(main, number),
         checked_out=branch in checked_out,
     )
 
