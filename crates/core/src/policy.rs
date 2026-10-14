@@ -9875,6 +9875,30 @@ five
         );
     }
 
+    /// A rule is matched against the program and its arguments, and a redirection is in neither:
+    /// `Bash(git log)` covers `git log > out.txt` as well, and no rule anybody could write says
+    /// otherwise. The allowed bare line is asserted first so that the question being asked, and
+    /// not a rule that never matched, is what the second assertion shows.
+    #[test]
+    fn a_write_redirection_asks_even_for_a_line_a_rule_allows() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git log)"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the rule did not cover the line it was written for"
+        );
+
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(
+            policy.plan_needs_approval(&writing),
+            "a settings-file rule let a line write a file it never named, unasked"
+        );
+    }
+
     /// The default label, and the only one that holds without knowing what ran: a program may
     /// print bytes an earlier step read out of a file an attacker wrote.
     #[test]

@@ -2281,8 +2281,9 @@ Under `onUnlisted: ask`, the hosts a foreground run was refused for want of an e
 person once that run has stopped. Nothing waits on the answer: the program was refused already, and
 a yes lets the lines that follow reach the hosts, so the person runs it again. The question names
 each host on a row of its own, up to eight at a time, and says that a yes holds until the session
-ends and writes nothing to disk. A yes adds the hosts to the allowed set of every stage from the
-next line on, which starts another proxy because the list is another list. A host the denied list
+ends and writes nothing to disk. `/clear`, `/branch` and `/resume` begin another session in the same
+process, and a host answered before, a no included, is asked about again. A yes adds the hosts to the allowed set of every stage
+from the next line on, which starts another proxy because the list is another list. A host the denied list
 names stays refused, and a granted name is held to the addresses it resolves to as a listed one
 is. A no is kept for the session, so the same host is not asked about again. The hosts asked about
 are those the proxy refused as not listed and that are host names or addresses; a host refused for
@@ -2329,6 +2330,7 @@ says nothing about them.
 `verified-by: bravebot_agent::confine::a_stage_under_a_host_list_cannot_connect_around_the_proxy`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it`
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
+`verified-by: bravebot_agent::workspace::a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
 `verified-by: bravebot_sandbox::hosts::a_denied_entry_wins_over_an_allowed_one_in_either_order`
 `verified-by: bravebot_sandbox::hosts::an_empty_list_refuses_every_host`
@@ -2709,7 +2711,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   refuses the request, and one narrower than a granted path takes its part of the grant back, since
   the person's rows are applied after the session's.
 - **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
-  file is written; the grant is held by the session and gone with it. Asking again for a path
+  file is written; the grant is held by the session and gone with it. `/clear`, `/branch` and
+  `/resume` begin another session in the same process, and a run started after one is asked again
+  for a path granted before it. Asking again for a path
   already held is asked like the first request, and a yes only ever widens the grant held: a read
   answered beside a write held leaves the write. The person may end a grant with
   `/reach paths remove <number>`.
@@ -2780,6 +2784,8 @@ the whole of what is held back.
 `verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended`
 `verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
+`verified-by: bravebot_agent::workspace::a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it`
+`verified-by: bravebot_agent::confine::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`

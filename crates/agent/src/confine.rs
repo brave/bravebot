@@ -4090,6 +4090,36 @@ mod tests {
         assert!(!plain.profile(&[&cat]).contains("also let programs reach"));
     }
 
+    /// SANDBOX-28: a yes to a path puts that path in the profile and no other. Its parent, a
+    /// sibling and a directory whose name merely starts with it get no row of their own, and a read
+    /// grant adds no row anywhere that programs may write.
+    #[test]
+    fn a_path_let_reach_does_not_reach_its_parent_or_a_sibling() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/in"),
+            write: false,
+            why: "the build needs it".to_string(),
+        }];
+        let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
+        let held = plain.clone().with_path_reach(&granted);
+        let cat = step("/bin/cat", &["file"]);
+        let before = plain.policy(&cat, Path::new("/work/project"), &[]);
+        let after = held.policy(&cat, Path::new("/work/project"), &[]);
+
+        assert!(reads(&after, "/data/in"), "the fixture grants nothing");
+        for other in ["/data", "/data/out", "/data/in-other", "/data/in/sub"] {
+            assert!(
+                !reads(&after, other),
+                "a grant of /data/in put {other} in the profile"
+            );
+        }
+        assert_eq!(
+            after.writable.len(),
+            before.writable.len(),
+            "a read grant added a place programs may write"
+        );
+    }
+
     /// The prompt's description and the failure sentence say how many entries are in force and never
     /// which paths, and say nothing where there are none.
     #[test]

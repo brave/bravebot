@@ -2589,6 +2589,9 @@ impl Session {
         self.turn_history.clear();
         self.prompt_at = None;
         self.recall.clear();
+        // ASK-8: kept, a question in the new conversation would be answered from the one that was
+        // thrown away, and the person asked nothing.
+        self.answers.clear();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
@@ -11339,6 +11342,28 @@ mod tests {
         session.remember_answer("q".into(), Answer::Chosen(vec![1]));
         assert_eq!(session.answers.len(), 1);
         assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
+    }
+
+    /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
+    /// new conversation puts is asked, not answered from the one that was thrown away.
+    #[test]
+    fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
+        let mut session = Session::new(".");
+        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+
+        session.clear();
+
+        assert_eq!(
+            session.recall_answer("pick one: Cache: Which?"),
+            None,
+            "a chosen answer outlived /clear"
+        );
+        assert_eq!(
+            session.recall_answer("skip: Branch: Which?"),
+            None,
+            "a declined question outlived /clear"
+        );
     }
 
     /// A decline is an answer, so it is remembered as one. Treating it as absence would put a

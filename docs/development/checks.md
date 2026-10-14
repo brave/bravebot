@@ -177,13 +177,18 @@ install back beside the publish credential, that points a checkout at a name ins
 gives a crate a network client the egress register does not admit, that drops the entry pinning a
 constructor, that adds a check nothing holds a merge to, or that adds a confirmer method, a
 remembered set or a trust question the register does not account for, fails rather than holding
-only for whoever remembers to run this. It is the deterministic half of the
+only for whoever remembers to run this. The register also has a table beneath it saying, for each
+answer, what a second checkout, a new session, a replaced file, another directory, a changed
+invocation, a changed declaration and an answer wider than its prompt do to it: this check fails a
+row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that no
+cell cites. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
 check contexts, the trust specs, the confirmer, the remembered answers
-(`crates/agent/src/answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical half
-itself when a task ends on a branch that changes a file where an answer is kept
+(`crates/agent/src/answers.rs`), the cases that change the world under them
+(`crates/agent/src/kept_answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical
+half itself when a task ends on a branch that changes a file where an answer is kept
 ([agent-configuration.md](agent-configuration.md#checking-the-register-when-a-task-ends)).
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
