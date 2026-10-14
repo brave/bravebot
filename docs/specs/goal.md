@@ -222,6 +222,9 @@ arrives about a goal somebody has just taken off is not acted on and not reporte
 would be told about is not the one they are in. Without this, the key pressed while the ninth round
 was being judged would leave the session, and the tenth round would go out regardless.
 
+A command the person typed while a turn ran waits in the queue and is carried out before the goal is
+judged, so a queued `/exit` or `/clear` ends the goal before another round is sent.
+
 A mode open over the session is nearer than the goal here as well. A scroller, a delegate's view or
 a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
 and [terminal-input.md](terminal-input.md) have them do everywhere else, and the check is the
@@ -239,6 +242,7 @@ just judged is still standing there.
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_goal_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
 `verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
+`verified-by: bravebot_tui::app::a_goal_is_not_judged_while_a_command_waits_in_the_queue`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
