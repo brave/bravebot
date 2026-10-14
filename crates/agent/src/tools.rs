@@ -16563,6 +16563,7 @@ mod tests {
     /// turn, and the delegate's list used to be built with the one for a turn that arranges it.
     #[test]
     fn a_delegates_descriptions_do_not_name_schedule_next() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
         let offered = for_delegate(
             &CapabilitySet::from_iter([Capability::FileRead, Capability::ShellExec]),
             None,
