@@ -1632,6 +1632,7 @@ would make every change with nobody watching.
 `verified-by: bravebot_cli::main::a_model_and_a_level_after_the_prompt_reach_the_session`
 `verified-by: bravebot_cli::main::a_blank_model_or_an_unknown_level_after_the_prompt_is_refused`
 `verified-by: bravebot_tui::persist::a_model_and_a_level_the_command_line_named_are_recorded_nowhere`
+`verified-by: bravebot_cli::running::a_model_given_to_a_session_on_a_prompt_that_nothing_serves_ends_the_start`
 `verified-by: bravebot_cli::main::a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task`
 `verified-by: bravebot_cli::main::a_session_flag_beside_another_way_of_starting_is_refused`
 `verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`
