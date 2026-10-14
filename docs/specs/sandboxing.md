@@ -2828,11 +2828,11 @@ routing field is the boolean beside the command line the person already reads, a
 with no sandbox" is a sentence a person can approve on its own. Asking every time and remembering
 nothing keeps the request from becoming a standing allowance approved for a different line.
 
-A file outside the workspace is the same request. The person saw the line and the file it writes,
-and a program in that line could write the file with no redirection at all, so refusing the
-redirection protected nothing and left a person who asked for `../hello.txt` with no route that
-ended in a prompt. The planner is pointed at the argument because it has no other way to learn it
-when the file tools refuse the path.
+A file outside the workspace is the same request. The person sees the line and the file it writes.
+Refusing the redirection would protect nothing, since a program in the same approved line can write
+the file, and would leave a person who asks for `../hello.txt` with no route that ends in a prompt.
+The planner is pointed at the argument because it has no other way to learn it when the file tools
+refuse the path.
 
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
