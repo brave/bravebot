@@ -7582,7 +7582,22 @@ struct Carried {
 
 /// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
 fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) {
+    // Stopping a turn stops the loop it was part of, and stops one the person was not part way
+    // through: the key means "stop what is happening", and a schedule that survived it would send
+    // the next prompt as though nothing had been said (LOOP-11).
+    session.stop_loop();
+    // And the watch whose fire this turn was, since stopping a fire's turn is the most exact way
+    // anybody has to say which watch they are finished with: they are reading its prompt when they
+    // press the key. A turn that was not a fire ends no watch, because that press is a person
+    // steering their own work.
+    session.stop_firing_watch();
+    // Not the goal, which outlives one turn by design. A stopped turn is recorded as failed, so it
+    // is not judged and the work is not sent straight back, and the person who stops a turn going
+    // the wrong way keeps the condition they set: the key means "stop this", and a second press
+    // with nothing running takes it off.
     session.stopped(attempts);
+    // A fire is a whole turn, so the gap to the next fire is measured from here.
+    session.watch_turn_ended();
     if !session.is_quitting() {
         session.restore(prompt);
     }
@@ -7705,26 +7720,12 @@ fn fold_outcome(
             }
         }
         Err(error) => {
-            // Stopping a turn stops the loop it was part of, and stops one the person was not
-            // part way through: the key means "stop what is happening", and a schedule that
-            // survived it would send the next prompt as though nothing had been said.
-            if matches!(error, turn::TurnError::Cancelled { .. }) {
-                session.stop_loop();
-                // And the watch whose fire this turn was, since stopping a fire's turn is the
-                // most exact way anybody has to say which watch they are finished with: they are
-                // reading its prompt when they press the key. A turn that was not a fire ends no
-                // watch, because that press is a person steering their own work.
-                session.stop_firing_watch();
-                // Not the goal, which outlives one turn by design. A stopped turn is recorded as
-                // failed, so it is not judged and the work is not sent straight back, and the
-                // person who stops a turn going the wrong way keeps the condition they set: the
-                // key means "stop this", and a second press with nothing running takes it off.
-            } else {
-                // Any other failure is a tick that ended, and a self-paced loop that was told
-                // nothing falls back to the driver's own wait. A loop must not end because one
-                // request failed, and must not run forever on failures either.
-                session.loop_turn_ended(None);
-            }
+            // A cancelled turn never arrives here: `finish_turn` hands it to
+            // `finish_cancelled_turn`, which ends the loop (LOOP-11). Any other failure is a tick
+            // that ended, and a self-paced loop that was told nothing falls back to the driver's
+            // own wait. A loop must not end because one request failed, and must not run forever
+            // on failures either.
+            session.loop_turn_ended(None);
 
             // The trail is kept on failure too: a refusal is exactly when a user wants
             // to see what happened.
@@ -26815,10 +26816,71 @@ mod tests {
         );
     }
 
-    /// Any turn cancelled while a loop runs ends the loop, and says so (LOOP-11), whether or not it
-    /// was a tick: this one is the person's own prompt typed in the middle of one.
+    /// Cancel the turn in flight the way the program does: through `finish_turn`, which is where a
+    /// stopped turn goes, and not through the fold a finished one goes to.
+    fn stop_through_finish_turn(session: &mut Session, text: &str) {
+        finish_turn(
+            session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text,
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: None }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+        );
+    }
+
+    /// Any turn cancelled while a loop runs ends the loop, and says so (LOOP-11): here the tick
+    /// itself is the turn in flight. Left running, the loop would be neither due nor ended, and
+    /// the next line the person typed would go out as a tick of it.
     #[test]
-    fn stopping_a_turn_ends_the_loop_and_says_so() {
+    fn stopping_a_tick_ends_the_loop_and_says_so() {
+        let mut session = Session::new("none");
+        session.start_loop(
+            crate::loops::request("5m watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(
+            session.status,
+            Status::Working,
+            "the first tick is not in flight"
+        );
+
+        stop_through_finish_turn(&mut session, "watch the build");
+
+        assert!(
+            session.looping().is_none(),
+            "the stop left the loop running"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.text == t!(loop_stopped))
+                .count(),
+            1,
+            "the ending was not announced exactly once"
+        );
+    }
+
+    /// And so does the person's own prompt typed in the middle of a loop, which is not a tick.
+    #[test]
+    fn stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so() {
         let mut session = Session::new("none");
         session.start_loop(
             crate::loops::request("5m watch the build"),
@@ -26826,38 +26888,16 @@ mod tests {
             Vec::new(),
         );
         session.complete("done", Vec::new(), 0);
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
+        session.loop_turn_ended(None);
+        assert!(session.looping().is_some(), "the loop ended with its tick");
+        type_line(&mut session, "something else");
+        session.submit().unwrap();
 
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "something else");
 
         assert!(
             session.looping().is_none(),
-            "the stop left the loop running"
+            "stopping the person's own turn left the loop running"
         );
         assert!(
             session
@@ -26881,34 +26921,7 @@ mod tests {
             })
             .expect("a fire");
         assert!(session.watch_is_firing());
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
-
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "");
 
         assert!(
             session.watches().is_empty(),
@@ -26931,34 +26944,7 @@ mod tests {
     fn stopping_a_turn_leaves_the_goal_set() {
         let mut session = Session::new("none");
         session.start_goal("cargo test exits 0".to_string());
-        let asked = Asked {
-            name: "test-model".to_string(),
-            comparable: true,
-        };
-
-        fold_outcome(
-            &mut session,
-            Err(turn::TurnError::Cancelled { attempts: None }),
-            Trail::new(),
-            Carried {
-                trust: TrustStore::new("/work"),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
-            },
-            Occupied {
-                budget: 100_000,
-                guessed: false,
-                last_request_tokens: 0,
-            },
-            asked,
-            Line {
-                text: "",
-                addressed: None,
-                offered_a_later_look: false,
-            },
-            &workspace_for_test(),
-        );
+        stop_through_finish_turn(&mut session, "");
 
         assert_eq!(
             session.goal().map(crate::goals::Running::condition),
