@@ -119,14 +119,20 @@ as well as what is under it. Four anchors decide where a pattern begins:
 |---|---|
 | `//x` | the filesystem root |
 | `~/x` | the user's home directory |
-| `/x` | the directory the settings file is in |
+| `/x` | the workspace, in `.bravebot/settings.json` and `.bravebot/settings.local.json`; the directory the settings file is in, in `~/.bravebot/settings.json` and a file `--settings` names |
 | `x` or `./x` | the workspace |
 
 A single leading slash is therefore **not** the filesystem root. A specifier with no slash in it is
-a name and matches at any depth, so `Read(.env)` and `Read(**/.env)` are one rule. Relative and
+a name and matches at any depth, so `Read(.env)` and `Read(**/.env)` are one rule, while one written
+from `./` stays at the top of the workspace in every list ([PERM-4](#PERM-4)). The checkout's two
+files start a `/x` rule at the workspace however they were reached, `--settings` naming one of them
+included. Relative and
 absolute patterns are separate namespaces and neither reaches into the other: a pattern is matched
 against the path as a gate holds it, which is relative for a file in the project and in full for one
-outside, and a rule written one way says nothing about the other. A pattern whose anchor is unknown, such as `~/` on a machine with no home
+outside, and a rule written one way says nothing about the other. A `/x` rule is in the namespace of
+the place it starts: one that starts at the workspace or a directory inside it is written and matched
+as the relative pattern from the workspace, so `Read(/x)` in `.bravebot/settings.json` is
+`Read(./x)`, and one that starts anywhere else is the full path. A pattern whose anchor is unknown, such as `~/` on a machine with no home
 directory, is reported as unusable rather than silently matching nothing.
 
 Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
@@ -140,7 +146,7 @@ way those keys are, from `/` with the drive as its first segment, so `D:\added\s
 `Read(//D:/added/**)` covers it and `Read(.env)`, which is about the workspace, does not. The home
 and settings directories a `~/` or `/` pattern starts at are spelled the same way, and so is a
 specifier written from a drive letter without the `//`: `Read(D:\added\**)` is the same rule as
-`Read(//D:/added/**)`. `Read(/D:/added/**)`, with one slash, is still about the settings directory.
+`Read(//D:/added/**)`. `Read(/D:/added/**)`, with one slash, still starts where any `/x` rule does.
 The drive letter is read in upper case on both sides, since that host never tells `d:` from `D:`:
 `Read(//D:/added/**)` covers `d:\added\secret`. Nothing else in a name is folded.
 
@@ -172,6 +178,11 @@ or the caller could not tell, the match is byte-exact and a rule about `Docs` de
 `docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
 as the narrower one.
 
+**Why.** A checkout's two settings files are about the checkout, and Claude Code starts a single
+slash in its project and local files at the project as well, so a rule copied from one covers the
+same file here. The file tools hold a file in the project by its relative name, so a rule about one
+spelled as a full path would refuse nothing asked for by that name.
+
 `verified-by: bravebot_core::permissions::a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates`
 `verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_a_folding_volume_would_open`
 `verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
@@ -200,19 +211,29 @@ as the narrower one.
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
 `verified-by: bravebot_core::permissions::a_pattern_whose_anchor_is_unknown_is_reported_rather_than_matching_nothing`
 `verified-by: bravebot_agent::permissions::a_single_slash_rule_is_anchored_at_the_settings_directory`
+`verified-by: bravebot_agent::permissions::a_checkouts_slash_rule_starts_at_the_workspace`
+`verified-by: bravebot_config::settings::a_slash_rule_starts_at_the_workspace_in_a_checkouts_file_and_beside_any_other`
+`verified-by: bravebot_config::settings::a_slash_rule_starting_inside_the_workspace_is_spelled_from_it`
+`verified-by: bravebot_config::settings::a_checkouts_file_named_on_the_command_line_still_starts_at_the_workspace`
+`verified-by: bravebot_agent::turn::a_single_slash_deny_in_the_project_file_refuses_a_read_of_the_file_it_names`
+`verified-by: bravebot_agent::turn::a_single_slash_edit_deny_in_the_local_file_stops_a_write_and_an_edit`
+`verified-by: bravebot_agent::turn::a_single_slash_ask_rule_in_the_project_file_asks_before_a_write`
+`verified-by: bravebot_agent::turn::a_single_slash_deny_in_a_named_file_inside_the_project_starts_beside_that_file`
 `verified-by: bravebot_agent::home::a_settings_rule_is_anchored_at_the_home_directory_the_accessor_names`
 
 <a id="PERM-4"></a>
 ### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants
 
 `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a nested copy
-under `vendor`. The same pattern in `allow` covers only the `src` at the top.
+under `vendor`. The same pattern in `allow` covers only the `src` at the top. A pattern written
+from `./` does not float in any list, so `Edit(./src/**)` covers only the `src` at the top.
 
 **Why.** A rule that restricts should cover the copy somebody forgot about; a rule that grants
-should cover what it says and no more. Anchoring the pattern, as `Edit(/src/**)`, pins it to one
-place in every list.
+should cover what it says and no more. Anchoring the pattern, as `Edit(./src/**)` or
+`Edit(/src/**)`, pins it to one place in every list.
 
 `verified-by: bravebot_core::permissions::a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list`
 
 <a id="PERM-5"></a>
 ### PERM-5: a command specifier matches a stage's words, with `*` standing in for any text

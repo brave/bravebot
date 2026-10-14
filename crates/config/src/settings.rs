@@ -784,6 +784,9 @@ impl Settings {
         let mut git_identities_misshapen: Vec<(PathBuf, String)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
+        // Where a `/x` rule in a checkout's file starts, and what a start inside the workspace is
+        // spelled relative to (PERM-3).
+        let workspace = cwd.map(resolved);
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -915,7 +918,10 @@ impl Settings {
                 &mut git_identities_ignored,
                 &mut git_identities_misshapen,
             );
-            let directory = settings_directory(&path);
+            // One of the checkout's two files is one however the command line reached it, so naming
+            // it does not move where its rules start.
+            let a_checkouts_file = !own && (!named_here || is_a_checkouts_file(&path, cwd));
+            let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
@@ -923,7 +929,7 @@ impl Settings {
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
                     true => {
-                        let anchored = anchor_slash_rule(&rule, &directory);
+                        let anchored = anchor_slash_rule(&rule, &anchor);
                         rule_sources.push(RuleSource {
                             list: "allow",
                             anchored: anchored.clone(),
@@ -953,7 +959,7 @@ impl Settings {
             }
             let written = permission_lists(&root);
             found.push(path.clone());
-            root.anchor_slash_rules(&directory);
+            root.anchor_slash_rules(&anchor);
             let anchored = permission_lists(&root);
             for (list, written, anchored) in [
                 ("deny", written.deny, anchored.deny),
@@ -2079,13 +2085,13 @@ impl Document {
         std::mem::take(&mut self.root)
     }
 
-    /// Respell every `/x` path rule in `deny` and `ask` as the `//` path it names, which is where
-    /// the file this document was read from puts it (PERM-3).
+    /// Respell every `/x` path rule in `deny` and `ask` as the path it names from `anchor`, which
+    /// [`slash_anchor`] gives for the file this document was read from (PERM-3).
     ///
     /// The merge unions the lists of every layer into one and keeps no record of which file wrote
     /// an entry, so the one place that still knows is the layer's own read. Rules that are not a
     /// `Read` or `Edit` path are left as written.
-    fn anchor_slash_rules(&mut self, directory: &str) {
+    fn anchor_slash_rules(&mut self, anchor: &str) {
         let Some(serde_json::Value::Object(block)) = self.root.get_mut(PERMISSIONS_BLOCK) else {
             return;
         };
@@ -2095,7 +2101,7 @@ impl Document {
             };
             for entry in entries {
                 if let serde_json::Value::String(text) = entry {
-                    *text = anchor_slash_rule(text, directory);
+                    *text = anchor_slash_rule(text, anchor);
                 }
             }
         }
@@ -2922,27 +2928,67 @@ fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize
         .and_then(|rows| usize::try_from(rows).ok())
 }
 
-/// The directory a settings file sits in, spelled for a rule that is anchored there.
-///
-/// Absolute, since a rule is matched against a path a gate holds in full and a named file may have
-/// been spelled relative to the working directory.
-fn settings_directory(file: &Path) -> String {
-    let file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
-    file.parent()
-        .map(|directory| directory.display().to_string())
-        .unwrap_or_default()
+/// Whether `character` separates one segment of a path from the next on this host.
+fn separates(character: char) -> bool {
+    character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
 }
 
-/// `rule` with a single-slash path specifier respelled as the `//` path it names under `directory`.
+/// `path` as the filesystem resolves it, or made absolute where it cannot be resolved.
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `file` is one of the two settings files the checkout at `cwd` keeps, however it was
+/// spelled.
+fn is_a_checkouts_file(file: &Path, cwd: Option<&Path>) -> bool {
+    let Some(cwd) = cwd else { return false };
+    let file = resolved(file);
+    [project_settings_file(cwd), local_settings_file(cwd)]
+        .iter()
+        .any(|layer| resolved(layer) == file)
+}
+
+/// Where a `/x` rule in the settings file at `file` starts, spelled as the specifier `/` is
+/// respelled to ([PERM-3](../../../docs/specs/permissions.md#PERM-3)).
 ///
-/// A `Read` or `Edit` rule written `/x` starts at the directory of the file that wrote it
+/// A checkout's own two files start at `workspace`, which is already [`resolved`], and any other
+/// file at the directory it is in. A start that resolves to the workspace or somewhere inside it is
+/// spelled from `.`, as a gate holds a file there, and any other in full from `//`. Resolved for the
+/// comparison because a link, a `..` or another spelling of the same directory names the same
+/// place, and comparing the text would answer about the spelling.
+fn slash_anchor(file: &Path, a_checkouts_file: bool, workspace: Option<&Path>) -> String {
+    let start = match (a_checkouts_file, workspace) {
+        (true, Some(workspace)) => workspace.to_path_buf(),
+        _ => std::path::absolute(file)
+            .unwrap_or_else(|_| file.to_path_buf())
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+    };
+    let resolved_start = resolved(&start);
+    match workspace.and_then(|workspace| resolved_start.strip_prefix(workspace).ok()) {
+        Some(below) => std::iter::once(".".into())
+            .chain(
+                below
+                    .components()
+                    .map(|segment| segment.as_os_str().to_string_lossy()),
+            )
+            .collect::<Vec<_>>()
+            .join("/"),
+        None => format!("//{}", start.display().to_string().trim_matches(separates)),
+    }
+}
+
+/// `rule` with a single-slash path specifier respelled as the path it names from `anchor`, which
+/// [`slash_anchor`] spelled.
+///
+/// A `Read` or `Edit` rule written `/x` starts where the layer that wrote it says
 /// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
 /// directory it is handed for every rule it reads, so a rule from any other file is told where it
 /// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
-fn anchor_slash_rule(rule: &str, directory: &str) -> String {
-    let separates = |character: char| {
-        character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
-    };
+fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some((name, rest)) = rule.trim().split_once('(') else {
         return rule.to_string();
     };
@@ -2958,7 +3004,7 @@ fn anchor_slash_rule(rule: &str, directory: &str) -> String {
         return rule.to_string();
     }
     let below = specifier.trim_start_matches(separates);
-    format!("{name}(//{}/{below})", directory.trim_matches(separates))
+    format!("{name}({anchor}/{below})")
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -4397,8 +4443,8 @@ mod tests {
         assert_eq!(source("ask", "Bash(git *)"), Some(project.as_path()));
         assert_eq!(source("deny", "Bash(git *)"), None);
 
-        // A single leading slash is anchored where the file sits, and the file's own spelling is
-        // what comes back for the person to search for.
+        // A single leading slash is respelled where the rule starts, and the file's own spelling
+        // is what comes back for the person to search for.
         let anchored = settings
             .permissions()
             .deny
@@ -4471,13 +4517,16 @@ mod tests {
         assert_eq!(settings.run_network_unreadable().count(), 1);
     }
 
-    /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in
-    /// two files names two places, and neither is the global state directory.
+    /// PERM-3: a `/x` rule in a checkout's two files starts at the workspace, and in the person's
+    /// own file and a named one at the directory the file is in, so the same text in four files
+    /// names three places. A start outside the workspace is spelled in full, which is how a gate
+    /// holds a file there.
     #[test]
-    fn a_slash_rule_starts_at_the_directory_of_the_file_that_wrote_it() {
+    fn a_slash_rule_starts_at_the_workspace_in_a_checkouts_file_and_beside_any_other() {
         let layers = Layers::new("slash-rule-per-layer")
             .global(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
             .project(r#"{"permissions": {"deny": ["Read(/secrets/**)", "Bash(/usr/bin/ls *)"]}}"#)
+            .local(r#"{"permissions": {"ask": ["Edit(/drafts/**)"]}}"#)
             .named(r#"{"permissions": {"ask": ["Edit(/notes.md)"], "allow": ["Read(/open/**)"]}}"#);
         let settings = layers.read();
         let spelled = |directory: &Path, rest: &str| {
@@ -4486,7 +4535,6 @@ mod tests {
                 directory.display().to_string().trim_start_matches('/')
             )
         };
-        let project = layers.cwd.join(PROJECT_DIR);
         let named = layers
             .named
             .as_ref()
@@ -4497,15 +4545,66 @@ mod tests {
             rules.deny,
             [
                 format!("Read({})", spelled(&layers.home, "secrets/**")),
-                format!("Read({})", spelled(&project, "secrets/**")),
+                "Read(./secrets/**)".to_string(),
                 "Bash(/usr/bin/ls *)".to_string(),
             ]
         );
-        assert_eq!(rules.ask, [format!("Edit({})", spelled(named, "notes.md"))]);
+        assert_eq!(
+            rules.ask,
+            [
+                "Edit(./drafts/**)".to_string(),
+                format!("Edit({})", spelled(named, "notes.md")),
+            ]
+        );
         assert_eq!(
             rules.allow,
             [format!("Read({})", spelled(named, "open/**"))]
         );
+    }
+
+    /// PERM-3: naming one of the checkout's own files on the command line reads it in the named
+    /// file's place, and its `/x` rules still start at the workspace, so which way the file was
+    /// reached does not move what its rules are about.
+    #[test]
+    fn a_checkouts_file_named_on_the_command_line_still_starts_at_the_workspace() {
+        let settings = Layers::new("slash-rule-named-project")
+            .project(r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#)
+            .naming_the_project_layer()
+            .read();
+        assert_eq!(settings.permissions().deny, ["Read(./secrets/**)"]);
+    }
+
+    /// PERM-3: a `/x` rule whose start is inside the workspace is spelled from the workspace, since
+    /// a gate holds a file there by its relative name and a full path would never meet it. A named
+    /// file in a subdirectory starts there however its path was spelled, and the person's own file
+    /// starts at its directory where a session works in a directory above it, in `allow` as in
+    /// `deny`.
+    #[test]
+    fn a_slash_rule_starting_inside_the_workspace_is_spelled_from_it() {
+        let layers = Layers::new("slash-rule-inside-the-workspace");
+        let state = layers.cwd.join("state");
+        let named = layers.cwd.join("tooling").join("bravebot.json");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(layers.cwd.join("sub")).unwrap();
+        std::fs::write(
+            state.join(SETTINGS_FILE),
+            r#"{"permissions": {"deny": ["Read(/secrets/**)"], "allow": ["Read(/open/**)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(&named, r#"{"permissions": {"ask": ["Edit(/notes.md)"]}}"#).unwrap();
+        let through_a_parent = layers
+            .cwd
+            .join("sub")
+            .join("..")
+            .join("tooling")
+            .join("bravebot.json");
+
+        let settings = Settings::layered(Some(state), Some(&layers.cwd), Some(&through_a_parent));
+        let rules = settings.permissions();
+        assert_eq!(rules.deny, ["Read(./state/secrets/**)"]);
+        assert_eq!(rules.ask, ["Edit(./tooling/notes.md)"]);
+        assert_eq!(rules.allow, ["Read(./state/open/**)"]);
     }
 
     /// The point of a project layer: a checkout says which gateway or profile the work in it uses,

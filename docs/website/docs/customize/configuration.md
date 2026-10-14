@@ -1125,25 +1125,28 @@ pattern begins:
 |---|---|
 | `//x` | the filesystem root |
 | `~/x` | your home directory |
-| `/x` | the directory the settings file is in |
+| `/x` | the workspace, in `.bravebot/settings.json` and `.bravebot/settings.local.json`; the directory the settings file is in, in `~/.bravebot/settings.json` and a file `--settings` names |
 | `x` or `./x` | the workspace |
 
 So a single leading slash is **not** the filesystem root. A specifier with no slash in it is a name
-and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule. Relative and
-absolute patterns are separate namespaces and neither reaches into the other.
+and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule; one written from
+`./` stays at the top of the workspace. Relative and
+absolute patterns are separate namespaces and neither reaches into the other. A `/x` rule that
+starts inside the workspace is a relative one, so `Read(/secrets/**)` in a project's
+`.bravebot/settings.json` is the same rule as `Read(./secrets/**)`.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
 with, and whichever case the drive letter is in. A rule written from the drive letter is the same
 rule, though in a JSON file each backslash is doubled, `"Read(D:\\work\\secrets\\**)"`, so the
 forward-slash form is easier to write. `~/x` starts at your home directory on its drive in the same
-way. `Read(/D:/work/**)`, with one slash, is still about the settings file's directory. A workspace
+way. `Read(/D:/work/**)`, with one slash, still starts where any `/x` rule does. A workspace
 rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
 
 **A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
 in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
-pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(/src/**)` to pin it to one
-place in either list.
+pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(./src/**)` to pin it to the
+top of the workspace in either list.
 
 A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 
