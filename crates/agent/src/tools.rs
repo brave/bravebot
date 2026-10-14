@@ -4406,6 +4406,51 @@ fn exposed_note(note: String, found: &[bravebot_core::credentials::Finding]) -> 
     format!("{note}; shown despite holding {}", exposure_note(found))
 }
 
+/// What the lines an edit comes back with hold that would authenticate somewhere and that the
+/// planner has not already been given.
+///
+/// Scans exactly the lines the result shows, at their numbers in the file: a key in the part of a
+/// long span the excerpt cuts, or past its context, is not in the planner's context, and a question
+/// about it would be one the person cannot connect to anything they were shown.
+///
+/// A value that nothing in the file held before the edit is left out, because the edit's own words
+/// wrote it. The write was put to the person with it on the screen, and the result repeating it
+/// discloses nothing the planner lacked. A value the file already held is not left out, even where
+/// the planner's words repeat it.
+///
+/// Not recorded here: `scan_a_write` ran over the whole of the edited file and recorded every
+/// finding in it at these same lines, and a second entry for each would be a duplicate.
+fn credentials_an_edit_would_show<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    shown_path: &str,
+    region: &Labelled<Option<crate::replace::Excerpt>>,
+    written: &Scanned,
+) -> Vec<bravebot_core::credentials::Finding> {
+    // The caller has already checked that this is trusted, so the driver may read it. Only where
+    // each run starts is taken from it: the text is shaped again below, inside the kernel, so that
+    // it reaches the scan carrying its label.
+    let Ok(Some(excerpt)) = policy.read_trusted_content("edit_file", region) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (at, (first_line, _)) in excerpt.runs().enumerate() {
+        let run = policy.render_in_place("edit_file", region, |region| {
+            region
+                .and_then(|excerpt| excerpt.runs().nth(at))
+                .map(|(_, text)| text)
+                .unwrap_or_default()
+        });
+        found.extend(policy.scan_a_read("edit_file", shown_path, first_line, &run));
+    }
+    found.retain(|finding| {
+        !written
+            .authored
+            .iter()
+            .any(|authored| authored.fingerprint == finding.fingerprint)
+    });
+    found
+}
+
 /// The text a slot holds for a file, read at the moment something needs it.
 ///
 /// The same shaping an eager read would have applied, from the same two functions, so a
@@ -6258,11 +6303,51 @@ fn edit_file<S: Sink, C: Confirmer>(
             // one that is told only that. The file itself is always trusted by this point:
             // `read_trusted_content` above refuses to locate a passage in anything else.
             if body_label.is_trusted() {
-                let told = policy.render_in_place("edit_file", &body, |contents| {
-                    match crate::replace::changed_region(&current, &contents) {
-                        Some(excerpt) => format!("{excerpt}\n\n{headline}"),
-                        None => headline.clone(),
+                let region = policy.render_in_place("edit_file", &body, |contents| {
+                    crate::replace::changed_region(&current, &contents)
+                });
+
+                // These lines are text from the file handed to the planner, which is a read of
+                // it, so they are scanned and put to the person as one is (CRED-15). The edit
+                // itself has landed and stays: it was approved as a diff, and what is held back
+                // is the planner's view of the lines around it.
+                //
+                // Asked about once the write has succeeded rather than before it, so a stale edit
+                // does not put a question about lines the planner is never going to be given.
+                let exposed =
+                    credentials_an_edit_would_show(policy, &shown_path, &region, &scanned);
+                let keyed = workspace.trust_key(&proposed_path);
+                if !exposed.is_empty() && !policy.read_exposure_is_allowed(&keyed) {
+                    let request = crate::confirm::ExposureRequest {
+                        path: shown_path.clone(),
+                        credentials: described(&exposed),
+                    };
+                    if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+                        // The planner is told its edit landed and why the lines are missing, and
+                        // nothing about what was found: a finding may not enter a model's context
+                        // however the question was answered.
+                        return confirmed(
+                            format!(
+                                "{headline}. The lines around the change are not shown: \
+                                 {shown_path} holds what looks like a credential, and the user \
+                                 did not agree to you being shown it. Do not try to read it \
+                                 another way: work without them, or say in your reply what you \
+                                 needed from them."
+                            ),
+                            format!(
+                                "{note}; the lines around the change were not shown to the planner"
+                            ),
+                        )
+                        .with_changes(changes)
+                        .marked_untrusted(false)
+                        .having_changed_a_file();
                     }
+                    policy.allow_exposing_read(&keyed);
+                }
+
+                let told = policy.render_in_place("edit_file", &region, |region| match region {
+                    Some(excerpt) => format!("{}\n\n{headline}", excerpt.render()),
+                    None => headline.clone(),
                 });
                 Produced::new(told, "", note)
                     .with_changes(changes)

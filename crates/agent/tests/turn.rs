@@ -44828,6 +44828,253 @@ fn a_read_of_a_file_holding_no_credential_is_not_asked_about() {
     );
 }
 
+/// A `.env` with a credential on the line after the one the edits below change.
+const ENV_BESIDE_A_CREDENTIAL: &str =
+    "DEBUG=true\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nPORT=80\n";
+
+/// One turn in which the planner makes each of `edits` to `.env` in order without having read it.
+///
+/// Returns what the tools answered in the request after the last call, and what the person was
+/// told on their half of each result.
+fn edits_to_env(
+    scratch: &Scratch,
+    edits: &[&str],
+    confirmer: &mut RemembersExposures,
+    task: Task,
+) -> (String, String) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = edits
+        .iter()
+        .map(|arguments| tool_request_2("edit_file", arguments))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let mut last = String::new();
+    for _ in 0..=edits.len() {
+        last = received.recv().expect("a request");
+    }
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (tool_results(&last), told)
+}
+
+/// CRED-15. The lines an edit comes back with are text from the file, handed to the planner, so
+/// they are a read of it. A planner that never opened `.env`, or was refused it, can still be
+/// given the line after one it edits.
+///
+/// The edit is not what is declined. The passage is changed by the time the question is put, and
+/// the person approved it as a diff, so what is held back is the planner's view of the lines
+/// around it. The planner is still told its edit landed.
+#[test]
+fn an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_person_agrees() {
+    let scratch = Scratch::new("credential-edit-excerpt-declined");
+    std::fs::write(scratch.path.join(".env"), ENV_BESIDE_A_CREDENTIAL).unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, told) = edits_to_env(
+        &scratch,
+        &[r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#],
+        &mut confirmer,
+        Task::new("turn debugging off"),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        ENV_BESIDE_A_CREDENTIAL.replace("DEBUG=true", "DEBUG=false"),
+        "declining to show the planner the lines undid the edit"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "a credential the person was never asked about reached the planner through an edit: {answered}"
+    );
+    assert!(
+        answered.contains("edited .env: 1 replacement(s)"),
+        "the planner was not told its edit landed: {answered}"
+    );
+    assert!(
+        answered.contains("holds what looks like a credential")
+            && answered.contains("did not agree"),
+        "the planner was not told why the lines were left out: {answered}"
+    );
+    assert!(
+        !answered.contains("an AWS access key id"),
+        "a finding reached the planner's context: {answered}"
+    );
+
+    let asked = asked.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the person was asked before the lines reached the planner");
+    assert_eq!(asked.len(), 1);
+    assert_eq!(request.path, ".env");
+    let said = request.credentials.join("; ");
+    assert!(
+        said.contains("an AWS access key id") && said.contains(".env:2"),
+        "the question did not say what was found or where: {said}"
+    );
+    assert!(
+        !said.contains(DECLARED_KEY),
+        "the question repeated the value it was asking about: {said}"
+    );
+    assert!(
+        told.contains("the lines around the change were not shown to the planner"),
+        "the person was not told what was held back: {told}"
+    );
+}
+
+/// The other direction of the same gate. A gate that dropped the lines whatever the person said
+/// would pass the test above and make the tool's result useless in any file beside a key, and a
+/// question put again on every edit is one people learn to answer without reading.
+#[test]
+fn an_edit_shows_the_lines_around_the_change_once_the_person_agrees_and_asks_once() {
+    let scratch = Scratch::new("credential-edit-excerpt-approved");
+    std::fs::write(scratch.path.join(".env"), ENV_BESIDE_A_CREDENTIAL).unwrap();
+
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[
+            r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#,
+            r#"{"path":".env","old_text":"PORT=80","new_text":"PORT=8080"}"#,
+        ],
+        &mut confirmer,
+        Task::new("turn debugging off and move the port"),
+    );
+
+    assert_eq!(
+        answered.matches(DECLARED_KEY).count(),
+        2,
+        "the person agreed and an edit's result still left the line out: {answered}"
+    );
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        1,
+        "the same file was put to the person again on the second edit"
+    );
+}
+
+/// Agreeing to the file is one answer whichever tool the lines come through. A person who said
+/// yes to a read of `.env` has not said no to an edit's view of it, and asking again is asking
+/// the same question under another name.
+#[test]
+fn an_agreement_to_show_a_file_covers_the_lines_an_edit_shows() {
+    let scratch = Scratch::new("credential-edit-excerpt-agreed-earlier");
+    std::fs::write(scratch.path.join(".env"), ENV_BESIDE_A_CREDENTIAL).unwrap();
+
+    let mut already = bravebot_core::credentials::Exposed::new();
+    already.allow(".env");
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#],
+        &mut confirmer,
+        Task::new("turn debugging off").already_exposed(already),
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a file the session had agreed to show was put to the person again by an edit"
+    );
+    assert!(
+        answered.contains(DECLARED_KEY),
+        "the carried answer was recorded and then not spent: {answered}"
+    );
+}
+
+/// What is disclosed is the lines the result shows. A key farther from the edit than the excerpt
+/// reaches is not in the planner's context, and holding the result back over it would put a
+/// question to the person about text they cannot connect to anything they were shown.
+#[test]
+fn a_credential_outside_the_lines_an_edit_shows_is_not_asked_about() {
+    let scratch = Scratch::new("credential-edit-excerpt-out-of-reach");
+    let filler: String = (1..=8).map(|n| format!("FILLER_{n}=x\n")).collect();
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("DEBUG=true\n{filler}AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#],
+        &mut confirmer,
+        Task::new("turn debugging off"),
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "an edit was held up over a credential its result does not show"
+    );
+    assert!(
+        answered.contains("DEBUG=false") && answered.contains("FILLER_3"),
+        "the edit's lines were left out although nothing in them was a credential: {answered}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "the excerpt reached further than its context: {answered}"
+    );
+}
+
+/// A value the planner wrote itself is not a disclosure when the result repeats it, and the person
+/// was already shown it on the write they approved. Asking again about the same value, as though
+/// the planner were being handed something new, is a second prompt for one decision.
+#[test]
+fn an_edit_is_not_put_to_the_person_twice_over_a_value_the_planner_wrote() {
+    let scratch = Scratch::new("credential-edit-excerpt-own-value");
+    std::fs::write(
+        scratch.path.join(".env"),
+        "PORT=80\nSECRET_KEY_BASE=changeme\n",
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[&format!(
+            r#"{{"path":".env","old_text":"changeme","new_text":"{GENERATED_SECRET}"}}"#
+        )],
+        &mut confirmer,
+        Task::new("set the key"),
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "the planner was asked to be shown a value it had just written"
+    );
+    assert!(
+        answered.contains("edited .env"),
+        "the edit did not land: {answered}"
+    );
+}
+
 /// Everything the tools answered in one request, joined.
 ///
 /// The planner's own words are in that request too, so an assertion over the whole body cannot
