@@ -5082,6 +5082,37 @@ fn honoured(root: &std::path::Path) -> Option<bravebot_agent::trusted::Honoured>
     )
 }
 
+/// What the answer to the startup question does to the record, as the line the session says, or
+/// `None` where nothing was kept: only `Answer::Trust` is a yes, so declining and leaving are a no
+/// (TRUST-23), and a yes with no record has nowhere to be written.
+///
+/// Everything [`opening_trust`] does with an answer once the question is closed, apart from the
+/// map, so a test drives it with each [`crate::trust_prompt::Answer`] and no terminal.
+fn keep_the_answer(
+    answer: crate::trust_prompt::Answer,
+    record: Option<&(
+        bravebot_agent::trusted::Store,
+        bravebot_agent::trusted::Identity,
+    )>,
+    session: &str,
+    root: &std::path::Path,
+) -> Option<String> {
+    let yes = answer == crate::trust_prompt::Answer::Trust;
+    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session)?;
+    let directory = root.display();
+    Some(match kept {
+        true => t!(session_trust_kept, directory = directory),
+        false => t!(
+            session_trust_not_kept,
+            directory = directory,
+            path = record.map_or(String::new(), |(store, _)| store
+                .path()
+                .display()
+                .to_string())
+        ),
+    })
+}
+
 /// Withdraw every answer kept about `root` inside `home`, and say what became of it (TRUST-24).
 ///
 /// Whichever directory was at the path when each was given: a person taking the answer back means
@@ -5189,19 +5220,8 @@ fn opening_trust(
             if !carried.is_empty() {
                 session.paste_text(&carried);
             }
-            let yes = answer == crate::trust_prompt::Answer::Trust;
-            if let Some(kept) = bravebot_agent::trusted::keep_a_yes(record.as_ref(), yes, id) {
-                session.note(match kept {
-                    true => t!(session_trust_kept, directory = where_it_is),
-                    false => t!(
-                        session_trust_not_kept,
-                        directory = where_it_is,
-                        path = record.as_ref().map_or(String::new(), |(store, _)| store
-                            .path()
-                            .display()
-                            .to_string())
-                    ),
-                });
+            if let Some(said) = keep_the_answer(answer, record.as_ref(), id, root) {
+                session.note(said);
                 return Some((trust, Whence::Asked));
             }
             (trust, Whence::Asked)
@@ -23999,12 +24019,13 @@ mod tests {
         Some((home, root, (store, identity)))
     }
 
-    /// TRUST-23: a yes is the answer that is kept. The next session started in the directory finds
-    /// it and is not asked, and the map it opens with is the tree trusted. The write is the shared
-    /// helper's, which the agent crate tests; what is asked here is that the terminal's opening
-    /// takes what it wrote.
+    /// TRUST-23: a yes is the answer that is kept. The answer goes through the function
+    /// `opening_trust` calls once the question is closed, and the next session started in the
+    /// directory finds what it wrote, is not asked, and opens with the tree trusted. The regression
+    /// it rejects is the call being dropped, or a yes not reaching the record.
     #[test]
     fn a_yes_is_kept_and_the_next_session_there_is_not_asked() {
+        use crate::trust_prompt::Answer;
         use bravebot_agent::PermissionMode;
 
         let Some((home, root, record)) = a_record_to_keep_in("bravebot-app-yes-kept") else {
@@ -24012,9 +24033,9 @@ mod tests {
         };
 
         assert_eq!(
-            bravebot_agent::trusted::keep_a_yes(Some(&record), true, "1-2"),
-            Some(true),
-            "a yes with a record was not written"
+            keep_the_answer(Answer::Trust, Some(&record), "1-2", &root),
+            Some(t!(session_trust_kept, directory = root.display())),
+            "a yes with a record did not say it was kept"
         );
 
         let kept = bravebot_agent::trusted::honoured(Some(&home), None, &root)
@@ -24035,9 +24056,10 @@ mod tests {
     }
 
     /// TRUST-23: a no is never kept. The next session started there asks, since a no grants nothing
-    /// and asking again is how a person changes their mind. What the terminal adds to the shared
-    /// helper is the reading of its answer: only `Answer::Trust` is a yes, so declining and leaving
-    /// both reach it as a no.
+    /// and asking again is how a person changes their mind. Each answer the question can give goes
+    /// through the function `opening_trust` calls, so the reading of which of them is a yes is the
+    /// code's and not the test's: declining and leaving are both a no. The regression it rejects is
+    /// either of them reaching the record.
     #[test]
     fn a_no_is_not_kept_and_the_next_session_there_is_asked() {
         use crate::trust_prompt::Answer;
@@ -24048,9 +24070,8 @@ mod tests {
         };
 
         for answer in [Answer::Decline, Answer::Leave] {
-            let yes = answer == Answer::Trust;
             assert_eq!(
-                bravebot_agent::trusted::keep_a_yes(Some(&record), yes, "1-2"),
+                keep_the_answer(answer, Some(&record), "1-2", &root),
                 None,
                 "{answer:?} was kept"
             );
@@ -24063,6 +24084,37 @@ mod tests {
             }),
             Opening::Ask
         ));
+        let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
+    }
+
+    /// TRUST-23: a yes whose record cannot be written says it was not kept and names the file, so
+    /// the person knows the next session asks; a yes with no record has nothing to say, because the
+    /// question already said the answer cannot be kept. The state directory here is a file, which
+    /// nothing can be created inside.
+    #[test]
+    fn a_yes_the_record_refuses_says_so_and_a_yes_with_no_record_says_nothing() {
+        use crate::trust_prompt::Answer;
+
+        let Some((_, root, _)) = a_record_to_keep_in("bravebot-app-yes-refused") else {
+            return;
+        };
+        let identity = bravebot_agent::trusted::Identity::of(&root).expect("a directory");
+        let blocked = root.parent().expect("scratch").join("not-a-directory");
+        std::fs::write(&blocked, b"").expect("a file in the way");
+        let record = (
+            bravebot_agent::trusted::Store::new(&blocked, &root),
+            identity,
+        );
+
+        assert_eq!(
+            keep_the_answer(Answer::Trust, Some(&record), "1-2", &root),
+            Some(t!(
+                session_trust_not_kept,
+                directory = root.display(),
+                path = record.0.path().display()
+            ))
+        );
+        assert_eq!(keep_the_answer(Answer::Trust, None, "1-2", &root), None);
         let _ = std::fs::remove_dir_all(root.parent().expect("scratch"));
     }
 
