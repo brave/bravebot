@@ -821,7 +821,7 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
             asked_in = file.display().to_string(),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
-            looser = bravebot_tui::sandbox_command::looser(refused)
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         )
         .to_string(),
         (None, Floor::Mode) => t!(
@@ -829,7 +829,7 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
-            looser = bravebot_tui::sandbox_command::looser(refused)
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         )
         .to_string(),
         (Some(file), Floor::Network) => t!(

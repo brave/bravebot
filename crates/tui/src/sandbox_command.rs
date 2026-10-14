@@ -14,7 +14,6 @@ use bravebot_config::sandbox::{Choice, Floor, Refused, Source, allowed_in_sessio
 use bravebot_core::ask::{Answer, Asking, Prompt, Row};
 use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
-use bravebot_sandbox::mode::Looser;
 
 /// The mode a session holds and where it came from.
 ///
@@ -83,20 +82,6 @@ fn report(held: &Sandboxed) -> String {
     t!(session_sandbox_report, detail = detail).to_string()
 }
 
-/// The sentence saying which of reading and writing the refused mode does more of than the pin,
-/// which the command line's refusal gives as well.
-pub fn looser(refused: &Refused) -> String {
-    let asked = refused.asked.name();
-    let pinned = refused.pinned.name();
-    match refused.asked.looser_than(refused.pinned) {
-        Some(Looser::Reads) => t!(sandbox_looser_reads, asked = asked, pinned = pinned),
-        Some(Looser::Writes) => t!(sandbox_looser_writes, asked = asked, pinned = pinned),
-        // A mode is refused only where it is looser than the pin, so `None` is not reached.
-        Some(Looser::Both) | None => t!(sandbox_looser_both, asked = asked, pinned = pinned),
-    }
-    .to_string()
-}
-
 /// The sentence a mode the managed file does not allow is refused with, naming the file.
 fn refusal(refused: &Refused) -> String {
     let pinned_in = refused.pinned_in.display().to_string();
@@ -106,7 +91,7 @@ fn refusal(refused: &Refused) -> String {
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
-            looser = looser(refused)
+            looser = bravebot_agent::sandbox_reason::looser(refused)
         ),
         Floor::Network => t!(
             session_sandbox_refused_network,
