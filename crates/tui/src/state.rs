@@ -1341,6 +1341,11 @@ pub struct Session {
     undo: std::collections::VecDeque<(String, usize)>,
     /// The INSERT session a change or an opening began, while it is open.
     inserting: Option<Inserting>,
+    /// Whether a run of typing in the ordinary box has already opened its step on [`Self::undo`],
+    /// so the next character typed shares it rather than opening one of its own. The ordinary box
+    /// has no mode to open a step at the way vi's INSERT does, so a run opens one at its first key
+    /// and this says whether that key has already come.
+    ordinary_run_open: bool,
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
@@ -1932,6 +1937,7 @@ impl Session {
             last_change: None,
             undo: std::collections::VecDeque::new(),
             inserting: None,
+            ordinary_run_open: false,
             status: Status::Idle,
             show_trail: false,
             panel: false,
@@ -3551,6 +3557,7 @@ impl Session {
         // Editing a recalled prompt makes it the working line rather than a view of history,
         // so the position indicator goes away as soon as a key is pressed.
         self.history.leave();
+        self.begin_an_ordinary_run();
         self.input.insert(self.caret, c);
         self.caret += c.len_utf8();
         // Back to the top of whatever is now offered. A cursor left where it was would sit on a
@@ -3571,6 +3578,7 @@ impl Session {
         }
         self.abandon_the_selection();
         self.history.leave();
+        self.begin_an_ordinary_run();
         // A line that grew under the list is one the list was not put up over.
         self.shortcuts = false;
         self.input.insert(self.caret, '\n');
@@ -3583,6 +3591,31 @@ impl Session {
     /// Which style of editing the box does.
     pub fn editing(&self) -> crate::vim::Editing {
         self.editing
+    }
+
+    /// Open the ordinary box's undo step for an edit that is not a run of typing: a press that
+    /// deletes or pastes closes whatever run was open and opens its own step, the way `d`, `c` or
+    /// `p` would in vi.
+    ///
+    /// Vi opens a step where a change begins, at `c`, an opening into INSERT or an operator other
+    /// than `y` ([`Session::begin_a_change`]); the ordinary box has no such moment to open one at,
+    /// so each of these opens and closes its own instead. A no-op is read before this is reached, so
+    /// a press that changes nothing opens no step either, the way `y` fills no step for vi.
+    fn begin_an_ordinary_edit(&mut self) {
+        if self.editing() == crate::vim::Editing::Ordinary {
+            self.begin_a_change();
+            self.ordinary_run_open = false;
+        }
+    }
+
+    /// Open the ordinary box's undo step for a run of typing, once for the run rather than once a
+    /// character, the way everything typed into one vi INSERT session shares the step that opened
+    /// it ([`Session::begin_a_change`]).
+    fn begin_an_ordinary_run(&mut self) {
+        if self.editing() == crate::vim::Editing::Ordinary && !self.ordinary_run_open {
+            self.begin_a_change();
+            self.ordinary_run_open = true;
+        }
     }
 
     /// Settle the style of editing for this session, given what a settings file said.
@@ -3814,11 +3847,12 @@ impl Session {
         self.half_typed = None;
         self.count = None;
         self.held_count = None;
-        // The ordinary box keeps no steps, so what it types is in none of them, and `u` back in vi
-        // would put back a line from before that typing and lose it.
+        // A step taken under one style answers to keys the other does not press, so a style change
+        // leaves nothing to undo, the way INPUT-28 already says for choosing the style already chosen.
         if changed {
             self.inserting = None;
             self.undo.clear();
+            self.ordinary_run_open = false;
         }
     }
 
@@ -3856,6 +3890,7 @@ impl Session {
         self.put_in_the_box(line);
         self.undo.clear();
         self.inserting = None;
+        self.ordinary_run_open = false;
     }
 
     /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
@@ -4066,6 +4101,7 @@ impl Session {
         if self.caret == self.input.len() {
             return;
         }
+        self.begin_an_ordinary_edit();
         self.abandon_the_selection();
         self.history.leave();
         match self.marker_at_caret() {
@@ -4122,6 +4158,7 @@ impl Session {
     /// The register vi's `p` reads, so there is one place for removed text, and it is put back as
     /// characters whatever the register held before.
     fn kill(&mut self, from: usize, to: usize, forward: bool) {
+        self.begin_an_ordinary_edit();
         let taken = self.input[from..to].to_string();
         // Where the caret was: the callers may have moved it to the far end of the stretch already.
         let was = if forward { from } else { to };
@@ -4742,11 +4779,14 @@ impl Session {
     /// newlines are kept rather than flattened, since a pasted paragraph was written with them
     /// and the box draws them.
     pub fn paste(&mut self, text: &str) {
+        // Every path that writes text in whole comes through here (a paste, a dropped file, an
+        // image marker), so this is the one place that opens the ordinary box's step for all of
+        // them: one step for whichever of the three it was, not one for each insertion folding or
+        // a marker makes underneath it.
+        self.begin_an_ordinary_edit();
         self.abandon_the_selection();
         self.history.leave();
-        // Every path that writes text in whole comes through here (a paste, a dropped file, an
-        // image marker), and the list stands over a line that arrived under it as it does over a
-        // recalled one.
+        // The list stands over a line that arrived under it as it does over a recalled one.
         self.shortcuts = false;
         let text = normalised(text);
         self.input.insert_str(self.caret, &text);
@@ -5145,6 +5185,7 @@ impl Session {
             self.take_back_what_was_typed_over();
             return;
         }
+        self.begin_an_ordinary_edit();
         self.abandon_the_selection();
         self.history.leave();
         if let Some((start, end)) = marker {
@@ -5392,6 +5433,7 @@ impl Session {
             self.caret = 0;
             self.undo.clear();
             self.inserting = None;
+            self.ordinary_run_open = false;
             true
         }
     }
@@ -19652,6 +19694,82 @@ mod tests {
         assert_eq!(keyed("one", 0, "Afoo\x1bxu").input, "onefoo");
         assert_eq!(keyed("one", 0, "Afoo\x1bxuu").input, "one");
         assert_eq!(keyed("one two", 0, "cwX\x1bw.uu").input, "one two");
+    }
+
+    /// The ordinary box has the undo stack vi already does, pushed before each edit.
+    ///
+    /// A run of typing is one step, folded into one the way an INSERT session folds vi's.
+    #[test]
+    fn a_typing_run_in_the_ordinary_box_is_one_change_to_undo() {
+        let mut s = session();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "");
+        assert!(!s.undo_last_change(), "a run is one step, not five");
+    }
+
+    /// Ctrl-U takes the line back to its start; undo puts the line and the caret back as they
+    /// stood before the press.
+    #[test]
+    fn ctrl_u_then_undo_restores_the_line_and_caret_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        let caret = s.caret();
+        s.delete_to_line_start();
+        assert_eq!(s.input, "");
+
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "one two");
+        assert_eq!(s.caret(), caret);
+    }
+
+    /// Sending the line clears what there was to undo, the way choosing a style or a line arriving
+    /// whole already does for vi: the undo chord after a send must not put back a prompt that has
+    /// already gone.
+    #[test]
+    fn undo_after_a_send_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        assert!(s.submit().is_some());
+        assert!(!s.undo_last_change());
+        assert_eq!(s.input, "");
+    }
+
+    /// A marker is kept behind an edit the same as the text around it, so deleting one and undoing
+    /// the delete puts the marker, and the attachment it still names, back.
+    #[test]
+    fn undo_brings_back_a_deleted_marker_with_its_attachment() {
+        let mut s = session();
+        for c in "abc".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in "xyz".chars() {
+            s.type_char(c);
+        }
+        for _ in 0.."xyz".len() + 1 {
+            s.move_left();
+        }
+        s.backspace();
+        assert_eq!(s.input, "abcxyz");
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "the marker was still there to delete"
+        );
+
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "abc[Image #1]xyz");
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "the picture did not come back with its marker"
+        );
     }
 
     /// The register yanked at the start of the line and then put over a selection made at `at`,

@@ -1152,6 +1152,17 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             session.stash();
             Action::Redraw
         }
+        // In the shared ladder so it works mid-turn, like every other key that edits the line
+        // rather than sends it. Reaches vi's own undo stack as well as the ordinary box's, so the
+        // chord works in INSERT mode without needing Escape to NORMAL mode first; `undo_last_change`
+        // says whether there was a step to put back.
+        _ if session.bindings().is_undo(&key) => {
+            if session.undo_last_change() {
+                Action::Redraw
+            } else {
+                Action::None
+            }
+        }
         // What a turn did, drawn per entry as the turn fills in. In the shared ladder because it
         // sets a render flag and sends nothing, and because the trail is *for* watching a turn:
         // refused mid-turn, a person who wanted to see which tools a turn was calling had to wait

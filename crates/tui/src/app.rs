@@ -22759,6 +22759,27 @@ mod tests {
         }
     }
 
+    /// The undo chord puts back what a delete took, pressed through the key handler rather than
+    /// called on the session directly, so the wiring from the chord to the step is covered too.
+    #[test]
+    fn the_undo_chord_puts_back_what_a_delete_took() {
+        let mut session = typed_into("one two three");
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "one two ");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "one two three");
+    }
+
+    /// A run of typing is one step back, not one for every character, the same way vi folds a
+    /// whole INSERT session into the one `u` after it reaches.
+    #[test]
+    fn the_undo_chord_takes_back_a_whole_typing_run() {
+        let mut session = typed_into("hello");
+        assert_eq!(session.input(), "hello");
+        handle_key(&mut session, ctrl('_'));
+        assert_eq!(session.input(), "");
+    }
+
     /// Kills in one direction join, and a change of direction starts a new buffer.
     #[test]
     fn consecutive_kills_join_in_the_direction_they_went() {
