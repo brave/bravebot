@@ -99,6 +99,7 @@ no review in English will catch.
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
+`verified-by: bravebot_i18n::generate::a_select_in_a_language_with_no_plural_rule_is_found`
 
 <a id="LOCALE-6"></a>
 ### LOCALE-6: no catalog is read while the agent is running
