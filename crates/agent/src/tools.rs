@@ -18576,6 +18576,119 @@ mod tests {
         }
     }
 
+    /// The regression it rejects: a link in a loaded skill's directory that lands in a directory
+    /// the person added, or in the session's own, being read under the skill's provenance label.
+    /// The file is outside the skill's directory, so it is refused. A link that stays inside the
+    /// directory is the control that keeps the refusal from being a blanket one.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_from_a_loaded_skill_into_an_opened_directory_is_refused() {
+        let fixture = SkillFixture::new("skill-files-link-into-opened");
+        let outside = fixture.project.parent().unwrap();
+        let added = outside.join("shared");
+        let scratch = outside.join("scratch");
+        for (directory, file) in [(&added, "untrusted.md"), (&scratch, "note.md")] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join(file), "NOT-THE-SKILLS-OWN\n").unwrap();
+        }
+        let skill = fixture.home.join(".bravebot/skills/notes");
+        for (name, target) in [
+            ("added.md", added.join("untrusted.md")),
+            ("scratch.md", scratch.join("note.md")),
+            ("alias.md", skill.join("reference.md")),
+        ] {
+            std::os::unix::fs::symlink(target, skill.join(name)).unwrap();
+        }
+        let mut workspace = fixture.workspace();
+        workspace
+            .add_directory(&added.to_string_lossy())
+            .expect("an added directory");
+        workspace.open_scratch(Some(scratch.canonicalize().unwrap()));
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        load_named(&mut policy, &catalogue, "notes");
+
+        for path in [
+            "~/.bravebot/skills/notes/added.md",
+            "~/.bravebot/skills/notes/scratch.md",
+        ] {
+            let (failed, _, said) = skill_call(
+                &mut policy,
+                &workspace,
+                "read_file",
+                json!({ "path": path }),
+            );
+            assert!(
+                failed && !said.contains("NOT-THE-SKILLS-OWN"),
+                "{path} reached a file outside the skill's directory: {said}"
+            );
+        }
+
+        let (failed, trusted, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({ "path": "~/.bravebot/skills/notes/alias.md" }),
+        );
+        assert!(
+            !failed && trusted && said.contains(SKILL_FILE_MARKER),
+            "a link inside the skill's directory was refused: {said}"
+        );
+    }
+
+    /// The regression it rejects: a comparison of where a link lands with the skill's directory
+    /// that renders both lossily, so a link into an opened directory whose name is not text is
+    /// read as inside the skill's directory named with the replacement character (PATH-003).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_into_a_directory_whose_name_is_not_text_is_not_taken_for_its_lookalike_skill() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = SkillFixture::new("skill-files-link-not-text");
+        let skills = fixture.home.join(".bravebot/skills");
+        let lookalike = skills.join("shared-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).unwrap();
+        std::fs::write(
+            lookalike.join("SKILL.md"),
+            "---\nname: lookalike\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::write(lookalike.join("own.md"), "THE-SKILLS-OWN\n").unwrap();
+        let scratch = skills.join(std::ffi::OsStr::from_bytes(b"shared-\xff"));
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("untrusted.md"), "NOT-THE-SKILLS-OWN\n").unwrap();
+        std::os::unix::fs::symlink(scratch.join("untrusted.md"), lookalike.join("out.md")).unwrap();
+        std::os::unix::fs::symlink(lookalike.join("own.md"), lookalike.join("in.md")).unwrap();
+        let mut workspace = fixture.workspace();
+        workspace.open_scratch(Some(scratch.canonicalize().unwrap()));
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        load_named(&mut policy, &catalogue, "lookalike");
+
+        let (failed, _, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({ "path": "~/.bravebot/skills/shared-\u{FFFD}/out.md" }),
+        );
+        assert!(
+            failed && !said.contains("NOT-THE-SKILLS-OWN"),
+            "a link into a directory that is not text was read as the skill's own: {said}"
+        );
+        let (failed, trusted, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({ "path": "~/.bravebot/skills/shared-\u{FFFD}/in.md" }),
+        );
+        assert!(
+            !failed && trusted && said.contains("THE-SKILLS-OWN"),
+            "a link inside the skill's directory was refused: {said}"
+        );
+    }
+
     /// The regression it rejects: a setting that keeps the file tools inside the project (PERM-16)
     /// being bypassed by the reach a load grants.
     #[cfg(unix)]
