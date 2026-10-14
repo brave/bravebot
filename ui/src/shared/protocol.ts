@@ -731,6 +731,8 @@ export interface RunRequest {
   releasesPrivate: boolean
   /** What the stages are confined to, or `null` where the turn does not confine them. */
   confinement?: { heading: string; directories: string[]; sentences: string[] } | null
+  /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
+  notSandboxed?: string | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *

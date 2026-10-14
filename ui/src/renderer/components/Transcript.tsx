@@ -2000,6 +2000,19 @@ function Card({
             ))}
           </ol>
 
+          {/* Said every time, as the terminal says it: what the programs are held to, or that they
+              are held to nothing. Only `null` is "not sandboxed"; a bridge that sent no field says
+              nothing rather than claim it. */}
+          {request.confinement && (
+            <div className="permission-scope" data-test="confinement" data-deciding="all">
+              <p>{request.confinement.heading}</p>
+              {!!request.confinement.directories.length && <ul>{request.confinement.directories.map((directory) => <li key={directory}><code>{directory}</code></li>)}</ul>}
+              {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
+            </div>
+          )}
+          {request.confinement === null && !!request.notSandboxed && (
+            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+          )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
@@ -2246,9 +2259,11 @@ function Card({
           </ol>
 
           <p className="permission-scope" data-deciding="all">
-            These steps run in this order, and nothing re-plans once the run starts. Approving
-            the plan does not approve its writes: each write is still put to you when its step
-            is reached. This answer covers this plan only.
+            These steps run in this order, decided before anything was read. Nothing the run reads
+            can add a step, drop one, or send anything anywhere this plan does not already name.
+            Approving the plan does not approve its writes: each write is still put to you when its
+            step is reached. Nothing has been read or written yet, so declining leaves everything
+            as it is. This answer covers this plan only.
           </p>
 
           {!!entry.unheld?.length && (

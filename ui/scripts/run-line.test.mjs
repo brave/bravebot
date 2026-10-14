@@ -49,9 +49,11 @@ const draw = (entry) =>
   )
 
 /** The run question as the bridge sends it, for a line whose glob the harness expanded. */
-const asked = (line) =>
+const asked = (line, confinement, notSandboxed) =>
   t.askedRun({
     request: 1,
+    confinement,
+    notSandboxed,
     line,
     plan: '/usr/bin/wc -l notes.txt report.txt',
     stages: [
@@ -94,4 +96,31 @@ test('a call that was never spelled as a line draws no row for one', () => {
     assert.ok(!drawn.includes('The model wrote:'), drawn)
     assert.ok(drawn.includes('Execution plan:'), drawn)
   }
+})
+
+const text = (markup) => markup.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+
+test('a confined run card names what the programs are held to and does not call them unsandboxed', () => {
+  const drawn = draw(
+    asked('wc -l *.txt', {
+      heading: 'zzconfined to these directories:',
+      directories: ['/home/someone/project', '/tmp/zzscratch'],
+      sentences: ['zzeach stage brings no credentials'],
+    }),
+  )
+  const said = text(drawn)
+
+  assert.ok(said.includes('zzconfined to these directories:'), said)
+  assert.ok(drawn.includes('<code>/home/someone/project</code>') && drawn.includes('<code>/tmp/zzscratch</code>'), drawn)
+  assert.ok(said.includes('zzeach stage brings no credentials'), said)
+  assert.ok(!said.includes('not sandboxed'), said)
+})
+
+test('a run the turn does not confine says it is not sandboxed, and a silent bridge says nothing', () => {
+  const unconfined = text(draw(asked('wc -l *.txt', null, 'zzthe bridge words this sentence')))
+  assert.ok(unconfined.includes('zzthe bridge words this sentence'), unconfined)
+  assert.ok(!unconfined.includes('This is not sandboxed'), unconfined)
+
+  const silent = text(draw(asked('wc -l *.txt', undefined)))
+  assert.ok(!silent.includes('sandboxed'), silent)
 })

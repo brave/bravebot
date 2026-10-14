@@ -531,6 +531,8 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 .collect::<Vec<_>>(),
             "sentences": confined.sentences(),
         })),
+        // The sentence for that null, in the catalog's words and so in the person's language.
+        "notSandboxed": request.confined.is_none().then(bravebot_approval::not_sandboxed),
         "summary": request.summary(),
     })
 }

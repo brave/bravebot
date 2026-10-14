@@ -2601,7 +2601,7 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
 - The trail records the names and the stage each was added to under `requested_scopes`, built from
   menu words and stage numbers and nothing the plan chose. The desktop sends the names as
-  `requestedScopes`, since it draws no confinement, and offers no standing answer for such a line.
+  `requestedScopes`, beside the confinement it draws, and offers no standing answer for such a line.
 - A delegate's `run` has the same argument, the same refusals and the same question.
 
 **Why.** Scopes follow the operation an argv names, so a script that shells out to `gh` reaches

@@ -234,6 +234,12 @@ pub struct Run<'a> {
     pub releases_private: bool,
 }
 
+/// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
+/// draws it carries no copy of its own (SHARE-001).
+pub fn not_sandboxed() -> String {
+    t!(run_not_sandboxed).to_string()
+}
+
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
 /// resolved to, what it would write, and what it is not confined to.
 ///
@@ -260,7 +266,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
             }
             lines.extend(confined.sentences.iter().cloned());
         }
-        None => lines.push(t!(run_not_sandboxed).to_string()),
+        None => lines.push(not_sandboxed()),
     }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
