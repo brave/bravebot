@@ -76,6 +76,7 @@ describing something that had already failed.
 
 `verified-by: bravebot_core::policy::a_run_that_has_met_something_untrusted_cannot_delegate`
 `verified-by: bravebot_core::policy::a_private_task_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::a_private_kind_cannot_direct_a_delegate_beside_a_public_task`
 
 ## What is fixed before it runs
 
@@ -152,6 +153,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
 `verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
@@ -1000,6 +1002,7 @@ a service to send the conversation to.
 `verified-by: bravebot_agent::agents::an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported`
 `verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_effort_the_one_it_replaces_named`
 
 <a id="DELEGATE-28"></a>
 ### DELEGATE-28: a definition may limit the files its delegate writes

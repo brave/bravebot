@@ -15162,6 +15162,25 @@ five
             assert!(!policy.finish());
         }
 
+        /// DELEGATE-2: the refusal reads the kind's label as well as the task's. A task that is
+        /// public beside a kind that is private is refused, and the refusal names the kind.
+        #[test]
+        fn a_private_kind_cannot_direct_a_delegate_beside_a_public_task() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            let private_kind = Labelled::new("reader".to_string(), Label::untrusted_private());
+            let err = policy
+                .before_delegate(&private_kind, &argument("summarise the notes"), None)
+                .expect_err("a private kind must not decide what a delegate is");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(
+                err.to_string().contains("kind is"),
+                "the refusal does not name the kind: {err}"
+            );
+            assert!(!policy.finish());
+        }
+
         /// A task written by a planner holding private content may repeat it, so the delegate
         /// starts out holding it too, and what the delegate writes is private.
         #[test]

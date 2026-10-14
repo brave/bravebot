@@ -658,6 +658,7 @@ never be able to spend a large fraction of the conversation.
 
 `verified-by: bravebot_agent::tools::a_capped_output_keeps_its_head_and_its_tail`
 `verified-by: bravebot_agent::tools::an_output_inside_the_cap_is_left_alone`
+`verified-by: bravebot_agent::tools::a_capped_output_says_how_many_bytes_and_lines_went`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_output_stays_reachable`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_job_output_stays_reachable`
