@@ -145,8 +145,9 @@ Optional routing is filled at validation with an explicit default, where the pla
 field or left it empty and nowhere else, so the driver never invents a destination that did not
 pass the lock and a default never stands in for a value the plan gave. An omitted listing pattern
 or search include is locked as no filter, not as a glob of the empty string, which would match
-nothing. A connector step's connector, resource, place, item and selector, and an act's path and
-option, are routing, and the optional ones are locked as the absence of a value. The item a
+nothing. A connector step's connector, resource, place, item, selector and `with` values, and an
+act's path, option and `take`, are routing, and the optional ones are locked as the absence of a
+value. The item a
 connector act lands on, where the plan did not name it, is named by `on`: a slot reference to the
 fetch that chose it, not a routing field. That fetch has to be of the same connector and place as
 the act, or the plan is refused, so an act cannot reach an item from anywhere its own locked place
@@ -371,10 +372,10 @@ its form is held here so that it cannot draw anything but one URL on one line.
 <a id="MANIFEST-13"></a>
 ### MANIFEST-13: a connector act's content is released only to the place its plan fixed
 
-A connector act that carries a slot names, from the frozen plan, the one connector and place the
-slot may go to and where its content came from: a workspace read, a connector fetch's place, or the
-union of what a processor read. The slot is released to that place and nowhere else, and not to a
-screen. Content the plan wrote itself releases nothing.
+A connector act that carries a slot, or takes a value a fetch recorded, names from the frozen plan
+the one connector and place that content may go to and where it came from: a workspace read, a
+connector fetch's place, or the union of what a processor read. It is released to that place and
+nowhere else, and not to a screen. Content the plan wrote itself releases nothing.
 
 A release fixes the account and the place. Whom an act addresses within that place, such as the
 recipient of a reply, is what its definition takes from the item the act lands on: the plan line
@@ -386,6 +387,8 @@ lets fetched content change what a slot says and never where it goes.
 
 `verified-by: bravebot_core::manifest::a_connector_act_release_is_named_before_anything_is_read`
 `verified-by: bravebot_core::policy::a_connector_release_is_refused_unless_precommitted_to_that_place`
+`verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
+`verified-by: bravebot_core::manifest::a_release_names_what_an_act_carries_and_what_it_takes`
 
 ## Known costs
 

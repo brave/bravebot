@@ -324,20 +324,22 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 <a id="CONNECTOR-18"></a>
 ### CONNECTOR-18: the planner is told what a definition offers, and only that
 
-Where a connector is usable, the planner is told each one's resources in the definition's own
-words, with the fields, selector terms, narrowing terms and listed values each takes, and for each
-act whether it takes text, which fetches its `on` may name and how they must narrow, and the values
-the authority fills in, which the plan must not give. It is told today's date and the machine's
-time zone where it names one. The goal call is told the same resources in the definition's
-summaries and no step or field name. Where none is usable, no connector step is offered at all.
-Both calls are told which definitions are installed but refused, with why, whether or not another is
-usable.
+Where a connector is usable, the planner is told each one's resources in the definition's own words,
+with the fields, selector terms, narrowing terms and listed values each takes, and for each act
+whether it takes text, which fetches its `on` may name and how they must narrow, and the values the
+authority fills in, which the plan must not give. It is told each `with` value with an example of
+its form, the fields a fetch records, and the values an act may take from them. It is told today's
+date and the machine's time zone where it names one. The goal call is told the same resources in
+the definition's summaries and no step or field name. Where none is usable, no connector step is
+offered at all. Both calls are told which definitions are installed but refused, with why, whether
+or not another is usable.
 
 `verified-by: bravebot_agent::connectors::the_catalogue_lists_each_resource_under_the_capability_it_uses`
 `verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_does_in_plain_words`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_which_fetches_an_act_may_name_in_on`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_how_the_fetch_an_act_lands_on_must_narrow`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_which_values_it_must_not_give`
+`verified-by: bravebot_agent::connectors::with_values_are_each_given_once_in_their_form_and_shown_to_the_planner`
 `verified-by: bravebot_agent::connectors::the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses`
 `verified-by: bravebot_agent::manifest::the_catalogue_offers_no_connector_step_where_none_is_installed`
 `verified-by: bravebot_agent::manifest::a_refused_definition_offers_no_step_and_is_named_with_its_reason`
@@ -369,3 +371,22 @@ of its own, or reorder or hide text without showing itself, is shown as its esca
 `verified-by: bravebot_agent::manifest::a_reply_is_sent_with_no_recipient_or_title_and_the_plan_line_says_who_fills_them_in`
 `verified-by: bravebot_agent::connectors::text_that_reorders_or_hides_itself_is_escaped_on_the_plan_line`
 `verified-by: bravebot_agent::connectors::the_note_names_the_item_an_act_named_itself`
+
+<a id="CONNECTOR-21"></a>
+### CONNECTOR-21: a value an act takes from a fetch never reaches this process
+
+A step gives each `with` value its resource asks for once, in its form or among its listed values.
+An act may instead take a value, in `take`, from a field an earlier fetch of any connector records,
+where its definition lets it take that value and it does not also give it. The request carries that
+fetch's receipt and the field's name, never the value: the authority alone reads it, from what it
+recorded when it made the fetch.
+
+**Why.** A value taken this way is service content, such as a flight's departure. Taken through a
+receipt it can fill an act without any planner or processor reading it, under the release the plan
+line names.
+
+`verified-by: bravebot_agent::connectors::with_values_are_each_given_once_in_their_form_and_shown_to_the_planner`
+`verified-by: bravebot_agent::connectors::an_act_takes_only_what_an_earlier_fetch_records_and_its_definition_allows`
+`verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
+`verified-by: bravebot_core::selector::a_take_names_a_slot_and_a_field_for_each_value`
+`verified-by: bravebot_agent::connectors::a_take_names_only_a_slot_a_fetch_filled`

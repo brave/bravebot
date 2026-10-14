@@ -4153,3 +4153,49 @@ fn plans_the_checks_refuse_reach_neither_the_authority_nor_a_person() {
         );
     }
 }
+
+/// A value an act takes from a fetch reaches the authority as the fetch's receipt and the field
+/// the plan named, never as a value bravebot read, under the release the plan line named.
+#[cfg(unix)]
+#[test]
+fn an_act_takes_a_recorded_field_as_the_fetch_s_receipt() {
+    let scratch = Scratch::new("connector-take");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[
+            r#"{"protocol":1,"outcome":"accepted","receipt":"r7","standing":"sufficient",
+                "payload":"A PULL REQUEST, which nothing reads"}"#,
+            r#"{"protocol":1,"outcome":"accepted"}"#,
+        ],
+    );
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_pull",
+                "place": "brave/bravebot", "select": "state:open", "out_slot": "pr"}},
+            {"capability": "CONNECTOR_ACT", "args": {"connector": "github", "resource": "protect",
+                "place": "brave/bravebot", "take": "branch:pr.head"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let outcome = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "protect the branch of the newest open pull request",
+        &mut asked,
+        &mut sink,
+    )
+    .expect("runs");
+    assert!(outcome.clean);
+    let act = authority.request(1);
+    assert_eq!(act["routing"]["take"], "branch:pr.head");
+    assert_eq!(act["routing"]["with"], "");
+    assert_eq!(act["taken"], json!({ "pr": "r7" }));
+    assert_eq!(act["release"]["from"], json!(["github brave/bravebot"]));
+    assert!(act.get("text").is_none(), "nothing read is carried");
+}

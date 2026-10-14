@@ -253,7 +253,7 @@ const REGISTRY: &[Advertised] = &[
         // it rather than the registry.
         gate: None,
         summary: "Fetch from an account through an installed connector, into a slot",
-        args: "connector*, resource*, place (unless the resource uses none), item, select, out_slot*",
+        args: "connector*, resource*, place (unless the resource uses none), item, select, with, out_slot*",
     },
     Advertised {
         capability: "TRANSFORM",
@@ -279,7 +279,8 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "Act on an account through an installed connector. A person approves exactly \
                   what changes in the credential authority before anything is sent",
-        args: "connector*, resource*, place*, item, select, path, option, on (the slot of a \
+        args: "connector*, resource*, place*, item, select, with, take (with values taken from \
+               fields earlier fetches record, as key:slot.field), path, option, on (the slot of a \
                fetch whose item this acts on), title, and exactly one of contents or from_slot \
                unless the resource takes no text",
     },
@@ -1200,13 +1201,13 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         release = release.allow(slot);
     }
     // Each connector act's slot, to the one place its plan named, fixed from the frozen plan and
-    // named on the line the person approves below.
+    // named on the line the person approves below. An act that only takes values sends no slot,
+    // so it is named on its line and entered here as nothing.
     let releases = plan.releases();
     for connector_release in &releases {
-        release = release.allow_into(
-            connector_release.slot.clone(),
-            connector_release.destination(),
-        );
+        if let Some(slot) = &connector_release.slot {
+            release = release.allow_into(slot.clone(), connector_release.destination());
+        }
     }
 
     // A grant for each connector the frozen plan names and for no other, the way a turn holds one
@@ -1968,6 +1969,13 @@ fn connector_act<S: Sink>(
             ),
             None => None,
         };
+        // The receipt of each fetch the act takes values from; the values stay with the authority.
+        for (_, slot, _) in bravebot_core::selector::take_terms(step.text("take"))? {
+            let receipt = connectors
+                .receipt(&slot)
+                .ok_or_else(|| format!("'{slot}' returned no item to take from"))?;
+            request.taken.insert(slot.to_string(), receipt.to_string());
+        }
         request.title =
             Some(step.text("title").trim().to_string()).filter(|title| !title.is_empty());
         request.release = release.map(|release| bravebot_connector::ReleaseLine {
