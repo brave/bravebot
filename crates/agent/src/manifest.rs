@@ -415,6 +415,19 @@ fn without_leading_reasoning(text: &str) -> &str {
     text
 }
 
+/// Whether the slot the step at `index` fills is only ever shown to the person: read by at least one
+/// later step, and by nothing but the plan's answers.
+fn shown_only(plan: &Manifest, index: usize) -> bool {
+    let Some(slot) = plan.steps()[index].out_slot() else {
+        return false;
+    };
+    let mut readers = plan.steps()[index + 1..]
+        .iter()
+        .filter(|later| later.reads().contains(slot))
+        .peekable();
+    readers.peek().is_some() && readers.all(|later| later.tool() == manifest::ANSWER)
+}
+
 /// What a process step's instruction gains when its first answer marked no document.
 const MARK_AGAIN: &str = "Your last answer marked no document. Give the whole result after the \
 line that marks where the document begins.";
@@ -1194,6 +1207,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 index,
+                shown_only(&plan, index),
                 step,
                 entry,
                 accounting,
@@ -1356,6 +1370,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     index: usize,
+    shown_only: bool,
     step: &Step,
     entry: &'static Advertised,
     accounting: &mut Accounting,
@@ -1521,6 +1536,12 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
 
                 if let Some(document) = processed.document.take() {
                     break (spec, processed, document);
+                }
+                // A slot the plan only shows the person has no file for an unmarked answer to
+                // land in: what the processor said goes to the person either way, so it stands as
+                // the answer, at its own label, rather than failing the step.
+                if shown_only && let Some(said) = processed.note.take() {
+                    break (spec, processed, said);
                 }
                 if retried {
                     return Err(

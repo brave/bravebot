@@ -294,6 +294,39 @@ fn a_slot_no_step_reads_is_never_opened() {
     );
 }
 
+/// A slot only shown to the person has no file for the marker to protect, so a processor's
+/// unmarked answer stands as the answer, with no call to ask again.
+#[test]
+fn an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer() {
+    let scratch = Scratch::new("shown-only");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "summarise the readme", &mut sink).expect("runs");
+
+    assert_eq!(
+        outcome.reply_for_display(),
+        "A coding agent, said without the line."
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        3,
+        "shape, plan and one processor call"
+    );
+}
+
 #[test]
 fn a_read_transform_answer_plan_runs_end_to_end() {
     let scratch = Scratch::new("end-to-end");
