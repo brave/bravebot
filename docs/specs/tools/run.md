@@ -641,6 +641,7 @@ where it also cannot tell success from failure.
 
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_read_ended`
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_not_read_ended`
+`verified-by: bravebot_agent::turn::a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed`
 
 <a id="RUN-14"></a>
 ### RUN-14: a quarantined result says what would lift the quarantine

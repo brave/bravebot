@@ -18527,6 +18527,53 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
     );
 }
 
+/// RUN-13: a line whose failed stage is followed by one that exits 0 is still told which stage
+/// failed and with what code. The verdict of the part that ran last would say it exited 0.
+#[test]
+fn a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed() {
+    let scratch = Scratch::new("run-status-joined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"false ; echo done"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::reject()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::from_iter([
+            vouched_in("false", &[], &scratch.path),
+            vouched_in("echo", &["done"], &scratch.path),
+        ]),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("step 1 exited 1"),
+        "the planner was not told which stage failed: {second}"
+    );
+    assert!(
+        !second.contains("It exited 0."),
+        "the planner was told a line with a failed stage exited 0: {second}"
+    );
+}
+
 /// The exit status is structure rather than content, so it is told even where none of the bytes
 /// can be: a planner holding a reference to output it may not read still has to know whether the
 /// program worked.
