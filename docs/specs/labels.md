@@ -52,7 +52,8 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
-      - crates/agent/src/manifest.rs: 10
+      - crates/agent/src/connectors.rs: 1
+      - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 22
@@ -420,6 +421,7 @@ and the content has no say in it.
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
+| what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes and counts withheld | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count and a reason in lower-case kebab, and a value out of form is replaced rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed | its input's label, carried through unchanged | `verified-by: bravebot_core::policy::a_filter_passes_an_untrusted_label_through_unchanged` |

@@ -1399,6 +1399,8 @@ fn a_plan_may_write_a_body_it_fixed_in_advance() {
 #[derive(Default)]
 struct RecordsEveryQuestion {
     writes: Vec<bravebot_agent::confirm::WriteRequest>,
+    /// Every plan it was asked to approve, line by line.
+    plans: Vec<Vec<String>>,
     /// Answers a write with `a` where it is offered, rather than a plain yes.
     always: bool,
 }
@@ -1406,8 +1408,9 @@ struct RecordsEveryQuestion {
 impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
     fn confirm_manifest(
         &mut self,
-        _request: &bravebot_agent::confirm::ManifestRequest,
+        request: &bravebot_agent::confirm::ManifestRequest,
     ) -> bravebot_agent::Decision {
+        self.plans.push(request.steps.clone());
         bravebot_agent::Decision::Approve
     }
 
@@ -2774,5 +2777,768 @@ fn a_plan_writing_untrusted_bytes_into_a_memory_records_it() {
         bravebot_agent::memory::Record::new(&home.path, &directory).paths(),
         vec![format!("{directory}/.bravebot/memory/notes-keeper.md")],
         "a plan left a memory untrusted and nothing recorded it"
+    );
+}
+
+/// A connector installed in a scratch state directory, whose authority is a script that keeps
+/// every request it is sent and answers each with the next canned reply.
+#[cfg(unix)]
+struct FakeAuthority {
+    home: PathBuf,
+    dir: PathBuf,
+}
+
+#[cfg(unix)]
+impl FakeAuthority {
+    const SURFACE: &'static str = r#"{
+        "resources": {
+            "issue": { "step": "fetch", "uses": ["place", "item"], "summary": "one issue" },
+            "find_issue": { "step": "fetch", "uses": ["place", "select"], "summary": "first issue",
+                "select": ["state:*", "no:label", "sort:created-*", "limit:2", "limit:3", "limit:4", "limit:5", "limit:6", "limit:7", "limit:8", "limit:9", "limit:10", "limit:11", "limit:12", "limit:13", "limit:14", "limit:15", "limit:16", "limit:17", "limit:18", "limit:19", "limit:20"],
+                "receipt": true },
+            "pull": { "step": "fetch", "uses": ["place", "item"], "summary": "one pull", "receipt": true },
+            "find_pull": { "step": "fetch", "uses": ["place", "select"], "summary": "first pull",
+                "select": ["state:*", "head:*", "label:*", "sort:updated-*"], "receipt": true,
+                "records": { "head": "its head branch" } },
+            "protect": { "step": "act", "uses": ["place", "with"], "summary": "protect a branch",
+                "text": false, "with": { "branch": "branch" }, "takes": ["branch"] },
+            "search": { "step": "fetch", "uses": ["select"], "summary": "across places",
+                "select": ["text:*", "repo:*"] },
+            "review": { "step": "act", "uses": ["place", "on", "option"], "summary": "review",
+                "narrow": ["head:*", "sort:updated-*"], "narrow_when": { "APPROVE": ["head:*"] },
+                "values": { "option": ["COMMENT", "APPROVE"] } },
+            "label_every": { "step": "act", "uses": ["place", "select", "option"], "text": false,
+                "summary": "label every match", "narrow": ["from:*", "to:*", "subject:*"],
+                "select": ["from:*", "to:*", "subject:*", "is:unread"],
+                "values": { "option": ["archive"] } },
+            "comment": { "step": "act", "uses": ["place", "item|on"], "summary": "comment" },
+            "lock": { "step": "act", "uses": ["place", "item"], "summary": "lock", "text": false },
+            "reply": { "step": "act", "uses": ["place", "on"], "summary": "answer the item it acts on",
+                "bound": { "recipient": "the author of that item", "title": "Re: and that item's title" } }
+        },
+        "forms": { "place": "owner/name", "item": "positive-integer" }
+    }"#;
+
+    fn new(scratch: &Scratch, replies: &[&str]) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch.path.join("authority");
+        std::fs::create_dir_all(dir.join("requests")).unwrap();
+        std::fs::create_dir_all(dir.join("replies")).unwrap();
+        for (n, reply) in replies.iter().enumerate() {
+            std::fs::write(dir.join("replies").join(format!("{n}.json")), reply).unwrap();
+        }
+        let script = dir.join("agent.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             dir=\"$(dirname \"$0\")\"\n\
+             n=$(ls \"$dir/requests\" | grep -c json)\n\
+             echo \"$1\" > \"$dir/requests/$n.args\"\n\
+             env > \"$dir/requests/$n.env\"\n\
+             cat > \"$dir/requests/$n.json\"\n\
+             cat \"$dir/replies/$n.json\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let home = scratch.path.join("home");
+        std::fs::create_dir_all(home.join("connectors")).unwrap();
+        std::fs::write(
+            home.join("connectors").join("github.json"),
+            format!(
+                r#"{{ "name": "github", "definition_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "authority": "{}", "item": "svc:github:me",
+                      "surface": {} }}"#,
+                script.display(),
+                Self::SURFACE
+            ),
+        )
+        .unwrap();
+        Self { home, dir }
+    }
+
+    fn request(&self, n: usize) -> serde_json::Value {
+        let text = std::fs::read_to_string(self.dir.join("requests").join(format!("{n}.json")))
+            .unwrap_or_else(|_| panic!("the authority was not sent request {n}"));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn requests(&self) -> usize {
+        std::fs::read_dir(self.dir.join("requests"))
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|x| x == "json")
+            })
+            .count()
+    }
+}
+
+#[cfg(unix)]
+fn run_with_connectors(
+    workspace: &Workspace,
+    config: &Config,
+    home: &std::path::Path,
+    task: &str,
+    asked: &mut RecordsEveryQuestion,
+    sink: &mut RecordingSink,
+) -> Result<bravebot_agent::turn::Outcome, bravebot_agent::turn::TurnError> {
+    manifest::run(
+        config,
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new(task).with_home(Some(home.to_path_buf())),
+        asked,
+        &mut bravebot_agent::IgnoreReports,
+        sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+}
+
+/// The whole road for a read: a fetch through the authority fills one slot that no planner reads,
+/// and a processor reads it. The request carries the locked routing and the definition's item and
+/// id, on standard input, to an authority started with a cleared environment.
+#[cfg(unix)]
+#[test]
+fn a_connector_fetch_fills_one_slot_that_no_planner_reads() {
+    let scratch = Scratch::new("connector-fetch");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[
+            r#"{"protocol":1,"outcome":"accepted","receipt":"r1","standing":"sufficient",
+                "withheld":[{"count":3,"reason":"below-floor","floor":"approved"}],
+                "payload":"THE ISSUE BODY, which nothing but the processor reads"}"#,
+        ],
+    );
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+                "place": "brave/bravebot", "select": "state:open no:label sort:created-asc",
+                "out_slot": "issue"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["issue"], "instruction": "summarise",
+                "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+        ])),
+        processor_reply("THE SUMMARY"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let outcome = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "summarise the oldest open issue with no label",
+        &mut asked,
+        &mut sink,
+    )
+    .expect("runs");
+    assert!(outcome.reply_for_display().contains("THE SUMMARY"));
+
+    let fetch = authority.request(0);
+    assert_eq!(fetch["protocol"], 1);
+    assert_eq!(fetch["step"], "fetch");
+    assert_eq!(fetch["connector"], "github");
+    assert_eq!(fetch["resource"], "find_issue");
+    assert_eq!(fetch["item"], "svc:github:me");
+    assert_eq!(
+        fetch["definition"],
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(fetch["routing"]["place"], "brave/bravebot");
+    assert_eq!(
+        fetch["routing"]["select"],
+        "state:open no:label sort:created-asc"
+    );
+    assert_eq!(
+        fetch["routing"]["item"], "",
+        "an omitted field is sent as no value"
+    );
+    assert!(fetch.get("text").is_none(), "a fetch carries no text");
+    assert_eq!(authority.requests(), 1);
+    let steps = outcome
+        .attempt
+        .as_ref()
+        .expect("an attempt")
+        .steps
+        .join("\n");
+    assert!(
+        steps.contains(
+            "fetched find_issue from brave/bravebot; 3 withheld, below-floor approved; standing sufficient"
+        ),
+        "{steps}"
+    );
+    let args = std::fs::read_to_string(authority.dir.join("requests/0.args")).unwrap();
+    assert_eq!(
+        args.trim(),
+        "connector",
+        "nothing but the verb is on the command line"
+    );
+    // The authority's environment holds the variables it is passed and the ones its shell sets
+    // itself, and nothing else of this process's.
+    assert!(
+        std::env::var_os("CARGO_PKG_NAME").is_some(),
+        "the test needs a name that is set"
+    );
+    let env = std::fs::read_to_string(authority.dir.join("requests/0.env")).unwrap();
+    for line in env.lines() {
+        let name = line.split('=').next().unwrap_or_default();
+        assert!(
+            [
+                "HOME",
+                "XDG_RUNTIME_DIR",
+                "PATH",
+                "TMPDIR",
+                "LANG",
+                "DBUS_SESSION_BUS_ADDRESS",
+                "PWD",
+                "OLDPWD",
+                "SHLVL",
+                "_"
+            ]
+            .contains(&name),
+            "the authority was started with {name}: {env}"
+        );
+    }
+
+    // What the service sent reached the processor and no planning call.
+    let requests: Vec<String> = received.try_iter().collect();
+    let planning: Vec<&String> = requests.iter().take(2).collect();
+    assert!(planning.iter().all(|r| !r.contains("THE ISSUE BODY")));
+    assert!(requests.iter().any(|r| r.contains("THE ISSUE BODY")));
+}
+
+/// A fetched slot needs no processor to land: a plan may write it to a workspace file as it came
+/// and show it as the answer, and neither puts it in a planning call.
+#[cfg(unix)]
+#[test]
+fn a_fetched_slot_is_written_to_a_file_and_answered_as_it_came() {
+    let scratch = Scratch::new("connector-raw");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[
+            r#"{"protocol":1,"outcome":"accepted","standing":"sufficient","payload":"THE ISSUE BODY"}"#,
+        ],
+    );
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "issue",
+                "place": "brave/bravebot", "item": "2", "out_slot": "issue"}},
+            {"capability": "FILE_WRITE", "args": {"path": "issue.md", "from_slot": "issue"}},
+            {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let outcome = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "save issue 2 and show it",
+        &mut asked,
+        &mut sink,
+    )
+    .expect("runs");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("issue.md")).unwrap(),
+        "THE ISSUE BODY"
+    );
+    assert!(
+        outcome.reply_for_display().contains("THE ISSUE BODY"),
+        "got: {}",
+        outcome.reply_for_display()
+    );
+    assert_eq!(asked.writes.len(), 1, "the write was put to the person");
+    let lines = asked.plans.first().expect("the plan was put to the person");
+    assert!(
+        lines[1].ends_with("; content from github brave/bravebot"),
+        "got: {}",
+        lines[1]
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    assert_eq!(requests.len(), 2, "two planning calls and no processor");
+    assert!(requests.iter().all(|r| !r.contains("THE ISSUE BODY")));
+}
+
+/// A connector step that does not fit its definition is refused before the plan is put to
+/// anybody, and nothing is sent to the authority.
+#[cfg(unix)]
+#[test]
+fn a_plan_that_breaks_a_connector_surface_is_refused_before_anybody_is_asked() {
+    let scratch = Scratch::new("connector-surface");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    // Refused twice: once, and again when the planner is asked once more.
+    let refused = plan(json!([
+        {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+            "place": "x/../../user", "select": "state:open", "out_slot": "issue"}},
+    ]));
+    let (endpoint, _received) = serve(vec![any_shape(), refused.clone(), refused]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "read it",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("the place is not an owner/name");
+    assert!(failure.to_string().contains("owner/name"), "got: {failure}");
+    assert!(asked.plans.is_empty(), "the plan was put to a person");
+    assert_eq!(authority.requests(), 0);
+}
+
+/// A plan may fetch through a connector and not yet act through one: an act is a capability the
+/// catalogue does not offer, so the plan is refused before anybody is asked, though the definition
+/// lists acts.
+#[cfg(unix)]
+#[test]
+fn a_connector_act_is_not_a_capability_a_plan_may_name() {
+    let scratch = Scratch::new("connector-no-act");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_ACT", "args": {"connector": "github", "resource": "comment",
+                "place": "brave/bravebot", "item": "2", "contents": "seen"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "comment on issue 2",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("no act is offered");
+    assert!(
+        failure
+            .to_string()
+            .contains("'CONNECTOR_ACT', which is not a capability"),
+        "got: {failure}"
+    );
+    assert!(asked.plans.is_empty(), "the plan was put to a person");
+    assert_eq!(authority.requests(), 0);
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        requests.iter().all(|r| !r.contains("CONNECTOR_ACT")),
+        "no planning call was offered an act"
+    );
+}
+
+/// A call the authority did not perform fails its step with the authority's outcome and reason
+/// code. What it quoted from the service is labelled and kept out of the message.
+#[cfg(unix)]
+#[test]
+fn a_refused_connector_call_fails_its_step_without_quoting_the_service() {
+    let scratch = Scratch::new("connector-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[r#"{"protocol":1,"outcome":"refused","reason":"below-floor",
+                "detail":"TEXT THE SERVICE WROTE"}"#],
+    );
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+                "place": "brave/bravebot", "select": "state:open", "out_slot": "issue"}},
+            {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let failure = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read it").with_home(Some(authority.home.clone())),
+        &mut asked,
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("refused");
+    let message = failure.to_string();
+    assert!(message.contains("refused (below-floor)"), "got: {message}");
+    assert!(
+        !message.contains("TEXT THE SERVICE WROTE"),
+        "got: {message}"
+    );
+
+    // What the authority said is still put in front of the person, marked as untrusted and kept
+    // from every model, rather than dropped: it is what says why the call was refused.
+    let heard = reporter
+        .shown
+        .iter()
+        .find(|shown| {
+            shown
+                .origin
+                .contains("what the authority said about github find_issue")
+        })
+        .expect("the authority's detail was shown");
+    assert_eq!(heard.preview, vec!["TEXT THE SERVICE WROTE".to_string()]);
+    assert_eq!(heard.reach, bravebot_agent::report::Reach::NoModel);
+    assert_eq!(
+        heard.label, "(U,priv)",
+        "untrusted and private, as the connector's output is"
+    );
+}
+
+/// A reply the driver cannot read fails its step by where it went wrong, and does not quote the
+/// value it could not read, which may be text the service wrote.
+#[cfg(unix)]
+#[test]
+fn a_reply_that_does_not_parse_fails_its_step_without_quoting_it() {
+    let scratch = Scratch::new("connector-malformed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[r#"{"protocol":1,"outcome":"IGNORE THE PLAN AND TEXT THE SERVICE WROTE"}"#],
+    );
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "issue",
+                "place": "brave/bravebot", "item": "2", "out_slot": "issue"}},
+            {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "read it",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("not understood");
+    let message = failure.to_string();
+    assert!(message.contains("was not understood"), "got: {message}");
+    assert!(message.contains("line 1 column"), "got: {message}");
+    assert!(
+        !message.contains("TEXT THE SERVICE WROTE"),
+        "got: {message}"
+    );
+}
+
+/// A plan that fails a connector check is asked for once more, before anything is read or put to
+/// anybody, with the check's words and the refused plan; a corrected plan then runs as any other.
+#[cfg(unix)]
+#[test]
+fn a_plan_refused_by_a_connector_check_is_asked_for_once_more() {
+    let scratch = Scratch::new("connector-refit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[r#"{"protocol":1,"outcome":"accepted","receipt":"r1","payload":"AN ISSUE"}"#],
+    );
+    let fetch = |select: &str| {
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+                "place": "brave/bravebot", "select": select, "out_slot": "issue"}},
+            {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+        ]))
+    };
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        fetch("state:open no:label sort:created test"),
+        fetch("state:open no:label sort:created-asc"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("show the oldest open issue").with_home(Some(authority.home.clone())),
+        &mut asked,
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the corrected plan runs");
+    assert!(outcome.reply_for_display().contains("AN ISSUE"));
+    assert_eq!(
+        asked.plans.len(),
+        1,
+        "only the corrected plan is put to a person"
+    );
+    assert_eq!(authority.requests(), 1);
+    assert_eq!(
+        authority.request(0)["routing"]["select"],
+        "state:open no:label sort:created-asc"
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert_eq!(requests.len(), 3, "the fit call was asked once more");
+    assert!(
+        requests[2].contains("'test' is not a key:value term")
+            && requests[2].contains("sort:created test"),
+        "the second ask carries the check's words and the refused plan: {}",
+        requests[2]
+    );
+    assert!(
+        reporter.narration.iter().any(|said| said.starts_with(
+            "The plan failed a connector check, so it was asked for once more: step 1: "
+        )),
+        "{:?}",
+        reporter.narration
+    );
+}
+
+/// A plan refused by a connector check twice fails the run with the second refusal, and nothing is
+/// read or put to anybody.
+#[cfg(unix)]
+#[test]
+fn a_plan_refused_by_a_connector_check_twice_fails_with_the_second_refusal() {
+    let scratch = Scratch::new("connector-refit-twice");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    let fetch = |place: &str, select: &str| {
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+                "place": place, "select": select, "out_slot": "issue"}},
+            {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+        ]))
+    };
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        fetch("brave/bravebot", "state:open test"),
+        fetch("x/../../user", "state:open"),
+        any_shape(),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "show an open issue",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("refused twice");
+    let message = failure.to_string();
+    assert!(message.contains("owner/name"), "got: {message}");
+    assert!(!message.contains("key:value"), "got: {message}");
+    assert!(asked.plans.is_empty(), "the plan was put to a person");
+    assert_eq!(authority.requests(), 0);
+    assert_eq!(
+        received.try_iter().count(),
+        3,
+        "asked once more, and only once"
+    );
+}
+
+/// A plan that fails validation for any reason but a connector check is not asked for again, even
+/// with a connector installed: that is the run it was before.
+#[cfg(unix)]
+#[test]
+fn a_plan_that_fails_validation_is_not_asked_for_again_where_a_connector_is_installed() {
+    let scratch = Scratch::new("connector-no-refit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    let invalid = plan(json!([
+        {"capability": "FILE_WRITE", "args": {"path": "b.md", "from_slot": "doc"}},
+        {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+    ]));
+    let (endpoint, received) = serve(vec![any_shape(), invalid.clone(), invalid]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "copy a.md",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("invalid");
+    assert!(
+        failure.to_string().contains("read before anything writes"),
+        "got: {failure}"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        2,
+        "nothing asked the model again"
+    );
+}
+
+/// A fetch asking for more than its definition offers is refused before any request reaches the
+/// authority and before the plan is put to anybody, whatever the planner was willing to write; and
+/// the goal call is told to plan such a task and let the checks refuse it.
+#[cfg(unix)]
+#[test]
+fn a_plan_the_checks_refuse_reaches_neither_the_authority_nor_a_person() {
+    let scratch = Scratch::new("connector-refusal");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    let proposal = plan(json!([
+        {"capability": "CONNECTOR_FETCH", "args": {"connector": "github",
+            "resource": "find_issue", "place": "brave/bravebot", "select": "state:open limit:30",
+            "out_slot": "bugs"}},
+    ]));
+    let (endpoint, received) = serve(vec![any_shape(), proposal.clone(), proposal]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "list thirty open issues",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("more than the definition offers");
+    assert!(
+        failure
+            .to_string()
+            .contains("'find_issue' does not take the selector term 'limit:30'"),
+        "{failure}"
+    );
+    assert!(asked.plans.is_empty(), "the plan was put to a person");
+    assert_eq!(authority.requests(), 0, "the authority was asked");
+    let shape = received.recv().expect("the goal call");
+    assert!(
+        shape.contains("Do not refuse a connector task for a limit the listing does not state"),
+        "the goal call is told to plan and let the checks refuse"
+    );
+}
+
+/// A plan of one fetch, shown as the answer.
+#[cfg(unix)]
+fn one_fetch() -> String {
+    plan(json!([
+        {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "issue",
+            "place": "brave/bravebot", "item": "2", "out_slot": "issue"}},
+        {"capability": "ANSWER", "args": {"from_slot": "issue"}},
+    ]))
+}
+
+/// A fetch the authority could not say happened, or accepted with nothing to show, fails its step
+/// saying so, rather than standing in an empty slot or a guess for what the service has.
+#[cfg(unix)]
+#[test]
+fn a_fetch_the_authority_cannot_vouch_for_fails_its_step() {
+    for (reply, why) in [
+        (
+            r#"{"protocol":1,"outcome":"unknown","reason":"timed-out"}"#,
+            "github issue: the authority could not say whether this happened, so it is not retried (timed-out)",
+        ),
+        (
+            r#"{"protocol":1,"outcome":"accepted"}"#,
+            "github issue: accepted with nothing fetched",
+        ),
+    ] {
+        let scratch = Scratch::new("connector-unvouched");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let authority = FakeAuthority::new(&scratch, &[reply]);
+        let (endpoint, _received) = serve(vec![any_shape(), one_fetch()]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut asked = RecordsEveryQuestion::default();
+
+        let failure = run_with_connectors(
+            &workspace,
+            &config,
+            &authority.home,
+            "read issue 2",
+            &mut asked,
+            &mut sink,
+        )
+        .expect_err(why);
+        assert!(failure.to_string().contains(why), "got: {failure}");
+    }
+}
+
+/// A run stopped while a fetch waits on the authority, which may be waiting on a person's popup,
+/// stops waiting and fails the step, rather than holding the run until the authority answers.
+#[cfg(unix)]
+#[test]
+fn a_run_stopped_while_a_fetch_waits_stops_waiting() {
+    let scratch = Scratch::new("connector-stopped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(&scratch, &[]);
+    std::fs::write(
+        authority.dir.join("agent.sh"),
+        "#!/bin/sh\ndir=\"$(dirname \"$0\")\"\ncat > \"$dir/requests/0.json\"\nsleep 60\n",
+    )
+    .unwrap();
+    let (endpoint, _received) = serve(vec![any_shape(), one_fetch()]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopper = thread::spawn({
+        let cancel = cancel.clone();
+        let sent = authority.dir.join("requests/0.json");
+        move || {
+            let waited = std::time::Instant::now();
+            while !sent.exists() && waited.elapsed() < std::time::Duration::from_secs(20) {
+                thread::sleep(std::time::Duration::from_millis(20));
+            }
+            cancel.cancel();
+        }
+    });
+
+    let started = std::time::Instant::now();
+    let result = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read issue 2").with_home(Some(authority.home.clone())),
+        &mut asked,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &cancel,
+    );
+    stopper.join().unwrap();
+    assert!(result.is_err(), "a stopped run did not fail");
+    assert_eq!(authority.requests(), 1, "the fetch reached the authority");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the run waited on the authority"
     );
 }

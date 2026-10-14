@@ -140,6 +140,7 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-bedrock",
  "bravebot-config",
+ "bravebot-connector",
  "bravebot-core",
  "bravebot-filetype",
  "bravebot-i18n",

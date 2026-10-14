@@ -7,7 +7,8 @@ governs:
   - crates/connector/src/lib.rs
   - crates/config/src/connectors.rs
   - crates/config/src/connectors/forms.rs
-documented-by: none (gap: a page is owed once a manifest run calls a connector; until then nothing a person runs reaches this client)
+  - crates/agent/src/connectors.rs
+documented-by: none (gap: a manifest run fetches through a connector, and the page saying how to install a definition and its authority is owed)
 ---
 
 ## Scope
@@ -22,8 +23,9 @@ side, are
 [../design/connectors.md](../design/connectors.md) and
 [../design/credential-brokering.md](../design/credential-brokering.md).
 
-Nothing in a run calls the client or reads a definition yet. These clauses are what each owes the
-driver that will.
+A manifest run reads the installed definitions, tells the planner what they offer, holds the plan
+to them, and fetches through the client ([manifest.md](manifest.md)). A plan may not yet act
+through a connector.
 
 ## Clauses
 
@@ -109,6 +111,7 @@ and only goes back to the authority, which issued it.
 `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form`
 `verified-by: bravebot_connector::lib::a_link_is_kept_only_when_it_is_one_https_url_on_one_line`
 `verified-by: bravebot_connector::lib::a_reply_keeps_its_link_only_when_it_is_well_formed`
+`verified-by: bravebot_agent::manifest::a_fetch_the_authority_cannot_vouch_for_fails_its_step`
 `verified-by: bravebot_connector::lib::what_the_service_sent_carries_the_capabilitys_label_and_the_authoritys_fields_do_not`
 
 <a id="CONNECTOR-8"></a>
@@ -148,6 +151,7 @@ not having happened, and a hung authority never holds the run.
 `verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
 `verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`
 `verified-by: bravebot_connector::lib::a_reply_is_kept_though_a_program_the_authority_started_holds_its_output`
+`verified-by: bravebot_agent::manifest::a_run_stopped_while_a_fetch_waits_stops_waiting`
 
 <a id="CONNECTOR-10"></a>
 ### CONNECTOR-10: a definition is read from the person's own directory, writable by them alone
@@ -272,3 +276,58 @@ is made against one the authority would refuse:
 `verified-by: bravebot_config::connectors::a_fetch_narrows_only_by_terms_its_own_select_offers`
 `verified-by: bravebot_config::connectors::with_values_are_declared_with_a_form_exactly_when_a_resource_uses_with`
 `verified-by: bravebot_config::connectors::a_surface_or_name_the_authority_would_refuse_is_refused`
+
+<a id="CONNECTOR-17"></a>
+### CONNECTOR-17: a plan's connector steps are held to their definitions before anybody is asked
+
+Each connector step in a frozen plan is held to the definition it names before the plan is put to
+anybody: a connector that is installed and readable, a resource it offers for that step, only the
+fields that resource takes and exactly one of each either-or, each value in its form and among the
+values listed for its field, selector terms the resource offers, and one of its narrowing terms
+where it lists any. A field the definition gives a default for is filled before the plan is locked,
+unless the plan gave it in any shape or it is half of an either-or whose other half was given, so
+the line a person approves holds the value that will be sent.
+
+**Why.** The authority holds every request to the same rules, so a plan that breaks one would only
+fail at its step, after earlier steps had run. Here it fails before anything has.
+
+`verified-by: bravebot_agent::connectors::a_step_is_held_to_its_resource_fields_values_and_selector_terms`
+`verified-by: bravebot_core::selector::a_malformed_term_is_refused`
+`verified-by: bravebot_core::selector::a_pattern_matches_its_key_and_its_value_or_the_rest_of_it`
+`verified-by: bravebot_agent::connectors::a_fetch_names_a_place_only_when_its_resource_uses_one`
+`verified-by: bravebot_agent::connectors::a_value_outside_its_named_form_is_refused_before_anything_is_asked`
+`verified-by: bravebot_agent::connectors::mail_reads_take_a_selector_or_an_opaque_id_and_nothing_else`
+`verified-by: bravebot_agent::connectors::a_resource_that_lists_its_own_values_takes_only_those`
+`verified-by: bravebot_agent::connectors::a_fetch_whose_surface_lists_narrow_terms_uses_one_in_its_select`
+`verified-by: bravebot_agent::connectors::a_default_is_not_filled_beside_the_other_half_of_an_either_or`
+`verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
+`verified-by: bravebot_agent::connectors::a_connector_that_is_not_installed_or_could_not_be_read_refuses_the_plan`
+`verified-by: bravebot_agent::manifest::a_plan_that_breaks_a_connector_surface_is_refused_before_anybody_is_asked`
+
+<a id="CONNECTOR-18"></a>
+### CONNECTOR-18: the planner is told what a definition offers, and only that
+
+Where a connector is usable, the planner is told each one's fetch resources in the definition's own
+words, with the fields, selector terms, narrowing terms and listed values each takes, and today's
+date and the machine's time zone where it names one. The goal call is told the same resources in
+the definition's summaries and no step or field name. Where none is usable, no connector step is
+offered at all. Both calls are told which definitions are installed but refused, with why, whether
+or not another is usable.
+
+`verified-by: bravebot_agent::connectors::the_catalogue_offers_each_fetch_and_no_act`
+`verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_fetches_in_plain_words`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses`
+`verified-by: bravebot_agent::manifest::the_catalogue_offers_no_connector_step_where_none_is_installed`
+`verified-by: bravebot_agent::manifest::a_refused_definition_offers_no_step_and_is_named_with_its_reason`
+
+<a id="CONNECTOR-19"></a>
+### CONNECTOR-19: a grant is for one connector
+
+A run holds the connector capability for each connector its frozen plan names and for no other, and
+a grant for one connector is no grant for another. What a connector returns is untrusted and
+private. The call to the service is the authority's, made from its own process, so no request to
+the service passes this process's network path.
+
+`verified-by: bravebot_core::capability::a_connector_is_an_untrusted_private_effect_that_this_process_sends_nowhere`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
+`verified-by: bravebot_agent::manifest::a_run_is_granted_only_the_connectors_its_plan_names`

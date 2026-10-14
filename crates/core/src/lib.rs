@@ -35,6 +35,7 @@ pub mod pure;
 pub mod reference;
 pub mod remembered;
 pub mod safe;
+pub mod selector;
 pub mod slot;
 pub mod spelling;
 pub mod todo;
@@ -46,7 +47,7 @@ pub mod vetting;
 
 pub use ask::{Answer, Choice, Prompt, Question};
 pub use cancel::Cancel;
-pub use capability::{Capability, CapabilitySet, CapabilityToken, ServerAlias};
+pub use capability::{Capability, CapabilitySet, CapabilityToken, ConnectorName, ServerAlias};
 pub use command::{Pipeline, Stage};
 pub use delegate::{DelegateSpec, Kind as DelegateKind};
 pub use event::{Event, NullSink, Principle, RecordingSink, Role, Sink};

@@ -6,6 +6,7 @@ governs:
   - crates/core/src/manifest.rs
   - crates/core/src/policy.rs
   - crates/agent/src/manifest.rs
+  - crates/agent/src/connectors.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
   - crates/session/src/sessions.rs
@@ -51,12 +52,23 @@ shown to the planner. The gate is that invariant written where a change has to p
 
 Two calls happen: the goal in plain words, then the same work fitted to the tool set. What is
 forbidden is a re-plan: a plan that fails validation fails the run, and nothing plans again once
-a step has read something.
+a step has read something. The one exception comes before anything is read or put to anybody: a
+plan whose connector steps fail the check against their definitions is asked for once more, the
+fit call being shown the plan it gave and the check's own words about it, and a second plan that
+fails anything fails the run with its own refusal. What that call is shown is the planner's own
+plan and the driver's words, so its context is still the one this clause admits, and a plan with
+no connector step never fails that check, so a run that uses no connector is never asked again.
+Where no connector is usable, a connector step names a capability the catalogue did not offer, and
+the plan is refused as one naming any other unknown capability is, without that check.
 
 `verified-by: bravebot_core::policy::every_planning_call_is_allowed_from_a_clean_context`
 `verified-by: bravebot_core::policy::a_planner_shown_untrusted_content_may_not_plan`
 `verified-by: bravebot_agent::manifest::the_audit_trail_records_each_planning_call`
 `verified-by: bravebot_agent::manifest::a_manifest_that_is_not_json_fails_without_another_call`
+`verified-by: bravebot_agent::manifest::a_plan_refused_by_a_connector_check_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest::a_connector_step_where_no_connector_is_usable_is_not_a_capability`
+`verified-by: bravebot_agent::manifest::a_plan_refused_by_a_connector_check_twice_fails_with_the_second_refusal`
+`verified-by: bravebot_agent::manifest::a_plan_that_fails_validation_is_not_asked_for_again_where_a_connector_is_installed`
 `verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
 `verified-by: bravebot_agent::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
 
@@ -107,8 +119,14 @@ schema does not name. If a plan cannot express something, the plan is wrong, not
 
 `edit_file` is unavailable, because locating a passage means having read the file and the planner
 has read nothing. `todo_write` is unavailable because the manifest is already the task list.
-There is no shell and no `run`: a command string is destination and payload at once.
+There is no shell and no `run`: a command string is destination and payload at once. The one
+program this mode starts is a connector's authority, at the absolute path in the person's own
+definition, with one fixed argument and the request on its standard input
+([connectors.md](connectors.md)). A plan may fetch through a connector and may not yet act
+through one.
 
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
+`verified-by: bravebot_agent::manifest::a_connector_act_is_not_a_capability_a_plan_may_name`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
@@ -128,7 +146,8 @@ Optional routing is filled at validation with an explicit default, where the pla
 field or left it empty and nowhere else, so the driver never invents a destination that did not
 pass the lock and a default never stands in for a value the plan gave. An omitted listing pattern
 or search include is locked as no filter, not as a glob of the empty string, which would match
-nothing.
+nothing. A connector fetch's connector, resource, place, item and selector are routing, and the
+optional ones are locked as the absence of a value.
 
 `verified-by: bravebot_core::manifest::every_effect_destination_is_named_for_the_routing_lock`
 `verified-by: bravebot_core::manifest::an_omitted_search_directory_is_locked_as_the_workspace`
@@ -139,6 +158,8 @@ nothing.
 `verified-by: bravebot_agent::manifest::a_plan_whose_routing_field_is_not_text_is_refused`
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
+`verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
+`verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 
 <a id="MANIFEST-7"></a>
 ### MANIFEST-7: the only path to a screen is the one the plan named
@@ -194,8 +215,10 @@ observe before it plans. Name a workspace file instead.
 Between freezing a plan and walking it, the frozen plan is put to a person: the task in their own
 words, then every step in order, each naming its tier, what it would do, and every routing field the
 step fixed. The routing is part of what is being answered for, so the line a person reads carries the
-directory a search runs in and the glob it filters by, not the pattern alone. Declining stops the run,
-and what was declined comes back with the error under MANIFEST-3, so the plan can still be read.
+directory a search runs in and the glob it filters by, not the pattern alone. A file write that carries
+a slot names where that slot's content came from, a connector's place or several, wherever that is
+anything but the workspace. Declining stops the run, and what was declined comes back with the
+error under MANIFEST-3, so the plan can still be read.
 Nothing has been read or written by then, so a declined run leaves the workspace exactly as it was.
 
 The question is asked once, and there is no standing form of it. Nothing between the plan and the
@@ -227,6 +250,8 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_tui::confirm::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
 `verified-by: bravebot_tui::remote_confirm::a_plan_crosses_with_every_step_and_the_answer_comes_back`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
+`verified-by: bravebot_core::manifest::a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace`
+`verified-by: bravebot_agent::manifest::a_fetched_slot_is_written_to_a_file_and_answered_as_it_came`
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
 `verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
 
@@ -305,6 +330,19 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
 `verified-by: bravebot_tui::confirm::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
+
+<a id="MANIFEST-12"></a>
+### MANIFEST-12: an authority's detail about a call reaches only the margin
+
+The detail an authority reports about a connector fetch it did not accept is drawn in the margin
+every untrusted byte is drawn in, labelled as the connector's output. It goes to no model and into
+no step's failure line, which holds only the outcome and the authority's reason code, and a reply
+that does not parse is reported by where it failed and not by what it held.
+
+**Why.** The detail may quote the service, which is text other people wrote.
+
+`verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service`
+`verified-by: bravebot_agent::manifest::a_reply_that_does_not_parse_fails_its_step_without_quoting_it`
 
 ## Known costs
 

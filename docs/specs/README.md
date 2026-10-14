@@ -35,7 +35,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 14 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 31 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
-| [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
+| [manifest.md](manifest.md) | `MANIFEST` | 12 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 43 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 21 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 27 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
@@ -48,7 +48,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 31 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 18 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
-| [connectors.md](connectors.md) | `CONNECTOR` | 16 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
+| [connectors.md](connectors.md) | `CONNECTOR` | 19 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 16 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 9 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
