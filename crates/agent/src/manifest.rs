@@ -1959,6 +1959,23 @@ fn connector_act<S: Sink>(
                  connectors: &crate::connectors::Connectors,
                  target: &Locked,
                  request: &mut bravebot_connector::Request| {
+        request.receipt = match step.arg("on").and_then(Arg::text) {
+            Some(on) => Some(
+                connectors
+                    .receipt(&SlotId::new(on))
+                    .ok_or_else(|| format!("'{on}' returned no item to act on"))?
+                    .to_string(),
+            ),
+            None => None,
+        };
+        request.title =
+            Some(step.text("title").trim().to_string()).filter(|title| !title.is_empty());
+        request.release = release.map(|release| bravebot_connector::ReleaseLine {
+            from: release.origins.iter().map(ToString::to_string).collect(),
+            to: release.destination(),
+        });
+        // Released last, once nothing else here can fail, so a release is recorded only for a
+        // request that is then made.
         let destination = manifest::destination(&target.name, &target.place);
         let text = match step.arg("from_slot").and_then(Arg::text) {
             Some(slot) => {
@@ -1980,21 +1997,6 @@ fn connector_act<S: Sink>(
             // A resource that takes no text is sent none, and says what it does by its option.
             None => None,
         };
-        request.receipt = match step.arg("on").and_then(Arg::text) {
-            Some(on) => Some(
-                connectors
-                    .receipt(&SlotId::new(on))
-                    .ok_or_else(|| format!("'{on}' returned no item to act on"))?
-                    .to_string(),
-            ),
-            None => None,
-        };
-        request.title =
-            Some(step.text("title").trim().to_string()).filter(|title| !title.is_empty());
-        request.release = release.map(|release| bravebot_connector::ReleaseLine {
-            from: release.origins.iter().map(ToString::to_string).collect(),
-            to: release.destination(),
-        });
         Ok(text)
     };
     let (target, reply) = call_connector(policy, connectors, index, step, carry)?;

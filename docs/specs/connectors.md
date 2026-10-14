@@ -317,6 +317,7 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 `verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_a_fetch_chose_and_narrowed`
 `verified-by: bravebot_agent::connectors::an_act_that_takes_values_from_its_item_is_planned_without_them`
 `verified-by: bravebot_agent::connectors::an_acts_own_values_replace_the_definitions_for_its_option`
+`verified-by: bravebot_agent::connectors::an_act_that_takes_no_text_takes_no_slot`
 `verified-by: bravebot_agent::manifest::plans_the_checks_refuse_reach_neither_the_authority_nor_a_person`
 `verified-by: bravebot_agent::manifest::a_plan_that_gives_a_value_the_item_supplies_is_refused_before_anybody_is_asked`
 
@@ -358,10 +359,13 @@ the service passes this process's network path.
 
 The line a person approves for a connector act says whether its effect reaches further than its
 text, the text and title the plan wrote for it, and what the authority fills in from the item it
-lands on and from which fetch. The words are the plan's and the definition's, and nothing on the
-line names a service.
+lands on, such as a reply's recipient, and from which fetch or named item. The words are the plan's
+and the definition's, and nothing on the line names a service. A character that would draw a line
+of its own, or reorder or hide text without showing itself, is shown as its escape.
 
 `verified-by: bravebot_agent::connectors::a_high_impact_act_says_so_on_its_plan_line`
 `verified-by: bravebot_agent::connectors::the_plan_line_says_what_the_authority_fills_in_and_from_which_fetch`
 `verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
 `verified-by: bravebot_agent::manifest::a_reply_is_sent_with_no_recipient_or_title_and_the_plan_line_says_who_fills_them_in`
+`verified-by: bravebot_agent::connectors::text_that_reorders_or_hides_itself_is_escaped_on_the_plan_line`
+`verified-by: bravebot_agent::connectors::the_note_names_the_item_an_act_named_itself`

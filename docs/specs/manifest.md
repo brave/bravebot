@@ -376,6 +376,11 @@ slot may go to and where its content came from: a workspace read, a connector fe
 union of what a processor read. The slot is released to that place and nowhere else, and not to a
 screen. Content the plan wrote itself releases nothing.
 
+A release fixes the account and the place. Whom an act addresses within that place, such as the
+recipient of a reply, is what its definition takes from the item the act lands on: the plan line
+names it, and the authority's popup shows it before anything is sent, but the release does not fix
+it, and an item a fetch chose without narrowing is one its content chose.
+
 **Why.** The plan is written from the task before anything is read, so a release fixed from it
 lets fetched content change what a slot says and never where it goes.
 

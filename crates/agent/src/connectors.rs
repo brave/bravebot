@@ -3,7 +3,7 @@
 //!
 //! Nothing here names a service. A definition's surface says which resources exist, which fields
 //! each takes, the form each field's value must have, the values a field may take and the selector
-//! terms a fetch accepts, and this compares a plan's text against it. Comparing text a person put
+//! terms a step accepts, and this compares a plan's text against it. Comparing text a person put
 //! in their own directory against text the planner wrote from the task alone decides nothing from
 //! anything a service sent.
 
@@ -329,9 +329,12 @@ impl Connectors {
                 .map(|resource| &resource.bound)
                 .filter(|bound| !bound.is_empty());
             if let Some(bound) = bound {
+                let from = match step.text("on") {
+                    "" => format!("item {}", one_line(step.text("item"))),
+                    on => format!("the item '{}' chose", one_line(on)),
+                };
                 said.push(format!(
-                    "the authority fills in, from the item '{}' chose: {}",
-                    step.text("on"),
+                    "the authority fills in, from {from}: {}",
                     described(bound, |field, words| format!("{field} = {words}"))
                 ));
             }
@@ -568,12 +571,18 @@ fn tool_for(step: StepKind) -> &'static str {
     }
 }
 
-/// The first 200 characters of text the plan wrote, on one line: a control character or a line or
-/// paragraph separator is shown as its escape, so the text cannot draw a line of its own.
+/// The first 200 characters of text the plan wrote, on one line: a control character, a line or
+/// paragraph separator, or a character that reorders or hides text without showing itself (a
+/// bidirectional control or a zero-width one) is shown as its escape, so the text cannot draw a line
+/// of its own or read otherwise than it is.
 fn one_line(text: &str) -> String {
     let mut shown = String::new();
     for c in text.chars().take(200) {
-        if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+        let unseen = matches!(
+            c,
+            '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        );
+        if c.is_control() || unseen {
             shown.extend(c.escape_default());
         } else {
             shown.push(c);
@@ -1680,5 +1689,66 @@ mod tests {
             shown.contains("filled in from the fetch named in on, so never give: recipient (the author of that item); title (Re: and that item's title)"),
             "{shown}"
         );
+    }
+
+    /// Text that reorders or hides other text without showing itself is escaped on the line a
+    /// person approves, so what they read is what is sent.
+    #[test]
+    fn text_that_reorders_or_hides_itself_is_escaped_on_the_plan_line() {
+        assert_eq!(
+            one_line("pay\u{202E}evil\u{200B}x\u{2066}y\u{FEFF}"),
+            "pay\\u{202e}evil\\u{200b}x\\u{2066}y\\u{feff}"
+        );
+        assert_eq!(one_line("plain café"), "plain café");
+    }
+
+    /// An act that names its item says on its line that the authority fills values in from that
+    /// item, never from a fetch it did not name.
+    #[test]
+    fn the_note_names_the_item_an_act_named_itself() {
+        let mail = connector(
+            "mail",
+            serde_json::json!({
+                "resources": {
+                    "reply": { "step": "act", "uses": ["place", "item|on"], "summary": "reply",
+                               "bound": { "recipient": "the sender" } }
+                },
+                "forms": { "item": "opaque-id" }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([("mail".to_string(), Ok(mail))]));
+        let draft = Draft::new(vec![
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "mail")
+                .with_text("resource", "reply")
+                .with_text("place", "me")
+                .with_text("item", "abc123")
+                .with_text("contents", "thanks"),
+        ]);
+        let plan = validate_for_tests(&draft).unwrap();
+        connectors.check(&plan).unwrap();
+        let note = &connectors.notes(&plan)[&0];
+        assert!(
+            note.contains("the authority fills in, from item abc123: recipient = the sender"),
+            "{note}"
+        );
+    }
+
+    /// An act whose option says what it does carries no text from a slot either, so nothing read
+    /// is released to it.
+    #[test]
+    fn an_act_that_takes_no_text_takes_no_slot() {
+        let refused = checked(vec![
+            fetch("issue", "i").with_text("item", "4"),
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "github")
+                .with_text("resource", "modify")
+                .with_text("place", "brave/bravebot")
+                .with_text("item", "4")
+                .with_text("option", "close")
+                .with_text("from_slot", "i"),
+        ])
+        .unwrap_err();
+        assert!(refused.contains("takes no text"), "{refused}");
     }
 }

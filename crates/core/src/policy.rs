@@ -5227,7 +5227,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Release a quarantined value into the connector destination its plan named for it.
     ///
-    /// The precommitted release safehouse calls `declassify_slot`: the slot and its one
+    /// The precommitted release SafeHouse calls `declassify_slot`: the slot and its one
     /// destination were entered into the [`ReleasePlan`] from the frozen plan, before anything
     /// was read, and a person approved the plan with the release named on its line. So content
     /// can change what the slot says and never where it goes. Anything not precommitted, a
