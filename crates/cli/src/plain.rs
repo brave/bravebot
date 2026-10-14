@@ -747,6 +747,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
             .with_confined_runs(true)
+            .asking_about_unconfined(true)
             .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.answers.asked_about.clone())

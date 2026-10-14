@@ -246,6 +246,16 @@ at the prompt, and it takes every rule a write takes: the permission rules, the 
 for that path, and the confinement that keeps a write inside the workspace. `>>` is a write, and
 `2>&1` renames a stream and touches no file.
 
+**A redirection outside the workspace needs a line with no sandbox.** bravebot, not the sandboxed
+program, opens the file a redirection names, so a destination outside the workspace and the
+directories you opened is refused. When you ask for a file there, such as `create ../hello.txt with
+howdy`, the planner is told it can start the line with `unconfined: true`. You are asked about that
+one line every time, the prompt lists the file and says the line runs with no sandbox, and no answer
+to it is remembered. The same redirection runs without the argument under `--sandbox off`, where no
+program is sandboxed. A delegate, the desktop app, and the `strict` and `read-only` modes do not
+accept it, and neither does a directory you did not trust. The file tools stay inside the workspace
+whatever you answer.
+
 **`> /dev/null` discards, so it is not a write.** Sending a stream to `/dev/null` (with `>`, `>>`,
 `2>`, `2>>` or `&>`) writes no file, so the path joins no write set and no write rule is asked about
 it; the prompt still shows where the stream went. Only that exact spelling counts: `/dev/../dev/null`,

@@ -1006,11 +1006,14 @@ fn table(
                         "description": "Start this one line with no sandbox, for a program \
                                         that has to write where the sandbox does not let it, \
                                         such as a login that stores a credential in its own \
-                                        directory. Only where the session is told it accepts \
-                                        it. The user is asked about the line every time, \
-                                        told that it runs with no sandbox, and no answer to \
-                                        it is remembered. What it prints is not trusted. Do \
-                                        not combine it with 'scopes'."
+                                        directory, or for a line that redirects its output to \
+                                        a file outside the workspace, which a sandboxed line \
+                                        cannot do. Only where the session is told it accepts \
+                                        it. The user is asked about the line every time, shown \
+                                        the files it writes and told that it runs with no \
+                                        sandbox, and no answer to it is remembered. What it \
+                                        prints is not trusted. Do not combine it with \
+                                        'scopes'."
                     },
                     "directory": {
                         "type": "string",
@@ -2042,6 +2045,9 @@ pub struct Tools<'a> {
     /// Read only where `confine_runs` is true. A delegate inherits the spawning turn's, so the
     /// mode is no looser one level down.
     pub sandbox: bravebot_sandbox::SandboxMode,
+    /// Whether the front end can put a line that starts with no sandbox to a person
+    /// ([`Task::asks_about_unconfined`](crate::turn::Task)).
+    pub asks_about_unconfined: bool,
 }
 
 /// A host list a unit test sets for the runs on its thread, read in place of the settled one.
@@ -5610,16 +5616,26 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
         }
-        Err(e) => Produced::problem(format!(
-            "error: {}",
-            workspace_failure(
-                policy,
-                "write_file",
-                path_field(destination),
-                &e,
-                &shown_path
-            )
-        )),
+        Err(e) => {
+            // A write that leaves the workspace can still be made by a line the person approves
+            // with no sandbox, which the planner has no other way to learn of (SANDBOX-29).
+            let way_out = match e {
+                crate::workspace::WorkspaceError::Escapes { .. } => {
+                    unconfined_way_out(policy, tools)
+                }
+                _ => "",
+            };
+            Produced::problem(format!(
+                "error: {}{way_out}",
+                workspace_failure(
+                    policy,
+                    "write_file",
+                    path_field(destination),
+                    &e,
+                    &shown_path
+                )
+            ))
+        }
     }
 }
 
@@ -7734,12 +7750,34 @@ fn request_path<S: Sink, C: Confirmer>(
                 "error: 'path' names one path and takes no pattern; nothing was asked.",
             );
         }
-        Err(_) => {
-            return Produced::problem(
-                "refused: that path cannot be reached by a program this way, whatever the \
-                 person answers; nothing was asked. Say which path the work needs, and what \
-                 for, so the person can arrange it.",
-            );
+        Err(refusal) => {
+            // Said, because a refusal that names nothing leaves the planner asking for the
+            // directory above, then the file, then trying another tool. Only what is true of the
+            // path, never which of the person's settings decided it.
+            let why = match refusal {
+                RequestRefusal::CredentialLocation => {
+                    "it is at or inside a place that holds credentials"
+                }
+                RequestRefusal::PersistenceLocation => {
+                    "a program that could write there could leave code that runs later with no \
+                     sandbox"
+                }
+                RequestRefusal::Denied => "the user's own sandbox deny list covers it",
+                _ => {
+                    "it is too broad or holds what no program is lent: a filesystem root, the \
+                     home directory or a directory above it, ~/.ssh or ~/.bravebot"
+                }
+            };
+            let way_out = if write {
+                unconfined_way_out(policy, tools)
+            } else {
+                ""
+            };
+            return Produced::problem(format!(
+                "refused: that path cannot be lent to a program, whatever the person answers, \
+                 because {why}; nothing was asked{way_out}. Say which path the work needs, and \
+                 what for, so the person can arrange it."
+            ));
         }
     };
 
@@ -7848,6 +7886,52 @@ fn unconfined_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Re
         true => Ok(()),
         false => Err(NOT_ACCEPTING_UNCONFINED.to_string()),
     }
+}
+
+/// What a planner whose write was refused for leaving the workspace is told it can do instead, or
+/// nothing where the session would not accept the request (SANDBOX-29).
+///
+/// Said only where [`unconfined_accepted`] holds and the front end can ask about the line, so the
+/// planner is never pointed at an argument the session or its window would refuse. The person is
+/// still asked, and the prompt shows the file. Worded to follow a refusal from
+/// [`crate::workspace::WorkspaceError::describe`], which ends without a full stop, and to end
+/// without one so a caller can go on.
+fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'static str {
+    match tools.asks_about_unconfined && unconfined_accepted(policy, tools).is_ok() {
+        true => {
+            ". A run line that redirects its output to a file there, started with \
+             'unconfined': true, can write it: the person is asked to approve that one line, \
+             which shows the file and runs with no sandbox"
+        }
+        false => "",
+    }
+}
+
+/// Whether the redirection targets of a `run` line may leave the workspace (CMDLINE-5).
+///
+/// The confinement of a target exists because this process opens the file and not the stage, so a
+/// destination outside the workspace would reach what the stage's profile holds its programs back
+/// from. A line whose programs start with no profile has nothing held back: one the person
+/// approved with no sandbox (SANDBOX-29), or any line under the mode `off`. Never a delegate,
+/// whose files are the ones its definition lets it write (DELEGATE-28).
+fn redirections_may_leave_the_workspace(unconfined: bool, tools: &Tools<'_>) -> bool {
+    redirections_may_leave(
+        unconfined,
+        tools.delegated,
+        tools.confine_runs,
+        tools.sandbox,
+    )
+}
+
+/// The rule [`redirections_may_leave_the_workspace`] applies, over the facts it reads, so each row
+/// is one a test can walk.
+fn redirections_may_leave(
+    unconfined: bool,
+    delegated: bool,
+    confine_runs: bool,
+    mode: bravebot_sandbox::SandboxMode,
+) -> bool {
+    unconfined || (!delegated && confine_runs && mode == bravebot_sandbox::SandboxMode::Off)
 }
 
 /// The rule [`unconfined_accepted`] applies, over the facts it reads, so each refusal is a row of a
@@ -8159,12 +8243,21 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     // A redirection names a file the run opens itself, so the confinement every other write goes
-    // through is applied here to the path, and again immediately before the run opens it.
+    // through is applied here to the path, and again immediately before the run opens it. Not for a
+    // line whose programs start with no profile: there is nothing for the target to get past, and
+    // the person is shown the file before the line runs (CMDLINE-5).
+    let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
     for path in &plan.writes {
-        if let Err(escape) = tools.workspace.confines(path) {
+        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
             let target = path.display().to_string();
+            let way_out = match escape {
+                crate::workspace::WorkspaceError::Escapes { .. } => {
+                    unconfined_way_out(policy, tools)
+                }
+                _ => "",
+            };
             return Produced::problem(format!(
-                "refused: {}",
+                "refused: {}{way_out}",
                 workspace_failure(policy, "run", "command", &escape, &target)
             ));
         }
@@ -8681,8 +8774,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // Confined again where it lands now, since the parts of the line before this one
                 // have run since the check above and may have left a link at this name. At every
                 // open and not only the first, because a part run between two opens of one
-                // destination can have replaced it with a link (CMDLINE-5).
-                if let Err(escape) = tools.workspace.confines(path) {
+                // destination can have replaced it with a link (CMDLINE-5). Not for a line whose
+                // programs have no profile, for the reason the check above is not.
+                if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
                     let target = path.display().to_string();
                     let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
@@ -12759,6 +12853,34 @@ mod tests {
             assert_eq!(
                 unconfined_is_accepted(confine, mode, trusted, pinned, delegated),
                 accepted,
+                "{why}"
+            );
+        }
+    }
+
+    /// CMDLINE-5: a redirection target may leave the workspace for a line the person approved with no
+    /// sandbox and for any line under `off`, and for no other: not under a mode that keeps the
+    /// profile, not in a delegate whatever the mode, and not in a turn nobody turned confinement on
+    /// for. The rows after the first two are the controls, so a function that allowed everything
+    /// fails them. The regression it rejects is the confinement of a redirection dropped for a line
+    /// that still has a profile, which would let a stage's own output file reach what the profile
+    /// holds it back from.
+    #[test]
+    fn a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile() {
+        use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        for (unconfined, delegated, confine, mode, leaves, why) in [
+            (true, false, true, WorkspaceWrite, true, "an approved line"),
+            (false, false, true, Off, true, "off"),
+            (false, false, true, WorkspaceWrite, false, "workspace-write"),
+            (false, false, true, Strict, false, "strict"),
+            (false, false, true, ReadOnly, false, "read-only"),
+            (false, true, true, Off, false, "a delegate under off"),
+            (false, false, false, Off, false, "no confinement turned on"),
+            (false, false, false, WorkspaceWrite, false, "a plain turn"),
+        ] {
+            assert_eq!(
+                redirections_may_leave(unconfined, delegated, confine, mode),
+                leaves,
                 "{why}"
             );
         }
@@ -17492,6 +17614,7 @@ mod tests {
                 run_directory: &mut run_directory,
                 confine_runs: false,
                 sandbox: bravebot_sandbox::SandboxMode::default(),
+                asks_about_unconfined: false,
                 remembering: None,
                 advising: None,
             })

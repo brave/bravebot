@@ -285,6 +285,22 @@ destination that lands outside the workspace and every opened directory at that 
 opened, and the line stops there. The window between that check and the open is the one the known
 costs of [trust-map.md](../trust-map.md) accept for every write.
 
+**The one line it is not applied to is a line whose programs start with no profile**: one the
+person approved with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)), and any line under the
+mode `off` ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), but not a delegate's. This process opens a
+destination in place of the stage, so the confinement is what keeps a redirection from reaching
+what the stage's profile holds its programs back from. Where the programs have no profile there is
+nothing for it to hold back, and a program in the same line can already write the same file. The
+prompt lists every destination, the person's `deny` rules still refuse a path, and a destination
+that is outside every opened directory is asked about under the name it was written with
+([TRUST-18](../trust-map.md#TRUST-18)). When the line is refused for leaving the workspace in a
+session that would accept the request, the refusal says that `unconfined` is the argument that
+makes the write possible.
+
+`verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
+
 `verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
 `verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
 `verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
