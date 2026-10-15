@@ -21875,6 +21875,49 @@ mod tests {
         assert_eq!(session.input(), "second", "the history was out of reach");
     }
 
+    /// A paragraph in the box has rows of its own, and Up moves between them first. Taking the
+    /// queue back from the bottom row would pull the waiting prompts in whenever the person only
+    /// reached for the row above, and from the top row there is nowhere left to go but the queue.
+    #[test]
+    fn up_reaches_the_queue_only_from_the_top_row_of_a_paragraph() {
+        let mut session = Session::new("none");
+        for c in "first".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+        for c in "waiting".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "top".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+        );
+        for c in "bottom".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(session.input(), "top\nbottom");
+        assert_eq!(session.queued.len(), 1);
+
+        handle_key_while_working(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.queued.len(),
+            1,
+            "Up took the queue back from the bottom row of a paragraph"
+        );
+        assert_eq!(session.input(), "top\nbottom");
+
+        handle_key_while_working(&mut session, key(KeyCode::Up));
+        assert!(
+            session.queued.is_empty(),
+            "Up did not reach the queue from the top row"
+        );
+        assert_eq!(session.input(), "waiting\ntop\nbottom");
+    }
+
     /// Shift-Enter writes a paragraph mid-turn as it does at rest, so it must not be caught by
     /// the arm that queues. A queued half-sentence is worse than one that waits to be finished.
     #[test]

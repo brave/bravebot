@@ -898,6 +898,7 @@ flight, which is aimed at something else entirely and costs the answer being wri
 
 `verified-by: bravebot_tui::app::up_takes_back_everything_waiting_rather_than_a_copy_of_it`
 `verified-by: bravebot_tui::app::up_walks_the_history_again_once_nothing_is_waiting`
+`verified-by: bravebot_tui::app::up_reaches_the_queue_only_from_the_top_row_of_a_paragraph`
 `verified-by: bravebot_tui::app::taking_the_queue_back_takes_it_out_of_the_turns_reach`
 `verified-by: bravebot_tui::app::a_prompt_the_turn_has_taken_cannot_be_taken_back`
 `verified-by: bravebot_tui::state::taking_the_queue_back_puts_every_waiting_prompt_in_the_box`
