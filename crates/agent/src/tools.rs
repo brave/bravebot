@@ -1357,7 +1357,23 @@ fn table(
     if arming.offered() {
         tools.push(Tool::function(
             "watch_file",
-            "Be told when one file changes, with no turn of yours running to notice it. This              arms a standing watch: the file is looked at every few seconds from now on, and the              first look that finds its size or modification time moved, or finds it removed or newly there, begins a new turn naming              this watch and this path. The watch outlives this turn and every turn after it.                           Nothing is read, now or when it fires. A fire says the path looks written to, no longer exists, or now exists, and says nothing else about the file, so read it then if you need what is in it. Two              things follow that are worth saying to the user: a write that restores the same              bytes fires the watch, and a change that leaves the modification time alone does              not.                           Use this where somebody asked to be told when a file changes. Use schedule_next              instead where what is being waited on is not one file, or where they asked for              their own line to be run again.                           One file, which may not exist yet, never a directory and never a pattern, and the path cannot be              changed once the watch is armed. A watch lives at most a week, at most 8 are live              at once, and the user sees every live one: they end one with /watch stop <n>, and              ctrl-c ends them all.",
+            "Be told when one file changes, with no turn of yours running to notice it. This \
+             arms a standing watch: the file is looked at every few seconds from now on, and the \
+             first look that finds its size or modification time moved, or finds it removed or \
+             newly there, begins a new turn naming this watch and this path. The watch outlives \
+             this turn and every turn after it.\n\n\
+             Nothing is read, now or when it fires. A fire says the path looks written to, no \
+             longer exists, or now exists, and says nothing else about the file, so read it then \
+             if you need what is in it. Two things follow that are worth saying to the user: a \
+             write that restores the same bytes fires the watch, and a change that leaves the \
+             modification time alone does not.\n\n\
+             Use this where somebody asked to be told when a file changes. Use schedule_next \
+             instead where what is being waited on is not one file, or where they asked for \
+             their own line to be run again.\n\n\
+             One file, which may not exist yet, never a directory and never a pattern, and the \
+             path cannot be changed once the watch is armed. A watch lives at most a week, at \
+             most 8 are live at once, and the user sees every live one: they end one with \
+             /watch stop <n>, and ctrl-c ends them all.",
             json!({
                 "type": "object",
                 "properties": {
@@ -2971,7 +2987,6 @@ impl Produced {
         self
     }
 
-    /// A listing whose entries were reserved rather than shown.
     /// Say the result was cut short by a cap, whoever ends up being allowed to read it.
     fn capped(mut self, incomplete: bool) -> Self {
         self.incomplete = incomplete;
@@ -2984,6 +2999,7 @@ impl Produced {
         self
     }
 
+    /// A listing whose entries were reserved rather than shown.
     fn with_entries(mut self, entries: Entries) -> Self {
         self.entries = Some(entries);
         self
@@ -4165,7 +4181,6 @@ fn confirmed(text: impl Into<String>, note: impl Into<String>) -> Produced {
     Produced::new(Labelled::trusted(text.into()), "", note)
 }
 
-/// Extract a string argument the model supplied, labelled untrusted because it is.
 /// A target argument as one line, whether it was given as a string or a list.
 ///
 /// `search` takes either, and a call that named three patterns must not announce itself with a
@@ -4182,6 +4197,7 @@ fn target_text(arguments: &Value, key: &str) -> Option<String> {
     }
 }
 
+/// Extract a string argument the model supplied, labelled untrusted because it is.
 fn argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
     let raw = arguments.get(key)?.as_str()?.to_string();
     Some(Labelled::new(
@@ -7125,14 +7141,6 @@ fn watch_file<S: Sink>(
     .watching(path)
 }
 
-/// Hand quarantined content to an isolated model and quarantine what comes back.
-///
-/// The tool that makes an untrusted workspace workable. Everything the planner cannot read, a
-/// processor can, and everything a processor produces the planner still cannot read: what comes
-/// back is a reference, exactly as a read of an untrusted file is.
-///
-/// Nothing here decides anything from content. The references are names the driver handed out,
-/// the instruction is the planner's, and the label on the result is computed by the kernel from
 /// Show a command's output to the user, and give it to the planner if they agree.
 ///
 /// One of the places bytes cross out of quarantine into the planner's context on nothing but a
@@ -10314,6 +10322,14 @@ fn advise<S: Sink>(
     }
 }
 
+/// Hand quarantined content to an isolated model and quarantine what comes back.
+///
+/// The tool that makes an untrusted workspace workable. Everything the planner cannot read, a
+/// processor can, and everything a processor produces the planner still cannot read: what comes
+/// back is a reference, exactly as a read of an untrusted file is.
+///
+/// Nothing here decides anything from content. The references are names the driver handed out,
+/// the instruction is the planner's, and the label on the result is computed by the kernel from
 /// the inputs before the processor runs.
 fn spawn_processor<S: Sink>(
     policy: &mut Policy<'_, S>,
