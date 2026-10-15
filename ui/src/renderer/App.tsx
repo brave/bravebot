@@ -40,6 +40,7 @@ import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
 import type { ExportFormat } from '../shared/export'
+import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkOf, forkedSessions } from '../shared/forks'
 import { activeBots, botProjects, type Bot } from '../shared/bots'
@@ -1004,7 +1005,7 @@ export function App(): React.JSX.Element {
   /** Start a run from whatever is in the composer, where a run can take it. */
   const submitPlan = useCallback(() => {
     const task = draft.trim()
-    if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    if (!handleRef.current || !canSend(live, backendReady, task)) return
     // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
     // carries a briefing a run has no place for.
     if (live?.attachments?.length || live?.bot) return
@@ -1015,10 +1016,10 @@ export function App(): React.JSX.Element {
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
     const prompt = draft.trim()
-    if (!prompt || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    if (!handleRef.current || !canSend(live, backendReady, prompt)) return
     setDraft('')
     void send(prompt)
-  }, [draft, live?.running, send, backendReady])
+  }, [draft, live?.running, live?.askingTrust, send, backendReady])
 
   /**
    * Let go of the open session.
@@ -1493,7 +1494,7 @@ export function App(): React.JSX.Element {
     () => ({
       hasSession: live !== null,
       running: live?.running ?? false,
-      canSend: live !== null && !live.running && !live.askingTrust && backendReady !== false && draft.trim().length > 0,
+      canSend: canSend(live, backendReady, draft),
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
