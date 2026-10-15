@@ -10,6 +10,9 @@
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict. <pr> is a number or a pull request URL.
+
+A branch already checked out in another worktree is rebased there and a `reused:` line says where.
+Every step refuses a locked one, which something else may be using, unless given --use-locked.
 """
 
 import argparse
@@ -76,7 +79,6 @@ def lookup(number, create):
 
 def report(pr):
     tree = pr.tree
-    print(f"worktree {tree}")
     state = rebase_dir(tree)
     if state is None:
         if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
@@ -116,6 +118,7 @@ def report(pr):
 
 
 def start(pr):
+    pr_worktree.announce(pr)
     git("worktree", "prune", cwd=pr.here)
     fetch(pr.here, pr.base_remote, pr.base)
     fetch(pr.here, pr.head_remote, pr.head)
@@ -150,6 +153,7 @@ def start(pr):
 
 
 def resume(pr):
+    pr_worktree.announce(pr)
     tree = pr.tree
     if rebase_dir(tree) is None:
         return report(pr)
@@ -208,10 +212,14 @@ def main():
     parser.add_argument("step", choices=["start", "continue", "check", "push"])
     parser.add_argument("pr")
     parser.add_argument("targets", nargs="*")
+    parser.add_argument(
+        "--use-locked", action="store_true", help="work in a locked worktree the branch is already checked out in"
+    )
     args = parser.parse_args()
     if args.targets and args.step != "check":
         parser.error("only check takes make targets")
     pr = lookup(pr_number(args.pr), create=args.step == "start")
+    pr_worktree.refuse_locked(pr, SCRIPT, [args.step, str(pr.number), *args.targets], args.use_locked)
     if args.step == "start":
         sys.exit(start(pr))
     if args.step == "continue":
