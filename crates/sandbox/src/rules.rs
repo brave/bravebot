@@ -1381,6 +1381,7 @@ mod tests {
     /// Files the product keeps in the state directory, one of each kind: credentials, files read
     /// back to decide what runs or what is allowed, and a name the product may start to write
     /// later. None is among the entries a stage reads.
+    #[cfg(unix)]
     const STATE_FILES: [&str; 12] = [
         "gateway-keys.json",
         "leo-premium.json",
