@@ -80,7 +80,8 @@ before a commit and before a push, what one commit contains, the specs the code 
 against, the security scan, configuration, releasing, and how an issue is titled and labelled.
 
 To file an issue, use the [issue-poster](agents/agents/issue-poster.md) definition: a person runs
-`/agent issue-poster`, and a session hands it the draft as a delegate. It searches open and closed
+`/agent issue-poster`, and a session or a skill hands it the draft as a delegate. No script files
+an issue. The definition searches open and closed
 issues, applies the labels `docs/development/labelling-issues.md` describes, and reads the issue
 back, none of which a bare `gh issue create` does.
 

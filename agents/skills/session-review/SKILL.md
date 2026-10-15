@@ -49,11 +49,11 @@ the turns after the ones reviewed. A session with no problems gets a marker too.
 
 ## Four things a run must not do
 
-**A run never posts by hand.** `session-review.py post` is the only thing here that writes to the
-tracker. It uses the same duplicate search, pacing, cap and label check as the
-[peer-advisories](../peer-advisories/SKILL.md) skill. `gh` is absent from this skill's
-`allowed-tools` so that a `gh issue create` typed here asks first. An issue filed outside the
-script goes through the [issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script here files an issue. Every issue
+goes through the [issue-poster](../../agents/issue-poster.md) definition (step 6), and
+`session-review.py filed` is the only thing here that records the result. `gh` is absent from
+this skill's `allowed-tools` so that a `gh` call that files an issue typed here asks first, and so does every
+call the poster makes.
 
 **A run never puts session content in an issue.** A session holds the person's files, command
 output and messages, and an issue is public. The analyzer is told to describe each problem in its
@@ -139,19 +139,28 @@ security concerns. The labels follow
 `session-analysis` on every issue, an `area/*` where one is clear, and never an `importance`,
 `urgency` or `size`. Tell the user about each held-back problem.
 
-### Step 6: file (zero model tokens)
+### Step 6: file
+
+Read `{work_dir}/drafts.json`: one entry per draft, with `id`, `title`, `labels` and `body_file`.
+For each entry in turn, up to 100 in a run, hand it to the
+[issue-poster](../../agents/issue-poster.md) definition with the title, the body file, the labels
+the entry names, the assignee only where the user named somebody, and this instruction: the issue
+is a finding nobody has read, so apply no `importance`, `urgency` or `size`; search the open and
+closed issues for the words of the title before posting, and post nothing when an issue already
+covers the problem. A `dry-run` run files nothing and records nothing.
+
+A missing label refuses the post and prints the `gh label create` line; creating a label is the
+user's call, so stop and tell them. Stop at a failure and print it.
+
+Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/session-review/session-review.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
+python3 agents/skills/session-review/session-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
-Run the step in the background and wait for it, so that no time limit on a tool call stops it
-partway. Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody.
-Print the output. A missing label stops the step before anything is posted and prints the
-`gh label create` for it; creating a label is the user's call, so stop and tell them. A `gh` failure
-while posting stops the step at that draft. Run the step once more: it skips every draft
-`filed.json` records and searches the tracker for the rest before posting. Where it fails again,
-print the error and stop.
+Pass `--existing` where the poster posted nothing because an issue already covered the problem, and
+that issue's number as `{number}`. A draft `filed.json` already records is not handed to the
+poster again.
 
 ### Step 7: mark the sessions (zero model tokens)
 

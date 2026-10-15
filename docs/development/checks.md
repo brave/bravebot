@@ -129,10 +129,10 @@ names, the paths it governs, the call sites a guarded symbol pins, and the table
 [../specs/README.md](../specs/README.md). It also runs
 [../../contrib/check-issue-posters.py](../../contrib/check-issue-posters.py), which fails when
 [the issue-poster definition](../../agents/agents/issue-poster.md) would not load, writes a label
-[labelling-issues.md](labelling-issues.md) does not describe, or when a skill that files an issue
-does not name it. Its helper's selftest,
+[labelling-issues.md](labelling-issues.md) does not describe, or when a file under `agents/skills`
+runs `gh issue create` instead of handing the draft to the definition. Its helper's selftest,
 [../../agents/issue_helper_selftest.py](../../agents/issue_helper_selftest.py), runs beside it: the
-label and assignee checks every poster shares are in
+label and assignee checks the definition's post command makes are in
 [../../agents/issue_helper.py](../../agents/issue_helper.py). CI runs it too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
 [../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are

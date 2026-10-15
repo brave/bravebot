@@ -294,6 +294,48 @@ class Work(unittest.TestCase):
         self.assertIsNone(sr.read_marker(self.directories["b"], "b"))
         self.assertEqual(sr.read_marker(self.directories["c"], "c")["held"], 1)
 
+    def run_filed(self, pid, issue, *flags):
+        return quiet(sr.main, ["filed", "--work-dir", str(self.work), "--id", pid, "--issue", issue, *flags])
+
+    def filed_json(self):
+        return json.loads((self.work / "filed.json").read_text())
+
+    def confirmed_drafts(self):
+        self.analysis("a", [PROBLEM, PROBLEM])
+        self.check("a-p1", verdict="confirmed")
+        self.check("a-p2", verdict="confirmed")
+        quiet(sr.draft, self.args())
+
+    def test_filed_merges_into_what_is_already_recorded_and_says_how(self):
+        self.confirmed_drafts()
+        code, out = self.run_filed("a-p1", "41")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn("a-p1", out)
+        self.assertIn("#41", out)
+        self.run_filed("a-p2", "42", "--existing")
+        self.assertEqual(self.filed_json(), {"a-p1": {"issue": 41, "how": "filed"}, "a-p2": {"issue": 42, "how": "existing"}})
+
+    def test_filed_refuses_and_writes_nothing_for_an_unknown_id_or_a_bad_issue_number(self):
+        self.confirmed_drafts()
+        for pid, issue in (("b-p1", "5"), ("a-p1", "0"), ("a-p1", "-3"), ("a-p1", "x"), ("a-p1", "1.5"), ("a-p1", "")):
+            with self.subTest(id=pid, issue=issue):
+                self.assertEqual(self.run_filed(pid, issue)[0], 2)
+                self.assertFalse((self.work / "filed.json").exists())
+
+    def test_filed_refuses_without_a_readable_drafts_file(self):
+        self.assertEqual(self.run_filed("a-p1", "5")[0], 2)
+        (self.work / "drafts.json").write_text("not json")
+        self.assertEqual(self.run_filed("a-p1", "5")[0], 2)
+        self.assertFalse((self.work / "filed.json").exists())
+
+    def test_record_marks_a_session_with_the_issue_filed_wrote(self):
+        self.confirmed_drafts()
+        self.run_filed("a-p1", "99")
+        self.run_filed("a-p2", "100", "--existing")
+        quiet(sr.record, self.args(), today="2026-10-14")
+        self.assertEqual(sorted(sr.read_marker(self.directories["a"], "a")["issues"]), [99, 100])
+
     def test_a_session_with_no_problems_is_marked_and_one_with_no_result_is_not(self):
         self.analysis("a", [])
         quiet(sr.record, self.args())
