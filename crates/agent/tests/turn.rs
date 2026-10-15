@@ -53122,6 +53122,82 @@ fn a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked() {
     }
 }
 
+/// PATHREQ-5, PATHREQ-7: a file tool's refusal names `request_path` only where the session accepts
+/// the call. Under the sandbox mode `off` and in a workspace nobody trusted, the mode that answers
+/// every question has nobody to ask and the tool refuses the request first, so a refusal that sent
+/// the planner there would name a road that is closed and leave the person to be asked for
+/// `/add-dir` after all. The same turn then makes the call the refusal would have named and checks
+/// that the tool refuses it.
+#[test]
+fn a_file_tool_refusal_names_request_path_only_where_the_session_accepts_one() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (label, mode, trust) in [
+        (
+            "off",
+            bravebot_sandbox::SandboxMode::Off,
+            trusting_the_workspace(),
+        ),
+        (
+            "untrusted",
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            bravebot_core::trust::TrustStore::new("/work"),
+        ),
+    ] {
+        let name = format!("refusal-closed-road-{label}");
+        let places = PathPlaces::new(&name);
+        let target = places.beside.join("notes.txt");
+        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            &name,
+            &places,
+            &[
+                (
+                    "read_file",
+                    serde_json::json!({ "path": target.display().to_string() }),
+                ),
+                (
+                    "list_files",
+                    serde_json::json!({ "directory": places.beside.display().to_string() }),
+                ),
+                asking_for(&places.beside, false),
+            ],
+            mode,
+            bravebot_agent::PermissionMode::Bypass,
+            trust,
+            None,
+            &mut bypassing(&mut asked),
+        );
+        let read = message_from(&turn.results[0], "Result of read_file");
+        assert!(
+            read.contains("resolves outside the workspace") && read.contains("/add-dir"),
+            "{label}: the refusal is not the one asked about: {read}"
+        );
+        assert!(!read.contains("request_path"), "{label}: {read}");
+        let listed = message_from(&turn.results[1], "Result of list_files");
+        assert!(
+            listed.contains("resolves outside the workspace") && listed.contains("/add-dir"),
+            "{label}: the refusal is not the one asked about: {listed}"
+        );
+        assert!(!listed.contains("request_path"), "{label}: {listed}");
+        assert!(
+            path_result(&turn.results[2]).contains("does not accept a request for a path"),
+            "{label}: {}",
+            turn.results[2]
+        );
+        assert!(paths.lock().unwrap().is_empty(), "{label}: asked");
+        assert!(turn.workspace.path_reach().is_empty(), "{label}: held");
+        assert!(
+            turn.workspace.added_directories().is_empty(),
+            "{label}: opened"
+        );
+    }
+}
+
 /// PATHREQ-7: a refused directory is told of `request_path` under the same condition a refused
 /// file is. The refusal for a directory offers to open the directory itself, which is a different
 /// remedy from the one for a file, and the hint follows both.
