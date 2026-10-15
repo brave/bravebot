@@ -36280,9 +36280,9 @@ fn a_delegate_in_a_checkout_is_refused_another() {
     );
 }
 
-/// CHECKOUT-3. A delegate in a checkout starts its own delegates in that checkout, a reader among
-/// them: the reader reads the committed tree the checkout holds, not the person's edited one, and
-/// a worker it starts writes into the checkout and not the working directory.
+/// CHECKOUT-3, CHECKOUT-7. A delegate in a checkout starts its own delegates in that checkout, a
+/// reader among them: the reader reads the committed tree the checkout holds, not the person's
+/// edited one, and a worker it starts writes into the checkout and not the working directory.
 #[test]
 fn a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout() {
     let scratch = Scratch::new("checkout-shared");

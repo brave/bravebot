@@ -364,6 +364,103 @@ fn a_pointer_that_names_nothing_readable_leaves_the_file_standing() {
     );
 }
 
+/// A link inside `project` that leads to `target`, and the name a pointer gives it. `None` where
+/// the platform has no such links to make.
+#[cfg(unix)]
+fn a_link_out_of(project: &std::path::Path, target: &std::path::Path) -> Option<String> {
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::os::unix::fs::symlink(target, project.join("docs/real.md")).unwrap();
+    Some("docs/real.md".to_string())
+}
+
+#[cfg(not(unix))]
+fn a_link_out_of(_project: &std::path::Path, _target: &std::path::Path) -> Option<String> {
+    None
+}
+
+/// The path a pointer names was chosen by the file, so it is held to the workspace as any other
+/// path is, whether it climbs out, is written absolutely or is a link inside the workspace that
+/// leads out. The directory outside is vouched for here, which leaves confinement as the only
+/// thing between its file and the planner.
+#[test]
+fn a_pointer_naming_a_file_outside_the_workspace_is_not_followed() {
+    let scratch = Scratch::new("pointer-outside");
+    let project = scratch.directory("project");
+    let outside = scratch.directory("outside").canonicalize().unwrap();
+    let target = outside.join("conventions.md");
+    std::fs::write(&target, "OUTSIDE-MUST-NOT-LOAD").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut spellings = vec![
+        "../outside/conventions.md".to_string(),
+        target.display().to_string(),
+    ];
+    spellings.extend(a_link_out_of(&project, &target));
+
+    let mut problems = Vec::new();
+    for named in &spellings {
+        let pointer = format!("See {named} for the conventions.");
+        std::fs::write(project.join("AGENTS.md"), &pointer).unwrap();
+
+        let mut sink = RecordingSink::new();
+        let preamble = {
+            let mut policy = policy(&mut sink, &[".", outside.to_str().unwrap()]);
+            preamble::compose(
+                &mut policy,
+                &workspace,
+                None,
+                &Catalogue::default(),
+                None,
+                None,
+                &Attribution::default(),
+            )
+        };
+
+        if preamble.text.contains("OUTSIDE-MUST-NOT-LOAD") {
+            problems.push(format!("{named} was followed out of the workspace"));
+        }
+        if !preamble.text.contains(&pointer) {
+            problems.push(format!(
+                "{named}: the file that named it did not reach the planner as itself"
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// An untrusted directory's instructions are a notice and no text, and that holds for a file that
+/// only points: neither its words nor what it names reach the planner.
+#[test]
+fn a_pointer_in_an_untrusted_directory_is_a_notice_and_no_text() {
+    let preamble = composed(
+        "pointer-untrusted",
+        &[
+            ("AGENTS.md", "See docs/real.md for the conventions."),
+            ("docs/real.md", "MUST-NOT-LOAD"),
+        ],
+        &[],
+    );
+
+    assert!(
+        !preamble.text.contains("MUST-NOT-LOAD"),
+        "the file a pointer names was read from an untrusted directory: {}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("See docs/real.md"),
+        "an untrusted directory's pointer reached the planner as text: {}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble
+            .notices
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>(),
+        ["AGENTS.md was not loaded: this directory is not trusted"],
+    );
+}
+
 /// What `compose` produces for a project holding `files`, with the given paths trusted.
 fn composed(name: &str, files: &[(&str, &str)], trusted: &[&str]) -> preamble::Preamble {
     let scratch = Scratch::new(name);
