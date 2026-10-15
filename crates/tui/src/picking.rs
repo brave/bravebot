@@ -47,16 +47,13 @@ pub enum Picked {
 /// What a key press did to an open picker.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Still choosing.
     Continue,
     /// Left with what was in force alone.
     Cancelled,
-    /// Took a row.
     Picked(Picked),
 }
 
 impl Picking {
-    /// Interpret one key press.
     pub fn press(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Step {
         match self {
             Picking::Model(picker) => {
