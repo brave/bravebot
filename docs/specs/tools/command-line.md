@@ -148,6 +148,7 @@ Refused, as a compile error with the offending span named:
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
 | a glob in program position | a program worked out from what is on disk is a program that changes when the tree does |
 
 **A refusal returns an error and runs nothing.** There is no degraded mode, no "fall back to
@@ -181,6 +182,8 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
+`verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
+`verified-by: bravebot_agent::cmdline::a_parenthesis_not_written_onto_an_argument_keeps_the_general_refusal`
 `verified-by: bravebot_agent::cmdline::a_pattern_in_program_position_is_refused`
 `verified-by: bravebot_agent::cmdline::quoting_makes_a_refused_construct_ordinary_text`
 `verified-by: bravebot_agent::cmdline::a_line_that_half_compiles_yields_nothing`

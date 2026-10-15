@@ -86,6 +86,7 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |
 | a pattern in program position | a program worked out from what is on disk changes when the tree does |
 | anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
