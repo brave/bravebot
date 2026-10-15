@@ -127,6 +127,33 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
     event::poll(timeout)
 }
 
+/// Whether the next event waiting is one a frame may wait out: the pointer's, or a change of size.
+///
+/// A drag arrives as a stream of positions and a frame for each would trail the pointer, so a burst
+/// of them is drawn once, and dragging a window edge is the same stream of sizes. A key, a paste or
+/// a focus change is not that: the person is looking at the screen for the result, so it is drawn
+/// as soon as it has been handled, however many more are queued behind it. Answers `false` where
+/// nothing is waiting.
+///
+/// Reads what the terminal has waiting into the queue, as a [`read`] would, so a caller asking
+/// this and then reading sees the events in the order they were written.
+pub fn next_is_a_stream() -> io::Result<bool> {
+    if pending().is_empty() {
+        if !event::poll(Duration::ZERO)? {
+            return Ok(false);
+        }
+        gather()?;
+    }
+    Ok(pending()
+        .front()
+        .is_some_and(|(event, _)| is_a_stream(event)))
+}
+
+/// Whether an event is one of a stream: the pointer moving, pressing or scrolling, or a new size.
+fn is_a_stream(event: &TermEvent) -> bool {
+    matches!(event, TermEvent::Mouse(_) | TermEvent::Resize(..))
+}
+
 /// The next event, blocking until there is one.
 ///
 /// Hands out what is buffered before reading the terminal again, so the order the terminal wrote
@@ -210,6 +237,29 @@ mod tests {
 
     fn key(code: KeyCode) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// A frame may wait out a drag or a resize and nothing else. A key waiting behind another key is a person
+    /// typing, and holding its frame back is the stutter the coalescing was never meant to cause.
+    #[test]
+    fn only_a_stream_of_positions_or_sizes_is_an_event_a_frame_waits_out() {
+        use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+        let drag = TermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(is_a_stream(&drag));
+        assert!(is_a_stream(&TermEvent::Resize(80, 24)));
+        for other in [
+            key(KeyCode::Char('a')),
+            released(KeyCode::Char('a')),
+            TermEvent::Paste("pasted".into()),
+            TermEvent::FocusGained,
+        ] {
+            assert!(!is_a_stream(&other), "{other:?} was coalesced like a drag");
+        }
     }
 
     /// One event waiting is what a person pressing a key looks like, since nothing fills the buffer

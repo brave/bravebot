@@ -2480,9 +2480,10 @@ fn event_loop(
         }
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
-        // otherwise show nothing until it stopped.
+        // otherwise show nothing until it stopped. Only a drag or a resize is waited out. A typed character
+        // is drawn as soon as it has been handled, whatever is queued behind it.
         let waited_long_enough = drawn_at.elapsed() >= FRAME;
-        if needs_draw && (waited_long_enough || !input::poll(Duration::ZERO)?) {
+        if needs_draw && (waited_long_enough || !input::next_is_a_stream()?) {
             redraw(terminal, &mut session)?;
             needs_draw = false;
             drawn_at = Instant::now();

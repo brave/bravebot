@@ -413,3 +413,114 @@ impl Entry {
         self
     }
 }
+
+/// The entries of a transcript, with a stamp that changes whenever they may have.
+///
+/// A frame's cost has to follow what changed, not the length of the conversation, and what a frame
+/// can ask is whether the entries are the ones it laid out last time. Every route to a mutable
+/// entry goes through [`DerefMut`], which takes a new stamp, so no edit of the transcript can be
+/// missed by a reader of the stamp and no call site has to remember to announce one. A borrow that
+/// changes nothing costs a redundant layout, never a stale one.
+#[derive(Debug)]
+pub struct Entries {
+    entries: Vec<Entry>,
+    stamp: u64,
+}
+
+/// Stamps are drawn from one counter for the whole process, so two transcripts can never hold the
+/// same stamp and a layout kept for one is never taken for the other's.
+fn next_stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Entries {
+    /// The stamp the entries hold right now. Equal stamps mean the entries are untouched.
+    pub fn stamp(&self) -> u64 {
+        self.stamp
+    }
+}
+
+impl Default for Entries {
+    fn default() -> Self {
+        Vec::new().into()
+    }
+}
+
+impl From<Vec<Entry>> for Entries {
+    fn from(entries: Vec<Entry>) -> Self {
+        Self {
+            entries,
+            stamp: next_stamp(),
+        }
+    }
+}
+
+impl std::ops::Deref for Entries {
+    type Target = Vec<Entry>;
+
+    fn deref(&self) -> &Vec<Entry> {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for Entries {
+    fn deref_mut(&mut self) -> &mut Vec<Entry> {
+        self.stamp = next_stamp();
+        &mut self.entries
+    }
+}
+
+impl<'a> IntoIterator for &'a Entries {
+    type Item = &'a Entry;
+    type IntoIter = std::slice::Iter<'a, Entry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Entries {
+    type Item = &'a mut Entry;
+    type IntoIter = std::slice::IterMut<'a, Entry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.stamp = next_stamp();
+        self.entries.iter_mut()
+    }
+}
+
+/// One computed value kept between frames, replaced when the question it answers changes.
+///
+/// Behind a lock because a frame is drawn from a shared borrow of the session, and the thing
+/// being kept is a product of drawing it. An [`Arc`] is handed out so a reader holds the value
+/// without holding the lock while it works.
+#[derive(Debug)]
+pub struct Kept<T>(std::sync::Mutex<Option<std::sync::Arc<T>>>);
+
+impl<T> Default for Kept<T> {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+}
+
+impl<T> Kept<T> {
+    /// The value kept, if `current` says it still answers the question, and otherwise one built
+    /// afresh and kept in its place.
+    pub fn get(
+        &self,
+        current: impl FnOnce(&T) -> bool,
+        build: impl FnOnce() -> T,
+    ) -> std::sync::Arc<T> {
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(value) = held.as_ref().filter(|value| current(value)) {
+            return value.clone();
+        }
+        let built = std::sync::Arc::new(build());
+        *held = Some(built.clone());
+        built
+    }
+}

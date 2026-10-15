@@ -289,6 +289,33 @@ fn a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file() {
     assert_eq!(session.input(), "@src/");
 }
 
+/// Everything a key press and its frame ask about what is offered is answered from one reading of
+/// the directory. The file is removed between two questions with no key between them, so the second
+/// can only name it if the disk was not read again.
+#[test]
+fn the_callers_of_one_key_press_share_one_reading_of_the_directory() {
+    let scratch = Scratch::new("shared");
+    let mut session = session(&scratch);
+    typing(&mut session, "@");
+    let first = offered_paths(&session);
+    assert!(first.iter().any(|path| path == "README.md"), "{first:?}");
+
+    std::fs::remove_file(scratch.path.join("README.md")).expect("remove");
+    assert_eq!(
+        offered_paths(&session),
+        first,
+        "a question with no key before it read the directory again"
+    );
+
+    handle_key(&mut session, key(KeyCode::Down));
+    assert!(
+        !offered_paths(&session)
+            .iter()
+            .any(|path| path == "README.md"),
+        "the next key press was answered from the reading before it"
+    );
+}
+
 /// An ordinary sentence containing an address is not a reference: only a word beginning with `@`
 /// is, and only while it is the one being typed.
 #[test]

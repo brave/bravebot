@@ -23,6 +23,23 @@ pub enum Offered {
     Shortcuts,
 }
 
+/// How long an answer from [`Session::offered`] is trusted without the line changing.
+const OFFERED_FRESH: Duration = Duration::from_secs(2);
+
+/// What [`Session::offered`] answered, with everything it answered from.
+#[derive(Debug)]
+pub(crate) struct OfferedFor {
+    at: Instant,
+    epoch: u64,
+    status: Status,
+    shortcuts: bool,
+    shell: bool,
+    input: String,
+    workspace: std::path::PathBuf,
+    reference_sources: Vec<(String, std::path::PathBuf)>,
+    offered: Offered,
+}
+
 impl Session {
     /// Hold the skills a slash word could become while the line holds a slash word, and let them go
     /// once it holds none.
@@ -33,8 +50,14 @@ impl Session {
         let typing =
             !self.shell && self.status != Status::Working && crate::skills::mentioned(&self.input);
         match (typing, self.skills.is_some()) {
-            (true, false) => self.skills = Some(resolve()),
-            (false, true) => self.skills = None,
+            (true, false) => {
+                self.skills = Some(resolve());
+                self.offered_epoch += 1;
+            }
+            (false, true) => {
+                self.skills = None;
+                self.offered_epoch += 1;
+            }
             _ => {}
         }
     }
@@ -49,8 +72,14 @@ impl Session {
             && self.status != Status::Working
             && bravebot_mentions::typed_reference(&self.input).is_some();
         match (typing, self.past_sessions.is_some()) {
-            (true, false) => self.past_sessions = Some(resolve()),
-            (false, true) => self.past_sessions = None,
+            (true, false) => {
+                self.past_sessions = Some(resolve());
+                self.offered_epoch += 1;
+            }
+            (false, true) => {
+                self.past_sessions = None;
+                self.offered_epoch += 1;
+            }
             _ => {}
         }
     }
@@ -67,11 +96,54 @@ impl Session {
         self.skills.as_deref().unwrap_or_default()
     }
 
+    /// Forget what was last offered, so the next [`Session::offered`] reads the disk again.
+    ///
+    /// Called as each key is taken, which is what keeps a list that is up honest about a file that
+    /// has gone since it was drawn, while the many callers a key press has share one reading.
+    pub fn reread_offers(&mut self) {
+        self.offered_epoch += 1;
+    }
+
     /// What the half-typed line could still become: a command or a skill, or a file reference.
+    ///
+    /// Asked at least once a frame and by about twenty callers a key press, and answering reads a
+    /// directory after an `@`, so the answer is kept for as long as everything it was worked out
+    /// from is unchanged: the line, the mode, the directories and the skills and sessions held.
+    /// Kept for [`OFFERED_FRESH`] at most, since the one thing that changes it unseen is the disk.
+    pub fn offered(&self) -> Offered {
+        self.offered_memo
+            .get(
+                |kept| {
+                    kept.at.elapsed() < OFFERED_FRESH
+                        && kept.epoch == self.offered_epoch
+                        && kept.status == self.status
+                        && kept.shortcuts == self.shortcuts
+                        && kept.shell == self.shell
+                        && kept.input == self.input
+                        && kept.workspace == self.workspace
+                        && kept.reference_sources == self.reference_sources
+                },
+                || OfferedFor {
+                    at: Instant::now(),
+                    epoch: self.offered_epoch,
+                    status: self.status,
+                    shortcuts: self.shortcuts,
+                    shell: self.shell,
+                    input: self.input.clone(),
+                    workspace: self.workspace.clone(),
+                    reference_sources: self.reference_sources.clone(),
+                    offered: self.compute_offered(),
+                },
+            )
+            .offered
+            .clone()
+    }
+
+    /// Worked out afresh, reading whatever it has to from the disk.
     ///
     /// One of the two at most. Both are the last word, and a word opens with a slash or with an
     /// `@`, so nothing can be both.
-    pub fn offered(&self) -> Offered {
+    fn compute_offered(&self) -> Offered {
         // First, before either guard below. The list of keys is documentation somebody asked for by
         // pressing a key, not machinery for finishing the line, so neither a turn in flight nor a
         // command line has anything to say about it. It takes the place of what is offered, since
