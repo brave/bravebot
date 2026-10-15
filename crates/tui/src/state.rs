@@ -1830,6 +1830,11 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// The model the turn in flight was begun with.
+    ///
+    /// `/model` is carried out while a turn runs and changes `model` for the turn after, so what the
+    /// turn is checked against when it ends has to be what it was sent with.
+    turn_model: Option<String>,
     /// The name the configuration gives each Bedrock model, by request name, for the panel to draw
     /// `model` by. Empty where no account is configured.
     model_labels: Vec<(String, String)>,
@@ -2048,6 +2053,7 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            turn_model: None,
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
@@ -2225,6 +2231,14 @@ impl Session {
     /// The model to request, or `None` to use the configured default.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// The model the turn in flight was sent with, which is [`Session::model`] when none is running.
+    pub fn model_of_the_turn(&self) -> Option<&str> {
+        match self.a_turn_is_running() {
+            true => self.turn_model.as_deref(),
+            false => self.model(),
+        }
     }
 
     /// Draw the models this configuration names by those names, as [`crate::status::model_label`]
@@ -7163,6 +7177,7 @@ impl Session {
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
         self.turn_in_flight = true;
+        self.turn_model = self.model.clone();
         self.stopping = false;
         self.back_to_the_tail();
         self.turns += 1;

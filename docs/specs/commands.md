@@ -282,7 +282,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox` in every form, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -290,7 +290,7 @@ it stays where it was. The exception is a line of the same command already waiti
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
-`/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+`/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
@@ -337,18 +337,23 @@ does not read:
 - **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory
   ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
   the command leaves alone.
+- **`/model`.** A turn is sent with the model in force when it begins and does not read the choice
+  again, so a model picked mid-turn is the next turn's. The turn is still compared with the model
+  it was sent with when it ends, and not with the one picked meanwhile.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
   turn's.
 - **`/config`.** It picks the style the box edits in. Only the box reads it, so the turn does not.
-- **The pickers.** The bare word of `/theme`, `/effort` and `/config` opens a list. While a turn
+- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config` opens a list. While a turn
   runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
   and asked about. The list takes every key the box would have taken, is drawn over the frame with
   the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
   the turn asks takes the screen for as long as it is open, and the list is there again once it is
   answered. The theme under the cursor is in force while the list is open, and Escape puts back the
   one that was. A row taken is carried out as a name typed is, and what it says is held under the
-  turn. A list still open when the turn ends stays open and takes the next key.
+  turn. A list still open when the turn ends stays open and takes the next key. The roster `/model`
+  lists is asked for on the thread that draws the turn, so a slow listing holds the drawing, and
+  any question the turn asks, until it returns.
 - **`/advisor`.** It names the model a later turn's planner may consult
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
@@ -413,6 +418,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::leaving_a_picker_opened_mid_turn_does_not_stop_the_turn`
 `verified-by: bravebot_tui::app::a_picker_still_open_when_the_turn_ends_goes_on_at_rest`
 `verified-by: bravebot_tui::app::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
+`verified-by: bravebot_tui::app::the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
 `verified-by: bravebot_tui::render::a_picker_opened_mid_turn_is_drawn_over_the_turn`
 `verified-by: bravebot_tui::theme_prompt::a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back`
 `verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`

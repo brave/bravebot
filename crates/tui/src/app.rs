@@ -215,8 +215,9 @@ struct Beside<'a> {
     workspace: &'a Workspace,
     /// The session's scratch directory, which `/status` names.
     scratch: Option<&'a std::path::Path>,
-    /// The configuration the turn was started with.
-    config: &'a Config,
+    /// The configuration the turn was started with. The turn holds a copy of its own, so `/model`
+    /// may change this one for the turn after.
+    config: &'a mut Config,
 }
 
 /// A press during a turn that is not one of the keys that only stop it.
@@ -232,7 +233,7 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
     // The row a picker was left on, if this key left it. Said under the turn as any command carried
     // out mid-turn is.
     if let Some(picked) = session.take_pick() {
-        session.answer_while_working(|session| carry_out_pick(session, picked));
+        session.answer_while_working(|session| carry_out_pick(session, beside.config, picked));
     }
     match action {
         Action::SendNow => stop_what_is_running(session, cancel),
@@ -273,6 +274,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
         }),
+        Action::ChooseModel => {
+            session.answer_while_working(|session| open_model_picker(session, beside.config));
+        }
         Action::ChooseTheme => open_theme_picker(session),
         Action::ChooseEffort => open_effort_picker(session),
         Action::ChooseEditing => open_editing_picker(session),
@@ -284,9 +288,10 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
 ///
 /// Said as a command carried out mid-turn is, so it joins the transcript once the turn has been
 /// folded in (CMD-8).
-fn carry_out_pick(session: &mut Session, picked: crate::picking::Picked) {
+fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::picking::Picked) {
     use crate::picking::Picked;
     match picked {
+        Picked::Model(model) => model_picked(session, config, model),
         Picked::Theme(theme) => theme_picked(session, &theme.name),
         Picked::Effort(row) => effort_picked(session, row.0),
         Picked::Editing(row) => editing_picked(session, row.0),
@@ -2471,7 +2476,7 @@ fn event_loop(
         // A pick made while a turn ran that no loop of the turn was left to carry out, because the
         // turn ended or another working loop began first.
         if let Some(picked) = session.take_pick() {
-            carry_out_pick(&mut session, picked);
+            carry_out_pick(&mut session, config, picked);
             needs_draw = true;
         }
 
@@ -4171,32 +4176,54 @@ fn choose_model(
                 render::draw(frame, session);
             });
             if let Some(chosen) = chosen {
-                // The listing is the only place a window is ever reported, so the budget is taken
-                // here, while the entry that named it is in hand. Said once when it changes, since
-                // a budget belongs to the model rather than to a turn.
-                if config.adopt_window(chosen.conversation_tokens) {
-                    session.note(t!(session_context_budget, budget = config.context_budget));
-                }
-                session.update_budget(config.context_budget, config.budget_is_guessed());
-                config.adopt_inputs(&chosen.key, &chosen.advertised.input_modalities);
-                // Which service answers is said here as well as in the picker: the row that
-                // carried it is gone by the time the note is read, and the same slug reached
-                // through two services is two bills.
-                session.note(match chosen.provider.as_deref() {
-                    Some(service) => t!(
-                        session_using_model_from,
-                        model = &chosen.display_name,
-                        service = service
-                    ),
-                    None => t!(session_using_model, model = &chosen.display_name),
-                });
-                session.note_model_reads_effort(chosen.reads_effort);
-                if !chosen.reads_effort && session.effort().is_some() {
-                    session.note(t!(session_effort_not_read));
-                }
-                session.choose_model(chosen.key, config);
+                model_picked(session, config, chosen);
             }
         }
+        Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
+    }
+}
+
+/// Put the model the person chose in force for the next turn, and say so.
+fn model_picked(
+    session: &mut Session,
+    config: &mut Config,
+    chosen: bravebot_aichat::models::Model,
+) {
+    // The listing is the only place a window is ever reported, so the budget is taken
+    // here, while the entry that named it is in hand. Said once when it changes, since
+    // a budget belongs to the model rather than to a turn.
+    if config.adopt_window(chosen.conversation_tokens) {
+        session.note(t!(session_context_budget, budget = config.context_budget));
+    }
+    session.update_budget(config.context_budget, config.budget_is_guessed());
+    config.adopt_inputs(&chosen.key, &chosen.advertised.input_modalities);
+    // Which service answers is said here as well as in the picker: the row that
+    // carried it is gone by the time the note is read, and the same slug reached
+    // through two services is two bills.
+    session.note(match chosen.provider.as_deref() {
+        Some(service) => t!(
+            session_using_model_from,
+            model = &chosen.display_name,
+            service = service
+        ),
+        None => t!(session_using_model, model = &chosen.display_name),
+    });
+    session.note_model_reads_effort(chosen.reads_effort);
+    if !chosen.reads_effort && session.effort().is_some() {
+        session.note(t!(session_effort_not_read));
+    }
+    session.choose_model(chosen.key, config);
+}
+
+/// Ask the endpoints what they offer and open the model picker as a mode of the session, for a turn
+/// that is running.
+///
+/// A refusal or an unreachable endpoint leaves the model as it was and says so, as at rest.
+fn open_model_picker(session: &mut Session, config: &Config) {
+    match list_models(config, session.model()) {
+        Ok(models) => session.open_picking(crate::picking::Picking::Model(
+            crate::model_prompt::Picker::new(models, session.model()),
+        )),
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
     }
 }
@@ -6538,7 +6565,7 @@ struct RetainedTurn {
 fn run_turn_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
-    config: &Config,
+    config: &mut Config,
     workspace: &Workspace,
     scratch: Option<&std::path::Path>,
     prompt: &str,
@@ -6774,7 +6801,7 @@ fn run_turn_animated(
         home: home.as_deref(),
         workspace,
         scratch,
-        config,
+        config: &mut *config,
     };
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
@@ -7037,8 +7064,8 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Spent(spent) => progress_of_a_turn(
                     session,
                     spent,
-                    config.context_budget,
-                    config.budget_is_guessed(),
+                    beside.config.context_budget,
+                    beside.config.budget_is_guessed(),
                 ),
                 crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
                 crate::remote_confirm::ToMain::RequestBuilt(view) => {
@@ -7660,7 +7687,7 @@ impl Line<'_> {
     fn model(&self, session: &Session, config: &Config) -> String {
         self.addressed
             .and_then(|addressed| addressed.model.as_deref())
-            .or(session.model())
+            .or(session.model_of_the_turn())
             .unwrap_or(&config.default_model)
             .to_string()
     }
@@ -12544,6 +12571,11 @@ mod tests {
     /// is never written, and no home to keep an answer in. A `/rename` through it still makes the
     /// store's directory for `/work`, so a test that renames runs in `in_isolated_profile`.
     fn nothing_beside<R>(press: impl FnOnce(&mut Beside<'_>) -> R) -> R {
+        beside_holding(&mut a_config_needing_no_sign_in(), press)
+    }
+
+    /// As [`nothing_beside`], with the configuration the turn was started with named.
+    fn beside_holding<R>(config: &mut Config, press: impl FnOnce(&mut Beside<'_>) -> R) -> R {
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
             root,
@@ -12556,7 +12588,7 @@ mod tests {
             home: None,
             workspace: &a_workspace(),
             scratch: None,
-            config: &a_config_needing_no_sign_in(),
+            config,
         })
     }
 
@@ -13757,9 +13789,18 @@ mod tests {
         );
         assert!(session.input().is_empty());
 
-        assert_eq!(type_while_working(&mut session, "/model"), Action::Redraw);
-        assert_eq!(session.commands_waiting().collect::<Vec<_>>(), ["/model"]);
-        assert!(session.input().is_empty(), "/model was completed again");
+        assert_eq!(
+            type_while_working(&mut session, COMPACT_COMMAND),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.commands_waiting().collect::<Vec<_>>(),
+            [COMPACT_COMMAND]
+        );
+        assert!(
+            session.input().is_empty(),
+            "{COMPACT_COMMAND} was completed again"
+        );
     }
 
     /// Rejects: the arrows being dropped mid-turn, so the row Enter completes could not be chosen.
@@ -20519,6 +20560,7 @@ mod tests {
                 JOBS_COMMAND,
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
+                MODEL_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
@@ -20911,7 +20953,7 @@ mod tests {
                 home: None,
                 workspace: &a_workspace(),
                 scratch: None,
-                config: &a_config_needing_no_sign_in(),
+                config: &mut a_config_needing_no_sign_in(),
             },
         );
 
@@ -21065,7 +21107,7 @@ mod tests {
                 home: None,
                 workspace: &a_workspace(),
                 scratch: None,
-                config: &a_config_needing_no_sign_in(),
+                config: &mut a_config_needing_no_sign_in(),
             },
         );
 
@@ -21175,7 +21217,7 @@ mod tests {
                 home: None,
                 workspace: &a_workspace(),
                 scratch: None,
-                config: &a_config_needing_no_sign_in(),
+                config: &mut a_config_needing_no_sign_in(),
             },
         );
 
@@ -21212,7 +21254,7 @@ mod tests {
                 home: None,
                 workspace: &a_workspace(),
                 scratch: None,
-                config: &a_config_needing_no_sign_in(),
+                config: &mut a_config_needing_no_sign_in(),
             },
         );
 
@@ -21271,7 +21313,7 @@ mod tests {
                 home: Some(&home),
                 workspace: &a_workspace(),
                 scratch: None,
-                config: &a_config_needing_no_sign_in(),
+                config: &mut a_config_needing_no_sign_in(),
             },
         );
 
@@ -21462,7 +21504,7 @@ mod tests {
         );
 
         let picked = session.take_pick().expect("nothing was picked");
-        carry_out_pick(&mut session, picked);
+        carry_out_pick(&mut session, &mut a_config_needing_no_sign_in(), picked);
         assert_eq!(session.effort(), Some(Effort::Low));
         assert_eq!(
             session.input(),
@@ -21492,8 +21534,93 @@ mod tests {
             "the pick was carried out without a loop for it"
         );
         let picked = session.take_pick().expect("the pick was dropped");
-        carry_out_pick(&mut session, picked);
+        carry_out_pick(&mut session, &mut a_config_needing_no_sign_in(), picked);
         assert_eq!(session.effort(), Some(Effort::Low));
+    }
+
+    /// A configuration whose roster is three named tiers and nothing fetched, so the picker is
+    /// offered a list without a request leaving the test.
+    fn a_config_offering_three_tiers() -> Config {
+        use bravebot_config::env_var;
+        Config::from_lookup(|name| match name {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            env_var::BEDROCK_SONNET_MODEL => Some("sonnet-arn".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            _ => None,
+        })
+        .expect("a configuration")
+    }
+
+    /// `/model` typed mid-turn lists what the endpoints offer as it is typed, and is neither queued
+    /// nor handed to the turn. The regression it rejects is the word waiting for the turn to end,
+    /// which is where a `/model` typed five minutes into a long turn sat looking like a hang.
+    #[test]
+    fn the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn() {
+        use crate::picking::Picking;
+        let mut config = a_config_offering_three_tiers();
+        let mut session = a_turn_running_on("first");
+
+        beside_holding(&mut config, |beside| {
+            typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside)
+        });
+
+        let Some(Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker opened: {:?}", session.picking());
+        };
+        assert_eq!(picker.matching().len(), 3, "the roster was not offered");
+        assert!(session.queued.is_empty(), "/model waited");
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed /model"
+        );
+        assert_eq!(session.input(), "", "/model was left in the box");
+    }
+
+    /// A model picked mid-turn is the next turn's. The running turn keeps the model it was sent
+    /// with, so that is what its reply is compared with, and what the pick says is held under the
+    /// turn. Letters typed into the picker narrow its list and do not reach the box. The regression
+    /// it rejects is the pick changing what the turn in flight is checked against.
+    #[test]
+    fn a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own() {
+        let mut config = a_config_offering_three_tiers();
+        let mut session = a_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let cancel = Cancel::new();
+
+        beside_holding(&mut config, |beside| {
+            typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside);
+            for c in "son".chars() {
+                turn_key(&mut session, key(KeyCode::Char(c)), &cancel, beside);
+            }
+            turn_key(&mut session, key(KeyCode::Enter), &cancel, beside);
+        });
+
+        assert_eq!(session.model(), Some("sonnet-arn"));
+        assert_eq!(
+            session.model_of_the_turn(),
+            None,
+            "the running turn was moved to the model picked for the next"
+        );
+        let line = Line {
+            text: "first",
+            addressed: None,
+            offered_a_later_look: false,
+        };
+        assert_eq!(
+            line.model(&session, &config),
+            config.default_model,
+            "the reply would be compared with a model the turn never asked for"
+        );
+        assert!(!said_under_the_turn(&session).is_empty());
+        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(session.input(), "", "a letter reached the box");
+        assert!(session.picking().is_none());
+
+        session.complete("answered", Vec::new(), 0);
+        assert_eq!(session.model_of_the_turn(), Some("sonnet-arn"));
     }
 
     /// `/reach` carries its argument whole to the loop, bare for the list, and a longer word is
@@ -21610,9 +21737,10 @@ mod tests {
             ("second", "/effort high"),
             ("second", "/advisor some-model"),
             ("second", EFFORT_COMMAND),
+            ("second", MODEL_COMMAND),
             ("second", THEME_COMMAND),
             ("second", CONFIG_COMMAND),
-            (MODEL_COMMAND, "/theme no-such-theme"),
+            (COMPACT_COMMAND, "/theme no-such-theme"),
         ] {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, first);
@@ -21642,7 +21770,7 @@ mod tests {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker, which is a mode of the session and says nothing.
-                _ if command.name == CONFIG_COMMAND => continue,
+                _ if [CONFIG_COMMAND, MODEL_COMMAND].contains(&command.name) => continue,
                 _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {
                     format!("{} no-such-name", command.name)
                 }

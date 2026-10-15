@@ -272,7 +272,7 @@ pub fn commands() -> [Command; 45] {
             name: MODEL_COMMAND,
             argument: "",
             description: t!(command_model),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: THEME_COMMAND,

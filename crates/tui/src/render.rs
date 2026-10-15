@@ -5488,7 +5488,7 @@ mod tests {
     }
 
     /// Rejects: a label taken from somewhere other than the command's own column of the table, or
-    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    /// one shared by every row, either of which tells a person `/compact` runs now when it waits.
     #[test]
     fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
         let mut session = Session::new("none");
@@ -5499,7 +5499,8 @@ mod tests {
         let output = rendered_at(&session, 120, 40);
 
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
-        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
         assert!(labelled(
             &row_for(&output, 120, "/theme [name]"),
             "now/queued"

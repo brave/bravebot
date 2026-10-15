@@ -277,7 +277,7 @@ pub fn choose<B: Backend>(
 }
 
 /// Draw the panel.
-fn draw(frame: &mut Frame, picker: &Picker) {
+pub fn draw(frame: &mut Frame, picker: &Picker) {
     let area = centred(frame.area(), picker.rows_needed());
     frame.render_widget(Clear, area);
 

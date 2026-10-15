@@ -1151,13 +1151,13 @@ what the session keeps for itself, so they are carried out as you type them, ahe
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
-`/forget-trust`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
+`/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
-transcript once the turn has ended. `/theme`, `/effort` and `/config` alone open their list over the
-turn, which keeps running behind it: Escape closes the list without stopping the turn, and a
-question the turn asks takes the screen until you have answered it. A list still open when the turn
-ends stays open.
+transcript once the turn has ended. `/model`, `/theme`, `/effort` and `/config` alone open their list
+over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
+a question the turn asks takes the screen until you have answered it. A list still open when the turn
+ends stays open. A model picked this way is the next turn's, and the turn running keeps its own.
 
 Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
 exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box

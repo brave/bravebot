@@ -1,4 +1,4 @@
-//! The pickers that `/config`, `/theme` and `/effort` open, held as state of the session.
+//! The pickers that `/model`, `/config`, `/theme` and `/effort` open, held as state of the session.
 //!
 //! At rest each of them is a loop of its own: it draws, reads a key and returns what was picked.
 //! A turn cannot wait inside such a loop, because the same thread draws the turn and puts the
@@ -18,11 +18,15 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::list_picker::Outcome;
 use crate::theme::Theme;
-use crate::{config_prompt, effort_prompt, theme_prompt};
+use bravebot_aichat::models::Model;
+
+use crate::{config_prompt, effort_prompt, model_prompt, theme_prompt};
 
 /// A picker that is open.
 #[derive(Debug)]
 pub enum Picking {
+    /// `/model`, with the roster the endpoints offered when it was typed.
+    Model(model_prompt::Picker),
     /// `/theme` alone. The theme under the cursor is in force while the picker is open.
     Theme(theme_prompt::Picker),
     /// `/effort` alone.
@@ -34,6 +38,7 @@ pub enum Picking {
 /// What a person picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
+    Model(Model),
     Theme(Theme),
     Effort(effort_prompt::Row),
     Editing(config_prompt::Row),
@@ -54,6 +59,14 @@ impl Picking {
     /// Interpret one key press.
     pub fn press(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Step {
         match self {
+            Picking::Model(picker) => match model_prompt::handle_key(picker, code, modifiers) {
+                model_prompt::Outcome::Continue => Step::Continue,
+                model_prompt::Outcome::Cancel => Step::Cancelled,
+                model_prompt::Outcome::Select => picker
+                    .chosen()
+                    .cloned()
+                    .map_or(Step::Cancelled, |model| Step::Picked(Picked::Model(model))),
+            },
             Picking::Theme(picker) => match theme_prompt::press(picker, code, modifiers) {
                 Outcome::Continue => Step::Continue,
                 Outcome::Cancel => Step::Cancelled,
@@ -88,6 +101,7 @@ impl Picking {
     /// Draw the panel over whatever is already in the frame.
     pub fn draw(&self, frame: &mut Frame) {
         match self {
+            Picking::Model(picker) => model_prompt::draw(frame, picker),
             Picking::Theme(picker) => theme_prompt::draw(frame, picker),
             Picking::Effort(picker) => effort_prompt::draw(frame, picker),
             Picking::Editing(picker) => config_prompt::draw(frame, picker),
