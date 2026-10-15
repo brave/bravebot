@@ -19216,6 +19216,31 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
     assert!(!line.contains("/elsewhere"), "{line}");
 }
 
+/// RUN-12: the `run` description a turn sends names the credentials a program it starts does not get,
+/// and says what an unset report from one of them means. A planner not told reads a build that
+/// reports the signing key unset as a gap in the person's setup and says so. What this rejects is
+/// a statement that exists and is never put on the list a turn sends; the same turn without
+/// confinement is used, since the statement is not about the sandbox.
+#[test]
+fn a_turn_tells_the_planner_which_variables_run_removes() {
+    // With the documented switch exported nothing is removed, so there is nothing to be told.
+    if std::env::var("BRAVEBOT_SUBPROCESS_ENV_SCRUB").is_ok_and(|value| value.trim() == "0") {
+        return;
+    }
+    let (first, _, _) = requests_for_one_run("run-removes-variables", "sh -c 'exit 0'", false);
+
+    for stated in [
+        "`SERVICES_KEY_AICHAT`",
+        "`BRAVE_SERVICES_KEY_ID`",
+        "says nothing about whether the person has set it",
+    ] {
+        assert!(
+            first.contains(stated),
+            "the first request does not say {stated}: {first}"
+        );
+    }
+}
+
 const CREDENTIAL_LOCATIONS: &str = "cannot be added with `/add-dir` or `--add-dir`";
 
 /// SANDBOX-19: the line that follows a failed step says a credential location cannot be added, in

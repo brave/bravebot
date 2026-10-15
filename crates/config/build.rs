@@ -37,10 +37,29 @@ fn main() {
         for name in &missing {
             println!("cargo:warning={name} is not set");
         }
+        // The same names, read from the same list, that bravebot's `run` tool removes from every
+        // program it starts. This script cannot tell who started it, so the note is conditional:
+        // for a build `run` started, "not set" says nothing about the shell, and the remedy above
+        // that edits the shell's configuration cannot apply.
+        let withheld: Vec<&str> = missing
+            .iter()
+            .copied()
+            .filter(|name| SCRUBBED.contains(name))
+            .collect();
+        let withheld = if withheld.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " If bravebot's run tool started this build, it removed {} from the environment \
+                 of every program it starts, so they are not set here whatever the shell holds, \
+                 and copying .envrc.example cannot change that.",
+                withheld.join(", ")
+            )
+        };
         panic!(
             "missing configuration: {}. Copy .envrc.example to .envrc and run `direnv allow`, \
              or set {ALLOW_UNCONFIGURED_BUILD}=1 to build a binary that must be configured \
-             at run time.",
+             at run time.{withheld}",
             missing.join(", ")
         );
     }

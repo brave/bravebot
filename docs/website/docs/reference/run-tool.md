@@ -392,6 +392,11 @@ first, and removed rather than blanked, so a program that tells an unset variabl
 sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
+The description of `run` tells the planner that these two are removed, and that the variables your
+settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+also says that a program reporting one of them unset says nothing about whether you have set it, so a
+build that fails for want of one is not reported to you as a gap in your setup.
+
 **The rest of your environment stays, and that is not an oversight.** `run aws s3 ls` and `run gh pr
 list` are ordinary requests, and no rule matching variable names can tell one of those from an
 exfiltration, so `AWS_PROFILE`, `GITHUB_TOKEN` and `NPM_TOKEN` are left where they are. What the run
