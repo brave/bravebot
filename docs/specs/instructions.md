@@ -198,6 +198,8 @@ exactly that.
 `verified-by: bravebot_agent::preamble::a_one_line_file_naming_another_is_a_pointer`
 `verified-by: bravebot_agent::preamble::a_document_that_merely_mentions_a_file_is_not_a_pointer`
 `verified-by: bravebot_agent::preamble::a_file_pointing_at_itself_is_not_followed`
+`verified-by: bravebot_agent::preamble::a_pointer_naming_a_file_outside_the_workspace_is_not_followed`
+`verified-by: bravebot_agent::preamble::a_pointer_in_an_untrusted_directory_is_a_notice_and_no_text`
 `verified-by: bravebot_agent::preamble::punctuation_around_the_name_is_not_part_of_it`
 `verified-by: bravebot_agent::preamble::a_short_file_naming_nothing_is_not_a_pointer`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`

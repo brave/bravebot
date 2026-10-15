@@ -597,6 +597,7 @@ altered a session nobody had configured would be a change to every session.
 `verified-by: bravebot_core::permissions::no_rules_decide_nothing`
 `verified-by: bravebot_agent::permissions::no_block_is_no_rules`
 `verified-by: bravebot_config::settings::the_permissions_block_and_the_env_block_do_not_need_each_other`
+`verified-by: bravebot_ui_bridge::rules::a_rule_written_after_a_session_opened_governs_the_next_one`
 
 ## The question
 
@@ -858,6 +859,7 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::a_directory_is_not_offered_to_be_opened_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`

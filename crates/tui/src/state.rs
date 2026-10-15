@@ -17551,6 +17551,10 @@ mod tests {
 
         /// `/compact` is a model call made in the middle of a turn, so its wait is that turn's and it
         /// is inference rather than time nobody can account for.
+        ///
+        /// The aside starts three seconds in the past. Under the real clock an aside that does
+        /// nothing reads zero in every figure, and a wait charged to tools or to the person would
+        /// then still equal the wall clock.
         #[test]
         fn an_aside_charges_its_wait_to_the_turn_it_interrupted() {
             let mut s = session();
@@ -17558,8 +17562,15 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 400);
+            let before = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
 
             s.begin_aside();
+            assert!(s.started.is_some(), "an aside did not start the clock");
+            s.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
             s.end_aside(250);
 
             let turn = s
@@ -17567,25 +17578,33 @@ mod tests {
                 .get(&1)
                 .copied()
                 .expect("turn 1 recorded");
-            assert_eq!(
-                turn.inference_ms, turn.wall_ms,
-                "an aside's wait was not counted as time spent on the model"
+            let waited = turn.inference_ms - before.inference_ms;
+            assert!(
+                waited >= 3_000,
+                "an aside's wait was not counted as time spent on the model: {turn:?}"
             );
+            assert_eq!(
+                turn.wall_ms - before.wall_ms,
+                waited,
+                "the wait is not in the turn's wall clock as well: {turn:?}"
+            );
+            assert_eq!(turn.tools_ms, before.tools_ms, "{turn:?}");
+            assert_eq!(turn.stalled_ms, before.stalled_ms, "{turn:?}");
         }
 
         /// An aside asked before the first turn waits on the model exactly as one asked during a
         /// turn does. Charged to no turn, that wait is in none of the figures the session adds up,
         /// so a session that sat for a minute on its first question reports having taken no time.
         ///
-        /// The entry is what this asserts rather than the figure in it, as
-        /// `a_failed_turn_still_accounts_for_its_wall_clock` does and for the same reason: the
-        /// clock is the real one, so a test's aside is over in well under the millisecond every
-        /// figure here is measured in.
+        /// The aside starts three seconds in the past, so the figures differ from zero and a wait
+        /// charged to the wrong one is seen.
         #[test]
         fn an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn() {
             let mut s = session();
 
             s.begin_aside();
+            assert!(s.started.is_some(), "an aside did not start the clock");
+            s.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
             s.end_aside(250);
 
             let leading = s
@@ -17593,10 +17612,16 @@ mod tests {
                 .get(&0)
                 .copied()
                 .expect("the wait was recorded ahead of the first turn");
-            assert_eq!(
-                leading.inference_ms, leading.wall_ms,
-                "an aside's wait was not counted as time spent on the model"
+            assert!(
+                leading.inference_ms >= 3_000,
+                "an aside's wait was not counted as time spent on the model: {leading:?}"
             );
+            assert_eq!(
+                leading.wall_ms, leading.inference_ms,
+                "the wait is not in the leading entry's wall clock as well"
+            );
+            assert_eq!(leading.tools_ms, 0, "{leading:?}");
+            assert_eq!(leading.stalled_ms, 0, "{leading:?}");
             assert_eq!(
                 s.timing_total().wall_ms,
                 leading.wall_ms,

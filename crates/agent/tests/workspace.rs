@@ -8700,6 +8700,114 @@ fn a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout(
     .expect("a directory the parent opened is reachable from the checkout");
 }
 
+/// CHECKOUT-7. The session's own directory outside the project stays reachable from the delegate's
+/// workspace by the same absolute path, for a read and for a write, so a delegate leaves its
+/// intermediate files where the session does.
+#[test]
+fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-session-dir", &[("README", "hello\n")]);
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "first pass").unwrap();
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let named = given.path().join("workings.txt").display().to_string();
+    made.read(&mut policy, &trusted_text(&named))
+        .expect("a file in the session's own directory is readable from the checkout");
+    made.write(
+        &mut policy,
+        &trusted_text(&named),
+        &trusted_text("second pass"),
+    )
+    .expect("a file in the session's own directory is writable from the checkout");
+    assert_eq!(
+        std::fs::read_to_string(given.path().join("workings.txt")).unwrap(),
+        "second pass"
+    );
+}
+
+/// CHECKOUT-7, PERM-16. Where the settings keep the file tools inside the workspace, a delegate's
+/// checkout keeps them inside its root: a directory the parent already had open is reached by none
+/// of a read, a write, a listing and a search, though the checkout's own files are.
+#[test]
+fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-kept-inside", &[("README", "hello\n")]);
+    let other = outside("checkout-reach-kept-inside");
+    std::fs::write(other.path.join("notes.md"), "a note").unwrap();
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let workspace = workspace.with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    // Each tool works on the checkout's own tree, so the refusals below come from the confinement
+    // and not from a tool that refuses everything in a checkout.
+    made.read(&mut policy, &trusted_text("README"))
+        .expect("the checkout reads its own file");
+    made.write(
+        &mut policy,
+        &trusted_text("inside.md"),
+        &trusted_text("written"),
+    )
+    .expect("the checkout writes in its own tree");
+    made.list(&mut policy, &trusted_text("."), None, None)
+        .expect("the checkout lists its own tree");
+    made.grep(
+        &mut policy,
+        std::slice::from_ref(&trusted_text("hello")),
+        &trusted_text("."),
+        None,
+        true,
+        1,
+    )
+    .expect("the checkout searches its own tree");
+    let directory = trusted_text(&opened.display().to_string());
+    let errors = [
+        made.read(
+            &mut policy,
+            &trusted_text(&opened.join("notes.md").display().to_string()),
+        )
+        .err(),
+        made.write(
+            &mut policy,
+            &trusted_text(&opened.join("fresh.md").display().to_string()),
+            &trusted_text("written"),
+        )
+        .err(),
+        made.list(&mut policy, &directory, None, None).err(),
+        made.grep(
+            &mut policy,
+            std::slice::from_ref(&trusted_text("note")),
+            &directory,
+            None,
+            true,
+            1,
+        )
+        .err(),
+    ];
+    let reached: Vec<&str> = ["read", "write", "list", "grep"]
+        .into_iter()
+        .zip(errors)
+        .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
+        .map(|(tool, _)| tool)
+        .collect();
+    assert!(
+        reached.is_empty(),
+        "these tools reached a directory outside the checkout: {reached:?}"
+    );
+    assert!(!opened.join("fresh.md").exists());
+}
+
 /// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
 /// person opened, and a directory held by neither the working directory nor the checkouts gives
 /// the other cause.

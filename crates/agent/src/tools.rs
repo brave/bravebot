@@ -12321,6 +12321,114 @@ mod tests {
         );
     }
 
+    /// Start `line` as a job of `jobs` and wait, to a bound, until its steps have exited. The pipes
+    /// are not waited for: `Background::ended` would pay the drain's grace on top.
+    fn start_a_job_and_wait_for_its_steps(jobs: &mut Jobs, line: &str) {
+        use bravebot_core::TrustStore;
+        use bravebot_core::file_authority::FileAuthority;
+
+        let root = std::env::current_dir().unwrap();
+        let plan = crate::cmdline::compile(line, &root, None, &mut |_, _| Ok(())).unwrap();
+        let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+            panic!("one pipeline");
+        };
+        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+        let (name, _stop) = jobs.keep(
+            running,
+            plan.display(),
+            Label::trusted_public(),
+            FileAuthority::new(TrustStore::new(&root)),
+            0,
+            false,
+        );
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !jobs.running.get_mut(&name).unwrap().running.steps_exited() {
+            assert!(std::time::Instant::now() < until, "`{line}` did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// End the turn over `jobs` and return what the person was told about each.
+    fn end_the_turn_over(jobs: &mut Jobs) -> Vec<crate::report::JobEvent> {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let mut sink = RecordingSink::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "start jobs");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        jobs.stop_all(&mut policy, &mut reporter);
+        reporter.jobs
+    }
+
+    /// RUN-26. A job whose steps exited before the turn ended is reported at its end as what it
+    /// did, from its exit codes, though nobody asked to stop it. Saying the turn stopped a program
+    /// that had already finished would be false, and a failed one would read as a success.
+    #[test]
+    fn a_job_that_exited_by_itself_is_reported_by_its_codes_at_the_turns_end() {
+        use crate::report::{JobEvent, Outcome};
+
+        let mut jobs = Jobs::new();
+        for line in ["true", "false"] {
+            start_a_job_and_wait_for_its_steps(&mut jobs, line);
+        }
+
+        let told = end_the_turn_over(&mut jobs);
+
+        assert!(
+            matches!(
+                told.as_slice(),
+                [
+                    JobEvent::Ended { name: first, outcome: Outcome::Succeeded },
+                    JobEvent::Ended { name: second, outcome: Outcome::Failed { detail, .. } },
+                ] if first == "job:1" && second == "job:2" && detail == "step 1 exited 1"
+            ),
+            "{told:?}"
+        );
+    }
+
+    /// RUN-26. The turn's end asks whether a job's steps exited and not whether its pipes drained.
+    /// A step that leaves a child holding the pipe open would otherwise hold the end of the turn
+    /// for the drain's grace, once for each job.
+    ///
+    /// The shell exits at once and leaves the sleep holding its end of the output pipe. The bound
+    /// is half of the two seconds `exec` gives a pipe to drain, which a turn that waited on it
+    /// would spend whole.
+    #[test]
+    fn the_turns_end_does_not_wait_for_a_jobs_pipes_to_drain() {
+        use crate::report::{JobEvent, Outcome};
+
+        let mut jobs = Jobs::new();
+        start_a_job_and_wait_for_its_steps(&mut jobs, "sh -c 'sleep 4 & exit 0'");
+
+        let asked = std::time::Instant::now();
+        let told = end_the_turn_over(&mut jobs);
+        let waited = asked.elapsed();
+
+        assert!(
+            waited < std::time::Duration::from_secs(1),
+            "the turn's end waited {waited:?} for a job's pipes to drain"
+        );
+        assert!(
+            matches!(
+                told.as_slice(),
+                [JobEvent::Ended {
+                    outcome: Outcome::Succeeded,
+                    ..
+                }]
+            ),
+            "{told:?}"
+        );
+    }
+
     /// A glob the matcher cannot read selects no files, and a search over no files reports no
     /// matches, which is the sentence a search that read the whole tree and found nothing
     /// prints. Saying which syntax was the problem is what keeps the two apart.

@@ -424,6 +424,9 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened`
 `verified-by: bravebot_agent::workspace::the_working_directory_and_a_checkout_are_not_reachable_from_each_other`
 `verified-by: bravebot_agent::workspace::a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout`
+`verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout`
+`verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts`
 `verified-by: bravebot_agent::workspace::a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs`
