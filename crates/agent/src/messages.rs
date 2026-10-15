@@ -27,7 +27,6 @@ const INTRODUCTION: &str = "A message from another bravebot session reached you.
 /// arrived, and neither is taken from the message (MSG-7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arrived {
-    /// The sender's id.
     pub from: String,
     /// The sender's name, as the roster holds it.
     pub name: String,

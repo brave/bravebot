@@ -586,7 +586,6 @@ pub struct Delegation {
 /// in the marked block every quarantined thing is drawn in where it was not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeardMessage {
-    /// The sender's id.
     pub from: String,
     /// The sender's name, as the roster holds it.
     pub name: String,
