@@ -1494,6 +1494,29 @@ mod tests {
                 "{sibling}"
             );
         }
+        // A name that is not UTF-8 beside `sessions` is not the session records, and neither is
+        // the name its lossy rendering spells. A lift that compared the text of the names would
+        // grant one of them. The names are built in memory because macOS cannot hold the first.
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let invalid = home
+                .join(".bravebot")
+                .join(std::ffi::OsStr::from_bytes(b"sessions\xff"));
+            let lookalike = home.join(".bravebot/sessions\u{FFFD}");
+            assert_ne!(invalid, lookalike);
+            for name in [invalid, lookalike] {
+                assert!(!reads_readable_state(&name, &home, false), "{name:?}");
+                for write in [false, true] {
+                    assert!(
+                        matches!(
+                            judged_request(&name, write, Some(&home), &rules),
+                            Err(RequestRefusal::Rule(_) | RequestRefusal::CredentialLocation)
+                        ),
+                        "{name:?} write={write} was granted"
+                    );
+                }
+            }
+        }
         // An access the caller says nothing about is judged as a write.
         assert!(inside_a_credential_location(&sessions, &home));
         assert!(!inside_a_credential_location_for(&sessions, &home, false));
