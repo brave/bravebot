@@ -1159,13 +1159,10 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let mut filled = false;
     let mut answer: Option<Labelled<String>> = None;
     let mut shown = String::new();
-    let mut chat = Chat {
-        config,
-        egress,
-        subscription: subscription.map(|s| s as &mut dyn bravebot_aichat::Subscription),
-        model: chosen_model,
-        cancel: Some(cancel),
-    };
+    let mut chat = Chat::new(config, egress)
+        .spending(subscription)
+        .on(chosen_model)
+        .stoppable_by(cancel);
 
     for (index, step) in plan.steps().iter().enumerate() {
         if cancel.is_cancelled() {
