@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -183,6 +184,56 @@ def test_a_worktree_whose_directory_was_deleted_by_hand_holds_no_branch():
         found, main = pr_worktree.worktrees(clone)
         assert found == {"main": clone}, found
         assert main == clone
+
+
+def a_failure_printing(stderr, stdout):
+    # The text goes in through the environment because the failure message repeats the command line.
+    script = "import os, sys; sys.stderr.write(os.environ['ERR']); sys.stdout.write(os.environ['OUT']); sys.exit(3)"
+    env = {**os.environ, "ERR": stderr, "OUT": stdout}
+    return quietly(lambda: pr_worktree.run(sys.executable, "-c", script, env=env))
+
+
+def test_a_failed_command_reports_what_it_wrote_to_stderr_and_to_stdout():
+    # gh api writes an error response's JSON, which holds the reason, to stdout and only a summary to stderr.
+    for stderr, stdout in (("the summary", "the reason"), ("", "the reason"), ("the summary", "")):
+        code, out = a_failure_printing(stderr, stdout)
+        assert code == 1, out
+        assert out.splitlines()[1:] == [text for text in (stderr, stdout) if text], (stderr, stdout, out)
+
+
+def test_a_json_error_body_is_cut_to_its_message_and_errors():
+    # A GraphQL response that failed in part also carries the data the query asked for, which is not the reason.
+    partial = {"data": {"repository": "THE-REVIEW-THREADS"}, "errors": [{"message": "Resource limit exceeded"}]}
+    refused = {"message": "Validation Failed", "errors": ["Review cannot be requested from pull request author."]}
+    cases = (
+        (partial, {"errors": partial["errors"]}),
+        ({**refused, "documentation_url": "https://docs.github.com/rest", "status": "422"}, refused),
+    )
+    for body, reason in cases:
+        code, out = a_failure_printing("gh: failed", json.dumps(body))
+        assert code == 1 and "THE-REVIEW-THREADS" not in out and "documentation_url" not in out, out
+        assert out.splitlines()[1] == "gh: failed" and json.loads(out.splitlines()[2]) == reason, out
+        assert len(out.splitlines()) == 3, out
+
+
+def test_a_failure_body_that_is_not_an_error_object_is_printed_as_it_came():
+    bodies = (
+        '{"detail": "no message here"}',
+        '{"errors": null, "detail": "rate limited"}',
+        '"an error message"',
+        '["a", "b"]',
+        '{"data": 1, "errors": [{"message": "cut off',
+        "[" * 200000,
+    )
+    for body in bodies:
+        assert pr_worktree.printed(SimpleNamespace(stderr="", stdout=body)) == body, body[:60]
+
+
+def test_a_line_separator_in_an_error_message_cannot_start_a_new_line():
+    # Text a response echoes back is printed on the one line the reason takes.
+    message = "bad\u2028name\u0085here"
+    out = pr_worktree.printed(SimpleNamespace(stderr="", stdout=json.dumps({"message": message})))
+    assert len(out.splitlines()) == 1 and json.loads(out) == {"message": message}, out
 
 
 def test_each_command_is_logged_and_only_a_failure_prints_its_tail():

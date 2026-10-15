@@ -499,6 +499,30 @@ def test_a_refused_review_request_fails_the_step():
     assert code == 1 and "HTTP 403" in out, out
 
 
+def test_a_refused_review_request_prints_the_reason_gh_api_writes_to_stdout_and_its_status_line():
+    # gh api puts the response body, which holds the reason, on stdout and only a summary on stderr.
+    status = "gh: Validation Failed (HTTP 422)"
+    reason = {"message": "Validation Failed", "errors": ["Review cannot be requested from pull request author."]}
+
+    def refused(stderr, stdout):
+        return lambda *args, **kwargs: SimpleNamespace(stdout=stdout, stderr=stderr, returncode=1)
+
+    real = pr_fix.run
+    try:
+        for stderr, stdout in ((status, json.dumps(reason)), ("", json.dumps(reason)), (status, "")):
+            pr_fix.run = refused(stderr, stdout)
+            code, out = quietly(pr_fix.review, SimpleNamespace(number=12, url="u"))
+            lines = out.splitlines()
+            assert code == 1 and lines[0] == "could not request netzenbot-reviewer on u:", out
+            assert len(lines) == 1 + bool(stderr) + bool(stdout), (stderr, stdout, out)
+            if stderr:
+                assert lines[1] == status, (stderr, stdout, out)
+            if stdout:
+                assert json.loads(lines[-1]) == reason, (stderr, stdout, out)
+    finally:
+        pr_fix.run = real
+
+
 def test_pull_requests_are_named_by_commas_spaces_or_links_and_once_each():
     named = pr_fix.pr_numbers(
         ["12,7", "https://github.com/brave/bravebot/pull/9/files #7", " 3 "], Path("."),
