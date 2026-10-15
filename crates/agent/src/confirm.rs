@@ -835,6 +835,8 @@ pub struct OutputRequest {
     pub command: String,
     /// What it printed, in full.
     pub output: String,
+    /// The label it was released under, in the same short form the trail uses (LABEL-10).
+    pub label: String,
     /// How many lines that is, counted before the bytes were released.
     ///
     /// Carried rather than counted here, for the reason [`WriteRequest::diff`] is carried: this
@@ -850,6 +852,9 @@ pub struct OutputRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 impl OutputRequest {
@@ -885,6 +890,10 @@ pub struct VetRequest {
     pub expects: String,
     /// The content, in full. Empty for a picture, which is shown as a file to open instead.
     pub content: String,
+    /// The label the content was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
+    /// text to carry it beside.
+    pub label: Option<String>,
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
@@ -892,6 +901,9 @@ pub struct VetRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
     /// Where the slot holds a picture or a PDF, the copy of it the person is asked to open.
     ///
     /// `None` for text, and for a picture on a run bypassing permissions, where the mode answers
@@ -1054,6 +1066,9 @@ pub struct VouchRequest {
     /// whatever it says has to be true of all of them. What a file holds decides how it is
     /// previewed and never whether it is asked about.
     pub preview: String,
+    /// The label the preview was released under, in the same short form the trail uses
+    /// (LABEL-10).
+    pub label: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
     /// What a check said about the whole file, or that it did not complete.
@@ -1065,6 +1080,9 @@ pub struct VouchRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 /// A file the planner has asked to read that holds something the scan took for a credential.
@@ -2798,6 +2816,8 @@ mod tests {
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2808,6 +2828,8 @@ mod tests {
             truncated: false,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 

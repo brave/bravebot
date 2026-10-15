@@ -21863,6 +21863,8 @@ struct ShownAfterAVet {
     shown: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::VetRequest>>>,
     /// What the copy of a picture held while its prompt was open, as a person opening it would see.
     opened: std::sync::Arc<std::sync::Mutex<Vec<Option<Vec<u8>>>>>,
+    /// The questions about vouching for a quarantined file, which are refused.
+    vouched: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::VouchRequest>>>,
 }
 
 impl ShownAfterAVet {
@@ -21871,6 +21873,7 @@ impl ShownAfterAVet {
             allow,
             shown: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             opened: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            vouched: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }
@@ -21942,8 +21945,9 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
 
     fn confirm_vouch(
         &mut self,
-        _request: &bravebot_agent::confirm::VouchRequest,
+        request: &bravebot_agent::confirm::VouchRequest,
     ) -> bravebot_agent::Decision {
+        self.vouched.lock().unwrap().push(request.clone());
         bravebot_agent::Decision::Reject
     }
 
@@ -55728,4 +55732,117 @@ fn plan_mode_refuses_a_download_before_anything_is_sent() {
 
     assert_eq!(count.load(Ordering::SeqCst), 0);
     assert!(!scratch.path.join("data.bin").exists());
+}
+
+/// LABEL-10: the prompts that put released bytes in front of a person state the label each gate
+/// released them under, and the check's sentence states the label it was released under. The
+/// file's bytes are untrusted and private, and so is the check's sentence, so the expected label is the
+/// gate's own and a prompt that dropped either one, or sent an empty word, fails.
+#[test]
+fn approval_prompts_carry_the_labels_the_gates_released_their_bytes_under() {
+    let scratch = Scratch::new("prompt-labels");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("config.py"), "RAW-CONTENTS\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![
+            reply_with(r#"{"verdict": "safe", "reason": "plain text"}"#),
+            reply_with(r#"{"verdict": "safe", "reason": "plain text"}"#),
+        ],
+        vec![
+            tool_request("read_file", r#"{"path":"config.py"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"return the whole file"}"#,
+            ),
+            processor_reply("PROCESSED CONTENTS"),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:3","expects":"the file, tidied"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let (shown, vouched) = (confirmer.shown.clone(), confirmer.vouched.clone());
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("tidy the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let said = bravebot_core::label::Label::untrusted_private().to_string();
+    let vouch = vouched.lock().unwrap();
+    let vouch = vouch.first().expect("the person was asked to vouch");
+    assert!(vouch.preview.contains("RAW-CONTENTS"));
+    assert_eq!(vouch.label, said);
+    assert_eq!(vouch.reason_label.as_deref(), Some(said.as_str()));
+
+    let vet = shown.lock().unwrap();
+    let vet = vet.first().expect("the person was asked to read");
+    assert!(vet.content.contains("PROCESSED CONTENTS"));
+    assert_eq!(vet.label.as_deref(), Some(said.as_str()));
+    assert_eq!(vet.reason_label.as_deref(), Some(said.as_str()));
+}
+
+/// LABEL-10: what a command printed reaches the prompt that asks to read it with the label its
+/// slot was released under.
+#[test]
+fn a_prompt_to_read_output_carries_the_label_the_slot_was_released_under() {
+    let scratch = Scratch::new("output-prompt-label");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("mail.txt"), "SENTINEL-MAIL\n").unwrap();
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        Vec::new(),
+        vec![
+            tool_request("run", r#"{"command":"sed -n p mail.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does the mail say"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert!(request.output.contains("SENTINEL-MAIL"));
+    assert_eq!(
+        request.label,
+        bravebot_core::label::Label::untrusted_private().to_string()
+    );
 }

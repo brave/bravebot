@@ -6490,6 +6490,8 @@ mod tests {
             verdict,
             reason: reason.map(str::to_string),
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 
@@ -7089,6 +7091,8 @@ mod tests {
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -7773,6 +7777,8 @@ mod tests {
             truncated,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 

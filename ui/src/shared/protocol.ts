@@ -343,14 +343,14 @@ export interface ForkedSession {
   }
 }
 
-export interface Vetting { verdict: string; reason?: string | null; detail?: string | null }
+export interface Vetting { verdict: string; reason?: string | null; label?: string | null; detail?: string | null }
 /**
  * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
  * the model would be shown. The copy is deleted once the question is answered.
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; label?: string | null; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -781,6 +781,8 @@ export interface OutputRequest {
   reference: string
   lines: number
   output: string
+  /** The label the output was released under, as the trail writes it. */
+  label: string
   summary: string
 }
 
@@ -790,6 +792,8 @@ export interface VouchRequest {
   request: number
   path: string
   preview: string
+  /** The label the preview was released under, as the trail writes it. */
+  label: string
   /** Whether the preview is only part of the file. Load-bearing: a preview that stops
    *  without saying so reads as the whole thing. */
   truncated: boolean

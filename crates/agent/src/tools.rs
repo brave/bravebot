@@ -4375,6 +4375,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             let head: Vec<&str> = text.lines().take(VOUCH_PREVIEW).collect();
             (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
         });
+        let label = shaped.label().to_string();
         let (preview, truncated) = {
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
@@ -4400,25 +4401,27 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Some(crate::timing::Interval::since(asked_at)),
             )
         });
-        let (verdict, reason) = match checked {
+        let (verdict, (reason, reason_label)) = match checked {
             Some((checked, elapsed)) => {
                 spent = checked.usage;
                 waited = elapsed;
-                let reason = checked.reason.map(|reason| {
-                    let proof = policy.authorise_display_release("what a check said about content");
-                    reason.declassify(&proof)
-                });
-                (checked.verdict, reason)
+                let said = released_reason(policy, checked.reason);
+                (checked.verdict, said)
             }
-            None => (Verdict::Inconclusive("the check was not made"), None),
+            None => (
+                Verdict::Inconclusive("the check was not made"),
+                (None, None),
+            ),
         };
 
         let request = crate::confirm::VouchRequest {
             path: proposed_path.clone(),
             preview,
+            label,
             truncated,
             verdict,
             reason,
+            reason_label,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
             approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_revision);
@@ -7187,18 +7190,18 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
     };
-    let (verdict, reason) = match &spec {
-        None => (Verdict::Inconclusive("the check was not made"), None),
+    let (verdict, said) = match &spec {
+        None => (
+            Verdict::Inconclusive("the check was not made"),
+            (None, None),
+        ),
         Some(spec) => {
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
             spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
-            let reason = checked.reason.map(|reason| {
-                let proof = policy.authorise_display_release("what a check said about content");
-                reason.declassify(&proof)
-            });
-            (checked.verdict, reason)
+            let said = released_reason(policy, checked.reason);
+            (checked.verdict, said)
         }
     };
 
@@ -7214,7 +7217,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         confirmer,
         &slot,
         verdict,
-        reason,
+        said,
         counted,
     ) {
         Ok((text, counted, endorsed)) => {
@@ -7329,11 +7332,27 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer>(
         confirmer,
         slot,
         Verdict::Inconclusive("the check was not made"),
-        None,
+        (None, None),
         0,
     )
     .ok()
     .map(|(text, _, _)| text)
+}
+
+/// What a check said about content, released for the screen an approval is read on, with the label
+/// it was released under. The label travels beside the words (LABEL-10).
+fn released_reason<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    reason: Option<Labelled<String>>,
+) -> (Option<String>, Option<String>) {
+    match reason {
+        Some(reason) => {
+            let label = reason.label().to_string();
+            let proof = policy.authorise_display_release("what a check said about content");
+            (Some(reason.declassify(&proof)), Some(label))
+        }
+        None => (None, None),
+    }
 }
 
 /// Put one slot a program printed to whoever answers for reading it, and hand the planner a new
@@ -7349,7 +7368,7 @@ fn release_output<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     slot: &SlotId,
     verdict: Verdict,
-    reason: Option<String>,
+    (reason, reason_label): (Option<String>, Option<String>),
     mut counted: usize,
 ) -> Result<(Labelled<String>, usize, Endorsed), Box<Produced>> {
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
@@ -7381,7 +7400,7 @@ fn release_output<S: Sink, C: Confirmer>(
         // The count is taken here, inside the reshape, rather than off the bytes afterwards.
         // Counting released bytes is the read LABEL-6 refuses, and it is the same question the
         // kernel already answers for a slot: how much there is, not what it says.
-        let (shown, lines) = {
+        let (shown, lines, label) = {
             let content = match policy.resolve("read_output", slot, slots) {
                 Ok(content) => content,
                 Err(denial) => {
@@ -7392,9 +7411,11 @@ fn release_output<S: Sink, C: Confirmer>(
                 let lines = text.lines().count();
                 (text, lines)
             });
+            let label = measured.label().to_string();
             let proof =
                 policy.authorise_display_release("command output the planner asked to read");
-            measured.declassify(&proof)
+            let (shown, lines) = measured.declassify(&proof);
+            (shown, lines, label)
         };
 
         counted = lines;
@@ -7402,10 +7423,12 @@ fn release_output<S: Sink, C: Confirmer>(
         let request = crate::confirm::OutputRequest {
             command: slots.command_of(slot).unwrap_or("a command").to_string(),
             output: shown,
+            label,
             lines,
             reference: slot.to_string(),
             verdict,
             reason,
+            reason_label,
         };
 
         // Says the bytes are not coming and not who decided that. Under bypass with screening asked
@@ -7572,7 +7595,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // at all where the mode answers without drawing anything: bypassing answers this from the
         // verdict alone, so a copy there would be a file written for nobody to open, and a machine
         // naming no cache directory would refuse what the mode answers yes.
-        let (shown, lines, shown_picture) = match &picture {
+        let (shown, lines, shown_picture, label) = match &picture {
             None => {
                 let content = match policy.resolve("vet_content", &slot, tools.slots) {
                     Ok(content) => content,
@@ -7582,12 +7605,13 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                     let lines = text.lines().count();
                     (text, lines)
                 });
+                let label = measured.label().to_string();
                 let proof =
                     policy.authorise_display_release("content the planner asked to be shown");
                 let (shown, lines) = measured.declassify(&proof);
-                (shown, lines, None)
+                (shown, lines, None, Some(label))
             }
-            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, None),
+            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, None, None),
             Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
                 Ok((copy, bytes)) => {
                     let shown = crate::confirm::PictureShown {
@@ -7596,7 +7620,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                         bytes,
                     };
                     _copy = Some(copy);
-                    (String::new(), 0, Some(shown))
+                    (String::new(), 0, Some(shown), None)
                 }
                 Err(detail) => {
                     return Produced::refused_with_a_note(
@@ -7612,10 +7636,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 }
             },
         };
-        let reason = said.map(|reason| {
-            let proof = policy.authorise_display_release("what a check said about content");
-            reason.declassify(&proof)
-        });
+        let (reason, reason_label) = released_reason(policy, said);
 
         // The origin comes off the kernel's own record either way, rather than off the spec on
         // the branch that has one: a slot's address is untrusted content, so reading it out here
@@ -7650,9 +7671,11 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             origin,
             expects,
             content: shown,
+            label,
             lines,
             verdict,
             reason,
+            reason_label,
             picture: shown_picture,
         };
 

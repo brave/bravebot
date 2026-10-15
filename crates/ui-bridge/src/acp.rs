@@ -1540,6 +1540,8 @@ mod tests {
             reference: "ref:1".to_string(),
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         };
 
         let (_, _, text) = shown("output", crate::wire::output_request(4, &request));
@@ -1564,6 +1566,8 @@ mod tests {
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         };
 
         let (_, _, text) = shown("vet", crate::wire::vet_request(5, &request));

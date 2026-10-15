@@ -341,6 +341,8 @@ fn an_unanswerable_output_read_refuses() {
             reference: "$1".into(),
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject,
         "approving output nobody could see is the one thing this cannot mean"
@@ -359,6 +361,8 @@ fn an_unanswerable_vouch_refuses() {
             truncated: true,
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject
     );
@@ -731,6 +735,8 @@ fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
                 verdict,
                 reason: None,
                 picture: None,
+                label: None,
+                reason_label: None,
             }),
             Decision::Reject
         );
@@ -755,6 +761,8 @@ fn vetted_content_requires_its_own_explicit_approval() {
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("instructions".into()),
             picture: None,
+            label: None,
+            reason_label: None,
         }),
         Decision::Approve
     );

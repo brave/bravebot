@@ -194,6 +194,65 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
     assert_eq!(remark("(T,pub)"), json!("(T,pub)"));
 }
 
+/// A prompt over released bytes states the label each part was released under: the bytes, and
+/// the sentence a check wrote about them. Two differing labels per carrier are what tell carrying
+/// the label from writing one down, and the reason's label differing from the bytes' tells the
+/// two apart from one label reused for both.
+#[test]
+fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_under() {
+    use bravebot_agent::confirm::{OutputRequest, VetRequest, VouchRequest};
+    use bravebot_core::vetting::Verdict;
+    for (bytes, said) in [("(U,priv)", "(T,pub)"), ("(T,pub)", "(U,priv)")] {
+        let output = wire::output_request(
+            1,
+            &OutputRequest {
+                command: "cat file".into(),
+                output: "content".into(),
+                label: bytes.into(),
+                lines: 1,
+                reference: "1".into(),
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+            },
+        );
+        assert_eq!(output["label"], json!(bytes));
+        assert_eq!(output["vetting"]["label"], json!(said));
+
+        let vet = wire::vet_request(
+            2,
+            &VetRequest {
+                origin: "file.md".into(),
+                expects: "notes".into(),
+                content: "text".into(),
+                label: Some(bytes.into()),
+                lines: 1,
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+                picture: None,
+            },
+        );
+        assert_eq!(vet["label"], json!(bytes));
+        assert_eq!(vet["vetting"]["label"], json!(said));
+
+        let vouch = wire::vouch_request(
+            3,
+            &VouchRequest {
+                path: "file".into(),
+                preview: "part".into(),
+                label: bytes.into(),
+                truncated: false,
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+            },
+        );
+        assert_eq!(vouch["label"], json!(bytes));
+        assert_eq!(vouch["vetting"]["label"], json!(said));
+    }
+}
+
 #[test]
 fn a_replayed_tool_line_carries_no_outcome() {
     let said = wire::recounted(&[Said::Tool {
@@ -1027,9 +1086,11 @@ fn approval_evidence_is_kept_beside_the_decision() {
             origin: "file.md".into(),
             expects: "notes".into(),
             content: "first\nsecond\n".into(),
+            label: Some("(U,priv)".into()),
             lines: 2,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
+            reason_label: Some("(U,priv)".into()),
             picture: None,
         },
     );
@@ -1042,10 +1103,12 @@ fn approval_evidence_is_kept_beside_the_decision() {
         &OutputRequest {
             command: "cat file".into(),
             output: "content".into(),
+            label: "(U,priv)".into(),
             lines: 1,
             reference: "1".into(),
             verdict: Verdict::Inconclusive("offline"),
             reason: None,
+            reason_label: None,
         },
     );
     assert_eq!(output["vetting"]["detail"], "offline");
@@ -1054,9 +1117,11 @@ fn approval_evidence_is_kept_beside_the_decision() {
         &VouchRequest {
             path: "file".into(),
             preview: "part".into(),
+            label: "(U,priv)".into(),
             truncated: true,
             verdict: Verdict::Safe,
             reason: Some("advice".into()),
+            reason_label: Some("(U,priv)".into()),
         },
     );
     assert_eq!(vouch["vetting"]["reason"], "advice");
