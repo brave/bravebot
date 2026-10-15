@@ -19,6 +19,11 @@ person asking why bravebot did or did not do something. The review looks for tho
 change that would have avoided each. This skill reads them, files what it finds, and remembers
 which it has read.
 
+It files defects in the bravebot product (`crates/`, `ui/` and the behaviour the specs describe). A
+session often runs one of this repository's own skills, such as `pr-fix` or `rebase`. Defects in
+those skills, the scripts beside them, the `Makefile`, `contrib/` and the CI workflows are left out.
+A session whose only findings are of that kind has no problems to file and still gets its marker.
+
 The memory is `<id>.analysis.jsonl` beside the session: one line per review, holding the date, the
 main commit, the number of turns reviewed, the issues filed and the counts dropped and held back.
 It is a local file, because sessions are per machine and a committed ledger would name sessions
