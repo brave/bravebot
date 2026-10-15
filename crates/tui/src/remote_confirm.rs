@@ -61,6 +61,14 @@ impl Interjections {
         self.0.lock().ok()?.pop_front()
     }
 
+    /// Take every line, oldest first, leaving the buffer empty.
+    pub fn drain(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|mut waiting| waiting.drain(..).collect())
+            .unwrap_or_default()
+    }
+
     /// Drop the newest, for a prompt the person is taking back off the queue.
     ///
     /// The newest rather than the oldest because that is the end Up takes from: the queue is taken
