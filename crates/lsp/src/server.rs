@@ -2716,22 +2716,29 @@ done
 
     /// LSP-9: the capability is checked before a process is started, so a run that was not granted
     /// one does not get a server launched on its behalf.
+    #[cfg(unix)]
     #[test]
     fn a_request_without_the_capability_is_refused() {
-        use bravebot_core::capability::CapabilitySet;
-
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
         // The grant a file read gives is not this one, which is the whole clause.
-        let reads_only = CapabilitySet::from_iter([Capability::FileRead]);
-        assert!(
-            reads_only.token_for(&Capability::LanguageServer).is_none(),
-            "file reads must not carry a language server with them"
-        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::FileRead]);
 
-        // And an empty set carries nothing, so the default is refusal.
+        let mut asked = false;
+        let refused = servers.ask(&mut policy, &definition_in("/workspace/a.rs"), &mut |_| {
+            asked = true;
+            true
+        });
+
+        assert!(matches!(refused, Err(LspError::Denied(_))), "{refused:?}");
         assert!(
-            CapabilitySet::none()
-                .token_for(&Capability::LanguageServer)
-                .is_none()
+            !asked,
+            "a refused request must not reach the approval prompt"
+        );
+        assert_eq!(
+            servers.running(),
+            0,
+            "a refused request must start no server"
         );
     }
 
