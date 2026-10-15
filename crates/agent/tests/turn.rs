@@ -17522,7 +17522,8 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
 /// person deciding where a check answers in the person's place. Which of the two is said follows who
 /// answers `read_output`, and a record only decides whether the vouching half is left out.
 #[test]
-fn a_quarantined_result_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back() {
+fn a_quarantined_result_from_a_remembered_line_where_a_check_answers_leaves_who_answers_to_the_description()
+ {
     for mode in EVERY_MODE {
         a_remembered_line_result_where_a_check_answers(mode);
     }
@@ -17580,12 +17581,12 @@ fn a_remembered_line_result_where_a_check_answers(mode: bravebot_agent::Permissi
     );
     let told = format!("[{mode:?}] {told}");
     assert!(
-        told.contains("It comes back as text you can read, or you are told it was kept back."),
-        "the planner was not told read_output returns the output or reports it kept back: {told}"
+        told.contains("call read_output with the reference."),
+        "the planner was not told to call read_output with the reference: {told}"
     );
     assert!(
-        !told.contains("the user is shown it"),
-        "a remembered line brought back the advice about a person deciding: {told}"
+        !told.contains("kept back") && !told.contains("the user is shown it"),
+        "a result restated who answers read_output, which its description says once: {told}"
     );
 }
 
@@ -18830,6 +18831,88 @@ fn the_advice_after_a_quarantined_run(
     told[advice..].to_string()
 }
 
+/// The `read_output` description a first request carried, for a turn run under `mode`.
+fn the_read_output_description(
+    scratch_name: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+) -> String {
+    let scratch = Scratch::new(scratch_name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(mode)
+            .with_auto_vetting(auto_vetting),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let request: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("request body")).expect("json");
+    request["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "read_output")
+        .expect("read_output offered")["function"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string()
+}
+
+/// RUN-14: who answers `read_output` is said once, in the tool's description, from the session's
+/// mode and auto-vetting, so it is not false where permissions are bypassed or a check answers first
+/// and is not repeated in every result.
+#[test]
+fn the_read_output_description_says_who_answers_for_the_session() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let bypassed = the_read_output_description("ro-desc-bypass", Bypass, false);
+    assert!(
+        bypassed.contains("The output comes back to you as text you can read.")
+            && !bypassed.contains("the user sees")
+            && !bypassed.contains("kept back"),
+        "a bypassed session was told a user decides, or that a check may keep output back: \
+         {bypassed}"
+    );
+    let checked = the_read_output_description("ro-desc-checked", Ask, true);
+    assert!(
+        checked.contains("or you are told it was kept back")
+            && !checked.contains("The user sees the output"),
+        "a session where a check answers was told a user decides, or not that output may be kept \
+         back: {checked}"
+    );
+    let asked = the_read_output_description("ro-desc-asked", Ask, false);
+    assert!(
+        asked.contains("The user sees the output and decides") && !asked.contains("kept back"),
+        "a session where a person is asked was not told so: {asked}"
+    );
+    for description in [&bypassed, &checked, &asked] {
+        assert_eq!(
+            description.matches("text you can read").count(),
+            1,
+            "who answers was stated more than once: {description}"
+        );
+    }
+}
+
 /// RUN-14: where permissions are bypassed and auto-vetting is on, nobody is shown the output and a
 /// run the mode approved vouches for nothing, so the advice describes neither a user deciding nor
 /// a vouch. A check's word answers there, so `read_output` is not a sure yes either, and the advice
@@ -18850,11 +18933,12 @@ fn a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_de
         );
 
         assert!(
-            advice.contains(
-                "call read_output with the reference. It comes back as text you can read, or you \
-                 are told it was kept back."
-            ),
-            "the planner was not told read_output returns the output or reports it kept back: \
+            advice.contains("call read_output with the reference."),
+            "the planner was not told to call read_output with the reference: {advice}"
+        );
+        assert!(
+            !advice.contains("kept back") && !advice.contains("text you can read"),
+            "the result restated who answers read_output, which its description says once: \
              {advice}"
         );
         assert!(
@@ -18908,10 +18992,8 @@ fn a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_app
             "the planner was not told its read changed nothing, or where to go instead: {advice}"
         );
         assert!(
-            advice.contains(
-                "call read_output with the reference. It comes back as text you can read"
-            ),
-            "the planner was not told how read_output answers: {advice}"
+            advice.contains("call read_output with the reference."),
+            "the planner was not told to call read_output with the reference: {advice}"
         );
         assert!(
             !advice.contains("the user") && !advice.contains("vouch"),
@@ -18924,7 +19006,7 @@ fn a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_app
 /// `read_output`, so the advice is the one RUN-14 has always given and a `read` that changed nothing
 /// is not remarked on. The wording above is for auto-vetting on, where a check answers first.
 #[test]
-fn a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides() {
+fn a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch() {
     for (mode, auto_vetting) in [
         (bravebot_agent::PermissionMode::Ask, false),
         (bravebot_agent::PermissionMode::AcceptEdits, false),
@@ -18937,9 +19019,9 @@ fn a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides
             r#"{"command":"sed -n p where.txt","read":true}"#,
         );
         assert!(
-            advice.contains("the user is shown it and decides"),
-            "{mode:?} with auto-vetting {auto_vetting}: the planner was not told a person decides: \
-             {advice}"
+            !advice.contains("the user is shown it"),
+            "{mode:?} with auto-vetting {auto_vetting}: the result restated that a person decides, \
+             which the read_output description says once: {advice}"
         );
         assert!(
             advice.contains("vouching for every stage of the exact command"),
@@ -19009,7 +19091,7 @@ fn a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers() 
         "a turn with no read_output was told read_output is the way to see the output: {told}"
     );
     assert!(
-        !told.contains("or you are told it was kept back"),
+        !told.contains("kept back"),
         "a turn with no read_output was told what read_output returns: {told}"
     );
 }
@@ -24620,8 +24702,9 @@ fn what_a_job_printed_says_how_to_read_it_where_nobody_is_asked() {
         "Result of job_output could not be shown to you",
     );
     assert!(
-        told.contains("call read_output with the reference and it comes back as text you can read"),
-        "the planner was not told how to read what the job printed: {told}"
+        told.contains("call read_output with the reference.")
+            && !told.contains("text you can read"),
+        "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
         !told.contains("the user is shown it"),
@@ -24680,10 +24763,9 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
         .expect("the turn was never told the job ended");
     let told = message_from(body, "you started as job:1 has finished");
     assert!(
-        told.contains(
-            "To see it, call read_output with the reference and it comes back as text you can read."
-        ),
-        "the planner was not told how to read what the job printed: {told}"
+        told.contains("To see it, call read_output with the reference.")
+            && !told.contains("text you can read"),
+        "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
         !told.contains("the user is shown it"),
@@ -24695,7 +24777,7 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
 /// output or reports it kept back. It does not say a user is shown it, offer a vouch, or name `read`,
 /// which is an argument of run alone.
 #[test]
-fn what_a_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person() {
+fn what_a_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person() {
     for mode in EVERY_MODE {
         a_job_result_where_a_check_answers(mode);
     }
@@ -24746,12 +24828,8 @@ fn a_job_result_where_a_check_answers(mode: bravebot_agent::PermissionMode) {
     );
     let told = format!("[{mode:?}] {told}");
     assert!(
-        told.contains(
-            "call read_output with the reference. It comes back as text you can read, or you are \
-             told it was kept back."
-        ),
-        "the planner was not told read_output returns what the job printed or reports it kept \
-         back: {told}"
+        told.contains("call read_output with the reference.") && !told.contains("kept back"),
+        "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
         !told.contains("the user is shown it"),
@@ -24769,7 +24847,8 @@ fn a_job_result_where_a_check_answers(mode: bravebot_agent::PermissionMode) {
 
 /// The same for a job whose end the turn reports without being asked.
 #[test]
-fn what_an_ended_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person() {
+fn what_an_ended_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person()
+ {
     for mode in EVERY_MODE {
         an_ended_job_account_where_a_check_answers(mode);
     }
@@ -24830,12 +24909,9 @@ fn an_ended_job_account_where_a_check_answers(mode: bravebot_agent::PermissionMo
     let told = message_from(body, "you started as job:1 has finished");
     let told = format!("[{mode:?}] {told}");
     assert!(
-        told.contains(
-            "call read_output with the reference. It comes back as text you can read, or you are \
-             told it was kept back. To read a file, use read_file."
-        ),
-        "the planner was not told read_output returns what the job printed or reports it kept \
-         back: {told}"
+        told.contains("call read_output with the reference. To read a file, use read_file.")
+            && !told.contains("kept back"),
+        "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
         !told.contains("the user is shown it"),
@@ -24851,7 +24927,8 @@ fn an_ended_job_account_where_a_check_answers(mode: bravebot_agent::PermissionMo
 /// about a person deciding where a check answers first. A record decides only whether the vouching
 /// half is left out, and with a check answering that half is never said.
 #[test]
-fn what_an_ended_job_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back() {
+fn what_an_ended_job_from_a_remembered_line_where_a_check_answers_leaves_who_answers_to_the_description()
+ {
     let scratch = Scratch::new("background-finish-remembered-checked-advice");
     let home = Scratch::new("background-finish-remembered-checked-advice-home");
     std::fs::write(
@@ -24918,12 +24995,9 @@ fn what_an_ended_job_from_a_remembered_line_where_a_check_answers_says_it_may_be
     );
     let told = message_from(body, "you started as job:1 has finished");
     assert!(
-        told.contains(
-            "call read_output with the reference. It comes back as text you can read, or you are \
-             told it was kept back. To read a file, use read_file."
-        ),
-        "the planner was not told read_output returns what the job printed or reports it kept \
-         back: {told}"
+        told.contains("call read_output with the reference. To read a file, use read_file.")
+            && !told.contains("kept back"),
+        "the planner was not told to call read_output, or was told again how it answers: {told}"
     );
     assert!(
         !told.contains("the user is shown it"),
@@ -24970,8 +25044,9 @@ fn what_an_ended_job_printed_says_how_to_stop_being_asked() {
         .expect("the turn was never told the job ended");
     let told = message_from(body, "you started as job:1 has finished");
     assert!(
-        told.contains("call read_output with the reference: the user is shown it and decides."),
-        "the planner was not told how to see what the job printed: {told}"
+        told.contains("call read_output with the reference.")
+            && !told.contains("the user is shown it"),
+        "the planner was not told to call read_output, or was told again who answers it: {told}"
     );
     assert!(
         told.contains("vouching for every stage of the exact command"),

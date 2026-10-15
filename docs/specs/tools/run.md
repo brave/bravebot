@@ -688,20 +688,30 @@ where it also cannot tell success from failure.
 ### RUN-14: a quarantined result says what would lift the quarantine
 
 Where the output could not be shown, the planner is also told how to see this result and how to
-stop being asked: `read_output` puts this one to the user, and a person vouching for every stage of
-the exact command makes what it prints visible from then on. It is also pointed at `read_file` for
-a file. Only where a command produced the result: a quarantined read carries no advice about
+stop being asked: it calls `read_output` with the reference, and a person vouching for every stage
+of the exact command makes what it prints visible from then on. It is also pointed at `read_file`
+for a file. Who answers a `read_output` call is a fact about the session, so it is said once, in the
+`read_output` description, and not in each result (below). Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
 return there for a person to answer, and `read_output` is then the whole of what is said.
 
-Where permissions are bypassed with no screening asked for, neither half is true: nobody is shown
-what `read_output` releases ([MODE-4](../permission-modes.md#MODE-4)), and a run the mode approved
-vouches for no program, so no vouch stops an asking that does not happen. The planner is told
-instead that `read_output` hands the output back as text it can read, and, on a run's result, that
-`read: true` returns it in the result that ran it ([RUN-22](#RUN-22)). A job's result and the account
-the turn gives of an ended job say the same of `read_output` and nothing of `read`, which is an
-argument of `run` alone. None of it names the mode, as no mode but plan mode is named to the planner
+**Who answers is stated once, in the description.** The `read_output` description is built for each
+request from the session as it stands, so a mode the person changes in the middle of a turn is what
+the next request says, and it is the same words a result would otherwise repeat. Where a person is
+asked, it says the user sees the output and decides, and if they agree it comes back as text the
+planner can read. A result's advice then holds only what is true of that result: the reference, the
+vouching advice where a record does not already stop the asking, that `read: true` was not applied,
+and that git ran. The description is sent with every request, so changing it costs the prompt cache
+the tool block, once, when the mode changes.
+
+Where permissions are bypassed with no screening asked for, nobody is shown what `read_output`
+releases ([MODE-4](../permission-modes.md#MODE-4)), and a run the mode approved vouches for no
+program, so no vouch stops an asking that does not happen. The description says that `read_output`
+hands the output back as text the planner can read, and the vouching advice is left out of every
+result. On a run's result, `read: true` returns it in the result that ran it
+([RUN-22](#RUN-22)). A job's result and the account the turn gives of an ended job say nothing of
+`read`, which is an argument of `run` alone. None of it names the mode, as no mode but plan mode is named to the planner
 ([MODE-3](../permission-modes.md#MODE-3)): a model told nobody is watching has been handed a reason
 to be bolder.
 
@@ -710,9 +720,9 @@ answers `read_output` whenever it is `safe` ([CHECK-12](../vetting.md#CHECK-12))
 shown that output and a vouch stops no asking. A word that is not `safe` puts the output to the user
 where permissions are asked and keeps it back where they are bypassed, so `read_output` is not a sure
 yes either. The planner is told that `read_output` hands the output back as text it can read, or
-reports that it was kept back, and nothing of what decided which, as
-[CHECK-9](../vetting.md#CHECK-9) requires. The words are the same in every mode, so they say nothing
-of which one it is in. `read` is not applied there ([RUN-22](#RUN-22)), so a run's result for a call
+reports that it was kept back, in the description and not in a result, and nothing of what decided
+which, as [CHECK-9](../vetting.md#CHECK-9) requires. The words are the same in every mode, so they
+say nothing of which one it is in. `read` is not applied there ([RUN-22](#RUN-22)), so a run's result for a call
 that passed `read: true` says it was not applied and that `read_output` is the way to see the
 output. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
 the account the turn gives of an ended job, since `read` is an argument of `run` alone. None of it
@@ -740,14 +750,15 @@ no explanation, and the planner repeats the call with `read: true` to try to see
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
 is not inferring it: the planner still cannot vouch for anything, and a person still answers.
 
+`verified-by: bravebot_agent::turn::the_read_output_description_says_who_answers_for_the_session`
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides`
 `verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied`
-`verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides`
-`verified-by: bravebot_agent::turn::what_a_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
-`verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
-`verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back`
-`verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back`
+`verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch`
+`verified-by: bravebot_agent::turn::what_a_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
+`verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_where_a_check_answers_leaves_who_answers_to_the_description`
+`verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_where_a_check_answers_leaves_who_answers_to_the_description`
 `verified-by: bravebot_agent::turn::a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
 `verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`

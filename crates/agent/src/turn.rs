@@ -109,12 +109,32 @@ enum ReadOutputIs {
     Asked,
 }
 
-/// What the planner is told of `read_output` where a check's word answers for the person (RUN-14).
-/// It follows "with the reference" and ends a sentence. The output comes back or is kept back, and
-/// nothing in it says what decides which: the planner is not told a check is made, as CHECK-9 keeps
-/// what it says from the planner.
-const READ_OUTPUT_MAY_BE_KEPT_BACK: &str =
-    ". It comes back as text you can read, or you are told it was kept back.";
+impl ReadOutputIs {
+    /// What the `read_output` description says of who answers, stated once for the session instead of
+    /// in every result (RUN-14).
+    ///
+    /// Where a check's word answers for the person, the output comes back or is kept back, and
+    /// nothing in the words says what decides which: the planner is not told a check is made, as
+    /// CHECK-9 keeps what it says from the planner. No case names the mode, as MODE-3 requires.
+    fn stated(self) -> &'static str {
+        match self {
+            ReadOutputIs::Unasked => "The output comes back to you as text you can read.",
+            ReadOutputIs::ByACheck => {
+                "The output comes back to you as text you can read, or you are told it was kept \
+                 back."
+            }
+            ReadOutputIs::Asked => {
+                "The user sees the output and decides; if they agree, it comes back to you as \
+                 text you can read."
+            }
+        }
+    }
+}
+
+/// The advice about how to stop being asked, which is true of a result and not of the session: it
+/// is left out where a record already stops the asking for that exact line (RUN-14).
+const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
+     exact command makes what it prints visible from then on.";
 
 /// What the person is told when a reply reached the output ceiling and the planner is asked again
 /// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
@@ -1854,19 +1874,13 @@ fn collect_jobs<S: Sink, R: Reporter>(
                 // for this exact line: no prompt will return there for a person to answer, and
                 // read_output is then the whole of what is said.
                 let then = match (read_output_is, ended.covered_by_record) {
-                    (ReadOutputIs::Unasked, _) => " and it comes back as text you can read.",
-                    (ReadOutputIs::ByACheck, _) => READ_OUTPUT_MAY_BE_KEPT_BACK,
-                    (ReadOutputIs::Asked, true) => ": the user is shown it and decides.",
-                    (ReadOutputIs::Asked, false) => {
-                        ": the user is shown it and decides. To stop being asked, a person \
-                         vouching for every stage of the exact command makes what it prints \
-                         visible from then on."
-                    }
+                    (ReadOutputIs::Asked, false) => format!(" {STOP_BEING_ASKED}"),
+                    _ => String::new(),
                 };
                 format!(
                     "{told} What it printed could not be shown to you: {}\n\nThis is about who \
                      answered for the command rather than about what it printed. To see it, call \
-                     read_output with the reference{then} To read a file, use read_file.",
+                     read_output with the reference.{then} To read a file, use read_file.",
                     reference.describe()
                 )
             }
@@ -3234,7 +3248,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         None => request,
                     };
                     let request = if may_call_tools {
-                        request.with_tools(offered.clone())
+                        // Who answers `read_output` is stated on this request's copy, since the
+                        // person can change the mode while the turn runs (RUN-14).
+                        let mut listed = offered.clone();
+                        tools::state_read_output_answer(&mut listed, read_output_is().stated());
+                        request.with_tools(listed)
                     } else {
                         request
                     };
@@ -4568,9 +4586,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                             format!(
                                                 "\n\nThis is about the command rather than about what \
                                              it printed, and it is not the end of the road. To see \
-                                             this one, call read_output with the reference and it \
-                                             comes back as text you can read.{in_the_result} To \
-                                             read a file, use read_file."
+                                             this one, call read_output with the \
+                                             reference.{in_the_result} To read a file, use \
+                                             read_file."
                                             )
                                         }
                                         (true, _, ReadOutputIs::ByACheck) => {
@@ -4585,28 +4603,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                                 "\n\nThis is about the command rather than about \
                                              what it printed, and it is not the end of the road. \
                                              To see this one, call read_output with the \
-                                             reference{READ_OUTPUT_MAY_BE_KEPT_BACK}{not_applied} \
-                                             To read a file, use read_file."
+                                             reference.{not_applied} To read a file, use \
+                                             read_file."
                                             )
                                         }
                                         (true, true, ReadOutputIs::Asked) => {
                                             "\n\nThis is about the command rather \
                                          than about what it printed, and it is not the end of the \
                                          road. To see this one, call read_output with the \
-                                         reference: the user is shown it and decides, and if they \
-                                         agree it comes back as text you can read. To read a file, \
-                                         use read_file."
+                                         reference. To read a file, use read_file."
                                                 .to_string()
                                         }
                                         (true, false, ReadOutputIs::Asked) => {
                                             "\n\nThis is about the command rather \
                                          than about what it printed, and it is not the end of the \
                                          road. To see this one, call read_output with the \
-                                         reference: the user is shown it and decides, and if they \
-                                         agree it comes back as text you can read. To stop being \
-                                         asked, a person vouching for every stage of the exact \
-                                         command makes what it prints visible from then on. To \
-                                         read a file, use read_file."
+                                         reference. To stop being asked, a person vouching for \
+                                         every stage of the exact command makes what it prints \
+                                         visible from then on. To read a file, use read_file."
                                                 .to_string()
                                         }
                                     };
