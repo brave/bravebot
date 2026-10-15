@@ -273,8 +273,9 @@ taken on Unix only, so on Windows a resume is refused on the other ground alone.
 names the worktree and says why, and where the worktree is gone it says that `bravebot --fork <id>`
 carries the conversation into the project directory.
 
-Only a start with `--resume`, `--continue` or the picker returns to a worktree. `/resume` of such a
-record from a running session is refused, and says to start `bravebot --resume <id>`. The desktop
+Only a start with `--resume`, `--continue` or the picker, and the process `/bg` starts
+([WORKTREE-9](#WORKTREE-9)), returns to a worktree. `/resume` of such a record from a running session
+is refused, and says to start `bravebot --resume <id>`. The desktop
 application, which keeps no checkouts, refuses to open a record that names a worktree.
 
 A one-shot run that continues a record with a task ([CLI-25](cli.md#CLI-25)) works in the directory it
@@ -326,20 +327,49 @@ not list checkouts.
 `verified-by: none`
 
 <a id="WORKTREE-9"></a>
-### WORKTREE-9: a command that starts another session, or applies the worktree to itself, is refused while the session works in it
+### WORKTREE-9: a command that begins another session works where this says, and `/cd`, `/branch` and an apply to the worktree itself are refused
 
-`/cd`, `/clear`, `/resume`, `/handoff`, `/branch`, `/bg` and `/init` are refused while the session
-works in a worktree. Each refusal names the worktree and says that the person leaves the session and
-starts another. `apply_checkout` and `/checkouts apply` are refused for the worktree the session works
-in, since the working directory they write into is that worktree.
+`/clear` changes the conversation and not the directory, so the session it begins works in the same
+worktree. `/handoff` begins its session as `/clear` does ([SESSION-34](sessions.md#SESSION-34)) and
+works there too. Both ask the opening questions again, as a start in the project directory does
+([TRUST-6](trust-map.md#TRUST-6)), and copy the rules the map then holds under the project directory
+to the worktree before anything can reach it ([WORKTREE-4](#WORKTREE-4)). A question declined starts
+the session with nothing trusted ([TRUST-7](trust-map.md#TRUST-7)) and does not end it, as it ends a
+start ([WORKTREE-1](#WORKTREE-1)), because the worktree already exists. The record the new session
+writes is kept under the project directory and lists the worktree ([WORKTREE-6](#WORKTREE-6)). The
+record of the session left lists it too and stays resumable. The two never run at once, because the
+process holds the worktree's lock through the change ([CHECKOUT-16](checkouts.md#CHECKOUT-16)).
 
-**Why.** `/clear`, `/resume`, `/handoff`, `/branch` and `/bg` each begin a session, or a process for
-one. This spec does not say which directory that one works in, or under which directory's key its
-record is kept. `/cd` moves the root out from under the worktree. [CHECKOUT-16](checkouts.md#CHECKOUT-16)
-and [SESSION-31](sessions.md#SESSION-31) already refuse `/cd` and `/branch` while a checkout is kept.
-`/init` writes an `AGENTS.md` in the working directory, which is the worktree, where
-[WORKTREE-5](#WORKTREE-5) says nothing is read as a source. An apply writes to the working directory,
-which is the worktree itself.
+`/resume` ends the session ([CMD-14](commands.md#CMD-14)), and the next works where the record chosen
+says, as a start with `--resume` of it would. A record that names no worktree works in the project
+directory, and the session says so as it starts. A record that names a worktree is refused
+([WORKTREE-7](#WORKTREE-7)). The worktree left is kept ([WORKTREE-8](#WORKTREE-8)), and the lock on it
+goes with the session.
+
+`/bg` hands the record to a process that resumes it ([BG-2](background-sessions.md#BG-2)), and that
+resume returns to the worktree ([WORKTREE-7](#WORKTREE-7)). The foreground session lets go of the
+worktree's lock after it writes the record and before it starts the process, so the lock is no ground
+to refuse the resume. [BG-14](background-sessions.md#BG-14) makes no checkout for that session, because
+it already works in one.
+
+`/init` writes in the working directory ([CMD-13](commands.md#CMD-13)), which is the worktree, where
+[WORKTREE-5](#WORKTREE-5) has nothing read as a source.
+
+`/cd` is refused ([CHECKOUT-16](checkouts.md#CHECKOUT-16)), and so is `/branch`
+([SESSION-31](sessions.md#SESSION-31)), because the record lists the worktree with the checkouts the
+session keeps ([WORKTREE-6](#WORKTREE-6)). Each refusal names the worktree and says that the person
+leaves the session and starts another, since `/checkouts remove` cannot remove the worktree the session
+works in. `apply_checkout` and `/checkouts apply` are refused for the worktree the session works in,
+since the working directory they write into is that worktree.
+
+**Why.** `/clear` and `/handoff` change the conversation and leave the directory. A person who asked
+for a worktree asked to work out of it, so a session that left it would edit the tree they asked to
+leave alone ([WORKTREE-1](#WORKTREE-1)). `/resume` and `/bg` begin from a record, and a record says
+where its session worked, so the directory is the record's. `/init` writes where every write goes.
+`/cd` moves the root out from under the worktree, and `/branch` carries on in a record that does not
+list it, which are the reasons [CHECKOUT-16](checkouts.md#CHECKOUT-16) and
+[SESSION-31](sessions.md#SESSION-31) refuse them for any checkout. An apply writes to the working
+directory, which is the worktree itself.
 
 `verified-by: none`
 
@@ -378,7 +408,10 @@ made in the change that builds this one.
   read the project directory's, and the sweep takes none. Its `/cd` refusal says to remove the checkout
   with `/checkouts remove`, which cannot remove the worktree the session works in, so the refusal for a
   worktree says something else. [CHECKOUT-21](checkouts.md#CHECKOUT-21) lists a checkout with the number of the delegate given it,
-  which a worktree does not have.
+  which a worktree does not have, and says the session `/clear` begins lists none of the checkouts
+  made before it, which does not hold for the worktree. [CHECKOUT-16](checkouts.md#CHECKOUT-16) says
+  a fork leaves no two records listing one directory, and a `/clear` or `/handoff` in a worktree
+  session leaves two, one after the other.
 - **[sessions.md](sessions.md).** [SESSION-1](sessions.md#SESSION-1) keys a session by the directory
   it ran in, which for a session in a worktree is the project directory.
   [SESSION-3](sessions.md#SESSION-3) gains the field that says which checkout the session works in.
@@ -392,8 +425,9 @@ made in the change that builds this one.
 - **[tools/read-git.md](tools/read-git.md).** [GIT-8](tools/read-git.md#GIT-8) opens a linked worktree
   only at the root of a checkout a delegate was started in, and gains the session's.
 - **[commands.md](commands.md).** [CMD-14](commands.md#CMD-14) has `/resume` start the next session in
-  the same process as `--resume` does, and refuses a record that names a worktree. `/init` is refused
-  in a worktree session.
+  the same process as `--resume` does, and refuses a record that names a worktree.
+  [CMD-13](commands.md#CMD-13) says a file `/init` writes is read from the next turn on, which does not
+  hold for one written in a worktree.
 - **[incognito.md](incognito.md).** `--incognito` is refused with `--worktree`.
 - **[sandboxing.md](sandboxing.md).** [SANDBOX-18](sandboxing.md#SANDBOX-18) refuses a confined stage
   whose session directory is inside the state directory, which is where the worktree is. Which way
@@ -403,7 +437,8 @@ made in the change that builds this one.
 - **[trust-map.md](trust-map.md).** [TRUST-7](trust-map.md#TRUST-7) starts a session whose startup
   question was declined, and a declined question here ends the session before its first turn.
   [TRUST-6](trust-map.md#TRUST-6) records a rule inside the project relative to it, and a worktree's
-  rules are recorded in full.
+  rules are recorded in full. It has `/clear` ask the startup question again, and a worktree session
+  that asks copies the answer's rules to the worktree again.
 - **[state-directory.md](state-directory.md).** The list of what `checkouts/` holds gains the
   worktrees, and says a session's worktree is kept past its session.
 - **[cli.md](cli.md).** A clause for the flag, and the usage text. [CLI-25](cli.md#CLI-25) refuses a
@@ -413,7 +448,9 @@ made in the change that builds this one.
   flag. A background session falls back to the working directory outside a repository, and no one
   asked for its checkout. [WORKTREE-3](#WORKTREE-3) refuses instead, because the person asked for this
   one. A background session's checkout takes retention, record placement and the sweep from this
-  spec.
+  spec. [BG-2](background-sessions.md#BG-2) starts the process `/bg` makes in the working directory
+  the foreground ran in. For a worktree session that process starts in the project directory, where the
+  record is kept, and returns to the worktree ([WORKTREE-9](#WORKTREE-9)).
 
 ## Not decided
 
@@ -444,9 +481,10 @@ made in the change that builds this one.
   ([CHECKOUT-17](checkouts.md#CHECKOUT-17)). A session working wholly in a worktree would have no
   `/undo` of its own edits unless the worktree used the session's backups in place of a delegate's.
 - **A second session in a kept worktree.** Naming one on the command line would put two records over
-  one directory, which [CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps from happening.
-- **Allowing the commands [WORKTREE-9](#WORKTREE-9) refuses.** `/clear` and `/resume` are the two a
-  person reaches for, and each needs a rule for which directory the next session works in.
+  one directory at once, which [CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps from happening. A
+  `/clear` or `/handoff` leaves two, one after the other ([WORKTREE-9](#WORKTREE-9)).
+- **`/resume` of a record that names a worktree.** [WORKTREE-7](#WORKTREE-7) refuses it from a running
+  session, because allowing it moves a running process into a worktree, as `/worktree` would.
 - **Where the answers that outlast a session are kept.** Remembered command lines, the permission
   grants a person gave, the answers about credentials, a kept startup yes and the reach a person
   remembered are each keyed by the working directory. Keyed by the worktree they are orphaned under a
@@ -470,8 +508,11 @@ made in the change that builds this one.
 - **A repository with a filter, an end-of-line conversion or LFS gets no worktree**
   ([CHECKOUT-4](checkouts.md#CHECKOUT-4)).
 - **The session loses what a checkout loses.** No definition memory, no `lsp`, a first build that is
-  asked about again, no delegate in a checkout of its own, and none of the commands
-  [WORKTREE-9](#WORKTREE-9) refuses.
+  asked about again, and no delegate in a checkout of its own.
+- **`/init` writes where nothing reads it as a source.** The file is in the worktree until the person
+  brings it into the project directory with git.
+- **`/cd` and `/branch` are refused.** The person leaves the session and starts another
+  ([WORKTREE-9](#WORKTREE-9)), as for any kept checkout.
 - **The refs and the stash are the project's.** A `git fetch` in the worktree updates the project
   directory's remote-tracking refs, and one `git stash` stack is shared
   ([CHECKOUT-5](checkouts.md#CHECKOUT-5)).
