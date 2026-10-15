@@ -19836,6 +19836,37 @@ mod tests {
         );
     }
 
+    /// SESSION-36: where no record can be written, the transcript says the note reached none and
+    /// does not say it was added, so the person is not told a note was kept that no record holds.
+    #[test]
+    fn a_note_where_no_record_can_be_written_is_not_reported_as_added() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::testutil::scratch_dir("bravebot-app-note-unwritable");
+        let mut session = Session::new("none");
+        session.turns = 1;
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let directory = bravebot_session::sessions::project_directory(&root).expect("dir");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.parent().expect("parent")).expect("make the parent");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        note_session(&mut session, &mut stored, "lost");
+
+        std::fs::remove_file(&directory).expect("unblock the directory");
+        let said: Vec<_> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(said, vec![t!(session_note_not_recorded).to_string()]);
+    }
+
     /// SESSION-36: `/note` with nothing after it brings the session's notes up, one line each with
     /// its turn, and a control character in one is not drawn as one.
     #[test]
