@@ -223,17 +223,6 @@ def test_a_step_counter_git_did_not_state_is_left_out_rather_than_printed_as_a_q
         assert "stopped: " in out and "?" not in out, out
 
 
-def test_what_git_said_is_cut_to_its_error_and_leaves_the_hints_behind():
-    said = "Rebasing (1/2)\rerror: gpg failed to sign the data:\n(no gpg output)\nerror: failed to write commit object\nhint: Could not execute\nhint:\nhint:     git rebase --continue\n"
-    assert pr_fix.stop_reason(said) == [
-        "error: gpg failed to sign the data:",
-        "(no gpg output)",
-        "error: failed to write commit object",
-    ]
-    assert pr_fix.stop_reason("") == []
-    assert pr_fix.stop_reason("plain words\nmore words\n") == ["more words"], "no error line: the last line"
-
-
 def test_the_files_changed_since_the_rebase_choose_the_checks():
     with tempfile.TemporaryDirectory() as tmp:
         pr, _, _ = world(Path(tmp).resolve())

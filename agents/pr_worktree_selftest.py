@@ -600,6 +600,17 @@ def test_a_push_no_key_in_the_agent_can_make_is_refused_with_githubs_message():
         assert git("rev-parse", "feature", cwd=remote) == before
 
 
+def test_what_git_said_is_cut_to_its_error_and_leaves_the_hints_behind():
+    said = "Rebasing (1/2)\rerror: gpg failed to sign the data:\n(no gpg output)\nerror: failed to write commit object\nhint: Could not execute\nhint:\nhint:     git rebase --continue\n"
+    assert pr_worktree.stop_reason(said) == [
+        "error: gpg failed to sign the data:",
+        "(no gpg output)",
+        "error: failed to write commit object",
+    ]
+    assert pr_worktree.stop_reason("") == []
+    assert pr_worktree.stop_reason("plain words\nmore words\n") == ["more words"], "no error line: the last line"
+
+
 def main():
     tests = [(name, one) for name, one in globals().items() if name.startswith("test_")]
     for name, one in tests:

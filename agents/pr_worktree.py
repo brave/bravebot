@@ -29,6 +29,9 @@ SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"
 LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
 PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
 REASON_WIDTH = 120
+# How much of what git said when a rebase stopped is shown: this many lines, each cut to this width.
+REASON_LINES = 3
+WIDTH = 300
 REBASE_STATES = ("rebase-merge", "rebase-apply")
 
 
@@ -469,3 +472,157 @@ def push_head(pr, tree, tip):
         die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
     if key:
         print(f"pushed as the ssh-agent key {key}")
+
+
+def add_worktree(pr):
+    """Prune, fetch the base and the head, and give the branch a worktree if it has none."""
+    git("worktree", "prune", cwd=pr.here)
+    fetch(pr.here, pr.base_remote, pr.base)
+    fetch(pr.here, pr.head_remote, pr.head)
+    tree = pr.tree
+    if not pr.checked_out:
+        if tree.exists():
+            die(f"{tree} exists and is not a worktree on {pr.branch}")
+        if succeeds("rev-parse", "--verify", "--quiet", f"refs/heads/{pr.branch}", cwd=pr.here):
+            git("worktree", "add", str(tree), pr.branch, cwd=pr.here)
+        else:
+            git("worktree", "add", "-b", pr.branch, str(tree), pr.tip, cwd=pr.here)
+
+
+def catch_up_with_pull(pr, tree):
+    """Fast-forward the worktree to the pull request's head, or say what stops it."""
+    if git("status", "--porcelain", "--untracked-files=no", cwd=tree):
+        die(f"{tree} has uncommitted changes")
+
+    def subjects(ref):
+        return set(git("log", "--format=%s", f"{pr.onto}..{ref}", cwd=tree).splitlines())
+
+    if succeeds("merge-base", "--is-ancestor", "HEAD", pr.tip, cwd=tree):
+        git("merge", "--ff-only", "--quiet", pr.tip, cwd=tree)
+    elif succeeds("merge-base", "--is-ancestor", pr.tip, "HEAD", cwd=tree):
+        print(f"{pr.branch} has commits the pull request does not; they are kept")
+    elif not subjects(pr.tip) <= subjects("HEAD"):
+        die(f"{pr.branch} in {tree} and {pr.tip} have diverged")
+
+
+def rebase_onto(pr, tree):
+    """Rebase onto the base unless already on it. Returns what git printed to stderr."""
+    if succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+        return ""
+    resolved_log(tree).unlink(missing_ok=True)
+    done = run("git", "rebase", pr.onto, cwd=tree, check=False)
+    if done.returncode and rebase_dir(tree) is None:
+        die(f"git rebase {pr.onto} failed:\n{(done.stderr or done.stdout).strip()}")
+    return done.stderr
+
+
+def resolve_or_stop(tree):
+    """Stage the resolved files and continue the rebase.
+
+    Returns None after printing the files that still hold conflict markers, and git's stderr otherwise.
+    """
+    files = unmerged(tree)
+    left = [
+        one
+        for one in files
+        if Path(tree, one).is_file()
+        and marker_ranges(Path(tree, one).read_text(encoding="utf-8", errors="replace"))
+    ]
+    if left:
+        print("markers remain:")
+        for name in left:
+            print(f"  {describe(tree, name)}")
+        return None
+    if files:
+        git("add", "-A", "--", *files, cwd=tree)
+        remember_resolved(tree, files)
+    done = run(
+        "git", "rebase", "--continue", cwd=tree, check=False, env={**os.environ, "GIT_EDITOR": "true"}
+    )
+    if done.returncode and rebase_dir(tree) is None:
+        die(f"git rebase --continue failed:\n{(done.stderr or done.stdout).strip()}")
+    return done.stderr
+
+
+def stop_reason(text):
+    """What git said when a rebase stopped, from its first error on, without the hints that follow."""
+    lines = [one.strip() for one in re.split(r"[\r\n]+", text)]
+    lines = [one for one in lines if one and not one.startswith(("hint:", "Rebasing ("))]
+    first = next((n for n, one in enumerate(lines) if one.startswith(("error:", "fatal:"))), len(lines) - 1)
+    return [one[:WIDTH] for one in lines[max(first, 0) :][:REASON_LINES]]
+
+
+def conflict_listing(pr, tree, files, script):
+    """The conflicted files with their marker ranges, and the base's recent commits on them."""
+    state = rebase_dir(tree)
+
+    def read(name):
+        path = state / name
+        return path.read_text().strip() if path.is_file() else ""
+
+    print("conflicts:")
+    for name in files:
+        print(f"  {describe(tree, name)}")
+    onto, orig = read("onto"), read("orig-head")
+    fork = run("git", "merge-base", orig, onto, cwd=tree, check=False).stdout.strip()
+    if fork:
+        touching = git("log", "--oneline", "--no-decorate", "-n", "10", f"{fork}..{onto}", "--", *files, cwd=tree)
+        if touching:
+            print(f"{pr.onto} commits on these files:")
+            print("\n".join(f"  {line}" for line in touching.splitlines()))
+    print(f"resolve each range, then: {script} continue {pr.number}")
+
+
+def report(pr, script, said=""):
+    """Say where the rebase stands. `said` is what git printed when it last stopped."""
+    tree = pr.tree
+    state = rebase_dir(tree)
+    if state is None:
+        if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+            die(f"{pr.branch} is not on {pr.onto}; `{script} start {pr.number}`")
+        tip, now = rev(pr.tip, tree), rev("HEAD", tree)
+        if now == tip:
+            print(f"{pr.url} is already on {pr.onto}; nothing to push")
+            return 0
+        count = git("rev-list", "--count", f"{pr.onto}..HEAD", cwd=tree)
+        print(f"{count} commit(s) on {pr.onto} {rev(pr.onto, tree)[:8]}: {tip[:8]} -> {now[:8]}")
+        print(f"next: {script} push {pr.number}")
+        return 0
+
+    def read(name):
+        path = state / name
+        return path.read_text().strip() if path.is_file() else ""
+
+    number, total = (read("msgnum"), read("end")) if (state / "msgnum").is_file() else (read("next"), read("last"))
+    step = f" at {number}/{total}" if number and total else ""
+    stopped = run("git", "log", "-1", "--format=%h %s", "REBASE_HEAD", cwd=tree, check=False)
+    print(f"stopped{step}: {stopped.stdout.strip()}")
+    files = unmerged(tree)
+    if not files:
+        reason = stop_reason(said)
+        print("stopped without a conflict" + ("; git said:" if reason else ""))
+        for line in reason:
+            print(f"  {line}")
+        print(f"see `git -C {tree} status`")
+        return 1
+    conflict_listing(pr, tree, files, script)
+    return 1
+
+
+def push(pr, script):
+    """Push the rebased head over the one `start` fetched, refusing to unsign or to drop uncommitted work."""
+    tree = pr.tree
+    if rebase_dir(tree):
+        die(f"finish the rebase first: `{script} continue {pr.number}`")
+    if git("status", "--porcelain", "--untracked-files=no", cwd=tree):
+        die(f"{tree} has uncommitted changes; commit them first")
+    if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+        die(f"{pr.branch} is not on {pr.onto}; `{script} start {pr.number}`")
+    tip, now = rev(pr.tip, tree), rev("HEAD", tree)
+    if now == tip:
+        print(f"{pr.url} is already at {now[:8]}; nothing to push")
+        return 0
+    refuse_unsigning(pr, tip, now, tree)
+    push_head(pr, tree, tip)
+    print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
+    return 0
