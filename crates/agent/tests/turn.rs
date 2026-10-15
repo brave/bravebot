@@ -38712,6 +38712,184 @@ fn a_pattern_over_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
     assert!(!refused.contains("SENTINEL-XYZZY"));
 }
 
+/// OUTPUT-5. An empty pattern is a mistake in the call, reported before the slot is opened: read
+/// as a search for nothing it would answer with every line, which is a page by another name and
+/// not what an empty value meant.
+#[test]
+fn an_empty_pattern_is_refused_before_the_slot_is_opened() {
+    let scratch = Scratch::new("read-output-pattern-empty");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("error: NEEDLE-XYZZY did not link\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","pattern":""}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::vouching_for_the_run();
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(4096)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about a mistake in the call"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(refused.contains("'pattern' must not be empty"), "{refused}");
+    assert!(
+        !refused.contains("NEEDLE-XYZZY") && !refused.contains("line 999"),
+        "the slot was read despite the pattern being refused: {refused}"
+    );
+}
+
+/// OUTPUT-5. A pattern that will not compile is reported as a mistake in the call, the same way
+/// `search`'s own pattern is, with nothing read: an empty result would look like proof the log
+/// holds nothing matching, which is the confusion a syntax error is worth a sentence of its own
+/// against.
+#[test]
+fn a_pattern_that_will_not_compile_is_refused_before_the_slot_is_opened() {
+    let scratch = Scratch::new("read-output-pattern-uncompilable");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("error: NEEDLE-XYZZY did not link\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","pattern":"(unclosed"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::vouching_for_the_run();
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(4096)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about a mistake in the call"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(
+        refused.contains("that pattern will not compile"),
+        "{refused}"
+    );
+    assert!(
+        !refused.contains("NEEDLE-XYZZY") && !refused.contains("line 999"),
+        "the slot was read despite the pattern being refused: {refused}"
+    );
+}
+
+/// OUTPUT-5. The same refusal where the pattern that will not compile is one entry in a list: a
+/// list is one call and one mistake in it is a mistake in the call, not a partial answer from
+/// whichever entries happened to compile.
+#[test]
+fn a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened() {
+    let scratch = Scratch::new("read-output-pattern-list-uncompilable");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("error: NEEDLE-XYZZY did not link\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request(
+            "read_output",
+            r#"{"ref":"ref:1","pattern":["NEEDLE-XYZZY","(unclosed"]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::vouching_for_the_run();
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(4096)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about a mistake in the call"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(
+        refused.contains("that pattern will not compile"),
+        "{refused}"
+    );
+    assert!(
+        !refused.contains("NEEDLE-XYZZY") && !refused.contains("line 999"),
+        "the slot was read despite one pattern in the list being refused: {refused}"
+    );
+}
+
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
 /// reports the request heads it was sent, so a test can tell what actually went out.
 ///

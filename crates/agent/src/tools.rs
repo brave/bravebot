@@ -7484,16 +7484,36 @@ fn matches_of(text: &str, slot: &SlotId, patterns: &[crate::regex::Regex], cap: 
         }
         let wanted = index.saturating_sub(OUTPUT_MATCH_CONTEXT);
         let to = (index + OUTPUT_MATCH_CONTEXT).min(lines.len().saturating_sub(1));
+        let mut block = String::new();
         if let Some(last) = written
             && wanted > last + 1
         {
-            out.push_str("--\n");
+            block.push_str("--\n");
         }
         let from = written.map_or(wanted, |last| wanted.max(last + 1));
         for (number, &(byte, line)) in lines.iter().enumerate().take(to + 1).skip(from) {
             let mark = if number == index { ':' } else { '-' };
-            out.push_str(&format!("{}{mark}{byte}{mark} {line}\n", number + 1));
+            block.push_str(&format!("{}{mark}{byte}{mark} {line}\n", number + 1));
         }
+
+        // A match's own context can be longer than what is left of `cap`, so the block built
+        // above is bounded against the budget before it joins `out` rather than after: appending
+        // it first and checking the total afterwards is the overshoot this guards against. The
+        // first match still writes something, cut to a character boundary within the budget, on
+        // the same footing `page_of` holds a page to at least one character: a cap smaller than
+        // one match's context must not come back empty.
+        if out.len() + block.len() > cap {
+            if out.is_empty() {
+                let mut end = cap.min(block.len());
+                while end > 0 && !block.is_char_boundary(end) {
+                    end -= 1;
+                }
+                out.push_str(&block[..end]);
+                drawn += 1;
+            }
+            break;
+        }
+        out.push_str(&block);
         written = Some(to.max(index));
         drawn += 1;
     }
@@ -15253,6 +15273,50 @@ mod tests {
         assert!(
             cut.contains("the next from byte"),
             "a result stopped by the cap does not say where to carry on: {cut}"
+        );
+    }
+
+    /// OUTPUT-5: no more bytes than the cap, however long the lines around a match are.
+    ///
+    /// The cap used to be checked only before a match started, so one match whose own two lines
+    /// of context ran well past it still wrote all of them in full: a check at the start of a
+    /// loop bounds how many times the loop runs, not what one pass through it writes. A single
+    /// long line already overshoots on its own, which is what this holds a line length past the
+    /// cap to; two matches far enough apart to need a `--` separator confirms the second is
+    /// bounded by what the first already spent rather than by its own share of the cap.
+    #[test]
+    fn a_match_whose_context_is_long_is_still_held_to_the_cap() {
+        let slot = SlotId::new("ref:4");
+        let long = "x".repeat(500);
+        let text = format!("{long}\nNEEDLE one\n{long}\n\n{long}\nNEEDLE two\n{long}\n");
+        let pattern = crate::regex::Regex::compile("NEEDLE").expect("compiles");
+
+        // Large enough to reach past the long line in front of the match, so the needle itself
+        // is still in what is kept, and small enough that the match's own trailing context and
+        // the second match stay past it: what the cap bounds either side is still visible.
+        let cap = 600;
+        let found = matches_of(&text, &slot, std::slice::from_ref(&pattern), cap);
+        let shown = found.split("\n(").next().unwrap_or(&found);
+        assert!(
+            shown.len() <= cap,
+            "a match's own context overshot the cap of {cap}: {} bytes in {found:?}",
+            shown.len()
+        );
+        assert!(found.contains("NEEDLE one"), "{found}");
+        assert!(
+            !found.contains("NEEDLE two"),
+            "a second match was drawn past the cap: {found}"
+        );
+
+        // A cap smaller than the first match's own context still returns something, cut to a
+        // character boundary, rather than nothing: the floor `page_of` holds a page to.
+        let one_byte = matches_of(&text, &slot, std::slice::from_ref(&pattern), 1);
+        let shown = one_byte.split("\n(").next().unwrap_or(&one_byte);
+        assert!(!shown.is_empty(), "a cap of 1 came back with nothing shown");
+        assert!(
+            shown.len() < long.len(),
+            "a cap of 1 was not held to a character boundary within it: {} bytes",
+            shown.len()
         );
     }
 

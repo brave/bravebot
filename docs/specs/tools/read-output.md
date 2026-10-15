@@ -191,10 +191,14 @@ requires, and a pattern that will not compile is reported as a pattern error. An
 refused. `pattern` with `offset` is refused: a pattern searches the whole of the output, and the
 byte it names for a match is what an `offset` call starts from.
 
-**Why.** Narrowing a long log was `run` with a program in the line, which asks a person about the
-line and hands back another capped result. The bytes here are ones the planner may already read, so
-a search over them releases nothing a page would not.
+**Why.** Narrowing a long log with `run` asks a person about the line and hands back another capped
+result. The bytes here are ones the planner may already read, so a search over them releases nothing
+a page would not.
 
 `verified-by: bravebot_agent::turn::a_pattern_over_output_the_planner_may_read_answers_with_matching_lines_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_pattern_over_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::an_empty_pattern_is_refused_before_the_slot_is_opened`
+`verified-by: bravebot_agent::turn::a_pattern_that_will_not_compile_is_refused_before_the_slot_is_opened`
+`verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
+`verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
