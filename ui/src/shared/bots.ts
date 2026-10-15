@@ -188,14 +188,18 @@ export function isSlug(value: unknown): value is string {
  * Lossy on purpose. It is not a rendering of the name and is never shown — the name is shown, and
  * this is what the files are called. A name with nothing usable in it at all still gets a slug,
  * because refusing to make a bot called `???` would be a validator making a product decision.
+ *
+ * The cut comes before the trailing trim: a name whose 48th character falls on a word break would
+ * otherwise end in a dash, which is not a slug and which the agent refuses as a definition name.
  */
 export function slugFor(name: string, taken: ReadonlySet<string> = new Set()): string {
   const base =
     name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 48) || 'bot'
+      .replace(/^-+/, '')
+      .slice(0, 48)
+      .replace(/-+$/, '') || 'bot'
   if (!taken.has(base)) return base
   for (let n = 2; n < 1000; n++) {
     const tried = `${base}-${n}`
