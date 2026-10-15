@@ -118,6 +118,9 @@ impl History {
     /// Say which workspace the session runs in, for [`Scope::Project`].
     pub fn set_project(&mut self, project: Option<String>) {
         self.project = project;
+        if !self.holds(self.scope) {
+            self.scope = Scope::All;
+        }
     }
 
     /// Whether the entry at `at` is in `scope`.
@@ -851,6 +854,23 @@ mod tests {
         assert_eq!(history.scope(), Scope::Project);
 
         assert!(history.withdraw(history.ticket()));
+
+        assert_eq!(history.scope(), Scope::All);
+        assert_eq!(history.older("").as_deref(), Some("old"));
+    }
+
+    /// Moving to a workspace that has no stored prompt leaves nothing to walk on the project
+    /// scope, so the walk goes back to everywhere rather than recalling nothing.
+    #[test]
+    fn moving_to_a_workspace_with_no_prompts_puts_the_scope_back_on_everywhere() {
+        let mut history = stored(&["old"]);
+        history.set_project(Some(HERE.to_string()));
+        history.push("new", Some(HERE.to_string()));
+        history.older("");
+        assert_eq!(history.cycle().as_deref(), Some("new"));
+        assert_eq!(history.scope(), Scope::Project);
+
+        history.set_project(Some("/elsewhere".to_string()));
 
         assert_eq!(history.scope(), Scope::All);
         assert_eq!(history.older("").as_deref(), Some("old"));

@@ -831,6 +831,8 @@ mod tests {
         );
     }
 
+    /// A person should not be left reading a list whose scope is not named on screen, and the
+    /// session scope is the one the panel title had no word for before.
     #[test]
     fn the_session_scope_is_named_on_the_panel() {
         let mut session = mixed();
