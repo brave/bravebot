@@ -8480,6 +8480,308 @@ fn requests_refusals(
     causes
 }
 
+/// What a `run` call asks for beyond the command line, read from its arguments.
+struct RunCall {
+    /// The deadline, clamped to the bounds the turn holds.
+    limit: std::time::Duration,
+    in_the_background: bool,
+    /// The reference whose contents go to the first program's standard input.
+    named_stdin: Option<Labelled<String>>,
+    read_asked: bool,
+    /// The credential scopes asked for by name from the fixed menu.
+    requested: Vec<bravebot_sandbox::scope::Requested>,
+    unconfined: bool,
+}
+
+/// Read and check the fields of a `run` call other than `command` and `directory`.
+///
+/// Shape and combination checks only, plus the two questions of whether this turn may be asked
+/// for a scope or for no profile at all. Nothing here reads the planner's words as content or
+/// holds a label: the fields are booleans, a list of menu words and the name of a reference.
+fn run_call<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    arguments: &Value,
+) -> Result<RunCall, Box<Produced>> {
+    // The deadline the caller asked for, clamped to bounds the turn cannot exceed.
+    // Not a safety property: a program that finishes in time is no safer than one that
+    // does not. Absent a value, the short default is generous enough for an ordinary
+    // build step and short enough that a hung program is noticed.
+    let limit = match deadline_from(arguments, tools.deadlines) {
+        Ok(limit) => limit,
+        Err(diagnostic) => return Err(Box::new(Produced::problem(diagnostic))),
+    };
+
+    // Absent or non-boolean means the foreground, which is the reading that waits for the program
+    // and hands back what it printed.
+    let in_the_background = arguments
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // The reference whose contents go to the first program's standard input, where the call named
+    // one. Present but not a string is refused rather than dropped, for the reason a directory is:
+    // a field the driver quietly ignored would run a line over nothing, and a planner that asked
+    // for a document to be filtered would be handed the filter's answer about an empty one. A
+    // blank string names no document, so it is the field left out, as for every other reference.
+    let named_stdin = match arguments.get("stdin_ref") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(_)) => named_argument(arguments, "stdin_ref"),
+        Some(_) => {
+            return Err(Box::new(Produced::problem(
+                "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
+            )));
+        }
+    };
+
+    // Nothing waits for a background job, and nothing writes to one either: `start_steps` gives
+    // its first step an empty stdin and has nowhere to put anything else. Refused rather than
+    // ignored, so a call asking for both is told which of the two it cannot have.
+    if named_stdin.is_some() && in_the_background {
+        return Err(Box::new(Produced::problem(
+            "error: a background command cannot be fed a reference. Run it in the foreground, \
+             which waits for the program and hands back what it printed.",
+        )));
+    }
+
+    // Absent means no, which leaves the result exactly as it would be without the field. Present but
+    // not a boolean is refused, as a mistyped `stdin_ref` is: a planner that believed it had asked
+    // would be handed a reference instead, and the way it would ask again is to run the line again.
+    // Refused beside a background line for the reason a reference is: nothing is waited for there,
+    // so this result holds nothing the line printed to read.
+    let read_asked = match arguments.get("read") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(read)) => *read,
+        Some(_) => {
+            return Err(Box::new(Produced::problem(
+                "error: 'read' must be true or false",
+            )));
+        }
+    };
+    if read_asked && in_the_background {
+        return Err(Box::new(Produced::problem(
+            "error: a background command has printed nothing into this result, so there is \
+             nothing in it to read. Leave 'read' out, or run it in the foreground.",
+        )));
+    }
+
+    // What the planner asks every stage of this line to carry, by name from a fixed menu. Refused
+    // rather than dropped where it cannot be honoured, so a planner that believed it had a
+    // credential is told it has none and not handed a failure it would chase as a fault.
+    let requested = match requested_from(arguments) {
+        Ok(requested) => requested,
+        Err(diagnostic) => return Err(Box::new(Produced::problem(diagnostic))),
+    };
+    if !requested.is_empty()
+        && let Err(causes) = requests_accepted(policy, tools)
+    {
+        policy.refuse_run_request("scopes", &causes);
+        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
+    }
+
+    // Whether the planner asks for this one line to start with no profile. Refused rather than
+    // dropped where it cannot be honoured, and where it is mistyped, as `read` is: a planner that
+    // believed it had asked would be handed the profile's failure to chase as a fault.
+    let unconfined = match arguments.get("unconfined") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(asked)) => *asked,
+        Some(_) => {
+            return Err(Box::new(Produced::problem(
+                "error: 'unconfined' must be true or false",
+            )));
+        }
+    };
+    if unconfined && !requested.is_empty() {
+        return Err(Box::new(Produced::problem(
+            "error: give 'unconfined' or 'scopes', not both. A line with no sandbox has no \
+             profile for a scope to be added to.",
+        )));
+    }
+    if unconfined && let Err(causes) = unconfined_accepted(policy, tools) {
+        policy.refuse_run_request("unconfined", &causes);
+        return Err(Box::new(Produced::problem(NOT_ACCEPTING_UNCONFINED)));
+    }
+    Ok(RunCall {
+        limit,
+        in_the_background,
+        named_stdin,
+        read_asked,
+        requested,
+        unconfined,
+    })
+}
+
+/// Put a plan to the person and act on what they answer.
+///
+/// Called only when the policy says this line is to be asked about. The answer is recorded, the
+/// line remembered or its scopes and key kept where the person asked for that, and a refusal comes
+/// back as the result of the call. No labelled value is built or released here: the plan, the
+/// reference's name and the confinement are the driver's own structure.
+#[allow(clippy::too_many_arguments)]
+fn ask_about_the_run<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    confirmer: &mut C,
+    plan: &bravebot_core::command::Plan,
+    record: Option<&crate::remembered::Store>,
+    requested: &[bravebot_sandbox::scope::Requested],
+    unconfined: bool,
+    stdin: Option<String>,
+    confinement: &mut Option<crate::confine::Confinement>,
+) -> Result<(), Box<Produced>> {
+    // Whether this person has already read a prompt for this binary under other arguments,
+    // asked before the line on screen joins that list. An identical line is not a different
+    // argument list, so the order is a matter of reading rather than of correctness.
+    let varied = policy.arguments_have_varied(plan);
+    policy.asked_about(plan);
+    let request = crate::confirm::RunRequest {
+        plan: plan.clone(),
+        // Offered only where it would stop a later prompt, which the policy decides: not for a
+        // line releasing private data, not for one naming a file to write, not for one running
+        // outside the workspace root, and not where a rule the person wrote in advance already
+        // says to ask. A remembered line holds no tree, unlike a vouched entry, so the root is
+        // still one of its refusals. The path is what the prompt shows, since a person cannot
+        // endorse a record they were not shown.
+        record: record
+            .filter(|_| policy.may_remember(plan) && requested.is_empty() && !unconfined)
+            .filter(|_| crate::remembered::may_be_added_to())
+            .map(|store| store.path().to_path_buf()),
+        // Said only where a key at this prompt will not finish the asking, only where a rule
+        // in that file would decide the line at all, and only where there is a file to name:
+        // a line that writes, releases private data, runs outside the root or carries an
+        // assignment is asked about before any rule is read, so a pattern for one would stop
+        // no prompt, and advice on a machine that names no home directory would send somebody
+        // to a path nothing reads. A session in the mode that adds nothing to `~/.bravebot`
+        // still gets the advice, because writing that file is the person's own act rather
+        // than this session's.
+        pattern: tools
+            .home
+            .filter(|_| {
+                varied && policy.a_rule_could_answer(plan) && requested.is_empty() && !unconfined
+            })
+            .map(bravebot_config::user_settings_file),
+        // The reference, so the person reads what is going in as well as that something is.
+        // The driver's own name for a slot, never a byte of what the slot holds.
+        stdin,
+        // Described by the confinement the executor starts these steps under, the same value,
+        // so the prompt names no confinement exactly where the steps start without one.
+        confined: confinement
+            .as_ref()
+            .map(|confinement| confinement.describe(&plan.steps())),
+        // Offered only for a line that asked for something to remember, in a session with a
+        // state directory, a session to key the answer to and a mode that may add to that
+        // directory. The path is what the prompt shows, for the reason `record` is.
+        reach_record: tools
+            .home
+            .zip(tools.remembering)
+            .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
+            .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
+        unconfined,
+        // Offered where the answer can be written down, for the reason `reach_record` is: a
+        // choice the next session forgets is a question asked again on every push.
+        key_choice: tools
+            .home
+            .zip(tools.remembering)
+            .filter(|_| crate::reach::may_be_added_to())
+            .zip(confinement.as_ref())
+            .and_then(|((home, _), confinement)| {
+                confinement.key_choice(&plan.steps(), crate::reach::Store::new(home).path())
+            })
+            .map(Box::new),
+    };
+    // Read before the question is put, for the reason a write's is.
+    let mode = tools.permission_mode.get();
+    let answer = confirmer.confirm_run(&request);
+    policy.record_answer(mode.answers_this_run_unasked(&request).then(|| mode.name()));
+    if !answer.approved() {
+        return Err(Box::new(Produced::problem(
+            "refused: the user did not approve running this. Do not retry the same \
+             line; ask what they would prefer."
+                .to_string(),
+        )));
+    }
+    // Recorded before the run, so a repeat of the same command later in this turn is not
+    // asked about again. The policy carries it out of the turn and the session records it.
+    //
+    // Not for a line an entry could not record: one that feeds a file to a program, one that
+    // feeds it a reference, and one that writes an assignment in front of a program. The prompt
+    // offers `a` for none of them, and this is the same refusal at the layer that would act on
+    // it, asked of the same predicate so the two cannot drift. What an entry records is a
+    // program, its exact argv and the tree the line runs in, and a `<` redirection, a
+    // `stdin_ref` and an assignment are in none of the three, so an entry made here would cover
+    // the same program fed any other file or reference, or run under no assignment at all. A
+    // front end answering `always` anyway must not be able to widen the list that way.
+    //
+    // The tree is not among the refusals, and that is RUN-8's own answer rather than an
+    // omission: an entry names the directory it was given in, so a line outside the workspace
+    // root is one an entry can hold as written, and it grants there and nowhere else.
+    if answer.remember && plan.can_be_remembered() && !unconfined {
+        for command in request.would_vouch_for() {
+            policy.remember_command(command);
+        }
+    }
+    // The credential scopes the planner asked for, kept for the stages they were added to
+    // (SANDBOX-27). The shapes are worked out again from the plan and the closed table here,
+    // rather than read back from what the prompt drew, so a front end answering with a key the
+    // prompt never offered cannot attach a scope to a stage it was not shown on. The scopes
+    // are the request's, which a person read in the plan, and no output byte is an input.
+    if let (Some(lasting), Some(home), Some(session)) =
+        (answer.remember_reach, tools.home, tools.remembering)
+        && !requested.is_empty()
+    {
+        let scopes = request.requested_credential_scopes();
+        crate::reach::keep_requested(
+            &crate::reach::Store::new(home),
+            &plan.steps(),
+            &scopes,
+            lasting,
+            session,
+            tools.workspace.root(),
+            &crate::reach::today(),
+        );
+    }
+    // The key the person chose for the owner this line's push leaves to ssh (SANDBOX-16). Read
+    // against the candidates this layer listed, so a front end answering with a key the prompt
+    // never offered, or answering where it offered none, chooses nothing. It applies to this
+    // line's stages and is remembered for the lines after it.
+    if let (Some(choice), Some(answer), Some(home)) = (&request.key_choice, answer.key, tools.home)
+    {
+        let key = match answer {
+            crate::confirm::KeyAnswer::Candidate(at) => {
+                choice.candidates.get(at).cloned().map(Some)
+            }
+            crate::confirm::KeyAnswer::SshDefault => Some(None),
+        };
+        if let Some(key) = key {
+            let chosen = crate::reach::ChosenKey {
+                address: choice.address.clone(),
+                key,
+                allowed: crate::reach::today(),
+            };
+            crate::reach::Store::new(home).choose_key(&chosen);
+            *confinement = confinement
+                .take()
+                .map(|confinement| confinement.with_chosen_key(chosen));
+        }
+    }
+    // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
+    // policy is asked again rather than the drawing being read back: a front end answering
+    // with a key the prompt never offered must not be able to put a line into a record that
+    // outlives the session, and a guard that consulted what was drawn would be resting on the
+    // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
+    // the store, for the mode that adds nothing to the state directory. The family answer of
+    // RUN-20 is asked of the table again by `line_to_record`.
+    if policy.may_remember(plan)
+        && requested.is_empty()
+        && !unconfined
+        && let (Some(store), Some(session), Some(line)) =
+            (record, tools.remembering, answer.line_to_record(plan))
+    {
+        store.remember(&line, session);
+    }
+    Ok(())
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -8511,96 +8813,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         );
     };
 
-    // The deadline the caller asked for, clamped to bounds the turn cannot exceed.
-    // Not a safety property: a program that finishes in time is no safer than one that
-    // does not. Absent a value, the short default is generous enough for an ordinary
-    // build step and short enough that a hung program is noticed.
-    let limit = match deadline_from(arguments, tools.deadlines) {
-        Ok(limit) => limit,
-        Err(diagnostic) => return Produced::problem(diagnostic),
+    let RunCall {
+        limit,
+        in_the_background,
+        named_stdin,
+        read_asked,
+        requested,
+        unconfined,
+    } = match run_call(policy, tools, arguments) {
+        Ok(call) => call,
+        Err(produced) => return *produced,
     };
-
-    // Absent or non-boolean means the foreground, which is the reading that waits for the program
-    // and hands back what it printed.
-    let in_the_background = arguments
-        .get("background")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    // The reference whose contents go to the first program's standard input, where the call named
-    // one. Present but not a string is refused rather than dropped, for the reason a directory is:
-    // a field the driver quietly ignored would run a line over nothing, and a planner that asked
-    // for a document to be filtered would be handed the filter's answer about an empty one. A
-    // blank string names no document, so it is the field left out, as for every other reference.
-    let named_stdin = match arguments.get("stdin_ref") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(_)) => named_argument(arguments, "stdin_ref"),
-        Some(_) => {
-            return Produced::problem(
-                "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
-            );
-        }
-    };
-
-    // Nothing waits for a background job, and nothing writes to one either: `start_steps` gives
-    // its first step an empty stdin and has nowhere to put anything else. Refused rather than
-    // ignored, so a call asking for both is told which of the two it cannot have.
-    if named_stdin.is_some() && in_the_background {
-        return Produced::problem(
-            "error: a background command cannot be fed a reference. Run it in the foreground, \
-             which waits for the program and hands back what it printed.",
-        );
-    }
-
-    // Absent means no, which leaves the result exactly as it would be without the field. Present but
-    // not a boolean is refused, as a mistyped `stdin_ref` is: a planner that believed it had asked
-    // would be handed a reference instead, and the way it would ask again is to run the line again.
-    // Refused beside a background line for the reason a reference is: nothing is waited for there,
-    // so this result holds nothing the line printed to read.
-    let read_asked = match arguments.get("read") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(read)) => *read,
-        Some(_) => return Produced::problem("error: 'read' must be true or false"),
-    };
-    if read_asked && in_the_background {
-        return Produced::problem(
-            "error: a background command has printed nothing into this result, so there is \
-             nothing in it to read. Leave 'read' out, or run it in the foreground.",
-        );
-    }
-
-    // What the planner asks every stage of this line to carry, by name from a fixed menu. Refused
-    // rather than dropped where it cannot be honoured, so a planner that believed it had a
-    // credential is told it has none and not handed a failure it would chase as a fault.
-    let requested = match requested_from(arguments) {
-        Ok(requested) => requested,
-        Err(diagnostic) => return Produced::problem(diagnostic),
-    };
-    if !requested.is_empty()
-        && let Err(causes) = requests_accepted(policy, tools)
-    {
-        policy.refuse_run_request("scopes", &causes);
-        return Produced::problem(NOT_ACCEPTING_REQUESTS);
-    }
-
-    // Whether the planner asks for this one line to start with no profile. Refused rather than
-    // dropped where it cannot be honoured, and where it is mistyped, as `read` is: a planner that
-    // believed it had asked would be handed the profile's failure to chase as a fault.
-    let unconfined = match arguments.get("unconfined") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(asked)) => *asked,
-        Some(_) => return Produced::problem("error: 'unconfined' must be true or false"),
-    };
-    if unconfined && !requested.is_empty() {
-        return Produced::problem(
-            "error: give 'unconfined' or 'scopes', not both. A line with no sandbox has no \
-             profile for a scope to be added to.",
-        );
-    }
-    if unconfined && let Err(causes) = unconfined_accepted(policy, tools) {
-        policy.refuse_run_request("unconfined", &causes);
-        return Produced::problem(NOT_ACCEPTING_UNCONFINED);
-    }
 
     // Assembled from the planner's own words, which are untrusted. A person reading the line at
     // the approval prompt is one destination for it, but it is not the only thing that happens to
@@ -8886,163 +9109,20 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // until somebody deletes the entry.
     let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
 
-    if asking {
-        // Whether this person has already read a prompt for this binary under other arguments,
-        // asked before the line on screen joins that list. An identical line is not a different
-        // argument list, so the order is a matter of reading rather than of correctness.
-        let varied = policy.arguments_have_varied(&plan);
-        policy.asked_about(&plan);
-        let request = crate::confirm::RunRequest {
-            plan: plan.clone(),
-            // Offered only where it would stop a later prompt, which the policy decides: not for a
-            // line releasing private data, not for one naming a file to write, not for one running
-            // outside the workspace root, and not where a rule the person wrote in advance already
-            // says to ask. A remembered line holds no tree, unlike a vouched entry, so the root is
-            // still one of its refusals. The path is what the prompt shows, since a person cannot
-            // endorse a record they were not shown.
-            record: record
-                .as_ref()
-                .filter(|_| policy.may_remember(&plan) && requested.is_empty() && !unconfined)
-                .filter(|_| crate::remembered::may_be_added_to())
-                .map(|store| store.path().to_path_buf()),
-            // Said only where a key at this prompt will not finish the asking, only where a rule
-            // in that file would decide the line at all, and only where there is a file to name:
-            // a line that writes, releases private data, runs outside the root or carries an
-            // assignment is asked about before any rule is read, so a pattern for one would stop
-            // no prompt, and advice on a machine that names no home directory would send somebody
-            // to a path nothing reads. A session in the mode that adds nothing to `~/.bravebot`
-            // still gets the advice, because writing that file is the person's own act rather
-            // than this session's.
-            pattern: tools
-                .home
-                .filter(|_| {
-                    varied
-                        && policy.a_rule_could_answer(&plan)
-                        && requested.is_empty()
-                        && !unconfined
-                })
-                .map(bravebot_config::user_settings_file),
-            // The reference, so the person reads what is going in as well as that something is.
-            // The driver's own name for a slot, never a byte of what the slot holds.
-            stdin: fed.as_ref().map(|(slot, _, _)| slot.to_string()),
-            // Described by the confinement the executor starts these steps under, the same value,
-            // so the prompt names no confinement exactly where the steps start without one.
-            confined: confinement
-                .as_ref()
-                .map(|confinement| confinement.describe(&plan.steps())),
-            // Offered only for a line that asked for something to remember, in a session with a
-            // state directory, a session to key the answer to and a mode that may add to that
-            // directory. The path is what the prompt shows, for the reason `record` is.
-            reach_record: tools
-                .home
-                .zip(tools.remembering)
-                .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
-                .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
+    if asking
+        && let Err(produced) = ask_about_the_run(
+            policy,
+            tools,
+            confirmer,
+            &plan,
+            record.as_ref(),
+            &requested,
             unconfined,
-            // Offered where the answer can be written down, for the reason `reach_record` is: a
-            // choice the next session forgets is a question asked again on every push.
-            key_choice: tools
-                .home
-                .zip(tools.remembering)
-                .filter(|_| crate::reach::may_be_added_to())
-                .zip(confinement.as_ref())
-                .and_then(|((home, _), confinement)| {
-                    confinement.key_choice(&plan.steps(), crate::reach::Store::new(home).path())
-                })
-                .map(Box::new),
-        };
-        // Read before the question is put, for the reason a write's is.
-        let mode = tools.permission_mode.get();
-        let answer = confirmer.confirm_run(&request);
-        policy.record_answer(mode.answers_this_run_unasked(&request).then(|| mode.name()));
-        if !answer.approved() {
-            return Produced::problem(
-                "refused: the user did not approve running this. Do not retry the same \
-                 line; ask what they would prefer."
-                    .to_string(),
-            );
-        }
-        // Recorded before the run, so a repeat of the same command later in this turn is not
-        // asked about again. The policy carries it out of the turn and the session records it.
-        //
-        // Not for a line an entry could not record: one that feeds a file to a program, one that
-        // feeds it a reference, and one that writes an assignment in front of a program. The prompt
-        // offers `a` for none of them, and this is the same refusal at the layer that would act on
-        // it, asked of the same predicate so the two cannot drift. What an entry records is a
-        // program, its exact argv and the tree the line runs in, and a `<` redirection, a
-        // `stdin_ref` and an assignment are in none of the three, so an entry made here would cover
-        // the same program fed any other file or reference, or run under no assignment at all. A
-        // front end answering `always` anyway must not be able to widen the list that way.
-        //
-        // The tree is not among the refusals, and that is RUN-8's own answer rather than an
-        // omission: an entry names the directory it was given in, so a line outside the workspace
-        // root is one an entry can hold as written, and it grants there and nowhere else.
-        if answer.remember && plan.can_be_remembered() && !unconfined {
-            for command in request.would_vouch_for() {
-                policy.remember_command(command);
-            }
-        }
-        // The credential scopes the planner asked for, kept for the stages they were added to
-        // (SANDBOX-27). The shapes are worked out again from the plan and the closed table here,
-        // rather than read back from what the prompt drew, so a front end answering with a key the
-        // prompt never offered cannot attach a scope to a stage it was not shown on. The scopes
-        // are the request's, which a person read in the plan, and no output byte is an input.
-        if let (Some(lasting), Some(home), Some(session)) =
-            (answer.remember_reach, tools.home, tools.remembering)
-            && !requested.is_empty()
-        {
-            let scopes = request.requested_credential_scopes();
-            crate::reach::keep_requested(
-                &crate::reach::Store::new(home),
-                &plan.steps(),
-                &scopes,
-                lasting,
-                session,
-                tools.workspace.root(),
-                &crate::reach::today(),
-            );
-        }
-        // The key the person chose for the owner this line's push leaves to ssh (SANDBOX-16). Read
-        // against the candidates this layer listed, so a front end answering with a key the prompt
-        // never offered, or answering where it offered none, chooses nothing. It applies to this
-        // line's stages and is remembered for the lines after it.
-        if let (Some(choice), Some(answer), Some(home)) =
-            (&request.key_choice, answer.key, tools.home)
-        {
-            let key = match answer {
-                crate::confirm::KeyAnswer::Candidate(at) => {
-                    choice.candidates.get(at).cloned().map(Some)
-                }
-                crate::confirm::KeyAnswer::SshDefault => Some(None),
-            };
-            if let Some(key) = key {
-                let chosen = crate::reach::ChosenKey {
-                    address: choice.address.clone(),
-                    key,
-                    allowed: crate::reach::today(),
-                };
-                crate::reach::Store::new(home).choose_key(&chosen);
-                confinement = confinement.map(|confinement| confinement.with_chosen_key(chosen));
-            }
-        }
-        // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
-        // policy is asked again rather than the drawing being read back: a front end answering
-        // with a key the prompt never offered must not be able to put a line into a record that
-        // outlives the session, and a guard that consulted what was drawn would be resting on the
-        // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
-        // the store, for the mode that adds nothing to the state directory. The family answer of
-        // RUN-20 is asked of the table again by `line_to_record`.
-        if policy.may_remember(&plan)
-            && requested.is_empty()
-            && !unconfined
-            && let (Some(store), Some(session), Some(line)) = (
-                record.as_ref(),
-                tools.remembering,
-                answer.line_to_record(&plan),
-            )
-        {
-            store.remember(&line, session);
-        }
+            fed.as_ref().map(|(slot, _, _)| slot.to_string()),
+            &mut confinement,
+        )
+    {
+        return *produced;
     }
 
     // The approval is what makes this plan trustworthy, and it is bound to this exact plan.
