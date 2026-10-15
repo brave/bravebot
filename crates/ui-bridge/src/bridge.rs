@@ -379,6 +379,14 @@ impl Bridge {
         ));
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        if let Some(open) = self
+            .open
+            .get(&handle)
+            .filter(|_| !record.checkouts.is_empty())
+        {
+            let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
+            take_back_checkouts(open, &record, &settings);
+        }
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
         opened["settingsRules"] = rules;
@@ -1112,7 +1120,7 @@ impl Bridge {
         // writes may carry (BACKEND-30), and the caps a search this turn makes runs under
         // (SEARCH-9).
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
-        let workspace = session_workspace(open, &settings)?;
+        let workspace = with_session_checkouts(open, session_workspace(open, &settings)?);
         // The files the prompt names with `@` (NAME-9), read out of the prompt here rather than
         // taken from the front end, and each one surveyed by the read the turn will make, so a
         // name that would end the turn refuses the send before anything starts. A prompt nobody
@@ -2105,6 +2113,35 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     Ok(workspace)
 }
 
+/// `workspace`, the one a turn is about to run in, given the checkouts the session keeps, or
+/// the session's record of them begun from it (CHECKOUT-16).
+fn with_session_checkouts(open: &Open, workspace: Workspace) -> Workspace {
+    let Ok(mut state) = open.state.lock() else {
+        return workspace;
+    };
+    match &state.kept {
+        Some(kept) => workspace.with_kept_between_turns(kept),
+        None => {
+            state.kept = Some(workspace.kept_between_turns());
+            workspace
+        }
+    }
+}
+
+/// As a session is opened again, place the checkouts its record lists as the terminal does, so the
+/// ones that cannot be placed stay in the record and the rest are the session's (CHECKOUT-16).
+fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
+    let Ok(workspace) = session_workspace(open, settings) else {
+        return;
+    };
+    if let Ok(mut state) = open.state.lock() {
+        if let Some(handle) = state.handle.as_mut() {
+            record.restore_checkouts(&workspace, handle);
+        }
+        state.kept = Some(workspace.kept_between_turns());
+    }
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -2725,6 +2762,11 @@ pub(crate) fn save(
         .handle
         .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
 
+    let checkouts = state
+        .kept
+        .as_ref()
+        .map(bravebot_agent::workspace::KeptBetweenTurns::checkouts)
+        .unwrap_or_default();
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and
     // the archive count wanted for `turn.done` is a field of the one being written down anyway —
@@ -2751,9 +2793,7 @@ pub(crate) fn save(
             // manifest so the picker can mark a run that may be read and not continued, and
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
-            // The desktop lists, resumes and applies no checkout yet, so it holds none itself;
-            // the ones a resumed record carries are written back by `Handle` (CHECKOUT-16).
-            checkouts: &[],
+            checkouts: &checkouts,
         },
     );
     handle.append_audit(turn, trail.events());

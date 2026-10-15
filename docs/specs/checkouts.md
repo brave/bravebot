@@ -698,6 +698,7 @@ not text, is named and left.
 `verified-by: bravebot_tui::checkouts_command::apply_a_number_and_paths_brings_back_only_those_paths`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_with_paths_asks_only_about_those_paths`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
+`verified-by: bravebot_ui_bridge::checkouts::a_later_turn_is_told_the_working_directory_was_written_since_the_checkout`
 
 ## How long one lasts
 
@@ -730,7 +731,7 @@ the driver reads none of it, and the planner is told none of it.
 Half built. A checkout the delegate given it and the delegates that one started did nothing in is
 removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
 the planner is told where, `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)), and the session
-record holds it, which the terminal's resume reads ([CHECKOUT-16](#CHECKOUT-16)).
+record holds it, which a resume reads ([CHECKOUT-16](#CHECKOUT-16)).
 
 `/checkouts` lists each one kept with the paths the planner typed for its writes and the number of
 writes made through a reference ([CHECKOUT-13](#CHECKOUT-13)), and says its status was not read.
@@ -839,9 +840,13 @@ terminal or `-p` session opens, takes only a plain `c<number>` directory that is
 owned by whoever owns the `checkouts/` directory for the working directory, and is at the mode a
 claimed checkout is left at, and holds the lock through the removal. It reads every record of the
 project, and removes nothing where one will not parse, since that one might list any of them. It
-leaves everything where `.git` is a link. The desktop does not run it and writes no checkouts into
-its record or resumes none, which is the issue's last stage. On Windows nothing is removed, and
-`/checkouts` names each directory under this working directory's key that is a plain `c<number>`
+leaves everything where `.git` is a link. The desktop does not run it. Its session keeps the
+checkouts its delegates were given across turns, with their locks and the log of working-directory
+writes they are judged by, so a turn's workspace lists and numbers them as the one before did. It
+writes them into its record, takes a record's back when the session is opened again, as the
+terminal's resume does, and a fork made in the window starts with none. The window lists, shows and
+applies none; the planner's `apply_checkout` works as it does in the terminal. On Windows nothing is
+removed, and `/checkouts` names each directory under this working directory's key that is a plain `c<number>`
 directory and not a link, that no record of the project lists and that this session does not keep,
 with its path, and says another session may be using it. It names none where a record cannot be read.
 Unix names none: the sweep removes them, and one it leaves is held by a running session.
@@ -859,6 +864,10 @@ Unix names none: the sweep removes them, and one it leaves is held by a running 
 `verified-by: bravebot_agent::workspace::a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back`
 `verified-by: bravebot_tui::sessions::a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry`
 `verified-by: bravebot_tui::sessions::a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume`
+`verified-by: bravebot_ui_bridge::checkouts::a_checkout_a_worker_wrote_in_is_in_the_record_the_turn_saved`
+`verified-by: bravebot_ui_bridge::checkouts::a_second_turns_worker_gets_the_next_checkout_and_the_first_stays_listed`
+`verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it`
+`verified-by: bravebot_ui_bridge::checkouts::a_checkout_stays_locked_between_turns`
 
 <a id="CHECKOUT-17"></a>
 ### CHECKOUT-17: a rewind leaves a checkout as it is, and says so
@@ -1011,8 +1020,9 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   answer that, and [CHECKOUT-12](#CHECKOUT-12) builds half of it.
 - **Removals on apply.** Bringing back a removal needs a removal under the write gate, which no tool
   has.
-- **Whether a desktop session gives checkouts before it can show them.** The desktop needs to list,
-  show and apply them, and has an issue of its own to write.
+- **Whether a desktop session gives checkouts before it can show them.** It gives them and keeps
+  them ([CHECKOUT-16](#CHECKOUT-16)). The window still needs to list, show and apply them, and has
+  an issue of its own to write.
 
 ## Known costs
 

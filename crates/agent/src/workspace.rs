@@ -683,6 +683,39 @@ pub struct SessionCheckout {
     pub size: Option<crate::git::checkout::Size>,
 }
 
+/// A session's checkouts, with the numbers and the write log they are judged by, for a front end
+/// that builds a workspace for each turn (CHECKOUT-16).
+///
+/// A workspace given it by [`Workspace::with_kept_between_turns`] lists, numbers and judges the
+/// working directory's writes against the same record as the one it was taken from, as a
+/// delegate's clone does. Holding it keeps each checkout's lock and the temporary directory for as
+/// long as the session does, and not for one turn.
+#[derive(Clone)]
+pub struct KeptBetweenTurns {
+    checkouts: Arc<Mutex<Vec<PathBuf>>>,
+    session_checkouts: Arc<Mutex<Vec<Made>>>,
+    checkout_numbers: Arc<AtomicU64>,
+    temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
+    working_writes: Arc<Mutex<WorkingWrites>>,
+}
+
+impl KeptBetweenTurns {
+    /// The checkouts the session made and has not removed (CHECKOUT-21).
+    pub fn checkouts(&self) -> Vec<SessionCheckout> {
+        listed(&self.session_checkouts)
+    }
+}
+
+/// The checkouts in `made` whose directories are still there, oldest first.
+fn listed(made: &Mutex<Vec<Made>>) -> Vec<SessionCheckout> {
+    made.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|made| made.path.exists())
+        .map(Made::listed)
+        .collect()
+}
+
 /// What the driver recorded doing in a checkout. One record for the delegate's workspace and the
 /// session's list, so the list reads what the delegate did.
 #[derive(Debug, Default)]
@@ -4851,13 +4884,7 @@ impl Workspace {
     /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). One whose
     /// directory is gone, removed by hand or only half removed, is not among them.
     pub fn session_checkouts(&self) -> Vec<SessionCheckout> {
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|made| made.path.exists())
-            .map(Made::listed)
-            .collect()
+        listed(&self.session_checkouts)
     }
 
     /// Remove the session's checkout `id`, one [`Workspace::session_checkouts`] lists, and take
@@ -5175,6 +5202,29 @@ impl Workspace {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+    }
+
+    /// What this workspace's checkouts are kept in, for the workspace of the next turn to be given
+    /// by [`Workspace::with_kept_between_turns`] (CHECKOUT-16).
+    pub fn kept_between_turns(&self) -> KeptBetweenTurns {
+        KeptBetweenTurns {
+            checkouts: self.checkouts.clone(),
+            session_checkouts: self.session_checkouts.clone(),
+            checkout_numbers: self.checkout_numbers.clone(),
+            temporary_checkouts: self.temporary_checkouts.clone(),
+            working_writes: self.working_writes.clone(),
+        }
+    }
+
+    /// Keep the checkouts in `kept`, taken from the workspace of an earlier turn, in place of this
+    /// workspace's own (CHECKOUT-16).
+    pub fn with_kept_between_turns(mut self, kept: &KeptBetweenTurns) -> Self {
+        self.checkouts = kept.checkouts.clone();
+        self.session_checkouts = kept.session_checkouts.clone();
+        self.checkout_numbers = kept.checkout_numbers.clone();
+        self.temporary_checkouts = kept.temporary_checkouts.clone();
+        self.working_writes = kept.working_writes.clone();
+        self
     }
 
     /// The workspace instructions, skills and definitions are read from: this one, or the
