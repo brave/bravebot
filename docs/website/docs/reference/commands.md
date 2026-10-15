@@ -875,6 +875,8 @@ moves, and nothing a turn sends to the model includes it. `/undo` is not affecte
 with nothing waiting, it is carried out at once. `/session-review` reads the notes of a session it
 reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-on-a-session).
 
+## `/issue` and `/pr`
+
 `/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
 [info panel](../using/sessions.md#telling-sessions-apart) shows both. Each takes one `http` or `https`
 link with a host: a value with a space, a line break, an escape, a character outside ASCII or
