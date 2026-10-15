@@ -26,3 +26,13 @@ docs/specs/session-messages.md:MSG-9: a message arrives with the label it was se
 docs/specs/session-messages.md:MSG-10: a session sends a bounded number of messages
 docs/specs/session-messages.md:MSG-11: both transcripts show the message, and the trail records that it happened
 docs/specs/session-messages.md:MSG-12: a delegate and a processor are offered no `message_session`
+docs/specs/worktrees.md:WORKTREE-1: `--worktree` starts a fresh interactive session in a worktree made for it
+docs/specs/worktrees.md:WORKTREE-2: a name is a label of ASCII letters, digits, `.`, `_` and `-`, and decides no path
+docs/specs/worktrees.md:WORKTREE-3: `--worktree` is refused where a delegate's checkout would be, and where a checkout would not be kept
+docs/specs/worktrees.md:WORKTREE-4: a worktree is written, placed, labelled and ruled as a checkout is
+docs/specs/worktrees.md:WORKTREE-5: the session works in the worktree as a delegate works in its checkout, and reads its sources from the project directory
+docs/specs/worktrees.md:WORKTREE-6: the record is kept under the project directory and names the worktree
+docs/specs/worktrees.md:WORKTREE-7: a resume returns to the worktree, and is refused where it cannot
+docs/specs/worktrees.md:WORKTREE-8: a worktree is kept until the person removes it, and the sweep never takes one
+docs/specs/worktrees.md:WORKTREE-9: a command that starts another session, or applies the worktree to itself, is refused while the session works in it
+docs/specs/worktrees.md:WORKTREE-10: `--worktree` composes with no other way of starting a session

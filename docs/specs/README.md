@@ -23,6 +23,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 12 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 21 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
+| [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 10 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, and how the reads of one round are run together |
 | [prompting.md](prompting.md) | `PROMPT` | 11 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
 | [permission-modes.md](permission-modes.md) | `MODE` | 12 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
