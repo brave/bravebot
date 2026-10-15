@@ -1056,4 +1056,21 @@ mod tests {
         shared.finish();
         assert_eq!(shared.roster.attach_token(ID), None);
     }
+
+    /// BG-13: the session the host process serves waits an hour, and `Shared::new` is the only way
+    /// the host makes one, so a shorter or longer wait is a different clause.
+    #[test]
+    fn a_hosted_session_waits_an_hour_before_it_ends() {
+        let shared = Shared::new(
+            Roster::at(a_root()),
+            Job::starting(
+                ID.to_string(),
+                std::path::Path::new("/work"),
+                "fix the build",
+                Mode::Ask,
+            ),
+            None,
+        );
+        assert_eq!(shared.idle_after, Duration::from_secs(60 * 60));
+    }
 }

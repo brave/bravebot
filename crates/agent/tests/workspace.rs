@@ -5160,6 +5160,53 @@ fn a_relative_look_sees_a_change_while_the_working_directory_stands() {
     assert_ne!(first, second, "a change in the file did not move the token");
 }
 
+/// FSWATCH-3: a look observes the size, the modification time and whether the file is there, and
+/// nothing from inside it. Same size and time with other bytes is the same look, so a look that
+/// hashed or read content would differ; one byte more or a second later is a different look, so a
+/// look that dropped the size or the time would match.
+#[test]
+fn a_look_observes_size_time_and_presence_and_nothing_inside_the_file() {
+    let scratch = Scratch::new("look-shape");
+    let path = scratch.path.join("notes.md");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let root = workspace.root().to_path_buf();
+    let first = workspace.look("notes.md", &root);
+    assert!(matches!(first, bravebot_agent::watch::Looked::Saw(_)));
+
+    std::fs::write(&path, "two\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    assert_eq!(
+        workspace.look("notes.md", &root),
+        first,
+        "other bytes of the same size and time changed the look"
+    );
+
+    std::fs::write(&path, "three\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    assert_ne!(
+        workspace.look("notes.md", &root),
+        first,
+        "a longer file at the same time looked the same"
+    );
+
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_100);
+    assert_ne!(
+        workspace.look("notes.md", &root),
+        first,
+        "a file of the same size a minute later looked the same"
+    );
+
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        workspace.look("notes.md", &root),
+        bravebot_agent::watch::Looked::Absent,
+        "a removed file was not reported absent"
+    );
+}
+
 /// An absolute path does not mean the working directory: it is legal only inside a directory the
 /// user added by name, so a directory that survived the move survives with its watch. Ending
 /// every watch on a move would take this one with it, and the answer that allowed it still holds.

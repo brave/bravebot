@@ -365,6 +365,7 @@ loop.
 `verified-by: bravebot_cli::plain::a_hosted_session_idle_for_its_time_ends_and_is_recorded_stopped`
 `verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_a_stopped_session_with_it`
 `verified-by: bravebot_cli::running::an_attach_from_a_terminal_starts_a_stopped_session`
+`verified-by: bravebot_cli::host::a_hosted_session_waits_an_hour_before_it_ends`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own

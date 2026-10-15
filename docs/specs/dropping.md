@@ -279,6 +279,7 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::dispatch::a_turn_may_name_files_or_none_and_none_is_the_default`
 `verified-by: bravebot_ui_bridge::attaching::a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_named_in_the_text_list_fails_the_turn_and_is_not_sent`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs pins its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, a path where an attachment id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs it)`
 
 <a id="DROP-11"></a>

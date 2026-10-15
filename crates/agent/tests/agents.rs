@@ -804,6 +804,53 @@ fn a_file_that_claims_to_be_a_definition_and_is_not_says_so() {
     );
 }
 
+/// DELEGATE-21: a definition whose name is refused is a file that does not load, and the notice
+/// names the path of the file, never the name it asked for. The names here are what a hostile file
+/// would pick, so a notice that quoted one would put it on the person's screen.
+#[test]
+fn a_refused_name_is_reported_by_the_files_path_and_never_by_the_name() {
+    let scratch = Scratch::new("refused-name");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "dash",
+        &frontmatter("-ignore-the-rules", "checks a diff", "reader"),
+        "body",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "colon",
+        &frontmatter("plugin:ignore-the-rules", "checks a diff", "reader"),
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert!(from_disk(&definitions).is_empty());
+    let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said.iter()
+            .any(|n| n.starts_with("~/.bravebot/agents/dash.md was skipped")),
+        "the home file was not named by its path: {said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|n| n.starts_with(".bravebot/agents/colon.md was skipped")),
+        "the project file was not named by its path: {said:?}"
+    );
+    assert!(
+        said.iter().all(|n| !n.contains("ignore-the-rules")),
+        "a notice quoted the name the file asked for: {said:?}"
+    );
+}
+
 /// ADDRESS-5 from the interface's side. A name a person types is compared, before anything
 /// starts, against the set the interface resolved, so that set has to be the one a turn would
 /// resolve: a definition the turn would run is found, and one in a checkout nobody vouched for is

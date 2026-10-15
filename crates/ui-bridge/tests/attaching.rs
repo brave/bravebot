@@ -207,6 +207,40 @@ fn a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture() {
     );
 }
 
+/// DROP-10: `dropped` is the list of text, so a picture named in it fails the turn rather than
+/// reaching the model as bytes. A turn that went on without the file would answer without what it
+/// was asked about and report success.
+#[test]
+fn a_picture_named_in_the_text_list_fails_the_turn_and_is_not_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("picture-as-text");
+    let outside = elsewhere("picture-as-text");
+    let shot = outside.join("Shot.png");
+    std::fs::write(&shot, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let failed = window.turn(&session, "describe this", json!({"dropped": [shot]}));
+
+    assert_eq!(failed.name, "turn.error", "{:?}", failed.data);
+    assert_eq!(failed.data["category"], "workspace", "{:?}", failed.data);
+    assert!(
+        requests.try_recv().is_err(),
+        "a request reached the model although the dropped file could not be read"
+    );
+
+    let done = window.turn(&session, "carry on", json!({}));
+    server.join().unwrap();
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let sent = requests.recv().unwrap();
+    assert!(
+        !sent.contains("image_url") && !sent.contains("data:image/png"),
+        "the picture reached the model in a later request: {sent}"
+    );
+}
+
 /// PASTE-9: a pasted picture is written into the session record, so a turn sent after the session
 /// is opened again still carries it in the conversation.
 #[test]
