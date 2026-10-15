@@ -35,24 +35,12 @@ def _load_shared():
 # The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
 
-BASE_REPO = pr_worktree.BASE_REPO
-GITHUB_URL = pr_worktree.GITHUB_URL
-PULL_URL = pr_worktree.PULL_URL
-OURS = pr_worktree.OURS
-THEIRS = pr_worktree.THEIRS
-MAKE_FAILED = pr_worktree.MAKE_FAILED
-SPEC_RECORDS = pr_worktree.SPEC_RECORDS
-LOCK_RESOLVES = pr_worktree.LOCK_RESOLVES
 die = pr_worktree.die
 run = pr_worktree.run
 git = pr_worktree.git
 succeeds = pr_worktree.succeeds
 pr_number = pr_worktree.pr_number
-github_remotes = pr_worktree.github_remotes
-fork_url = pr_worktree.fork_url
-local_branch = pr_worktree.local_branch
 marker_ranges = pr_worktree.marker_ranges
-worktrees = pr_worktree.worktrees
 fetch = pr_worktree.fetch
 rev = pr_worktree.rev
 rebase_dir = pr_worktree.rebase_dir
@@ -60,7 +48,6 @@ unmerged = pr_worktree.unmerged
 resolved_log = pr_worktree.resolved_log
 resolved = pr_worktree.resolved
 remember_resolved = pr_worktree.remember_resolved
-package_of = pr_worktree.package_of
 plan = pr_worktree.plan
 describe = pr_worktree.describe
 
