@@ -2051,6 +2051,129 @@ struct Begun {
     answers: Answers,
 }
 
+/// Bring a session up to what a resumed record left: the transcript and the notes that caveat it,
+/// the accounts, the vouched programs, the directories opened with `/add-dir`, the checkouts and
+/// the rewind points. Returns the conversation, the record's handle and the programs vouched for.
+///
+/// Nothing here needs a terminal. The trust question follows it in `begin_session`, because the
+/// map it asks about comes from the record and the transcript is shown before anything is asked.
+fn restore_resumed(
+    session: &mut Session,
+    config: &Config,
+    workspace: &mut Workspace,
+    record: &bravebot_session::sessions::Record,
+) -> (
+    Conversation,
+    bravebot_session::sessions::Handle,
+    TrustedPrograms,
+) {
+    let mut handle = bravebot_session::sessions::Handle::resuming(
+        workspace.root(),
+        record,
+        bravebot_session::sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    let conversation = Conversation::restored(record.conversation.clone());
+    // Shown before anything else, because a session that silently continues something
+    // the user cannot see is one they will contradict without meaning to. The trail comes
+    // out of the audit beside the record, so Ctrl-T answers for the whole session rather
+    // than only for the turns this process ran.
+    let recalled = bravebot_session::sessions::recall(workspace.root(), record);
+    session.replay(&conversation, &record.title, &recalled);
+    session.restore_accounts(record);
+    if conversation.last_request_tokens() > 0 {
+        session.measured(
+            conversation.last_request_tokens(),
+            config.context_budget,
+            config.budget_is_guessed(),
+        );
+    }
+    // Said after the transcript, so it reads as a caveat on what was just shown: the work
+    // it describes may not be in the tree the user is now looking at.
+    if let Some(note) = bravebot_session::sessions::branch_note(
+        record.branch.as_deref(),
+        bravebot_session::sessions::branch_of(workspace.root()).as_deref(),
+    ) {
+        session.note(note);
+    }
+    // The same caveat about the other half of what produced that transcript: not the
+    // tree it ran against, but the code that ran.
+    if let Some(note) =
+        bravebot_session::sessions::build_note(record.build.as_deref(), bravebot_stamp::BUILD)
+    {
+        session.note(note);
+    }
+    // And the third of them: which surface drew the transcript above. The other one
+    // renders the same session differently, so a detail being read as a symptom of the
+    // work may be a symptom of the program that showed it.
+    if let Some(note) = bravebot_session::sessions::front_note(
+        record.front.as_deref(),
+        bravebot_session::sessions::Front::Terminal,
+    ) {
+        session.note(note);
+    }
+    // The programs go the way the map does and for the same reason: the person resuming
+    // is the person who vouched for them. Unlike the map there is nothing to ask about an
+    // absent list, since an empty one simply means every run asks.
+    let vouched = record.trusted_programs(workspace.root());
+    // The other half of `/add-dir`, which the map cannot carry: a directory has to be
+    // open for an absolute path in it to resolve at all. Restored here so the rule and
+    // the reach come back together, rather than the rule alone.
+    for note in record.reopen_added_directories(workspace) {
+        session.note(note);
+    }
+    // Beside them, the checkouts the session's delegates were given: their rules came
+    // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
+    if let Some(note) = record.restore_checkouts(workspace, &mut handle) {
+        session.note(note);
+    }
+    // After the transcript rather than before it, because each point's place in that
+    // transcript is worked out from it: a point is a turn number in the record and an
+    // index in the session, and the list it indexes has to exist first.
+    session.restore_rewind(record, workspace, &conversation);
+    (conversation, handle, vouched)
+}
+
+/// Put into force the settings a session reads once, before any turn. `asked_effort` is the level
+/// the command line named, which outranks the one the settings and the record settle.
+fn adopt_settings(
+    session: &mut Session,
+    settings: &bravebot_config::Settings,
+    asked_effort: Option<bravebot_aichat::protocol::Effort>,
+) {
+    // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
+    session.adopt_editing(settings.editor_mode());
+    // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
+    // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
+    // and `/effort` is how this one is changed.
+    session.adopt_effort(settings);
+    if let Some(level) = asked_effort {
+        session.name_effort(level);
+        say_if_unread(session);
+    }
+    session.adopt_limit(settings);
+    adopt_style(session, settings.style());
+    // Settled here too, and once, for the reason the mode is read once per turn: what decides
+    // whether somebody is asked must not change under a prompt already on the screen. The command
+    // line's switch is read here and nowhere else in the interface.
+    session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
+    session.adopt_keybindings(settings.keybindings());
+    // And how far the wheel moves the view, for the reason the chords are read here: a figure read
+    // once at startup describes the session, and a terminal's own idea of a notch does not change
+    // under it.
+    session.adopt_wheel_rows(settings.wheel_rows());
+    session.adopt_panel();
+    session.adopt_caffeinate();
+    session.away.adopt(settings.away_summary_enabled());
+    // A background job belongs to the session here and ends with it, except where nothing may
+    // outlive the process that wrote it (RUN-15).
+    if !bravebot_core::incognito::engaged() {
+        session.keep_jobs_between_turns();
+    }
+    session.adopt_prompt_files(crate::prompt_files::directory());
+    session.adopt_suggestions(settings.suggestions() == Some(true));
+}
+
 /// Everything `event_loop` settles before its first pass: the session, a resumed record, the
 /// trust question, the scratch directory, the rules, the named directories and an addressed
 /// definition, in that order.
@@ -2159,74 +2282,7 @@ fn begin_session(
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
-        Start::Resuming(record) => {
-            let mut handle = bravebot_session::sessions::Handle::resuming(
-                workspace.root(),
-                &record,
-                bravebot_session::sessions::Front::Terminal,
-                bravebot_stamp::BUILD,
-            );
-            let conversation = Conversation::restored(record.conversation.clone());
-            // Shown before anything else, because a session that silently continues something
-            // the user cannot see is one they will contradict without meaning to. The trail comes
-            // out of the audit beside the record, so Ctrl-T answers for the whole session rather
-            // than only for the turns this process ran.
-            let recalled = bravebot_session::sessions::recall(workspace.root(), &record);
-            session.replay(&conversation, &record.title, &recalled);
-            session.restore_accounts(&record);
-            if conversation.last_request_tokens() > 0 {
-                session.measured(
-                    conversation.last_request_tokens(),
-                    config.context_budget,
-                    config.budget_is_guessed(),
-                );
-            }
-            // Said after the transcript, so it reads as a caveat on what was just shown: the work
-            // it describes may not be in the tree the user is now looking at.
-            if let Some(note) = bravebot_session::sessions::branch_note(
-                record.branch.as_deref(),
-                bravebot_session::sessions::branch_of(workspace.root()).as_deref(),
-            ) {
-                session.note(note);
-            }
-            // The same caveat about the other half of what produced that transcript: not the
-            // tree it ran against, but the code that ran.
-            if let Some(note) = bravebot_session::sessions::build_note(
-                record.build.as_deref(),
-                bravebot_stamp::BUILD,
-            ) {
-                session.note(note);
-            }
-            // And the third of them: which surface drew the transcript above. The other one
-            // renders the same session differently, so a detail being read as a symptom of the
-            // work may be a symptom of the program that showed it.
-            if let Some(note) = bravebot_session::sessions::front_note(
-                record.front.as_deref(),
-                bravebot_session::sessions::Front::Terminal,
-            ) {
-                session.note(note);
-            }
-            // The programs go the way the map does and for the same reason: the person resuming
-            // is the person who vouched for them. Unlike the map there is nothing to ask about an
-            // absent list, since an empty one simply means every run asks.
-            let vouched = record.trusted_programs(workspace.root());
-            // The other half of `/add-dir`, which the map cannot carry: a directory has to be
-            // open for an absolute path in it to resolve at all. Restored here so the rule and
-            // the reach come back together, rather than the rule alone.
-            for note in record.reopen_added_directories(&mut workspace) {
-                session.note(note);
-            }
-            // Beside them, the checkouts the session's delegates were given: their rules came
-            // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
-            if let Some(note) = record.restore_checkouts(&workspace, &mut handle) {
-                session.note(note);
-            }
-            // After the transcript rather than before it, because each point's place in that
-            // transcript is worked out from it: a point is a turn number in the record and an
-            // index in the session, and the list it indexes has to exist first.
-            session.restore_rewind(&record, &workspace, &conversation);
-            (conversation, handle, vouched)
-        }
+        Start::Resuming(record) => restore_resumed(&mut session, config, &mut workspace, &record),
     };
 
     // Settled once, before any turn. Nothing means the user left at the question, and a session
@@ -2259,39 +2315,7 @@ fn begin_session(
         session.note(note);
     }
 
-    // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
-    session.adopt_editing(settings.editor_mode());
-    // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
-    // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
-    // and `/effort` is how this one is changed.
-    session.adopt_effort(&settings);
-    if let Some(level) = asked.effort {
-        session.name_effort(level);
-        say_if_unread(&mut session);
-    }
-    session.adopt_limit(&settings);
-    // No unit test reaches this call, because this function needs a real terminal. A scripted
-    // session (`contrib/drive_tui.py`) with a `style` in settings and `/style` typed checks it.
-    adopt_style(&mut session, settings.style());
-    // Settled here too, and once, for the reason the mode is read once per turn: what decides
-    // whether somebody is asked must not change under a prompt already on the screen. The command
-    // line's switch is read here and nowhere else in the interface.
-    session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
-    session.adopt_keybindings(settings.keybindings());
-    // And how far the wheel moves the view, for the reason the chords are read here: a figure read
-    // once at startup describes the session, and a terminal's own idea of a notch does not change
-    // under it.
-    session.adopt_wheel_rows(settings.wheel_rows());
-    session.adopt_panel();
-    session.adopt_caffeinate();
-    session.away.adopt(settings.away_summary_enabled());
-    // A background job belongs to the session here and ends with it, except where nothing may
-    // outlive the process that wrote it (RUN-15).
-    if !bravebot_core::incognito::engaged() {
-        session.keep_jobs_between_turns();
-    }
-    session.adopt_prompt_files(crate::prompt_files::directory());
-    session.adopt_suggestions(settings.suggestions() == Some(true));
+    adopt_settings(&mut session, &settings, asked.effort);
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -27768,6 +27792,117 @@ mod tests {
             .iter()
             .map(|entry| entry.text.clone())
             .collect()
+    }
+
+    /// A record written by another build, on a branch this checkout is not on, that spent tokens
+    /// and had `/add-dir` open `extra`.
+    fn a_recorded_session_in(
+        root: &std::path::Path,
+        extra: &std::path::Path,
+    ) -> bravebot_session::sessions::Record {
+        serde_json::from_value(serde_json::json!({
+            "id": "7-8",
+            "directory": root.display().to_string(),
+            "branch": "a-branch-this-checkout-is-not-on",
+            "title": "an earlier session",
+            "started": 1,
+            "updated": 1,
+            "tokens": 4321,
+            "build": "an-older-build",
+            "directories": [extra.display().to_string()],
+            "conversation": {"messages": [], "context": "trusted"},
+        }))
+        .expect("a record")
+    }
+
+    /// Resuming puts back what the record holds and says where it differs from now: the same
+    /// session id, the spend, the directory `/add-dir` opened, and a line each for the build and
+    /// the branch that are not the ones running. The regressions it rejects are a resumed session
+    /// that writes to a new record, forgets its spend or its open directories, and one that
+    /// continues someone else's work without saying so.
+    #[test]
+    fn resuming_a_record_restores_its_accounts_directories_and_says_what_differs() {
+        let mut workspace = workspace_for_test();
+        let extra = crate::testutil::scratch_dir("bravebot-restore-resumed-extra");
+        std::fs::create_dir_all(&extra).expect("scratch");
+        let record = a_recorded_session_in(workspace.root(), &extra);
+        let mut session = Session::new("none");
+        let config = a_config_needing_no_sign_in();
+
+        let (conversation, handle, _programs) =
+            restore_resumed(&mut session, &config, &mut workspace, &record);
+
+        assert_eq!(
+            handle.id(),
+            "7-8",
+            "the resumed session began a record of its own"
+        );
+        assert_eq!(session.spent_tokens(), 4321, "the spend was not restored");
+        assert_eq!(conversation.last_request_tokens(), 0);
+        assert_eq!(
+            workspace.added_directories(),
+            vec![extra.canonicalize().expect("canonical")],
+            "the directory `/add-dir` opened was not opened again"
+        );
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains("resumed session: an earlier session"),
+            "{said}"
+        );
+        assert!(
+            said.contains("that session ran on bravebot an-older-build"),
+            "a record from another build resumed without saying so: {said}"
+        );
+        assert!(
+            said.contains("this session ran on a-branch-this-checkout-is-not-on"),
+            "a record from another branch resumed without saying so: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&extra);
+    }
+
+    /// A record on the build and branch now running says nothing about either, so the notes above
+    /// are about a difference and not about every resume.
+    #[test]
+    fn resuming_a_record_from_this_build_adds_no_caveat() {
+        let mut workspace = workspace_for_test();
+        let extra = crate::testutil::scratch_dir("bravebot-restore-resumed-same");
+        std::fs::create_dir_all(&extra).expect("scratch");
+        let mut record = a_recorded_session_in(workspace.root(), &extra);
+        record.build = Some(bravebot_stamp::BUILD.to_string());
+        record.branch = bravebot_session::sessions::branch_of(workspace.root());
+        let mut session = Session::new("none");
+        let config = a_config_needing_no_sign_in();
+
+        restore_resumed(&mut session, &config, &mut workspace, &record);
+
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(!said.contains("that session ran on bravebot"), "{said}");
+        assert!(!said.contains("this session ran on"), "{said}");
+        let _ = std::fs::remove_dir_all(&extra);
+    }
+
+    /// A level named on the command line outranks what the settings say and is the one in force,
+    /// and a limit in the settings is the one the next turn is held to.
+    #[test]
+    fn adopting_settings_puts_the_asked_level_and_the_limit_in_force() {
+        use bravebot_aichat::protocol::Effort;
+        let settings = bravebot_config::Settings::parse(r#"{"limit": "250k"}"#);
+        let mut asked = Session::new("none");
+        let mut unasked = Session::new("none");
+
+        adopt_settings(&mut asked, &settings, Some(Effort::Low));
+        adopt_settings(&mut unasked, &settings, None);
+
+        assert_eq!(asked.effort(), Some(Effort::Low));
+        assert_ne!(
+            unasked.effort(),
+            Some(Effort::Low),
+            "the level was set without being asked for"
+        );
+        assert!(
+            asked.spend_limit().limit().is_some(),
+            "the limit in the settings was not adopted"
+        );
     }
 
     /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
