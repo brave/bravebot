@@ -1197,11 +1197,12 @@ second copy a no-op without a field in the record that every earlier build would
 The resume picker narrows its list by what a session's record says as well as by its title, branch
 and links ([SESSION-3](#SESSION-3)). The words searched are the ones a resumed transcript draws: the
 prompts a person typed, the planner's replies, and the line announcing each call the planner made,
-which names the path, command, address or pattern it was about. A tool result, a file a prompt
-attached, a note the agent composed and a reference the quarantine holds are not drawn, so they are
-not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one the transcript draws,
-so a command the transcript hides is not searchable either. The trail holds no words and is not
-read.
+which names the path, command, address or pattern it was about. A note a person typed on the
+session ([SESSION-36](#SESSION-36)) is searched too, and is shown on a row the same way. A tool
+result, a file a prompt attached, a note the agent composed and a reference the quarantine holds are
+not drawn, so they are not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one
+the transcript draws, so a command the transcript hides is not searchable either. The trail holds no
+words and is not read.
 
 A record is searched only when it was written by this program's terminal or desktop front end, or
 by a build that did not yet record one. An imported session ([SESSION-32](#SESSION-32)) holds
@@ -1251,6 +1252,11 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::a_shown_match_is_cut_around_the_words_and_no_wider_than_a_row`
 `verified-by: bravebot_session::search::a_since_word_is_a_window_and_leaves_the_rest_as_the_phrase`
 `verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
+`verified-by: bravebot_session::search::a_note_a_person_typed_is_found_and_a_record_without_notes_is_unchanged`
+`verified-by: bravebot_session::search::a_session_found_by_a_note_and_by_a_prompt_shows_the_prompt_line`
+`verified-by: bravebot_session::search::a_note_is_cleaned_like_any_other_line_before_it_is_compared_or_shown`
+`verified-by: bravebot_session::search::a_note_in_an_imported_session_is_not_searched`
+`verified-by: bravebot_session::search::an_entry_built_before_notes_were_searched_is_rebuilt_to_include_them`
 `verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
 `verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
 `verified-by: bravebot_session::search::a_session_saved_before_the_index_is_found_and_indexed`
@@ -1420,7 +1426,8 @@ a model produced is written as one. Text with nothing in it is not a note and re
 A note is not part of the conversation. It is not a prompt, is not queued, is not offered to the
 turn in flight, and is not in the snapshot a resume restores, so adding one changes nothing the
 planner is given. A resume, a continuation save and a fork keep the notes of the session. A record
-written before notes were kept reads as having none.
+written before notes were kept reads as having none. The resume search ([SESSION-33](#SESSION-33))
+finds a session by the text of its notes.
 
 The session-review skill reads the notes of a session it reviews and shows them to its analyzer and
 verifier as data from the person. The analyzer checks a note against the audit trail and the code

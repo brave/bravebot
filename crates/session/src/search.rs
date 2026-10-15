@@ -2,10 +2,11 @@
 //!
 //! A person remembers a session by something said in it, not by its title, which is the first
 //! thing they asked. What is searched is what a resumed transcript draws: the prompts typed, the
-//! planner's replies and the line announcing each call it made. A tool result, a file body and
-//! a quarantined reference are not drawn, so none is searched or shown (SESSION-2).
+//! planner's replies and the line announcing each call it made, and the notes a person typed on
+//! the session (SESSION-36). A tool result, a file body and a quarantined reference are not drawn,
+//! so none is searched or shown (SESSION-2).
 
-use crate::sessions::{self, Front};
+use crate::sessions::{self, Front, Note};
 use bravebot_agent::conversation::{Composed, Conversation, Said, Snapshot};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -181,7 +182,7 @@ pub(crate) const INDEX_EXTENSION: &str = "search";
 
 /// The shape of an index entry. Raised whenever [`lines_of`] would answer differently for the same
 /// record, so an entry built by an older rule is rebuilt rather than trusted.
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 
 /// What one record said, with what it was built from.
 #[derive(Serialize, Deserialize)]
@@ -268,6 +269,9 @@ struct Searched {
     #[serde(default)]
     front: Option<String>,
     conversation: Snapshot,
+    /// Notes a person typed, kept beside the conversation (SESSION-36).
+    #[serde(default)]
+    notes: Vec<Note>,
 }
 
 /// The lines of one record's JSON that a search covers, cleaned.
@@ -293,6 +297,7 @@ pub fn lines_of(record: &str) -> Vec<String> {
     if !ours || copied {
         return Vec::new();
     }
+    let notes = searched.notes.into_iter().map(|note| note.text);
     Conversation::restored(searched.conversation)
         .recounted()
         .into_iter()
@@ -308,6 +313,9 @@ pub fn lines_of(record: &str) -> Vec<String> {
             } => Some(text),
             Said::Composed { .. } => None,
         })
+        // Notes come last: a note is found, but a line of the conversation that holds the same
+        // words is the one a row shows.
+        .chain(notes)
         .flat_map(|text| {
             text.lines()
                 .map(|line| clean(line, LONGEST_LINE))
@@ -373,6 +381,17 @@ mod tests {
         if let Some(front) = front {
             value["front"] = front.into();
         }
+        value.to_string()
+    }
+
+    fn record_with_notes(front: Option<&str>, messages: Vec<Stored>, notes: &[&str]) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&record(front, messages)).expect("json");
+        value["notes"] = notes
+            .iter()
+            .enumerate()
+            .map(|(turn, text)| serde_json::json!({ "turn": turn, "by": "person", "text": text }))
+            .collect();
         value.to_string()
     }
 
@@ -826,6 +845,110 @@ mod tests {
         assert!(found_in(&corpus, "a1b2", "signing keys"));
         assert!(!entry_of(&directory, "a1b2").exists());
         assert!(entry_of(&directory, "c3d4").exists());
+    }
+
+    #[test]
+    fn a_note_a_person_typed_is_found_and_a_record_without_notes_is_unchanged() {
+        let with = record_with_notes(
+            Some("terminal"),
+            vec![said("rotate the signing keys")],
+            &["the answer was slow because of the proxy"],
+        );
+        let lines = lines_of(&with);
+        assert!(found(&lines, "slow because of the proxy"));
+        assert!(found(&lines, "signing keys"));
+
+        let without = lines_of(&record(
+            Some("terminal"),
+            vec![said("rotate the signing keys")],
+        ));
+        assert!(!found(&without, "proxy"));
+    }
+
+    #[test]
+    fn a_session_found_by_a_note_and_by_a_prompt_shows_the_prompt_line() {
+        let lines = lines_of(&record_with_notes(
+            Some("terminal"),
+            vec![said("fix the flaky test")],
+            &["flaky again on the second run"],
+        ));
+        let query = Query::parse("flaky").expect("a query");
+        let shown = Corpus::of([("s".to_string(), lines)])
+            .found("s", &query)
+            .expect("found");
+        assert_eq!(shown, "fix the flaky test");
+    }
+
+    #[test]
+    fn a_note_is_cleaned_like_any_other_line_before_it_is_compared_or_shown() {
+        let lines = lines_of(&record_with_notes(
+            None,
+            Vec::new(),
+            &["clear\u{1b}[2J the \u{202E}screen\u{7}\nsecond   line"],
+        ));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().all(|c| !c.is_control() && c != '\u{202E}')),
+            "{lines:?}"
+        );
+        assert!(found(&lines, "the screen"));
+        assert!(found(&lines, "second line"));
+    }
+
+    #[test]
+    fn a_note_in_an_imported_session_is_not_searched() {
+        let imported = Stored {
+            message: Message::user("deploy to the staging cluster"),
+            composed: Some(Composed::Imported),
+            source: None,
+        };
+        let lines = lines_of(&record_with_notes(
+            Some("terminal"),
+            vec![imported],
+            &["a note"],
+        ));
+        assert!(lines.is_empty());
+        let lines = lines_of(&record_with_notes(
+            Some("some-new-front"),
+            Vec::new(),
+            &["a note"],
+        ));
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn an_entry_built_before_notes_were_searched_is_rebuilt_to_include_them() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-notes-version");
+        let body = record_with_notes(
+            Some("terminal"),
+            vec![said("rotate the signing keys")],
+            &["slow because of the proxy"],
+        );
+        let record_path = directory.join("a1b2.json");
+        std::fs::write(&record_path, &body).expect("write");
+        // An entry as the build before notes wrote it: current for the record, without the note.
+        let (bytes, modified) = stamp(&record_path).expect("a stamp");
+        let old = Indexed {
+            // The version the build before notes wrote, not relative to the current one, so an
+            // unbumped version leaves this entry current and the test fails.
+            version: 1,
+            bytes,
+            modified,
+            lines: vec!["rotate the signing keys".to_string()],
+        };
+        std::fs::write(
+            entry_of(&directory, "a1b2"),
+            serde_json::to_vec(&old).expect("json"),
+        )
+        .expect("write");
+
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "proxy"));
     }
 
     #[test]
