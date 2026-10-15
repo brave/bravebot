@@ -15,7 +15,7 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event;
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 
 use crate::input;
 
@@ -72,6 +72,37 @@ impl Picker {
     }
 }
 
+/// Open on the theme in use, with the theme under the cursor already in force.
+///
+/// The way in for a picker that is held as state; [`choose`] opens the same one.
+pub fn opened(themes: Vec<Theme>, current: &str) -> Picker {
+    let picker = Picker::new(themes, current);
+    picker.preview();
+    picker
+}
+
+/// Interpret one key press.
+///
+/// The theme under the cursor is in force as the cursor reaches it. Leaving puts back the theme the
+/// picker opened on, and taking a row keeps it.
+pub fn press(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
+    let outcome = list_picker::handle_key(picker, code, modifiers);
+    match outcome {
+        Outcome::Continue => picker.preview(),
+        Outcome::Cancel => picker.restore(),
+        Outcome::Select => match picker.chosen() {
+            Some(theme) => theme::apply(theme),
+            None => picker.restore(),
+        },
+    }
+    outcome
+}
+
+/// Draw the panel over whatever is already in the frame.
+pub fn draw(frame: &mut Frame, picker: &Picker) {
+    list_picker::draw(frame, picker, &panel());
+}
+
 /// Show the list as a centred panel over whatever `behind` draws, and return the theme the user
 /// picked, or `None` if they kept the current one.
 ///
@@ -84,9 +115,8 @@ pub fn choose<B: Backend>(
     current: &str,
     mut behind: impl FnMut(&mut Frame),
 ) -> Option<Theme> {
-    let mut picker = Picker::new(themes, current);
+    let mut picker = opened(themes, current);
     let panel = panel();
-    picker.preview();
 
     loop {
         if terminal
@@ -111,24 +141,10 @@ pub fn choose<B: Backend>(
             continue;
         }
 
-        match list_picker::handle_key(&mut picker, key.code, key.modifiers) {
-            Outcome::Continue => {
-                picker.preview();
-                continue;
-            }
-            Outcome::Cancel => {
-                picker.restore();
-                return None;
-            }
-            Outcome::Select => {
-                let chosen = picker.chosen().cloned();
-                if let Some(ref theme) = chosen {
-                    theme::apply(theme);
-                } else {
-                    picker.restore();
-                }
-                return chosen;
-            }
+        match press(&mut picker, key.code, key.modifiers) {
+            Outcome::Continue => continue,
+            Outcome::Cancel => return None,
+            Outcome::Select => return picker.chosen().cloned(),
         }
     }
 }
@@ -177,6 +193,37 @@ mod tests {
         assert_ne!(theme::name(), theme::BRAVE);
         picker.restore();
         assert_eq!(theme::name(), theme::BRAVE);
+    }
+
+    /// The cursor's theme is in force as the cursor reaches it, leaving puts back the one the picker
+    /// opened on, and taking a row keeps it. The regressions it rejects are a preview that is not
+    /// put back by Escape, and one that is dropped by taking the row.
+    #[test]
+    fn a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut picker = opened(offered(), theme::BRAVE);
+
+        assert_eq!(
+            press(&mut picker, KeyCode::Down, KeyModifiers::NONE),
+            Outcome::Continue
+        );
+        assert_ne!(theme::name(), theme::BRAVE, "the row was not previewed");
+        assert_eq!(
+            press(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
+            Outcome::Cancel
+        );
+        assert_eq!(theme::name(), theme::BRAVE, "leaving kept the preview");
+
+        let mut picker = opened(offered(), theme::BRAVE);
+        press(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        let previewed = theme::name();
+        assert_eq!(
+            press(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Select
+        );
+        assert_eq!(theme::name(), previewed, "taking the row dropped it");
+        theme::apply_brave();
     }
 
     fn rendered(picker: &Picker) -> String {

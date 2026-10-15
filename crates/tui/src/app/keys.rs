@@ -297,9 +297,9 @@ fn cycles_the_mode(key: KeyEvent) -> bool {
 /// the view to see what a delegate was doing, or the search to find a prompt that has scrolled
 /// away is not asking for the turn to end when they close it again, and the press that reaches
 /// the turn is the next one. Watching is also the mode most likely to be open while something is
-/// going wrong.
+/// going wrong. A picker opened mid-turn is left the same way.
 ///
-/// Each of the three names these keys itself, and this is what lets them have them: the loops read
+/// Each of the four names these keys itself, and this is what lets them have them: the loops read
 /// this before any ladder, so a mode left out here is one whose way out ends the turn instead.
 ///
 /// Named rather than written out at each loop, because there are three of them and a condition
@@ -319,6 +319,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
+        && session.picking().is_none()
         && (is_ctrl_c(key) || is_escape(session, key))
 }
 
@@ -831,10 +832,14 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
-/// A mode owns every key before anything edits the line: while a delegate is being watched, the
-/// scroller is open or a history search is, there is no line being edited, and a letter belongs to
-/// the mode rather than to a box nobody can see. Checked in that order.
+/// A mode owns every key before anything edits the line: while a picker is open, a delegate is
+/// being watched, the scroller is open or a history search is, there is no line being edited, and a
+/// letter belongs to the mode rather than to a box nobody can see. Checked in that order.
 fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    if session.picking().is_some() {
+        session.press_in_picking(key.code, key.modifiers);
+        return Some(Action::Redraw);
+    }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
     }

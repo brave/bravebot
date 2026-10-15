@@ -1404,6 +1404,17 @@ pub struct Session {
     /// `None` at rest, on the same footing as the scroller: a mode is what decides whether a
     /// letter typed is a letter in the box or one narrowing a list.
     history_search: Option<crate::history_search::Search>,
+    /// The picker `/config`, `/theme` or `/effort` opened while a turn was running, or that was
+    /// still open when it ended.
+    ///
+    /// A mode on the same footing as the search: while one is open it takes every key and is drawn
+    /// over the frame. At rest the same pickers are loops of their own and leave this `None`.
+    picking: Option<crate::picking::Picking>,
+    /// What the picker last closed on, until the loop that can carry it out has done so.
+    ///
+    /// The key handler only has the session, and what a pick changes may live elsewhere: the
+    /// saved theme, and for a later pick the configuration.
+    picked: Option<crate::picking::Picked>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
     /// How many lines of results are held for expansion across the session, so what a long
@@ -1955,6 +1966,8 @@ impl Session {
             asides: Vec::new(),
             held_view: None,
             history_search: None,
+            picking: None,
+            picked: None,
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
@@ -8115,6 +8128,43 @@ impl Session {
 
     pub fn searching_history(&self) -> bool {
         self.history_search.is_some()
+    }
+
+    /// Open a picker, which takes every key until it is left.
+    pub fn open_picking(&mut self, picking: crate::picking::Picking) {
+        self.picking = Some(picking);
+    }
+
+    /// The picker that is open, for the renderer and for a test.
+    pub fn picking(&self) -> Option<&crate::picking::Picking> {
+        self.picking.as_ref()
+    }
+
+    /// Give a key to the open picker, and close it when the key left it.
+    ///
+    /// What was picked is held for [`Session::take_pick`] rather than returned, because the loops
+    /// that can carry a pick out are not the ones the key arrived in.
+    pub fn press_in_picking(
+        &mut self,
+        code: ratatui::crossterm::event::KeyCode,
+        modifiers: ratatui::crossterm::event::KeyModifiers,
+    ) {
+        let Some(picking) = &mut self.picking else {
+            return;
+        };
+        match picking.press(code, modifiers) {
+            crate::picking::Step::Continue => {}
+            crate::picking::Step::Cancelled => self.picking = None,
+            crate::picking::Step::Picked(picked) => {
+                self.picking = None;
+                self.picked = Some(picked);
+            }
+        }
+    }
+
+    /// What the picker closed on, taken so it is carried out once.
+    pub fn take_pick(&mut self) -> Option<crate::picking::Picked> {
+        self.picked.take()
     }
 
     /// What is being searched for, for the renderer and for a test.

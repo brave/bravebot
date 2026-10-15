@@ -325,9 +325,7 @@ fn command_when(session: &Session, command: &crate::command_table::Command) -> &
         }
         MidTurn::Runs => t!(command_when_now),
         MidTurn::Waits => t!(command_when_queued),
-        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
-            t!(command_when_either)
-        }
+        MidTurn::Changes | MidTurn::RunsUnlessItStarts => t!(command_when_either),
     }
 }
 

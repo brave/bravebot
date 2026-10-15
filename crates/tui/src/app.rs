@@ -228,7 +228,13 @@ struct Beside<'a> {
 /// finish, is finished here, and what it says is held under the turn as the key handler holds its
 /// own (CMD-8).
 fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
-    match handle_key_while_working(session, key) {
+    let action = handle_key_while_working(session, key);
+    // The row a picker was left on, if this key left it. Said under the turn as any command carried
+    // out mid-turn is.
+    if let Some(picked) = session.take_pick() {
+        session.answer_while_working(|session| carry_out_pick(session, picked));
+    }
+    match action {
         Action::SendNow => stop_what_is_running(session, cancel),
         Action::Rename(name) => {
             session.answer_while_working(|session| rename_session(session, beside.stored, &name));
@@ -267,7 +273,23 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
         }),
+        Action::ChooseTheme => open_theme_picker(session),
+        Action::ChooseEffort => open_effort_picker(session),
+        Action::ChooseEditing => open_editing_picker(session),
         action => act_while_working(session, action, crate::clipboard::paste),
+    }
+}
+
+/// Carry out what the picker closed on, which a key handler left for whoever can.
+///
+/// Said as a command carried out mid-turn is, so it joins the transcript once the turn has been
+/// folded in (CMD-8).
+fn carry_out_pick(session: &mut Session, picked: crate::picking::Picked) {
+    use crate::picking::Picked;
+    match picked {
+        Picked::Theme(theme) => theme_picked(session, &theme.name),
+        Picked::Effort(row) => effort_picked(session, row.0),
+        Picked::Editing(row) => editing_picked(session, row.0),
     }
 }
 
@@ -917,7 +939,7 @@ pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
     // inside a turn, so this is the path a paste while watching actually takes. Nothing is said
     // about it either way, because both modes have the whole screen but their footer and a sentence
     // drawn nowhere is no answer.
-    if session.scrolling() || session.watching().is_some() {
+    if session.scrolling() || session.watching().is_some() || session.picking().is_some() {
         return Action::None;
     }
     // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
@@ -2445,6 +2467,13 @@ fn event_loop(
             stored.link(bravebot_session::sessions::Link::Issue),
             stored.link(bravebot_session::sessions::Link::PullRequest),
         );
+
+        // A pick made while a turn ran that no loop of the turn was left to carry out, because the
+        // turn ended or another working loop began first.
+        if let Some(picked) = session.take_pick() {
+            carry_out_pick(&mut session, picked);
+            needs_draw = true;
+        }
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
@@ -4179,9 +4208,23 @@ fn choose_theme(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session: 
     if let Some(chosen) = crate::theme_prompt::choose(terminal, themes, &current, |frame| {
         render::draw(frame, session);
     }) {
-        bravebot_session::store::save_theme(&chosen.name);
-        session.note(t!(session_theme_set, theme = &chosen.name));
+        theme_picked(session, &chosen.name);
     }
+}
+
+/// Persist the theme the person chose, which the picker has already put in force.
+fn theme_picked(session: &mut Session, name: &str) {
+    bravebot_session::store::save_theme(name);
+    session.note(t!(session_theme_set, theme = name));
+}
+
+/// Open the theme picker as a mode of the session, for a turn that is running.
+fn open_theme_picker(session: &mut Session) {
+    let current = crate::theme::name();
+    let themes = crate::theme::listed(&current);
+    session.open_picking(crate::picking::Picking::Theme(crate::theme_prompt::opened(
+        themes, &current,
+    )));
 }
 
 /// Open the effort picker and keep what the person chose.
@@ -4189,10 +4232,22 @@ fn choose_effort(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session:
     if let Some(row) = crate::effort_prompt::choose(terminal, session.effort(), |frame| {
         render::draw(frame, session);
     }) {
-        session.choose_effort(row.0);
-        session.note(said_of(row.0));
-        say_if_unread(session);
+        effort_picked(session, row.0);
     }
+}
+
+/// Keep the level the person chose, and say so.
+fn effort_picked(session: &mut Session, level: Option<bravebot_aichat::protocol::Effort>) {
+    session.choose_effort(level);
+    session.note(said_of(level));
+    say_if_unread(session);
+}
+
+/// Open the effort picker as a mode of the session, for a turn that is running.
+fn open_effort_picker(session: &mut Session) {
+    session.open_picking(crate::picking::Picking::Effort(
+        crate::effort_prompt::Picker::new(session.effort()),
+    ));
 }
 
 /// Open the panel of preferences and keep what the person chose.
@@ -4200,15 +4255,27 @@ fn choose_editing(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, session
     if let Some(row) = crate::config_prompt::choose(terminal, session.editing(), |frame| {
         render::draw(frame, session);
     }) {
-        session.choose_editing(row.0);
-        // Said out loud, because the choice changes what the next keystroke does and the box gives no
-        // other sign of it until a letter has already gone somewhere unexpected. The mode beneath the
-        // box says which vi mode is in force, and this says the style was chosen at all.
-        session.note(match row.0 {
-            crate::vim::Editing::Vi => t!(session_editing_vi),
-            crate::vim::Editing::Ordinary => t!(session_editing_ordinary),
-        });
+        editing_picked(session, row.0);
     }
+}
+
+/// Keep the style of editing the person chose, and say so.
+fn editing_picked(session: &mut Session, editing: crate::vim::Editing) {
+    session.choose_editing(editing);
+    // Said out loud, because the choice changes what the next keystroke does and the box gives no
+    // other sign of it until a letter has already gone somewhere unexpected. The mode beneath the
+    // box says which vi mode is in force, and this says the style was chosen at all.
+    session.note(match editing {
+        crate::vim::Editing::Vi => t!(session_editing_vi),
+        crate::vim::Editing::Ordinary => t!(session_editing_ordinary),
+    });
+}
+
+/// Open the panel of preferences as a mode of the session, for a turn that is running.
+fn open_editing_picker(session: &mut Session) {
+    session.open_picking(crate::picking::Picking::Editing(
+        crate::config_prompt::Picker::new(session.editing()),
+    ));
 }
 
 /// Say that the model in force reads no level, where one has just been asked for.
@@ -4227,11 +4294,7 @@ fn say_if_unread(session: &mut Session) {
 /// field, and silently ignoring it would leave somebody believing they had asked for something.
 fn set_effort(session: &mut Session, word: &str) {
     match bravebot_aichat::protocol::Effort::named(word) {
-        Some(level) => {
-            session.choose_effort(Some(level));
-            session.note(said_of(Some(level)));
-            say_if_unread(session);
-        }
+        Some(level) => effort_picked(session, Some(level)),
         None => session.note(t!(session_no_such_effort, effort = word)),
     }
 }
@@ -20445,6 +20508,7 @@ mod tests {
             vec![
                 ADVISOR_COMMAND,
                 CAFFEINATE_COMMAND,
+                CONFIG_COMMAND,
                 CONTEXT_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
@@ -21272,11 +21336,27 @@ mod tests {
         }
     }
 
-    /// The bare word opens a picker, and a picker takes the terminal the turn draws its own
-    /// questions on, so `/theme` and `/effort` alone wait for the turn.
+    /// The bare word of a command that opens a picker opens it as it is typed (CMD-8). The picker is
+    /// a mode of the session, so the turn goes on being drawn behind it. The regression it rejects
+    /// is the word waiting for the turn to end, which leaves a person looking at a line under the
+    /// box for as long as the turn runs, and each word opening its own picker rather than another's.
     #[test]
-    fn the_bare_theme_and_effort_commands_wait_for_the_turn() {
-        for line in [THEME_COMMAND, EFFORT_COMMAND] {
+    fn a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn() {
+        use crate::picking::Picking;
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+        for (line, opened) in [
+            (
+                THEME_COMMAND,
+                (|picking: &Picking| matches!(picking, Picking::Theme(_))) as fn(&Picking) -> bool,
+            ),
+            (EFFORT_COMMAND, |picking| {
+                matches!(picking, Picking::Effort(_))
+            }),
+            (CONFIG_COMMAND, |picking| {
+                matches!(picking, Picking::Editing(_))
+            }),
+        ] {
             let mut session = a_turn_running_on("first");
 
             nothing_beside(|beside| {
@@ -21284,16 +21364,136 @@ mod tests {
             });
 
             assert!(
-                session.said_while_working().is_empty(),
-                "{line} was carried out mid-turn"
+                session.picking().is_some_and(opened),
+                "{line} did not open its own picker: {:?}",
+                session.picking()
             );
-            session.complete("answered", Vec::new(), 0);
+            assert!(session.queued.is_empty(), "{line} waited");
             assert_eq!(
-                session.take_queued_command().map(|taken| taken.line),
-                Some(line.to_string()),
-                "{line} did not wait to be carried out"
+                session.interjections().take(),
+                None,
+                "the running turn was handed {line}"
             );
+            assert_eq!(session.input(), "", "{line} was left in the box");
+            assert!(said_under_the_turn(&session).is_empty());
         }
+    }
+
+    /// While a picker opened mid-turn is open it takes the keys, and a row taken is carried out as
+    /// any command mid-turn is: kept for the next turn, said under this one, and nothing written
+    /// into the transcript the turn will be folded into. The regressions it rejects are a letter
+    /// reaching the box under the picker, and the pick joining the transcript.
+    #[test]
+    fn a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = a_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let cancel = Cancel::new();
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, EFFORT_COMMAND, key(KeyCode::Enter), beside);
+            for code in [KeyCode::Char('j'), KeyCode::Char('j'), KeyCode::Enter] {
+                turn_key(&mut session, key(code), &cancel, beside);
+            }
+        });
+
+        assert_eq!(session.effort(), Some(Effort::Medium));
+        assert!(session.picking().is_none(), "the picker stayed open");
+        assert_eq!(
+            session.input(),
+            "",
+            "a key reached the box under the picker"
+        );
+        assert_eq!(
+            said_under_the_turn(&session).first().copied(),
+            Some(said_of(Some(Effort::Medium)).as_str())
+        );
+        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert!(!cancel.is_cancelled());
+    }
+
+    /// Escape and Ctrl-C are the picker's way out while it is open, and leave what was in force
+    /// alone. The same keys stop the turn once it is closed. The regression it rejects is the turn
+    /// stopping under a person who only meant to put the picker away.
+    #[test]
+    fn leaving_a_picker_opened_mid_turn_does_not_stop_the_turn() {
+        for leaving in [key(KeyCode::Esc), ctrl('c')] {
+            let mut session = a_turn_running_on("first");
+            let cancel = Cancel::new();
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, EFFORT_COMMAND, key(KeyCode::Enter), beside);
+                assert!(
+                    !stops_the_turn(&session, leaving),
+                    "{leaving:?} would stop the turn behind the picker"
+                );
+                turn_key(&mut session, leaving, &cancel, beside);
+            });
+
+            assert!(session.picking().is_none(), "{leaving:?} left it open");
+            assert_eq!(session.effort(), None, "{leaving:?} set a level");
+            assert!(
+                stops_the_turn(&session, leaving),
+                "{leaving:?} no longer stops the turn once the picker is closed"
+            );
+            assert!(session.said_while_working().is_empty());
+        }
+    }
+
+    /// A picker still open when the turn ends is not lost. It takes the next key at rest, and the
+    /// row taken is carried out there. The regression it rejects is the picker closing with the
+    /// turn, which costs a person the search they were part way through.
+    #[test]
+    fn a_picker_still_open_when_the_turn_ends_goes_on_at_rest() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, EFFORT_COMMAND, key(KeyCode::Enter), beside)
+        });
+
+        session.complete("answered", Vec::new(), 0);
+        assert!(
+            session.picking().is_some(),
+            "the picker closed with the turn"
+        );
+        handle_key(&mut session, key(KeyCode::Char('j')));
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        let picked = session.take_pick().expect("nothing was picked");
+        carry_out_pick(&mut session, picked);
+        assert_eq!(session.effort(), Some(Effort::Low));
+        assert_eq!(
+            session.input(),
+            "",
+            "a key reached the box under the picker"
+        );
+    }
+
+    /// A pick made while another working loop has the keys is held until a loop that can carry it
+    /// out, rather than lost with the key that made it.
+    #[test]
+    fn a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, EFFORT_COMMAND, key(KeyCode::Enter), beside)
+        });
+        session.complete("answered", Vec::new(), 0);
+        session.begin_aside();
+
+        handle_key_while_working(&mut session, key(KeyCode::Char('j')));
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(
+            session.effort(),
+            None,
+            "the pick was carried out without a loop for it"
+        );
+        let picked = session.take_pick().expect("the pick was dropped");
+        carry_out_pick(&mut session, picked);
+        assert_eq!(session.effort(), Some(Effort::Low));
     }
 
     /// `/reach` carries its argument whole to the loop, bare for the list, and a longer word is
@@ -21409,6 +21609,9 @@ mod tests {
             ("/cd crates/tui", FORGET_TRUST_COMMAND),
             ("second", "/effort high"),
             ("second", "/advisor some-model"),
+            ("second", EFFORT_COMMAND),
+            ("second", THEME_COMMAND),
+            ("second", CONFIG_COMMAND),
             (MODEL_COMMAND, "/theme no-such-theme"),
         ] {
             let mut session = a_turn_running_on("first");
@@ -21423,6 +21626,10 @@ mod tests {
                 "{then} was carried out ahead of a waiting {first}"
             );
             assert_eq!(session.effort(), None, "{then} set a level");
+            assert!(
+                session.picking().is_none(),
+                "{then} opened a picker ahead of a waiting {first}"
+            );
             assert_eq!(waiting_prompts(&session), vec![first, then]);
         }
     }
@@ -21434,7 +21641,11 @@ mod tests {
         for command in commands() {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
-                MidTurn::RunsWhenNamed => format!("{} no-such-name", command.name),
+                // The bare word opens a picker, which is a mode of the session and says nothing.
+                _ if command.name == CONFIG_COMMAND => continue,
+                _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {
+                    format!("{} no-such-name", command.name)
+                }
                 MidTurn::Runs | MidTurn::Changes | MidTurn::RunsUnlessItStarts => {
                     command.name.to_string()
                 }
