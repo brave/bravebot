@@ -391,10 +391,13 @@ impl Watches {
 
     /// Which watch's fire the turn running now is, where it is one.
     pub fn firing(&self) -> Option<usize> {
-        self.live
-            .iter()
-            .find(|watch| watch.firing)
-            .map(Watch::number)
+        self.firing_watch().map(Watch::number)
+    }
+
+    /// The watch whose fire the turn running now is, where it is one, for the number and the path
+    /// the turn's prompt is recorded with.
+    pub fn firing_watch(&self) -> Option<&Watch> {
+        self.live.iter().find(|watch| watch.firing)
     }
 
     /// Record that the turn a fire started has ended, which is where the gap to the next fire is

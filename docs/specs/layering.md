@@ -177,8 +177,10 @@ is meant to trust, an inch above them.
 A conversation holds messages composed rather than typed: a file somebody named, put in front of
 the planner as a user-role message, a watch that fired while no turn was running to notice it, a
 prompt a front end sent on its own account rather than on anybody's instruction, and the messages
-the agent writes for the planner alone: a tool result sent as prose, the note a resume adds and the
-summary a compaction leaves. Each is recorded
+the agent writes for the planner alone: a tool result sent as prose, the note a resume adds, the
+summary a compaction leaves, and a nudge, a report or a notice written between rounds, as well as a
+line it writes for a turn nobody typed, the standard input a run was given and the output of a shell
+line a person ran. Each is recorded
 with a tag saying which it is, the tag rides beside the message rather than inside it so that no
 part of it reaches a backend, and a surface drawing the conversation back decides what to draw from
 the tag. Reading the words to decide instead is a
@@ -212,6 +214,8 @@ turn it is the context that turn worked from.
 
 `verified-by: bravebot_agent::turn::a_file_the_turn_admits_is_recorded_as_a_message_the_agent_composed`
 `verified-by: bravebot_agent::turn::a_prompt_the_agent_composed_is_recorded_as_one`
+`verified-by: bravebot_agent::turn::a_prompt_the_driver_wrote_is_recorded_as_one`
+`verified-by: bravebot_agent::turn::the_nudge_for_a_spent_tool_budget_is_not_a_prompt`
 `verified-by: bravebot_agent::conversation::a_message_the_agent_composed_is_recorded_as_one`
 `verified-by: bravebot_agent::conversation::the_tag_is_not_part_of_what_the_planner_is_sent`
 `verified-by: bravebot_agent::conversation::a_record_written_before_the_tag_still_reads`

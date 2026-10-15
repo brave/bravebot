@@ -6626,6 +6626,15 @@ fn run_turn_animated(
     if session.take_driver_prompt() || wrote == Wrote::TheDriver {
         task = task.written_by_the_driver();
     }
+    // A watch's fire is recorded as the watch's, from the terminal's own record of which one it
+    // was, so a surface drawing the session back draws the row it draws for a fire the bridge
+    // started rather than a prompt somebody typed (LAYER-6).
+    if let Some((number, path)) = session.firing_watch() {
+        task = task.composed_rather_than_typed(bravebot_agent::conversation::Composed::Watch {
+            number,
+            path,
+        });
+    }
     // The jobs the session keeps, so one started here is still running when the next turn begins
     // (RUN-15).
     if let Some(kept) = kept_jobs {

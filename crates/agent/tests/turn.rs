@@ -713,6 +713,81 @@ fn a_prompt_the_agent_composed_is_recorded_as_one() {
     assert_eq!(conversation.messages()[0].message.content.text(), fired);
 }
 
+/// LAYER-6: a line the driver wrote for a turn nobody typed, a goal's carry-on or `/init`, is
+/// recorded as written by the agent. Untagged it was a `Said::User`, which a window drew as a
+/// "You" bubble with a Fork button, and which `fork::cut` counted as a place to cut.
+#[test]
+fn a_prompt_the_driver_wrote_is_recorded_as_one() {
+    use bravebot_agent::conversation::{Composed, Said};
+
+    let scratch = Scratch::new("driver-prompt-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(&reply_with("on it"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("carry on towards the goal").written_by_the_driver(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        conversation.recounted().first(),
+        Some(&Said::Composed {
+            why: Composed::Written,
+            text: "carry on towards the goal".into(),
+        })
+    );
+}
+
+/// LAYER-6: the nudge a turn sends itself for spending its tool budget is house-keeping for the
+/// planner. Untagged it was a `Said::User` numbered as a prompt after a resume, and compaction
+/// could cut in front of it.
+#[test]
+fn the_nudge_for_a_spent_tool_budget_is_not_a_prompt() {
+    use bravebot_agent::conversation::{Composed, Said};
+
+    const ROUNDS: usize = 2;
+    let scratch = Scratch::new("nudge-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = (0..ROUNDS)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("fix the bug").with_rounds(Some(ROUNDS)),
+    )
+    .expect("turn runs");
+
+    let nudged: Vec<_> = conversation
+        .messages()
+        .iter()
+        .filter(|stored| stored.message.content.text().contains("have no more"))
+        .collect();
+    assert_eq!(nudged.len(), 1, "the nudge was not recorded once");
+    assert_eq!(nudged[0].composed, Some(Composed::Notice));
+    let said = conversation.recounted();
+    assert_eq!(
+        said.iter()
+            .filter(|entry| matches!(entry, Said::User(_)))
+            .count(),
+        1,
+        "the nudge was counted as something a person said: {said:?}"
+    );
+}
+
 /// The scenario the project exists for. A file contains an injected instruction; it
 /// reaches the model as data, and the turn's routing is unchanged by it.
 #[test]
