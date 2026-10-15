@@ -195,10 +195,12 @@ gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
 The [session-review skill](../../agents/skills/session-review/SKILL.md), which files the problems
 bravebot gave a person in a recorded session, applies `bug` or `enhancement`, `session-analysis`, an
 `area` where one is clear, and no axis. `session-analysis` marks an issue found by reading a recorded
-session, and `is:open label:session-analysis` lists them. It never files a problem that touches the
-guarantee: it prints that to the person running it. It uses the same duplicate search, pacing and
-label check as the peer-advisories skill, and an issue it files carries no text from the session.
-The skill refuses to post while `session-analysis` does not exist, because a person creates labels:
+session, and `is:open label:session-analysis` lists them. It files defects in the product only, and
+leaves out defects in this repository's skills, scripts, `Makefile`, `contrib/` and CI workflows. It
+never files a problem that touches the guarantee: it prints that to the person running it. It uses
+the same duplicate search, pacing and label check as the peer-advisories skill, and an issue it
+files carries no text from the session. The skill refuses to post while `session-analysis` does not
+exist, because a person creates labels:
 
 ```bash
 gh label create session-analysis --repo brave/bravebot --color 8cad49 \
