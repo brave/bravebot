@@ -18115,6 +18115,33 @@ mod tests {
         assert_eq!(session.input(), "/pr-fix ");
     }
 
+    /// The arrows moving onto the skill row change what Enter does too, not only Tab: CMD-9 says
+    /// Enter sends a name typed in full "unless the arrows moved onto another row first", and here
+    /// they did. Taking the row rather than running `/pr` is what this guards (#2141).
+    #[test]
+    fn enter_takes_a_skill_row_the_arrows_moved_onto_instead_of_the_typed_command() {
+        let held = || {
+            vec![crate::skills::Skill {
+                name: "pr-fix".to_string(),
+                description: "what pr-fix is for".to_string(),
+                argument_hint: None,
+                source: bravebot_agent::skills::Source::Home,
+            }]
+        };
+        let mut session = Session::new("none");
+        for c in "/pr".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+            session.settle_skills(held);
+        }
+        handle_key(&mut session, key(KeyCode::Down));
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw,
+            "Enter on the highlighted skill row ran the typed command instead of taking it"
+        );
+        assert_eq!(session.input(), "/pr-fix ");
+    }
+
     /// Mid-sentence a command is a prompt, so only skills are offered there. Taking one writes its
     /// name over the half-typed word, and the line is then sent as the sentence it is.
     #[test]

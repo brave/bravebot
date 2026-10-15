@@ -1086,7 +1086,17 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // marker in the line being dispatched. The words a folded paste stood for are put back as
         // the line is taken, the way a line queued behind a turn is settled as it is queued, since
         // that marker is a handle only the session holding it can undo.
-        KeyCode::Enter if command_typed(session.input()).is_some() => {
+        //
+        // Guarded against a row the arrows moved onto: a command typed in full is still the start
+        // of a longer skill's name, and the skill is listed beneath it. Pressing Down highlights
+        // that row, and Enter there has to take it the way Tab would rather than running the
+        // command the cursor left behind (CMD-9). Where the arrows never moved,
+        // `completion_would_change_the_line` answers false for the command's own row and this arm
+        // runs as before.
+        KeyCode::Enter
+            if command_typed(session.input()).is_some()
+                && !session.completion_would_change_the_line() =>
+        {
             let commanded = session.take_command();
             dispatch_command(session, commanded)
         }
