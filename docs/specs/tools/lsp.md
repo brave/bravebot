@@ -547,20 +547,20 @@ table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line 
 `verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
 
 <a id="LSP-12"></a>
-### LSP-12: a write is checked by a server that is already running, and reports lines, never prose
+### LSP-12: a write or an edit is checked by a server that is already running, and reports lines, never prose
 
-After `write_file` lands a file, a language server for that file's language that is **already
-running** is asked what it makes of the file, and the result says how many errors it found and the
-line each starts on, how many warnings, and how many notes of any other kind. A write never starts
-a server and never asks anyone about one: starting a server is the approval [LSP-5](#LSP-5)
-describes, and a write is not that approval. With no server running for the language, with no
+After `write_file` or `edit_file` lands a file, a language server for that file's language that is
+**already running** is asked what it makes of the file, and the result says how many errors it found
+and the line each starts on, how many warnings, and how many notes of any other kind. A write or an
+edit never starts a server and never asks anyone about one: starting a server is the approval
+[LSP-5](#LSP-5) describes, and neither is that approval. With no server running for the language, with no
 server configured for it, or in a run that was not granted the capability ([LSP-9](#LSP-9)), the
 result says nothing about the file.
 
 This is not an operation of the `lsp` tool. The planner names no operation here and chooses
 nothing, so there is no routing field to promote. A planner that wants the same check for a file it
-did not just write, or after an edit, asks for it with the `diagnostics` operation
-([LSP-13](#LSP-13)).
+did not just write or edit, or wants a server started for it, asks for it with the `diagnostics`
+operation ([LSP-13](#LSP-13)).
 
 **What is read.** Only the severity of each diagnostic and the line its range starts on. The
 `message`, the `code`, the `source` and the related information are never deserialised, so
@@ -583,7 +583,8 @@ the failure is carried.
 for after the write, and a write sets that from the trust of the bytes written
 ([TRUST-4](../trust-map.md#TRUST-4)). So a file written from `contents_ref`, whose bytes came out
 of quarantine, is untrusted once written and reports nothing: the server's view of bytes nobody
-vouched for is not put in the planner's context.
+vouched for is not put in the planner's context. An edit is made only to a file the trust map
+vouches for ([EDIT-2](edit-file.md#EDIT-2)), and the result is given on the same terms.
 
 **Bounded.** The server is sent the file as it now stands, as a change where it already holds the
 document (a version that only goes up, so a notice that names an older version is passed over, and
@@ -592,9 +593,9 @@ time after it, since servers publish a quick pass and then refine it. Type error
 build may arrive after the bound, and the wording says a report may be short. A set another run
 holds for the length of a question, a prompt included, is not waited for.
 
-**Why a write is checked without being asked.** The planner's alternative is a build, and a build
-is a `run` a person approves. This gives the common case, a syntax or type error in the file just
-written, in the same turn and at the cost of one notice from a server somebody already approved. It
+**Why a write or an edit is checked without being asked.** The planner's alternative is a build, and
+a build is a `run` a person approves. This gives the common case, a syntax or type error in the file
+just written or edited, in the same turn and at the cost of one notice from a server somebody already approved. It
 does not replace a build, and OpenCode's own documentation says language-server feedback is not
 always a net positive; the cost here is a wait of at most the bound per write.
 
@@ -607,6 +608,8 @@ always a net positive; the cost here is a wait of at most the bound per write.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
 
 <a id="LSP-13"></a>
 ### LSP-13: diagnostics are asked for by file, and come back as lines and one reference
@@ -615,7 +618,7 @@ The `diagnostics` operation takes a `path` and no position, and asks what a lang
 that file. The server is sent the file as it now stands, as [LSP-12](#LSP-12) sends it, and the notice
 it publishes in reply is the answer. It is a read and is on the closed list of [LSP-1](#LSP-1). Like
 every operation it starts the server for the file's language when none is running, and that start is
-put to the person under [LSP-5](#LSP-5); a write's check never starts one.
+put to the person under [LSP-5](#LSP-5); a write's or an edit's check never starts one.
 
 The answer has two parts, on two footings.
 

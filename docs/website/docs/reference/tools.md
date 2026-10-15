@@ -361,8 +361,8 @@ make what this tool can reach a property of whichever server you installed.
 
 ### Checking a file with `diagnostics`
 
-`diagnostics` takes a path and no position. The agent uses it after an edit to learn whether the file
-still compiles before running a build. The server is sent the file as it is on disk and the notice it
+`diagnostics` takes a path and no position. The agent uses it to learn whether a file still compiles
+before running a build. The server is sent the file as it is on disk and the notice it
 publishes in reply is the answer:
 
 ```text
@@ -384,9 +384,9 @@ yet" because a server can refine a quick pass later. A server still indexing say
 short. A server that publishes late, or only when its diagnostics change, can stay silent about an
 edit, so a build is still the check that does not depend on the server.
 
-A `write_file` result already carries the same counts and lines when a server for that file's
-language is running, and never starts one. `diagnostics` is the way to ask for them after an edit,
-or for a file that was not just written, and it starts the server after you agree to it.
+A `write_file` or `edit_file` result already carries the same counts and lines when a server for that
+file's language is running, and never starts one. `diagnostics` is the way to ask for them for a file
+that was not just written or edited, and it starts the server after you agree to it.
 
 ### Which server, and what starting one costs
 
@@ -585,6 +585,11 @@ The result gives the agent back the changed lines with three lines either side. 
 scanned for credentials as a file read is. If they hold what looks like a credential and you have not
 agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
 and reads alike. A no leaves the edit in place and the lines out of the result.
+
+Where a language server for the file's language is already running, the result also says how many
+errors it found and on which lines, and how many warnings, as a `write_file` result does
+([details](#checking-a-file-with-diagnostics)). An edit never starts a server, and the server's own
+messages are never shown.
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.

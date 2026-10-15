@@ -3790,6 +3790,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             tools.slots,
             tools.recording(),
             tools.permission_mode.get(),
+            tools.servers.as_deref_mut(),
             confirmer,
             &arguments,
         ),
@@ -5962,7 +5963,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed { note, changes, .. } = reviewed;
             let checked = if check_with_server {
-                diagnostics_after_a_write(policy, tools, &proposed_path)
+                diagnostics_after_a_write(policy, tools.servers.as_deref_mut(), &proposed_path)
             } else {
                 None
             };
@@ -6030,20 +6031,20 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     }
 }
 
-/// What a language server that is already running says about a file the planner has just written,
-/// as a sentence for the result, or `None` where there is nothing to say (LSP-12).
+/// What a language server that is already running says about a file the planner has just written
+/// or edited, as a sentence for the result, or `None` where there is nothing to say (LSP-12).
 ///
-/// Never starts a server: that is an approved action and a write is not the approval. The
+/// Never starts a server: that is an approved action and a write or an edit is not the approval. The
 /// sentence is counts and line numbers in this repository's words, so it is the driver's own
 /// text; what makes it the file's is that it is only given where the trust map vouches for the
 /// file it describes, the same footing [LSP-3](../../../docs/specs/tools/lsp.md) puts a location
 /// on. Nothing branches on what the server said: the outcome goes to the renderer whole.
 fn diagnostics_after_a_write<S: Sink>(
     policy: &mut Policy<'_, S>,
-    tools: &mut Tools<'_>,
+    servers: Option<&mut LanguageServers>,
     proposed_path: &str,
 ) -> Option<String> {
-    let servers = tools.servers.as_deref_mut()?;
+    let servers = servers?;
     // Without `.` components, since the server is matched by the URI of the path it was sent.
     let absolute = servers
         .root()
@@ -6477,12 +6478,14 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
 ///
 /// `recording` reaches no further than the scan below: an edit's findings are written to the same
 /// record a whole-file write's are.
+#[allow(clippy::too_many_arguments)]
 fn edit_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     slots: &SlotStore,
     recording: crate::findings::Recording<'_>,
     mode: crate::PermissionMode,
+    servers: Option<&mut LanguageServers>,
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
@@ -6693,6 +6696,12 @@ fn edit_file<S: Sink, C: Confirmer>(
             let Reviewed { note, changes, .. } = reviewed;
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
+            // What a server that is already running makes of the file now (LSP-12). It reads the
+            // file, which this edit has just changed, and the sentence is counts and lines.
+            let headline = match diagnostics_after_a_write(policy, servers, &proposed_path) {
+                Some(said) => format!("{headline}. {said}"),
+                None => headline,
+            };
 
             // What the edit produced, not only that it produced something. A count of
             // replacements is not a result a planner can check: one wrote eighteen files in a
@@ -17118,6 +17127,7 @@ mod tests {
                 // them; the question here is about the arguments.
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path": "a.txt", "old_text": "old", "new_text": "new"}),
             );
@@ -17273,6 +17283,7 @@ mod tests {
                 &slots,
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"}),
             );
@@ -17427,6 +17438,7 @@ mod tests {
                 &slots,
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"}),
             );

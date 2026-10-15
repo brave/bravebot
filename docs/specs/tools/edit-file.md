@@ -158,3 +158,17 @@ routing value a person approves alone ([TOOL-2](tool-surface.md)).
 `verified-by: bravebot_agent::turn::a_later_edit_matches_the_text_an_earlier_one_wrote`
 `verified-by: bravebot_agent::turn::edits_beside_a_single_pair_or_cancelling_out_are_refused`
 `verified-by: bravebot_agent::turn::a_malformed_edits_argument_is_refused_without_asking_or_writing`
+
+<a id="EDIT-7"></a>
+### EDIT-7: the result says what a running language server found wrong
+
+Where a language server for the file's language is already running, the result of an edit adds the
+line numbers of the errors it reports, as [LSP-12](lsp.md#LSP-12) specifies: counts and lines in
+this repository's words, never the server's, never started by the edit, and given only for a file the
+trust map vouches for after the edit.
+
+**Why.** A planner that finds a type error an edit introduced only by running a build spends a round
+and a second approval on something the server already knew.
+
+`verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
