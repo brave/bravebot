@@ -9474,6 +9474,352 @@ fn a_handed_over_session_runs_in_the_mode_it_was_given() {
     let _ = host.wait();
 }
 
+/// The supervisor, started as a terminal's `--bg` starts it, handed back once it holds its lock.
+#[cfg(unix)]
+fn a_supervisor(home: &ShortHome) -> std::process::Child {
+    let supervisor = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .arg("__bg-supervisor")
+        .current_dir(&home.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the supervisor starts");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !has_a_supervisor(home) {
+        assert!(
+            std::time::Instant::now() < until,
+            "the supervisor never took its lock"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    supervisor
+}
+
+/// Whether a supervisor holds the lock in the home's roster.
+#[cfg(unix)]
+fn has_a_supervisor(home: &ShortHome) -> bool {
+    std::fs::File::open(home.0.join(".bravebot/jobs/supervisor.lock"))
+        .is_ok_and(|file| file.try_lock_shared().is_err())
+}
+
+/// The exit status of `child` if it ends within `wait`, and `None` if it is still running.
+#[cfg(unix)]
+fn ended_within(
+    child: &mut std::process::Child,
+    wait: Duration,
+) -> Option<std::process::ExitStatus> {
+    let until = std::time::Instant::now() + wait;
+    loop {
+        if let Some(status) = child.try_wait().expect("the process can be waited on") {
+            return Some(status);
+        }
+        if std::time::Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The one session in the home's roster, as `sessions --json` prints it.
+#[cfg(unix)]
+fn the_session(home: &ShortHome) -> serde_json::Value {
+    let listed = said(&bravebot(&home.0, &[], &["sessions", "--json"])).0;
+    let sessions: serde_json::Value = serde_json::from_str(&listed).expect("the roster as JSON");
+    sessions[0].clone()
+}
+
+/// The session, once `ready` says of it that it is, and a failure naming `why` if that never comes.
+#[cfg(unix)]
+fn until_the_session(
+    home: &ShortHome,
+    why: &str,
+    ready: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let session = the_session(home);
+        if ready(&session) {
+            return session;
+        }
+        assert!(std::time::Instant::now() < until, "{why}: {session}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// End the process `pid` as a crash or the kernel's out-of-memory killer would: no chance to say so.
+#[cfg(unix)]
+fn killed(pid: u64) {
+    let status = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(status.success(), "kill -9 {pid}");
+}
+
+/// A host that has run its first prompt and is idle, started by hand as a terminal's `--bg` would.
+#[cfg(unix)]
+fn an_idle_session(home: &ShortHome, gateway: &Gateway) -> std::process::Child {
+    use std::os::unix::net::UnixStream;
+
+    let (host, socket) = a_started_host(home, gateway, "{}");
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    // The question is drawn a moment before the session reads an answer to it, and a line sent in
+    // that moment is refused, so it is sent again.
+    loop {
+        writeln!(terminal, "n").expect("answer the question");
+        if shown_until_any(&mut seen, &["all done", "Not sent"]).contains("all done") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first prompt reached the gateway");
+    assert!(first.contains("fix the build"), "{first}");
+    drop(seen);
+    drop(terminal);
+    until_the_session(home, "never idle", |session| session["state"] == "idle");
+    host
+}
+
+/// BG-12, end to end: a process killed while it waits for a prompt is started again by the
+/// supervisor, idle, from the record it left. It starts no turn of its own, and the next reply
+/// carries the conversation from before the kill.
+#[cfg(unix)]
+#[test]
+fn a_session_killed_while_idle_is_started_again_idle_with_its_conversation() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let mut host = an_idle_session(&home, &gateway);
+    assert!(!has_a_supervisor(&home));
+    let mut supervisor = a_supervisor(&home);
+    let first = the_session(&home)["pid"].as_u64().expect("a pid");
+
+    killed(first);
+    host.wait().expect("the killed host is collected");
+    let again = until_the_session(&home, "never started again", |session| {
+        session["pid"].as_u64() != Some(first) && session["state"] == "idle"
+    });
+    assert_ne!(again["pid"].as_u64(), Some(first));
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "the process started again ran a turn of its own"
+    );
+
+    let socket = home
+        .0
+        .join(format!(".bravebot/jobs/{SESSION_ID}/attach.sock"));
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        use std::os::unix::net::UnixStream;
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "{}\nreply\nand the tests\n", a_token(&socket)).expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "ok" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the reply was never taken: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    let status = ended_within(&mut supervisor, Duration::from_secs(30))
+        .expect("the supervisor outlived the last session");
+    assert!(status.success());
+    assert!(!has_a_supervisor(&home));
+}
+
+/// BG-12, end to end: a process killed while it holds a question is not started again, because
+/// that would run what it was asking about from the start. The supervisor has nothing left to
+/// watch and ends, and the session reads as interrupted.
+#[cfg(unix)]
+#[test]
+fn a_session_killed_while_it_holds_a_question_is_not_started_again() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, _) = a_started_host(&home, &gateway, "{}");
+    let held = until_the_session(&home, "never held the question", |session| {
+        session["state"] == "needs-input"
+    });
+    let mut supervisor = a_supervisor(&home);
+    let pid = held["pid"].as_u64().expect("a pid");
+
+    killed(pid);
+    host.wait().expect("the killed host is collected");
+    let status = ended_within(&mut supervisor, Duration::from_secs(30))
+        .expect("the supervisor is still watching: it started the session again");
+    assert!(status.success());
+    let session = the_session(&home);
+    assert_eq!(session["state"], "interrupted", "{session}");
+    assert_eq!(session["pid"].as_u64(), Some(pid), "{session}");
+    assert!(gateway.asked.try_recv().is_err());
+}
+
+/// BG-12, end to end: a process that keeps being killed while idle is started again three times
+/// within the hour and then left, with the session reading as stopped, and the supervisor ends.
+#[cfg(unix)]
+#[test]
+fn a_session_killed_while_idle_four_times_is_started_again_three_times_and_then_left() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let mut host = an_idle_session(&home, &gateway);
+    let mut supervisor = a_supervisor(&home);
+    let mut pid = the_session(&home)["pid"].as_u64().expect("a pid");
+
+    killed(pid);
+    host.wait().expect("the killed host is collected");
+    for round in 1..=3 {
+        let again = until_the_session(
+            &home,
+            &format!("not started again after kill {round}"),
+            |session| session["pid"].as_u64() != Some(pid) && session["state"] == "idle",
+        );
+        pid = again["pid"].as_u64().expect("a pid");
+        killed(pid);
+    }
+    let status = ended_within(&mut supervisor, Duration::from_secs(30))
+        .expect("the supervisor never gave up on the session");
+    assert!(status.success());
+    let session = the_session(&home);
+    assert_eq!(session["state"], "stopped", "{session}");
+    assert_eq!(session["pid"].as_u64(), Some(pid), "{session}");
+}
+
+/// BG-11, BG-12, end to end: a session a person stops with the supervisor running stays stopped,
+/// and the supervisor ends once it has nothing left to watch.
+#[cfg(unix)]
+#[test]
+fn a_session_a_person_stops_stays_stopped_with_a_supervisor_running() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let mut host = an_idle_session(&home, &gateway);
+    let mut supervisor = a_supervisor(&home);
+    let pid = the_session(&home)["pid"].as_u64().expect("a pid");
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    host.wait().expect("the stopped host is collected");
+    let status = ended_within(&mut supervisor, Duration::from_secs(30))
+        .expect("the supervisor is still watching: it started the stopped session again");
+    assert!(status.success());
+    let session = the_session(&home);
+    assert_eq!(session["state"], "stopped", "{session}");
+    assert_eq!(session["pid"].as_u64(), Some(pid), "{session}");
+}
+
+/// BG-11: a supervisor started while one is running ends at once and leaves the first holding the
+/// lock, so there is one per account.
+#[cfg(unix)]
+#[test]
+fn a_second_supervisor_ends_at_once_and_leaves_the_first_running() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let mut host = an_idle_session(&home, &gateway);
+    let mut first = a_supervisor(&home);
+
+    let mut second = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .arg("__bg-supervisor")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the second supervisor starts");
+    let status = ended_within(&mut second, Duration::from_secs(30))
+        .expect("a second supervisor kept running beside the first");
+    assert!(status.success());
+    assert!(has_a_supervisor(&home));
+    assert!(first.try_wait().expect("waited on").is_none());
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    let _ = host.wait();
+    let _ = ended_within(&mut first, Duration::from_secs(30));
+}
+
+/// BG-12, end to end: a stop that never finished leaves its mark, and a process that starts is not
+/// being stopped, so the mark does not have the end of the new process read as a person's.
+#[cfg(unix)]
+#[test]
+fn a_process_that_starts_clears_the_mark_of_a_stop_that_never_finished() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let jobs = home.0.join(".bravebot/jobs");
+    let job = jobs.join(SESSION_ID);
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    std::fs::write(job.join("stopping"), "").expect("the mark a stop left");
+    let roster = bravebot_session::jobs::Roster::at(jobs);
+    assert!(
+        roster.is_being_stopped(SESSION_ID),
+        "the mark is not the one a stop leaves"
+    );
+
+    let (mut host, _) = a_started_host(&home, &gateway, "{}");
+    assert!(
+        !roster.is_being_stopped(SESSION_ID),
+        "a process that is running was read as being stopped"
+    );
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
+/// BG-11, from a terminal: the process a terminal starts for a stopped session is watched by a
+/// supervisor that the terminal started, and that ends with the session.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_started_from_a_terminal_is_watched_by_a_supervisor_that_ends_with_it() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+    assert!(!has_a_supervisor(&home));
+
+    let output = in_a_terminal(&home.0, AT_A_GATEWAY, &["attach", "3f2a9c1e"]);
+    assert!(output.status.success(), "{:?}", said(&output));
+    assert!(has_a_supervisor(&home), "the terminal left no supervisor");
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while has_a_supervisor(&home) {
+        assert!(
+            std::time::Instant::now() < until,
+            "the supervisor outlived the last session"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// BG-10: a reply with no text is refused even when standard input carries some, because a prompt
 /// that arrived on a pipe is not a line a person typed.
 #[test]

@@ -1,5 +1,5 @@
 //! `bravebot sessions`, `--bg`, `attach` and `reply`: the sessions that keep running after the
-//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10).
+//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10, BG-11).
 //!
 //! Everything drawn here is a thing the person typed, a fact about a process, or a word from a
 //! fixed set. The roster has no field for anything else (BG-4), so there is nothing in it to
@@ -180,6 +180,7 @@ fn start_host(
         if roster.get(id).is_some_and(|seen| seen.live)
             && roster.socket_of(id).is_some_and(|s| s.exists())
         {
+            ensure_supervisor(roster, &me);
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -188,9 +189,55 @@ fn start_host(
     Err(fail(Ending::Failed, t!(bg_not_started)))
 }
 
+/// Make sure a supervisor is running, so the process just started is started again if it ends
+/// between turns (BG-11, BG-12).
+///
+/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
+/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
+/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
+/// order is what leaves no moment in which a live process has neither.
+///
+/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
+/// be started.
+#[cfg(unix)]
+fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    if roster.has_supervisor() {
+        return;
+    }
+    let mut command = supervisor_command(program);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let Ok(mut supervisor) = command.spawn() else {
+        return;
+    };
+    // Until it holds its lock, so that the next `--bg` finds it rather than starting another, or
+    // until it has ended: it does when nothing is alive for it to watch.
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && !roster.has_supervisor() {
+        if !matches!(supervisor.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
+/// terminal holds open.
+#[cfg(unix)]
+fn supervisor_command(program: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.arg("__bg-supervisor").current_dir("/");
+    command
+}
+
 /// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
 #[cfg(unix)]
-fn host_command(
+pub(crate) fn host_command(
     program: &std::path::Path,
     id: &str,
     directory: Option<&std::path::Path>,
@@ -223,6 +270,17 @@ pub(crate) fn host(id: &str, mode: Mode) -> ExitCode {
 
 #[cfg(not(unix))]
 pub(crate) fn host(_id: &str, _mode: Mode) -> ExitCode {
+    ExitCode::FAILURE
+}
+
+/// The hidden command the supervisor runs under (BG-11).
+#[cfg(unix)]
+pub(crate) fn supervise() -> ExitCode {
+    crate::supervisor::supervise()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn supervise() -> ExitCode {
     ExitCode::FAILURE
 }
 
@@ -607,6 +665,16 @@ mod tests {
             command.get_current_dir(),
             Some(std::path::Path::new("/work"))
         );
+    }
+    /// BG-11: the supervisor is started as the hidden command, away from any directory a terminal
+    /// is in, so closing the terminal that started it does not hold a directory open.
+    #[cfg(unix)]
+    #[test]
+    fn the_supervisor_is_started_as_the_hidden_command_from_the_root() {
+        let command = supervisor_command(std::path::Path::new("/bin/bravebot"));
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(arguments, ["__bg-supervisor"]);
+        assert_eq!(command.get_current_dir(), Some(std::path::Path::new("/")));
     }
     use bravebot_session::jobs::{Job, Mode};
     use std::path::Path;

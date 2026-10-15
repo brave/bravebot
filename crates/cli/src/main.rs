@@ -21,6 +21,8 @@ mod sandbox_check;
 mod session_import;
 mod session_search;
 mod shell_init;
+#[cfg(unix)]
+mod supervisor;
 mod update;
 use bravebot_agent::servers;
 
@@ -431,6 +433,7 @@ fn main() -> ExitCode {
                 _ => ExitCode::FAILURE,
             }
         }
+        Some("__bg-supervisor") => background::supervise(),
         Some("mcp") => mcp::command(&args[1..]),
         Some("permissions") => permissions_check::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
@@ -6842,6 +6845,7 @@ mod tests {
             Some("--resume"),
             Some("reply"),
             Some("__bg-host"),
+            Some("__bg-supervisor"),
         ] {
             assert!(!starts_no_program(first), "{first:?}");
         }

@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
+  - crates/cli/src/supervisor.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---
@@ -21,8 +22,9 @@ a person sends it its next prompt, and what it does when it needs an answer.
 The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bravebot attach` and
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
-`verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)) and the checkout ([BG-14](#BG-14)). `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+`verified-by: none` until all of it lands, and the part not built is the checkout ([BG-14](#BG-14)).
+The supervisor and the restart of a process that ends between turns ([BG-11](#BG-11),
+[BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
@@ -33,9 +35,9 @@ that other specs would contradict are named under
 [What this changes in other specs](#what-this-changes-in-other-specs).
 
 A **background session** is an ordinary session, as [sessions.md](sessions.md) describes one, whose
-process a supervisor owns instead of a terminal. The **supervisor** is a small process that starts,
-stops and restarts those processes and records their state. The **roster** is that record. A
-**foreground session** is any session that is not one.
+process a terminal does not own. The **supervisor** is a small process that watches those processes
+and starts one again when it ends between turns ([BG-12](#BG-12)). The **roster** is the record of
+them. A **foreground session** is any session that is not one.
 
 What a session record holds is [sessions.md](sessions.md). What the prompts ask and what an answer
 grants is [prompting.md](prompting.md), and what a mode answers in advance is
@@ -116,12 +118,21 @@ the whole of what they asked for.
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
 
-The supervisor starts a session's process, stops it, restarts it ([BG-12](#BG-12)), and writes the
-roster. A process that has been idle ([BG-13](#BG-13)) ends itself, because it is the one that knows
-whether a terminal is attached, and the supervisor sees only that it ended. It reads no conversation, no record, no
-prompt, no reply and no tool result. It makes no model request and holds no credential: a session's
-process reads its own, as a foreground one does. It branches only on process facts (whether the
-process is alive, how it exited, when it last did anything) and on the roster's own fields.
+The supervisor starts a session's process again ([BG-12](#BG-12)) and writes no entry itself: the
+process it starts writes its own. It leaves the empty line a process begins with ([BG-2](#BG-2)) and
+removes the socket of the one that ended. A terminal starts a session's process the first time and
+stops it ([BG-11](#BG-11)), because the process reads its configuration from the environment of
+the terminal that ran `--bg`, and a supervisor that started it would hand it the environment of
+whichever terminal started the supervisor. A process started again has no terminal to take an
+environment from and has the supervisor's. A process that has been idle ([BG-13](#BG-13)) ends
+itself, because it is the one that knows whether a terminal is attached, and the supervisor sees
+only that it ended.
+
+It takes from the roster the state the process last wrote and the directory the session works in,
+and nothing else. It reads no conversation, no record, no prompt, no reply and no tool result. It
+makes no model request and reads no credential: a session's process reads its own, as a foreground
+one does. It branches only on process facts (whether the process is alive, whether a person was
+stopping it, when it was started again) and on those two roster fields.
 
 The attach channel ([BG-9](#BG-9)) is between a terminal and the session's process. The supervisor
 is not on it.
@@ -130,7 +141,9 @@ is not on it.
 Keeping it ignorant of every byte of content is how that holds without an argument about each field:
 a supervisor that can read a conversation can be made to act on one.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::the_facts_a_supervisor_reads_are_the_state_the_directory_and_whether_it_is_alive`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_in_a_turn_or_a_question_is_not_started_again`
+`verified-by: bravebot_cli::supervisor::a_process_is_started_again_in_its_directory_in_the_mode_every_session_opens_in`
 
 <a id="BG-4"></a>
 ### BG-4: the roster is a closed set of fields in the person's own state directory
@@ -312,22 +325,49 @@ the prompt on screen, so it could be taken for an answer to a write or a run it 
 `bravebot sessions stop <id>` stops a turn that is running, then ends the process and sets the state
 to `stopped`. The record is kept and is resumable. No session is without a way to be stopped.
 
-There is one supervisor per account. It is started by the first `--bg` or `/bg` and ends when it
-owns no live process. A supervisor already running is found through a lock in `~/.bravebot/jobs/`,
-and a second one is never started. `bravebot sessions` reads the roster and needs no supervisor.
+There is one supervisor per account. A terminal that starts a session ([BG-2](#BG-2)), for the first
+time or again, starts the supervisor once that session's process is alive, unless one is running.
+It watches every process it finds alive and ends when none is. A supervisor already running is found
+through the lock on `supervisor.lock` in `~/.bravebot/jobs/`, which the kernel releases however the
+supervisor ends, and a second one ends at once. A supervisor about to end lets go of the lock and
+looks at the roster once more, so a process that became alive in that moment is watched by it or by
+the supervisor its terminal started. `bravebot sessions` reads the roster and needs no supervisor.
 
 **Why.** Work nobody is watching has to be stoppable by the person who started it. A supervisor that
 stays after its last session is a standing process the person did not ask for.
 
-`verified-by: none`
+`verified-by: bravebot_session::stopping_a_job::stopping_ends_a_running_process_and_records_it`
+`verified-by: bravebot_cli::running::sessions_stop_marks_a_dead_entry_stopped_and_refuses_an_unknown_id`
+`verified-by: bravebot_cli::running::a_session_a_person_stops_stays_stopped_with_a_supervisor_running`
+`verified-by: bravebot_cli::running::a_second_supervisor_ends_at_once_and_leaves_the_first_running`
+`verified-by: bravebot_cli::running::a_session_started_from_a_terminal_is_watched_by_a_supervisor_that_ends_with_it`
+`verified-by: bravebot_cli::supervisor::a_second_supervisor_finds_the_first`
+`verified-by: bravebot_cli::supervisor::a_claim_made_while_the_lock_is_looked_at_is_tried_again`
+`verified-by: bravebot_cli::supervisor::a_claim_made_while_another_supervisor_runs_is_refused`
+`verified-by: bravebot_cli::supervisor::the_supervisor_is_done_when_nothing_is_alive`
+`verified-by: bravebot_cli::supervisor::a_process_that_comes_alive_is_watched_within_a_few_ticks`
+`verified-by: bravebot_cli::background::the_supervisor_is_started_as_the_hidden_command_from_the_root`
+`verified-by: bravebot_session::jobs::the_supervisors_lock_is_not_an_entry_of_the_roster`
 
 <a id="BG-12"></a>
 ### BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 
-A process that exits while the state is `idle` is restarted, at most three times in an hour, in the
-mode every session opens in. After that its state is `stopped`. A process that exits while the state
-is `working` or `needs input` is not restarted: its state is `interrupted`, the turn it was running
-is not run again, and the prompt it held is gone.
+A process that ends while the state it last wrote is `idle` is started again by the supervisor, at
+most three times in an hour, in the mode every session opens in. After that it is left, and its state
+reads `stopped` ([BG-6](#BG-6)). A process that ends while that state is `working` or `needs input`
+is not started again: its state reads `interrupted`, the turn it was running is not run again, and
+the prompt it held is gone. A process that a person stopped, or that ended itself and wrote
+`stopped` ([BG-13](#BG-13)), is not started again either.
+
+The supervisor starts only a process it found alive, so a session that ended while no supervisor was
+running, or before it started, stays as it is. A stop marks the entry before it signals the process
+and removes the mark after the entry reads as stopped, so a supervisor that sees a process end finds
+either the mark or the entry saying `stopped`. A process that was started again has a short time to
+become alive before it counts as having ended again.
+
+A start again is not a start in the sense of [BG-2](#BG-2): it carries no prompt, so no turn
+begins, and the record it resumes is one a person started. It opens idle, from that record. The
+process has the environment the supervisor was started with.
 
 The first turn after an `interrupted` session is a reply or an attach. The planner is told, by the
 driver, that the earlier turn ended without finishing, and not what it had done.
@@ -335,7 +375,22 @@ driver, that the earlier turn ended without finishing, and not what it had done.
 **Why.** Running the turn again would repeat its writes and commands, and some of them are not safe
 to repeat. The person who comes back sees the state and decides.
 
-`verified-by: none`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_idle_is_started_again_and_one_never_seen_alive_is_not`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_in_a_turn_or_a_question_is_not_started_again`
+`verified-by: bravebot_cli::supervisor::a_process_is_started_again_three_times_in_an_hour`
+`verified-by: bravebot_cli::supervisor::a_process_that_keeps_ending_is_given_up_on_after_three_starts`
+`verified-by: bravebot_cli::supervisor::a_process_started_again_is_given_time_to_come_up`
+`verified-by: bravebot_cli::supervisor::a_process_a_person_stopped_is_not_started_again`
+`verified-by: bravebot_session::stopping_a_job::a_stop_marks_the_entry_from_before_the_process_ends_until_it_reads_as_stopped`
+`verified-by: bravebot_session::stopping_a_job::a_stop_that_cannot_end_the_process_leaves_no_mark`
+`verified-by: bravebot_session::stopping_a_job::a_stop_whose_entry_cannot_be_written_keeps_its_mark`
+`verified-by: bravebot_cli::supervisor::a_restart_does_not_replace_the_line_a_terminal_is_starting_the_process_with`
+`verified-by: bravebot_cli::running::a_session_killed_while_idle_is_started_again_idle_with_its_conversation`
+`verified-by: bravebot_cli::running::a_session_killed_while_it_holds_a_question_is_not_started_again`
+`verified-by: bravebot_cli::running::a_session_killed_while_idle_four_times_is_started_again_three_times_and_then_left`
+`verified-by: bravebot_cli::running::a_process_that_starts_clears_the_mark_of_a_stop_that_never_finished`
+`verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_an_interrupted_session_and_the_planner_is_told`
+`verified-by: bravebot_cli::running::a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_stop_does_not`
 
 <a id="BG-13"></a>
 ### BG-13: an idle session is stopped after an hour and wakes on the next reply
@@ -461,6 +516,16 @@ it is stated.
 - **Asking is the only mode on the command line.** `--bg` cannot start a session that accepts edits,
   and a session stopped for idleness returns to asking. A person walking away from accept-edits work
   finds it waiting on the first write after a restart.
+- **A process started again has the supervisor's environment.** Nobody is at a terminal when the
+  supervisor starts a process again, so the process takes the environment the supervisor was
+  started with, which is the environment of the terminal that ran the first `--bg` while it ran.
+  A variable exported in a later terminal, or since removed from the first, does not reach it.
+  Settings files and stored keys are read as they are at the time. The supervisor holds that
+  environment without reading it.
+- **A stop typed just after a crash can be undone.** A process that ended idle is started again
+  within about half a second, and a stop typed after the process ended and before the new one is
+  alive finds nothing to signal, writes `stopped`, and is followed by the process being alive and
+  idle. `bravebot sessions` shows it idle and a second stop ends it.
 - **A session outside a repository shares its directory.** [BG-14](#BG-14) separates sessions only
   where git can.
 - **Unix first.** The attach channel is a socket in a directory only its owner can enter. Where that

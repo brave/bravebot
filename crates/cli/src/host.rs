@@ -482,6 +482,8 @@ mod socket {
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
+        // Left by a stop that did not finish. A process that is running is not being stopped.
+        roster.clear_stopping(id);
         let job = entry(&roster, id, first.as_deref(), mode);
         if roster.publish(&job).is_err() {
             return ExitCode::FAILURE;
