@@ -1494,6 +1494,10 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::state::the_underscore_key_is_the_first_word_of_the_row_its_count_names`
 `verified-by: bravebot_tui::state::the_bar_key_is_the_column_its_count_names`
 `verified-by: bravebot_tui::state::the_jumps_to_a_character_land_on_it_or_just_short_of_it`
+`verified-by: bravebot_tui::state::a_backward_jump_reaches_a_target_that_begins_the_line`
+`verified-by: bravebot_tui::state::a_backward_jump_only_looks_behind_the_caret_and_along_its_own_line`
+`verified-by: bravebot_tui::state::an_operator_takes_the_stretch_back_to_a_target_that_begins_the_line`
+`verified-by: bravebot_tui::state::a_backward_jump_can_land_on_a_marker_that_begins_the_line`
 `verified-by: bravebot_tui::state::a_jump_to_a_character_stays_on_its_own_line`
 `verified-by: bravebot_tui::state::the_repeat_keys_do_the_last_jump_again_and_then_the_other_way`
 `verified-by: bravebot_tui::state::a_repeat_with_nothing_to_repeat_does_nothing`

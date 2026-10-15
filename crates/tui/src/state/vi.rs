@@ -2017,18 +2017,15 @@ impl Session {
                 session.move_left();
             }
         };
-        let arrived = |session: &Self| {
-            if find.forwards {
-                session.caret >= end
-            } else {
-                session.caret <= start
-            }
-        };
+        // The first character of the line is on it, and the last place a backward walk looks.
+        let line = start..end;
 
         // Off the character the caret is on before looking, so `f` twice reaches the second occurrence
-        // rather than staying on the first.
+        // rather than staying on the first. A step that leaves the caret where it was has reached an
+        // end of the input, and the character under it is not an occurrence.
+        let mut last = self.caret;
         step(self);
-        while !arrived(self) {
+        while self.caret != last && line.contains(&self.caret) {
             if self.input[self.caret..].starts_with(find.target) {
                 // `t` and `T` stop one character short of the target, on the side the jump came from.
                 if find.short {
@@ -2040,6 +2037,7 @@ impl Session {
                 }
                 return;
             }
+            last = self.caret;
             step(self);
         }
 
