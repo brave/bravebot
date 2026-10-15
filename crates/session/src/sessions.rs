@@ -73,9 +73,7 @@ pub struct Note {
     /// The turn the session was on when the note was added: the one running, or the last one
     /// finished when none was.
     pub turn: usize,
-    /// Who typed it.
     pub by: NoteAuthor,
-    /// What the person typed.
     pub text: String,
 }
 
@@ -5854,8 +5852,8 @@ mod tests {
         assert_eq!(kept, vec![(1, "first note"), (2, "second note")]);
     }
 
-    /// SESSION-36: a record whose handle was resumed from a copy that predates a later note still
-    /// ends with every note the handle holds when a whole-record save writes it.
+    /// SESSION-36: a note typed before any turn is saved stays in the record through the whole-record
+    /// saves that follow, and is not written twice.
     #[test]
     fn a_whole_record_save_writes_the_notes_the_handle_holds() {
         if !in_isolated_profile() {
