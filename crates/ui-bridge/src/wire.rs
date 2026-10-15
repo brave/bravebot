@@ -282,9 +282,9 @@ pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
 /// The ordinal is counted here because it is the agent's own count of what the user said, and
 /// [`crate::fork::cut`] resolves it against that count. A client that counts instead holds a
 /// second copy of the rule, and the two agree only for as long as nobody adds a kind of user
-/// message: a turn nudged for spending its tool budget and a shell line a person ran themselves
-/// are both `Said::User` here, neither is drawn as a prompt by a window watching a live session,
-/// and a fork of anything after one of them arrives short and is refused.
+/// message: a kind added without a tag would be a `Said::User` here, drawn as a prompt by no
+/// window watching a live session, and a fork of anything after it would arrive short and be
+/// refused. Every message the agent composes is tagged, so none is.
 ///
 /// Sent beside each thing said rather than composed from the list, so that a client drawing one
 /// kind of user message differently costs nobody a working fork.
@@ -349,7 +349,9 @@ fn said(said: &Said) -> Value {
                 | Composed::Summary
                 | Composed::Imported
                 | Composed::Skill { .. }
-                | Composed::SkillKept { .. },
+                | Composed::SkillKept { .. }
+                | Composed::Notice
+                | Composed::Written,
             text,
         } => json!({ "kind": "user", "text": text }),
     }

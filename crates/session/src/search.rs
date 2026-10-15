@@ -299,6 +299,13 @@ pub fn lines_of(record: &str) -> Vec<String> {
         .filter_map(|said| match said {
             Said::User(text) | Said::Assistant(text) => Some(text),
             Said::Tool { line, .. } => Some(line),
+            // What the agent wrote in its own words and a person was shown as it stands, a shell
+            // line's output or the standard input a run was given, was searchable when it was
+            // recorded untagged, and the tag leaves it so.
+            Said::Composed {
+                why: Composed::Written,
+                text,
+            } => Some(text),
             Said::Composed { .. } => None,
         })
         .flat_map(|text| {
@@ -453,6 +460,17 @@ mod tests {
         };
         let lines = lines_of(&record(Some("terminal"), vec![said("look"), attached]));
         assert!(!found(&lines, "tokenizer"));
+    }
+
+    #[test]
+    fn a_line_the_agent_wrote_for_a_person_is_still_searched() {
+        let ran = Stored {
+            message: Message::user("I ran `make` in the shell myself. It printed: linker exploded"),
+            composed: Some(Composed::Written),
+            source: None,
+        };
+        let lines = lines_of(&record(Some("terminal"), vec![said("build it"), ran]));
+        assert!(found(&lines, "linker exploded"));
     }
 
     #[test]

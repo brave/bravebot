@@ -126,6 +126,20 @@ pub enum Composed {
         /// The skill's name as the catalogue spells it.
         name: String,
     },
+    /// A message the driver wrote for the planner in the middle of a turn: a nudge after a stop or
+    /// a spent budget, the mode having changed, a delegate's report, a background job's output, the
+    /// jobs still running.
+    ///
+    /// House-keeping for the planner: it belongs to the round above it, so a transcript draws no
+    /// row for it, no fork is cut in front of it and no compaction cuts between the two.
+    Notice,
+    /// A message the agent or a front end wrote in its own words into the conversation, and that a
+    /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
+    /// input a run was given, a file the kernel would not show, and what a shell line the person
+    /// ran themselves printed.
+    ///
+    /// Drawn plainly, and not as a prompt: nobody typed it, so it is no place to fork from.
+    Written,
 }
 
 impl Composed {
@@ -140,6 +154,7 @@ impl Composed {
                 | Self::Summary
                 | Self::Skill { .. }
                 | Self::SkillKept { .. }
+                | Self::Notice
         )
     }
 }
@@ -1170,7 +1185,12 @@ fn opens_an_exchange(stored: &Stored) -> bool {
     stored.message.role == Role::User
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::Resumed | Composed::SkillKept { .. })
+            Some(
+                Composed::ToolResult
+                    | Composed::Resumed
+                    | Composed::SkillKept { .. }
+                    | Composed::Notice
+            )
         )
 }
 
@@ -1405,6 +1425,33 @@ mod tests {
                 },
             ],
         );
+    }
+
+    /// LAYER-6: a note the driver wrote mid-turn is house-keeping and a line it wrote for a turn
+    /// is drawn plainly, and neither is a prompt, whatever the words are.
+    #[test]
+    fn a_notice_is_left_out_and_a_written_line_is_not_a_prompt() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("typed words"));
+        conversation.push_composed(
+            Message::user("(from the system, not the user) stop"),
+            Composed::Notice,
+        );
+        conversation.push_composed(Message::user("carry on"), Composed::Written);
+
+        assert_eq!(
+            conversation.recounted(),
+            vec![
+                Said::User("typed words".into()),
+                Said::Composed {
+                    why: Composed::Written,
+                    text: "carry on".into()
+                },
+            ]
+        );
+        let notice = &conversation.messages()[1];
+        assert!(!opens_an_exchange(notice), "compaction may cut at a nudge");
+        assert!(opens_an_exchange(&conversation.messages()[2]));
     }
 
     /// And the tag is not sent. The messages are the request body, so a field inside one would be

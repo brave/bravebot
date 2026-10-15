@@ -281,9 +281,10 @@ fn a_replayed_tool_line_carries_no_outcome() {
 /// agent composed as well, the attachment in the middle, which is a user-role message in the
 /// request and is not a prompt, gives it 2 rather than the 1 `cut` will look for.
 ///
-/// The nudge a turn sends itself for spending its tool budget is the one in the fixture that a
-/// window could never count: it is an untagged `Said::User`, it is a prompt to `cut`, and no
-/// event tells a live window it happened.
+/// What the agent wrote itself and a person is shown as it stands, a shell line's output here, is
+/// tagged, so it is no prompt to `cut` and takes no ordinal. The nudge a turn sends itself for
+/// spending its tool budget never reaches this list at all: it is tagged house-keeping and
+/// `Conversation::recounted` leaves it out.
 #[test]
 fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
     let said = wire::recounted(&[
@@ -299,13 +300,15 @@ fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
             },
             text: "Contents of notes.md:\nsomething".into(),
         },
-        Said::User("you have spent your tool budget".into()),
+        Said::Composed {
+            why: Composed::Written,
+            text: "I ran `ls` in the shell myself. It printed nothing.".into(),
+        },
         Said::User("second".into()),
     ]);
     assert_eq!(said[0]["prompt"], json!(0));
-    assert_eq!(said[4]["prompt"], json!(1));
-    assert_eq!(said[5]["prompt"], json!(2));
-    for at in [1, 2, 3] {
+    assert_eq!(said[5]["prompt"], json!(1));
+    for at in [1, 2, 3, 4] {
         assert!(
             said[at].get("prompt").is_none(),
             "only what the user said can be forked at: {}",

@@ -1221,13 +1221,15 @@ fn admit_context_file<S: Sink>(
                 path: path.to_string(),
             },
         ),
-        // Untagged: no byte of the file is in this, and what it says is something a person has to
-        // read. A reference with nothing drawn about it is a turn that quietly read nothing.
-        Presentation::Quarantined(reference) => conversation.push_from(
+        // Tagged as written by the agent and drawn plainly: no byte of the file is in this, and
+        // what it says is something a person has to read. A reference with nothing drawn about it
+        // is a turn that quietly read nothing.
+        Presentation::Quarantined(reference) => conversation.push_composed_from(
             Message::user(format!(
                 "{path} could not be shown to you.\n\n{}",
                 reference.describe()
             )),
+            Composed::Written,
             Provenance::Reference(reference.slot.to_string()),
         ),
     }
@@ -1722,7 +1724,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         }
 
         reporter.delegate_finished(id, note, failed, reported);
-        conversation.push_from(Message::user(body), from);
+        conversation.push_composed_from(Message::user(body), Composed::Notice, from);
         conversation.observed(policy.context_label());
         collected += 1;
     }
@@ -1886,8 +1888,9 @@ fn collect_jobs<S: Sink, R: Reporter>(
             }
         };
 
-        conversation.push_from(
+        conversation.push_composed_from(
             Message::user(body),
+            Composed::Notice,
             presented.as_ref().map_or(Provenance::Driver, |presented| {
                 provenance_of(presented, "job output")
             }),
@@ -1914,12 +1917,13 @@ fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
         .map(|(name, ran_for)| format!("{name} (running for {}s)", ran_for.as_secs()))
         .collect::<Vec<_>>()
         .join(", ");
-    conversation.push_from(
+    conversation.push_composed_from(
         Message::user(format!(
             "{TOOL_BUDGET_SPENT} Background jobs from earlier in this session are still running: \
              {list}. Call job_output with a name to see what it has printed since you last looked, \
              or with kill set to stop it. Do not start one again that is already running."
         )),
+        Composed::Notice,
         Provenance::Driver,
     );
 }
@@ -2730,7 +2734,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 .present("chat", slot, "stdin", &piped, conversation.quarantine())
                 .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
-            conversation.push_from(
+            conversation.push_composed_from(
                 Message::user(match &presented {
                     Presentation::Visible(body) => format!("Piped input:\n\n{body}"),
                     Presentation::Quarantined(reference) => {
@@ -2740,6 +2744,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         )
                     }
                 }),
+                Composed::Written,
                 provenance_of(&presented, "piped input"),
             );
         }
@@ -2835,7 +2840,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         match &task.composed {
             Some(composed) => conversation.push_composed(submitted, composed.clone()),
             None if task.driver_wrote_the_prompt => {
-                conversation.push_from(submitted, Provenance::Driver)
+                conversation.push_composed_from(submitted, Composed::Written, Provenance::Driver)
             }
             None if has_attachments => {
                 conversation.push_from(submitted, Provenance::TypedWithFiles)
@@ -3073,7 +3078,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // the planner is said to it before the next request.
                     let chosen = task.permission_mode.get();
                     if let Some(notice) = told_mode.change_notice(chosen) {
-                        conversation.push_from(Message::user(&notice), Provenance::Driver);
+                        conversation.push_composed_from(
+                            Message::user(&notice),
+                            Composed::Notice,
+                            Provenance::Driver,
+                        );
                     }
                     told_mode = chosen;
 
@@ -3375,11 +3384,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                         Err(error) if error.is_empty_reply() && !asked_after_an_empty_reply => {
                             asked_after_an_empty_reply = true;
-                            conversation.push_from(Message::user(format!(
+                            conversation.push_composed_from(Message::user(format!(
                             "{TOOL_BUDGET_SPENT} Your last reply was empty. Carry on from where \
                              you were: make the next call, or if the work is done, say what you \
                              found."
-                        )), Provenance::Driver);
+                        )), Composed::Notice, Provenance::Driver);
                             continue;
                         }
                         // A reply that reached the ceiling having written nothing: part way through
@@ -3398,12 +3407,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     AfterCeilingStop::AskedAgain,
                                 );
                                 reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
-                                conversation.push_from(
+                                conversation.push_composed_from(
                                     Message::user(after_a_ceiling_stop(
                                         cut_off,
                                         &request,
                                         may_call_tools,
                                     )),
+                                    Composed::Notice,
                                     Provenance::Driver,
                                 );
                             }
@@ -3457,8 +3467,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         record_answer(&mut policy, conversation, &completion.content)?;
                         narrate_between_calls(&mut policy, &mut reporter, &completion.content);
                         reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
-                        conversation.push_from(
+                        conversation.push_composed_from(
                             Message::user(after_a_ceiling_stop(cut_off, &request, may_call_tools)),
+                            Composed::Notice,
                             Provenance::Driver,
                         );
                         continue;
@@ -3577,11 +3588,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         may_call_tools = false;
                         stop.honour();
                         reporter.narration(t!(delegate_stopped_narration).to_string());
-                        conversation.push_from(Message::user(format!(
+                        conversation.push_composed_from(Message::user(format!(
                             "{TOOL_BUDGET_SPENT} The person stopped you, and you have no more tool \
                              calls. Answer now with what you know. If the work is not finished, say \
                              what you found and what is left to do."
-                        )), Provenance::Driver);
+                        )), Composed::Notice, Provenance::Driver);
                     } else if let Some(limit) = task
                         .rounds
                         .filter(|limit| steps >= *limit && may_call_tools)
@@ -3591,12 +3602,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     "that is {limit} tool calls without an answer, so this turn has to finish with \
                  what it has"
                 ));
-                        conversation.push_from(Message::user(format!(
+                        conversation.push_composed_from(Message::user(format!(
                 "{TOOL_BUDGET_SPENT} You have made {limit} tool calls this turn and have no more. \
                  Answer now with what you know. If the work is not finished, say what you found, \
                  what stopped you, and what would let you finish, such as a file named or a \
                  directory trusted."
-            )), Provenance::Driver);
+            )), Composed::Notice, Provenance::Driver);
                     }
 
                     // What the model said on the way to these calls. It used to be dropped on the floor,
@@ -4737,12 +4748,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         && steps >= ROUNDS_BEFORE_WRITING
                     {
                         said_nothing_written = true;
-                        conversation.push_from(Message::user(format!(
+                        conversation.push_composed_from(Message::user(format!(
                     "{TOOL_BUDGET_SPENT} That is {steps} rounds of tools and nothing written yet. \
                      If the task asks for a change and any part of it is settled, write that part \
                      now and keep looking only for the parts that are not. If it asks for no \
                      change, carry on."
-                )), Provenance::Driver);
+                )), Composed::Notice, Provenance::Driver);
                     }
 
                     // The other half of the same problem. A change nobody built is a guess about whether
@@ -4767,13 +4778,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         && delegates.iter().all(|working| working.checkout.is_some())
                     {
                         said_nothing_run = true;
-                        conversation.push_from(Message::user(format!(
+                        conversation.push_composed_from(Message::user(format!(
                     "{TOOL_BUDGET_SPENT} Files have changed this turn and nothing has been run. \
                      A change that has not been built is a guess about whether it builds, so find \
                      how this project builds and tests, and run that. Where the log is long and \
                      what you want from it is which test failed, hand it to a checker with \
                      spawn_agent instead. If there is nothing here to build, carry on."
-                )), Provenance::Driver);
+                )), Composed::Notice, Provenance::Driver);
                     }
                 };
                 Ok::<_, TurnError>(completion)

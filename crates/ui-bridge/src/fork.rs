@@ -21,14 +21,12 @@
 //! tags. If a future build filters on something the walk cannot see, it runs out of matches and
 //! this returns `None`, a refusal rather than a cut in the wrong place.
 //!
-//! Two kinds of user-role message are worth knowing about here. One the agent composed **and
-//! tagged**, a context file somebody named or a watch that fired, is drawn as one of the
-//! interface's own rows on both sides, so it is a prompt to neither and shifts no ordinal. One the
-//! agent composed and left untagged is a prompt as far as any transcript is concerned: a turn
-//! nudged for spending its tool budget, a shell line the person ran themselves, a file the kernel
-//! would not show. Those shift the ordinals of everything after them, and a window drawing the
-//! same projection counts them the same way. Which is why the caller checks the prompt's *text*
-//! against the ordinal before cutting anything.
+//! Every user-role message the agent or a front end composed is tagged (LAYER-6), whether a
+//! context file somebody named, a watch that fired, a nudge for spending the tool budget or a shell
+//! line a person ran themselves. A tagged message is drawn as one of the interface's own rows or
+//! plainly, and is a prompt to neither side, so it shifts no ordinal. Only an untagged message is a
+//! place to cut, which includes one of these in a session recorded before the tag existed. Which is why the caller still checks the prompt's *text* against the ordinal before
+//! cutting anything.
 
 use bravebot_agent::conversation::{Composed, Said, Snapshot, Stored};
 use bravebot_aichat::protocol::Role;

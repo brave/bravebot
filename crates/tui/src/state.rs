@@ -6656,6 +6656,14 @@ impl Session {
         self.watches.firing().is_some()
     }
 
+    /// The number and path of the watch whose fire the turn starting now is, for the tag its
+    /// prompt is recorded with (LAYER-6).
+    pub fn firing_watch(&self) -> Option<(usize, String)> {
+        self.watches
+            .firing_watch()
+            .map(|watch| (watch.number(), watch.path().to_string()))
+    }
+
     /// Record that the turn a fire started has ended, which is where the gap to the next fire is
     /// measured from.
     pub fn watch_turn_ended(&mut self) {
@@ -13087,6 +13095,20 @@ mod tests {
                 .any(|entry| entry.text == t!(watch_stopped_with_its_turn, number = 1)),
             "the watch ended in silence"
         );
+    }
+
+    /// LAYER-6: the terminal can say which watch the turn it starts is the fire of, which is what
+    /// the turn's prompt is recorded with, and says none for a turn a person typed.
+    #[test]
+    fn the_watch_a_fire_belongs_to_is_known_for_the_tag() {
+        let mut s = session();
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        assert_eq!(s.firing_watch(), None);
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+            saw("second")
+        })
+        .expect("a fire");
+        assert_eq!(s.firing_watch(), Some((1, "notes.md".to_string())));
     }
 
     /// A turn that was not a fire ends no watch: that press is a person steering their own work.
