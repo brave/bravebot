@@ -370,6 +370,8 @@ they asked for it.
 
 `verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 `verified-by: bravebot_tui::status::a_session_watching_nothing_says_nothing_about_watches`
+`verified-by: bravebot_tui::status::the_report_says_how_long_a_watch_has_left`
+`verified-by: bravebot_tui::state::a_fire_announces_the_watch_it_came_from`
 `verified-by: bravebot_agent::watch::a_number_is_not_reused_when_the_watch_it_named_ends`
 `verified-by: bravebot_agent::watch::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
 `verified-by: bravebot_tui::state::a_session_with_no_watch_says_so_when_asked`

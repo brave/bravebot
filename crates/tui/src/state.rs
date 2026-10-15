@@ -12844,6 +12844,55 @@ mod tests {
         assert_eq!(prompt, watch::fired(1, "new.md", watch::Change::Appeared));
     }
 
+    /// A person with several watches armed reads an announcement against the number they end a
+    /// watch by and the file they asked about, so it names the watch that moved, which here is
+    /// neither the first armed nor the last.
+    #[test]
+    fn a_fire_announces_the_watch_it_came_from() {
+        let later = Instant::now() + Duration::from_secs(6);
+        let announced =
+            |s: &Session, line: &str| s.transcript.iter().any(|entry| entry.text == line);
+        let armed = |second: watch::Looked| {
+            let mut s = session();
+            s.arm_watch("first.md", ARMED_IN, saw("one"));
+            s.arm_watch("second.md", ARMED_IN, second);
+            s.arm_watch("third.md", ARMED_IN, saw("one"));
+            s
+        };
+        let looking = |second: watch::Looked| {
+            move |path: &str, _: &std::path::Path| {
+                if path == "second.md" {
+                    second.clone()
+                } else {
+                    saw("one")
+                }
+            }
+        };
+
+        let mut s = armed(saw("one"));
+        s.watch_fired(later, looking(saw("two")))
+            .expect("a change did not fire");
+        assert!(
+            announced(&s, &t!(watch_fired, number = 2, path = "second.md")),
+            "a write was not announced as the second watch's"
+        );
+
+        let mut s = armed(watch::Looked::Absent);
+        assert!(
+            s.watch_fired(later, looking(watch::Looked::Absent))
+                .is_none()
+        );
+        s.watch_fired(later + Duration::from_secs(6), looking(saw("created")))
+            .expect("an appearance did not fire");
+        assert!(
+            announced(
+                &s,
+                &t!(watch_fired_appeared, number = 2, path = "second.md")
+            ),
+            "an appearance was not announced as the second watch's"
+        );
+    }
+
     /// A filesystem event is not a licence to interrupt: the person is still the one using this
     /// session, and what they queued was typed before the file moved.
     #[test]

@@ -1084,6 +1084,78 @@ mod tests {
             );
         }
 
+        /// One list holds asides, a delegate and a command, and the keys that step through it do
+        /// not ask what a row is. What changes as they step is the header and the footer, each
+        /// naming its own kind: a delegate by kind and number, a command as a command beside the
+        /// line that ran, an aside as an aside with whether the record keeps its answer.
+        #[test]
+        fn stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            ran(&mut session, "cargo test --workspace", true, &["ok"], 1);
+            asked(&mut session, "and the base case?", "it is a leaf", true);
+            asked(&mut session, "why recursive?", "because of nesting", false);
+            let delegate = format!("checker delegate {id}");
+            let screen = |session: &Session| {
+                let rows = rows_at(session, 90, 24);
+                let footer = rows.last().expect("a footer").trim_start().to_string();
+                (rows, footer)
+            };
+
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(rows[1].contains("on your screen only"), "{rows:?}");
+            assert!(
+                footer.starts_with("aside  ·  screen only  ·  2 of 4"),
+                "{footer}"
+            );
+
+            session.watch_previous();
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(
+                rows[1].contains("the answer, which the conversation has not read"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+
+            session.watch_next();
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains(&delegate), "{rows:?}");
+            assert!(rows[1].contains("run the build"), "{rows:?}");
+            assert!(
+                footer.starts_with(&format!("{delegate}  ·  working  ·  3 of 4")),
+                "{footer}"
+            );
+
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains("what this command printed"), "{rows:?}");
+            assert!(rows[0].contains("the model has read this"), "{rows:?}");
+            assert!(rows[1].contains("cargo test --workspace"), "{rows:?}");
+            assert!(
+                footer.starts_with("command  ·  the model has read this  ·  4 of 4"),
+                "{footer}"
+            );
+
+            for _ in 0..3 {
+                session.watch_previous();
+            }
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+        }
+
         /// Marked the way every other block the planner was kept from is marked, and marked
         /// structurally: the bar is in the margin on every row, so content saying the block ends
         /// cannot end it.

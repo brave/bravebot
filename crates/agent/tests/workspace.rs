@@ -8584,6 +8584,75 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
     assert!(!scratch.path.join(".git/worktrees").exists());
 }
 
+/// CHECKOUT-7. The delegate's workspace is rooted at its checkout, so the working directory is not
+/// reachable from it by its absolute path, and the checkout is not reachable from the session's
+/// workspace or from another delegate's checkout. Each tree first reads its own file by a relative
+/// path, so a refusal of the other tree's file can only come from the confinement.
+#[test]
+fn the_working_directory_and_a_checkout_are_not_reachable_from_each_other() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-reach", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("README"), "uncommitted\n").unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let in_the_working_directory = trusted_text(&scratch.path.join("README").display().to_string());
+    let in_the_checkout = trusted_text(&made.root().join("README").display().to_string());
+
+    for reading in [&made, &workspace] {
+        reading
+            .read(&mut policy, &trusted_text("README"))
+            .expect("a workspace reads its own file");
+    }
+
+    let error = made
+        .read(&mut policy, &in_the_working_directory)
+        .expect_err("the working directory is reachable from the checkout");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    let error = workspace
+        .read(&mut policy, &in_the_checkout)
+        .expect_err("the checkout is reachable from the session's workspace");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+
+    let sibling = workspace
+        .checkout_for(
+            &policy,
+            &state.path,
+            bravebot_core::delegate::DelegateId::nth(2),
+        )
+        .expect("a checkout for another delegate");
+    let error = sibling
+        .read(&mut policy, &in_the_checkout)
+        .expect_err("the checkout is reachable from another delegate's");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+}
+
+/// CHECKOUT-7. The directories the parent opened beside its working directory stay reachable from
+/// the delegate's workspace, by the same absolute path.
+#[test]
+fn a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-opened", &[("README", "hello\n")]);
+    let other = outside("checkout-reach-opened");
+    std::fs::write(other.path.join("notes.md"), "a note").unwrap();
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    made.read(
+        &mut policy,
+        &trusted_text(&opened.join("notes.md").display().to_string()),
+    )
+    .expect("a directory the parent opened is reachable from the checkout");
+}
+
 /// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
 /// person opened, and a directory held by neither the working directory nor the checkouts gives
 /// the other cause.

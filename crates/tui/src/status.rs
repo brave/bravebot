@@ -1368,6 +1368,39 @@ mod tests {
         assert!(line.note.contains('3'), "{:?}", line.note);
     }
 
+    /// The time on the line is what the watch has left of its week, which is when it stops
+    /// itself. A watch armed ninety seconds ago has just under seven days left, where a line that
+    /// reported how long the watch had been on would show a minute and a half.
+    #[test]
+    fn the_report_says_how_long_a_watch_has_left() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let armed_ninety_seconds_ago = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(90))
+            .expect("the clock has run for ninety seconds");
+        let mut watches = watch::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
+                3,
+                watch::Looked::Saw("first".to_string()),
+                armed_ninety_seconds_ago,
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert!(line.note.contains("6d 23h left"), "{:?}", line.note);
+    }
+
     /// A line saying a thing is not happening is a line on every report for the sake of the few
     /// where it is.
     #[test]
