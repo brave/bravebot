@@ -945,13 +945,17 @@ pub fn definition_named(
 /// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
 /// paste asks for and nothing else.
 pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
-    // The line is the scroller's to leave alone, and the delegate view's: a paste is not a key, so
-    // it arrives from the terminal whatever mode is open and the guard that holds the box still for
-    // a keystroke never sees it. Mid-turn is when the view is open, since a delegate only runs
-    // inside a turn, so this is the path a paste while watching actually takes. Nothing is said
-    // about it either way, because both modes have the whole screen but their footer and a sentence
-    // drawn nowhere is no answer.
-    if session.scrolling() || session.watching().is_some() || session.picking().is_some() {
+    // The line is the scroller's to leave alone, and the delegate view's, the picker's and the
+    // prompt search's: a paste is not a key, so it arrives from the terminal whatever mode is open
+    // and the guard that holds the box still for a keystroke never sees it. Mid-turn is when the
+    // view is open, since a delegate only runs inside a turn, so this is the path a paste while
+    // watching actually takes. Nothing is said about it either way: the scroller and the view
+    // have the whole screen but their footer, and a sentence drawn nowhere is no answer.
+    if session.scrolling()
+        || session.watching().is_some()
+        || session.picking().is_some()
+        || session.searching_history()
+    {
         return Action::None;
     }
     // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
@@ -1054,12 +1058,16 @@ fn pump_terminal(
 /// picture does not need telling every time they use the other one.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     session.drop_a_wiped_handoff();
-    // The line is the scroller's to leave alone, and the delegate view's: a paste is not a key, so
-    // it arrives from the terminal whatever mode is open and the guard that holds the box still for
-    // a keystroke never sees it. Before the empty case as much as the rest, because that one spends
-    // a hint said once a session on a sentence neither mode leaves room to draw, and answers with
-    // the clipboard read that would put a picture in a box nobody can see.
-    if session.scrolling() || session.watching().is_some() || session.picking().is_some() {
+    // The line is the scroller's to leave alone, and the delegate view's, the picker's and the
+    // prompt search's: a paste is not a key, so it arrives from the terminal whatever mode is open
+    // and the guard that holds the box still for a keystroke never sees it. Before the empty case
+    // as much as the rest, because that one answers with the clipboard read that would put a
+    // picture in a box nobody can see, and spends a hint said once a session.
+    if session.scrolling()
+        || session.watching().is_some()
+        || session.picking().is_some()
+        || session.searching_history()
+    {
         return Action::None;
     }
     // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since
@@ -23128,6 +23136,95 @@ mod tests {
 
         assert!(!session.searching_history());
         assert_eq!(session.input(), "half a thought");
+    }
+
+    /// A paste and a drop reach this process as events of their own rather than as keys, so the
+    /// guard that holds the box still for a letter does not see them. The panel is drawn in place
+    /// of the box, so whatever lands in the box is invisible until the search closes, and the
+    /// person comes back to a different prompt with a file staged that nobody asked for. An empty
+    /// paste is how a picture on the clipboard arrives, and answering it reads the clipboard into
+    /// that same box. The regressions it rejects are each of those, and spending the hint an empty
+    /// paste says once a session, on the two paths a paste takes: at rest and mid-turn.
+    #[test]
+    fn a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open() {
+        let directory = crate::testutil::scratch_dir("bravebot-app-drop-while-searching");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        let file = directory.join("shot.png");
+        std::fs::write(&file, [0x89u8, 0x50]).expect("write");
+        let dropped = file.to_string_lossy().into_owned();
+
+        for mid_turn in [false, true] {
+            let place = if mid_turn { "mid-turn" } else { "at rest" };
+            let press = |session: &mut Session, pressed: KeyEvent| match mid_turn {
+                true => handle_key_while_working(session, pressed),
+                false => handle_key(session, pressed),
+            };
+            let paste = |session: &mut Session, text: &str| match mid_turn {
+                true => handle_paste_while_working(session, text),
+                false => handle_paste(session, text),
+            };
+
+            let mut session = having_sent(&["half a thought sent before"]).in_workspace(&directory);
+            if mid_turn {
+                type_line(&mut session, "second question");
+                handle_key(&mut session, key(KeyCode::Enter));
+                assert!(session.a_turn_is_running(), "{place}: no turn was running");
+            }
+            for c in "half a thought".chars() {
+                press(&mut session, key(KeyCode::Char(c)));
+            }
+            press(&mut session, key(KeyCode::Left));
+            press(&mut session, ctrl('r'));
+            assert!(
+                session.searching_history(),
+                "{place}: the search did not open"
+            );
+
+            let said = session.transcript.len();
+            for pasted in ["pasted", "", dropped.as_str()] {
+                assert_eq!(
+                    paste(&mut session, pasted),
+                    Action::None,
+                    "{place}: a paste of {pasted:?} was answered from inside the search"
+                );
+            }
+            assert_eq!(
+                session.transcript.len(),
+                said,
+                "{place}: the empty paste spent the hint from inside the search"
+            );
+            assert_eq!(
+                session.history_search().expect("a search").needle(),
+                "half a thought",
+                "{place}: a paste changed what was searched for"
+            );
+            press(&mut session, key(KeyCode::Esc));
+            assert!(
+                !session.searching_history(),
+                "{place}: the search stayed open"
+            );
+            assert_eq!(
+                session.input(),
+                "half a thought",
+                "{place}: a paste reached the box under the search"
+            );
+            assert!(
+                session.attached().is_empty(),
+                "{place}: a drop staged an attachment from inside the search"
+            );
+
+            // The caret is where it was left, which is the half of the line's state that is not
+            // in the text.
+            press(&mut session, key(KeyCode::Char('!')));
+            assert_eq!(
+                session.input(),
+                "half a though!t",
+                "{place}: the caret moved"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// Backspacing past the start leaves, which is what the key means once there is nothing left of

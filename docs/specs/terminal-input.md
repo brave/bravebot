@@ -1010,7 +1010,9 @@ history put that one there whole, and a search looking for it answers with it al
 every letter narrows the list rather than reaching the box, and each word typed has to appear
 somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S cycles the scope through
 everywhere, this project and this session and back to everywhere, and backspacing past the start closes the search as the
-scroller's does. The chord is on the key list (INPUT-13), and in the border of the box while an older
+scroller's does. A paste, a dropped file and the empty paste that stands for a picture on the clipboard do
+nothing while it is open: they reach neither the box nor the search, no clipboard is read, and
+closing it with Escape leaves the box as it was. The chord is on the key list (INPUT-13), and in the border of the box while an older
 prompt is being walked back to, which is the moment somebody has shown they want one, except where
 that border is too narrow to hold it beside which prompt is being shown (INPUT-31).
 
@@ -1021,6 +1023,10 @@ in the box, that line being what the search was seeded with or the prompt the wa
 one and no way in at all when it is the hundredth: what a person remembers of an old prompt is a
 word out of the middle of it rather than how far back it was. Ctrl-R because every shell answers
 that chord with this question.
+
+A paste reaches the session by another route than a letter does, so keeping letters out of the box
+does not keep it out. The panel is drawn in place of the box, so a paste that reached the box would
+be found only when the search closed, as a prompt that is not the one the person left.
 
 A stored prompt is content, not an instruction: the file can be edited, on a shared machine by
 somebody else. Landing it in the box rather than in a request means the keystroke that sends it is
@@ -1047,6 +1053,7 @@ those the same way.
 `verified-by: bravebot_tui::app::a_letter_narrows_the_search_rather_than_reaching_the_box`
 `verified-by: bravebot_tui::app::enter_puts_the_chosen_prompt_in_the_box_without_sending_it`
 `verified-by: bravebot_tui::app::escape_closes_the_search_and_leaves_the_box_as_it_was`
+`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open`
 `verified-by: bravebot_tui::app::backspacing_past_the_start_of_the_search_closes_it`
 `verified-by: bravebot_tui::app::the_arrows_walk_the_matches_while_the_search_is_open`
 `verified-by: bravebot_tui::history_search::typing_narrows_the_list_to_the_prompts_that_match`
