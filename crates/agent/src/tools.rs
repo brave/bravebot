@@ -1009,7 +1009,9 @@ fn table(
                                         or a build inside it and so shows no operation of its \
                                         own. `loopback` lets the line listen on and connect to \
                                         ports of this machine, which `cargo test` and `sccache` \
-                                        need on macOS. Only where the session \
+                                        need on macOS. `ssh-key` has the user choose again \
+                                        which ssh key a `git push` offers its owner, after a \
+                                        push was refused for permission. Only where the session \
                                         is told it accepts them. The user is asked about the line \
                                         every time with the names shown, and no answer to it is \
                                         remembered. A name outside the list is an error."

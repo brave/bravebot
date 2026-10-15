@@ -947,6 +947,14 @@ directory, a session with nobody to ask included: it adds no row, since a choice
 key ssh could offer, which the remote scope already reads, and it only changes which of them ssh
 offers first.
 
+A line whose `run` call asks for `ssh-key` ([SANDBOX-26](#SANDBOX-26)) is asked about the key again
+for an owner a choice was made for at an earlier prompt, whether that choice was a key or ssh's own
+order, on the same terms: the owner is the one every such stage names, and the answer replaces the
+earlier choice. It changes nothing for an owner an entry names, which decides over any choice and
+is changed in the settings, nor for a stage with a `NAME=value` in front of it, which carries no
+scope. The request lends no path, adds no row and names no key, so the planner chooses nothing: it
+only has the person asked.
+
 `bravebot doctor --push-identity [<host>/<owner>]` asks which account each key pushes as. It takes
 every public key a stage with the remote scope could be offered, the ones at ssh's default names and
 the ones an `IdentityFile` line of the person's ssh configuration names, and runs `ssh -T -i <key>
@@ -1608,7 +1616,8 @@ line is said once. It then says that where GitHub refused a push for permission 
 belong to an account that cannot write to the repository, and where it refused the login no key
 offered is registered, that a retry offers the same key, and that only the person chooses the key:
 at the run prompt of the terminal interface, where ssh could offer more than one key and none was
-chosen for the owner, or with the entry shape and the file it goes in. It says that in the terminal
+chosen for the owner, or, for one already chosen, where the planner's retry names `ssh-key` in
+`scopes`, or with the entry shape and the file it goes in. It says that in the terminal
 interface `/reach keys` lists the keys chosen at a prompt and `/reach keys remove <number>` forgets
 one, so that the next prompt asks again, and that in either case the planner asks the person rather
 than retrying. The text names no host, owner, address or key path and reads nothing a
@@ -2577,12 +2586,15 @@ because the path it names is the one the person was protecting.
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle` and `loopback`. It is
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `loopback` and `ssh-key`. It is
 for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
 that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
 that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
 bind one or a build through `sccache`. `loopback` is the loopback grant and nothing else: it reads
-no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. Every other name is
+no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. `ssh-key` is a
+request for the person to choose again which ssh key a push offers its owner, for the line whose
+push was refused for permission ([SANDBOX-16](#SANDBOX-16)): it lends nothing, reads no path, and
+only has the run prompt number the keys for an owner already chosen. It is never remembered. Every other name is
 the scope or toolchain list of the same name, with the rows, the egress under a closed network
 ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
 (`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
@@ -2623,6 +2635,8 @@ for a different line.
 `verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
 `verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
 `verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
+`verified-by: bravebot_agent::confine::a_request_for_ssh_key_asks_again_for_an_owner_already_chosen_and_for_no_entry`
+`verified-by: bravebot_agent::turn::a_request_for_ssh_key_asks_again_and_the_new_answer_replaces_the_old_choice`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
@@ -2664,7 +2678,7 @@ person reads, and a session that asks for nothing is not asked about it.
   starts with an option has no operation to key on, so the line is offered neither key. The keys are
   unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
   the closed scope table rather than from what was drawn.
-- A toolchain list and loopback are never remembered, whether asked for alone or beside a scope,
+- A toolchain list, loopback and `ssh-key` are never remembered as reach, whether asked for alone or beside a scope,
   and nor is the `signing` scope, which `/reach` has no name for. The prompt says so.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is

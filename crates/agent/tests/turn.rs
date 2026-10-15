@@ -20659,13 +20659,27 @@ fn a_push_answered(
     state: &std::path::Path,
     answer: bravebot_agent::RunDecision,
 ) -> (String, Vec<bravebot_agent::RunRequest>) {
+    a_push_answered_asking(name, profile, state, answer, serde_json::json!([]))
+}
+
+/// `a_push_answered` for a `run` call that also names `scopes`.
+fn a_push_answered_asking(
+    name: &str,
+    profile: &std::path::Path,
+    state: &std::path::Path,
+    answer: bravebot_agent::RunDecision,
+    scopes: serde_json::Value,
+) -> (String, Vec<bravebot_agent::RunRequest>) {
     let scratch = Scratch::new(name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
             "run",
-            &serde_json::json!({ "command": "git push ssh://git@127.0.0.1:1/acme/widgets.git" })
-                .to_string(),
+            &serde_json::json!({
+                "command": "git push ssh://git@127.0.0.1:1/acme/widgets.git",
+                "scopes": scopes,
+            })
+            .to_string(),
         ),
         reply_with("done"),
     ]);
@@ -20772,6 +20786,64 @@ fn a_key_chosen_at_the_run_prompt_is_offered_and_remembered_and_one_not_numbered
     );
     assert!(
         message_from(&said, "Result of run").contains("offered whichever key ssh tried first"),
+        "{said}"
+    );
+}
+
+/// SANDBOX-16, SANDBOX-26: after a key was chosen for an owner, a push that asks for `ssh-key` puts
+/// the numbered keys to the person again, the answer replaces the earlier choice, and a push that
+/// does not ask is not asked. Run through `run` so the request, the acting layer and the record are
+/// all on the path. The regressions it rejects are a request that changes nothing, an answer that
+/// is not written over the earlier choice, and a request that leaves a choice standing as the
+/// prompt asked again.
+#[test]
+fn a_request_for_ssh_key_asks_again_and_the_new_answer_replaces_the_old_choice() {
+    use bravebot_agent::confirm::KeyAnswer;
+    if cannot_confine_here() {
+        return;
+    }
+    let profile = a_profile_with_two_keys("asked-again");
+    let state = Scratch::new("key-asked-again-state");
+    let (default, work) = (
+        profile.join(".ssh/id_ed25519.pub"),
+        profile.join(".ssh/work.pub"),
+    );
+    a_push_answered(
+        "key-asked-again-first",
+        &profile,
+        &state.path,
+        bravebot_agent::RunDecision::approve_with_key(KeyAnswer::Candidate(1)),
+    );
+    let store = bravebot_agent::reach::Store::new(&state.path);
+    assert_eq!(store.chosen_keys()[0].key.as_deref(), Some(work.as_path()));
+
+    let (_, seen) = a_push_answered(
+        "key-asked-again-unasked",
+        &profile,
+        &state.path,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(seen[0].key_choice, None, "asked again unprompted");
+
+    let (said, seen) = a_push_answered_asking(
+        "key-asked-again-second",
+        &profile,
+        &state.path,
+        bravebot_agent::RunDecision::approve_with_key(KeyAnswer::Candidate(0)),
+        serde_json::json!(["ssh-key"]),
+    );
+    let choice = seen[0]
+        .key_choice
+        .as_ref()
+        .expect("the request was not asked again");
+    assert_eq!(choice.candidates, [default.clone(), work]);
+    assert_eq!(seen[0].requested_not_remembered(), ["ssh-key"]);
+    let chosen = store.chosen_keys();
+    assert_eq!(chosen.len(), 1, "{chosen:?}");
+    assert_eq!(chosen[0].key.as_deref(), Some(default.as_path()));
+    assert!(
+        message_from(&said, "Result of run")
+            .contains("the key the person chose for that address's owner at a run prompt"),
         "{said}"
     );
 }

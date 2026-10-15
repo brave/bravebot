@@ -1489,6 +1489,7 @@ run-confined-machine-git = il peut lire cette machine sauf les endroits qui cont
 run-carries-known-hosts = { $program } ajoute aussi à vos hôtes ssh connus et peut atteindre votre agent ssh
 run-carries-toolchain = { $program } atteint aussi l'installation et le cache de la chaîne d'outils { $toolchain }
 run-carries-loopback = { $program } peut aussi écouter sur des ports de cette machine et s'y connecter
+run-carries-ssh-key = le planificateur demande que vous choisissiez de nouveau la clé ssh que { $program } propose en premier, si plusieurs peuvent l'être, et rien de plus n'est prêté
 run-carries-remote = { $program } lit aussi vos identifiants git et gh, votre configuration ssh et vos clés publiques, jamais une clé privée, et ajoute à vos hôtes ssh connus
 run-carries-aws = { $program } lit aussi vos identifiants aws dans ~/.aws
 run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans ~/.kube
