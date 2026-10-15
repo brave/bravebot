@@ -1536,8 +1536,11 @@ pub fn for_delegate(
     } else {
         Running::Withheld
     };
+    // NoLaterLook rather than ArrangingALook: a delegate is offered no `schedule_next` and nothing
+    // asks it again, so the read and run descriptions say that instead of sending it to a tool its
+    // list does not hold.
     let mut tools: Vec<Tool> = available(
-        Scheduling::ArrangingALook,
+        Scheduling::NoLaterLook,
         crate::watch::Arming::Unavailable,
         deadlines,
         running,
@@ -16551,6 +16554,39 @@ mod tests {
                 .iter()
                 .any(|t| t.function.name == "watch_file"),
                 "a delegate was offered a way to arm a watch"
+            );
+        }
+    }
+
+    /// SCHED-6: a delegate is offered no `schedule_next`, so the descriptions it receives must not
+    /// send it there. `read_file` and `run` carry a paragraph about the later look that differs by
+    /// turn, and the delegate's list used to be built with the one for a turn that arranges it.
+    #[test]
+    fn a_delegates_descriptions_do_not_name_schedule_next() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        let offered = for_delegate(
+            &CapabilitySet::from_iter([Capability::FileRead, Capability::ShellExec]),
+            None,
+            None,
+            Deadlines::BUILT_IN,
+        );
+        for name in ["read_file", "run"] {
+            let tool = offered
+                .iter()
+                .find(|t| t.function.name == name)
+                .unwrap_or_else(|| panic!("{name} is offered to this delegate"));
+            assert!(
+                !tool.function.description.contains("schedule_next"),
+                "a delegate was told to call schedule_next in {name}: {}",
+                tool.function.description
+            );
+            assert!(
+                tool.function
+                    .description
+                    .to_lowercase()
+                    .contains("nothing will ask you again"),
+                "{name} does not say no later look is coming: {}",
+                tool.function.description
             );
         }
     }
