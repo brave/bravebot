@@ -601,7 +601,9 @@ fn table(
              as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
              --merged does; search finds the lines matching a regular expression in the files \
              at a revision, as git grep does. Works only where the whole of .git is \
-             trusted, and for status the whole working tree; {git_elsewhere}. Nothing git's \
+             trusted, and for status the whole working tree, and where .git is a directory: it \
+             declines the .git file a linked worktree or a submodule has, except at the root of \
+             a checkout you were started in; {git_elsewhere}. Nothing git's \
              configuration names is applied: no diff drivers, textconv, \
              filters or signature checks, and no remote URL is ever returned. Status detects no \
              renames and lists a file an attribute would convert as not compared. {git_beyond}"
@@ -1870,9 +1872,10 @@ pub struct Output {
     /// anything started. Read for the checkout, which is kept wherever one was started
     /// (CHECKOUT-15).
     pub started_a_program: bool,
-    /// Whether a stage of the command was git, so a result sealed from the planner can name the
-    /// tool that reads history without a prompt.
-    pub ran_git: bool,
+    /// The directory each git stage of the command worked in, so a result sealed from the planner
+    /// can name the tool that reads history without a prompt where that tool opens the
+    /// repository. Where the line ran, moved by the stage's leading `-C` options.
+    pub ran_git_in: Vec<std::path::PathBuf>,
     /// What the call spent at the model, where it called one.
     ///
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
@@ -2681,8 +2684,8 @@ struct Produced {
     ran_a_program: bool,
     /// Whether a program was started, including a call that was then refused or failed.
     started_a_program: bool,
-    /// Whether a stage of the command was git.
-    ran_git: bool,
+    /// The directory each git stage of the command worked in.
+    ran_git_in: Vec<std::path::PathBuf>,
     /// Which document a processor's answer is about, where it produced one.
     ///
     /// `Some(None)` is a processor that was given several documents and told which of them it
@@ -2777,7 +2780,7 @@ impl Produced {
             changed_a_file: false,
             ran_a_program: false,
             started_a_program: false,
-            ran_git: false,
+            ran_git_in: Vec::new(),
             answers_for: None,
             said: None,
             glimpsed: None,
@@ -3882,7 +3885,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
         started_a_program: produced.started_a_program,
-        ran_git: produced.ran_git,
+        ran_git_in: produced.ran_git_in,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
@@ -9411,7 +9414,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
             produced.started_a_program = true;
-            produced.ran_git = plan.steps().into_iter().any(runs_git);
+            produced.ran_git_in = plan
+                .steps()
+                .into_iter()
+                .filter(|step| runs_git(step))
+                .map(|step| git_directory(step, &plan.directory))
+                .collect();
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
@@ -9468,6 +9476,30 @@ fn ask_about_hosts<S: Sink, C: Confirmer>(
 
 fn runs_git(step: &bravebot_core::command::Step) -> bool {
     step.resolved.file_stem().is_some_and(|stem| stem == "git")
+}
+
+/// The directory a git stage works in: where the line ran, moved by each `-C` that leads its
+/// arguments, as git moves it. `-c name=value` before them is passed over. `--git-dir`,
+/// `--work-tree` and `GIT_DIR` are not followed.
+fn git_directory(
+    step: &bravebot_core::command::Step,
+    line: &std::path::Path,
+) -> std::path::PathBuf {
+    let mut directory = line.to_path_buf();
+    let mut args = step.args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-C" => match args.next() {
+                Some(path) => directory = directory.join(path),
+                None => break,
+            },
+            "-c" => {
+                args.next();
+            }
+            _ => break,
+        }
+    }
+    directory
 }
 
 /// What every fetch asks for, in the order it prefers.
@@ -12911,6 +12943,30 @@ mod tests {
             checker.contains("For --follow, blame or anything else use run."),
             "a checker was not sent to the tool it holds: {checker}"
         );
+    }
+
+    /// GIT-8. read_git declines a `.git` that is a file, and the description says so in a turn
+    /// offered `run` and in one that is not, so a planner working in a linked worktree does not
+    /// learn it from a refused call.
+    #[test]
+    fn read_git_says_a_dot_git_that_is_a_file_is_declined() {
+        use bravebot_core::delegate::Kind;
+
+        for kind in [Kind::Reader, Kind::Checker] {
+            let said = for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN)
+                .into_iter()
+                .find(|tool| tool.function.name == "read_git")
+                .expect("a kind that reads files is offered read_git")
+                .function
+                .description;
+            assert!(
+                said.contains(
+                    "it declines the .git file a linked worktree or a submodule has, except at \
+                     the root of a checkout you were started in"
+                ),
+                "the description did not say a .git file is declined: {said}"
+            );
+        }
     }
 
     /// The description and the refusal are read in one context, so they have to agree. A turn told

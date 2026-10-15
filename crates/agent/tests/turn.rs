@@ -48976,13 +48976,83 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     );
 }
 
+/// The sentence a sealed result carries to name read_git.
+const READ_GIT_SENTENCE: &str = "To read a repository's history, use read_git";
+
+/// What the planner reads of each of `runs`, a command and the directory it runs in, in order,
+/// when the person approves every run without vouching for it, so each result is sealed. A script
+/// named `git` that prints a sentinel is written into each directory, so no git is started and a
+/// command is written `./git`.
+fn sealed_git_runs(
+    scratch: &Scratch,
+    workspace: &Workspace,
+    runs: &[(&str, &str)],
+    trust: bravebot_core::trust::TrustStore,
+) -> Vec<String> {
+    let mut requests = Vec::new();
+    for (command, directory) in runs {
+        let script = scratch.path.join(directory).join("git");
+        std::fs::write(&script, "#!/bin/sh\necho SENTINEL-SEALED\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        requests.push(tool_request(
+            "run",
+            &format!(r#"{{"command":"{command}","directory":"{directory}"}}"#),
+        ));
+    }
+    requests.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(requests);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    // One request per run, then the one the reply answers; the last holds every result.
+    let mut last = String::new();
+    for _ in 0..=runs.len() {
+        last = received.recv().expect("a request");
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&last).expect("a request");
+    let results: Vec<String> = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .collect();
+    assert_eq!(results.len(), runs.len(), "{results:?}");
+    for result in &results {
+        assert!(
+            result.contains("could not be shown to you"),
+            "a run was not sealed, so it says nothing of what it names: {result}"
+        );
+    }
+    results
+}
+
 /// GIT-7. A git run's sealed output names read_git, which answers the same question with nobody
 /// asked where the repository is trusted. Any other program's does not, where the sentence would
 /// be noise.
 #[test]
 fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
-    const SENTENCE: &str = "To read a repository's history, use read_git";
     let scratch = Scratch::new("read-git-named-by-a-run");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     for program in ["git", "other"] {
         let script = scratch.path.join(program);
@@ -49020,14 +49090,135 @@ fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
     let _first = received.recv().expect("first request");
     let git = tool_results(&received.recv().expect("second request"));
     assert!(
-        git.contains("could not be shown to you") && git.contains(SENTENCE),
+        git.contains("could not be shown to you") && git.contains(READ_GIT_SENTENCE),
         "a sealed git run did not name read_git: {git}"
     );
     let both = tool_results(&received.recv().expect("third request"));
     assert_eq!(
-        both.matches(SENTENCE).count(),
+        both.matches(READ_GIT_SENTENCE).count(),
         1,
         "another program's sealed run named read_git: {both}"
+    );
+}
+
+/// GIT-7, GIT-8. A git run in a linked worktree, or in a directory below one, does not name
+/// read_git, which declines a `.git` that is a file: the planner would spend a call on a tool that
+/// refuses the repository it just ran git in, and then ask `run` again. The same run at the root
+/// of a repository with a `.git` of its own, in the same turn, still names it.
+#[test]
+fn a_sealed_git_run_in_a_linked_worktree_does_not_name_read_git() {
+    let scratch = Scratch::new("read-git-linked-worktree");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let linked = scratch.path.join("linked");
+    std::fs::create_dir_all(linked.join("inner")).unwrap();
+    std::fs::write(linked.join(".git"), "gitdir: ../.git/worktrees/linked\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let results = sealed_git_runs(
+        &scratch,
+        &workspace,
+        &[
+            ("./git log", "."),
+            ("./git log", "linked"),
+            ("./git log", "linked/inner"),
+        ],
+        trusting_the_workspace(),
+    );
+
+    assert!(
+        results[0].contains(READ_GIT_SENTENCE),
+        "a sealed git run in a repository read_git opens did not name it: {}",
+        results[0]
+    );
+    for (directory, result) in [("linked", &results[1]), ("linked/inner", &results[2])] {
+        assert!(
+            !result.contains(READ_GIT_SENTENCE),
+            "a sealed git run in {directory} named a tool that declines its repository: {result}"
+        );
+    }
+}
+
+/// GIT-7. Git finds the repository from a directory below its root, so a run there names read_git
+/// as a run at the root does: the repository is the one read_git opens, whichever directory the
+/// line ran in.
+#[test]
+fn a_sealed_git_run_in_a_subdirectory_of_a_repository_names_read_git() {
+    let scratch = Scratch::new("read-git-subdirectory-run");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    std::fs::create_dir_all(scratch.path.join("crates/inner")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let results = sealed_git_runs(
+        &scratch,
+        &workspace,
+        &[("./git log", "crates/inner")],
+        trusting_the_workspace(),
+    );
+
+    assert!(
+        results[0].contains(READ_GIT_SENTENCE),
+        "a sealed git run below the root of a repository did not name read_git: {}",
+        results[0]
+    );
+}
+
+/// GIT-7. A `-C` that leads a git stage moves the directory it works in, so the repository is the
+/// one `-C` names: `git -C linked log` run from the root of a repository is a run in a linked
+/// worktree, and `git -C ../plain log` run from inside one is a run in a repository of its own.
+#[test]
+fn a_sealed_git_run_is_judged_by_the_directory_dash_c_names() {
+    let scratch = Scratch::new("read-git-dash-c-run");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let linked = scratch.path.join("linked");
+    std::fs::create_dir(&linked).unwrap();
+    std::fs::write(linked.join(".git"), "gitdir: ../.git/worktrees/linked\n").unwrap();
+    let plain = scratch.path.join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    repository::commit_files(&plain, &[("README", "elsewhere\n")], "second");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let results = sealed_git_runs(
+        &scratch,
+        &workspace,
+        &[
+            ("./git -C linked log", "."),
+            ("./git -C ../plain log", "linked"),
+        ],
+        trusting_the_workspace(),
+    );
+
+    assert!(
+        !results[0].contains(READ_GIT_SENTENCE),
+        "git -C into a linked worktree named a tool that declines it: {}",
+        results[0]
+    );
+    assert!(
+        results[1].contains(READ_GIT_SENTENCE),
+        "git -C into a repository read_git opens, from a linked worktree, did not name it: {}",
+        results[1]
+    );
+}
+
+/// GIT-7, GIT-2. A git run in a repository the map does not trust does not name read_git, which
+/// opens none: the sentence that says nobody is asked in a trusted repository is not written for
+/// one that is not.
+#[test]
+fn a_sealed_git_run_in_a_repository_nobody_vouched_for_does_not_name_read_git() {
+    let scratch = Scratch::new("read-git-unvouched-run");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let results = sealed_git_runs(
+        &scratch,
+        &workspace,
+        &[("./git log", ".")],
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+
+    assert!(
+        !results[0].contains(READ_GIT_SENTENCE),
+        "a sealed git run in a repository nobody vouched for named a tool that declines it: {}",
+        results[0]
     );
 }
 

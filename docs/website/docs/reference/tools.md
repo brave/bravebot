@@ -326,7 +326,8 @@ so. A rule over `.git` or anything in it keeps the repository closed.
 
 What it would show is scanned for credentials as a file read is, and held back until you agree. A
 file's lines in a commit are scanned as that file, so agreeing to one file's key is not agreeing to
-another's. A `run` of git whose output the planner could not be shown mentions `read_git`.
+another's. A `run` of git whose output the planner could not be shown mentions `read_git`, unless `read_git` would
+decline the repository the command ran in.
 
 Blame, `--follow` and a diff against the working tree go through `run`. A repository laid out in a
 way that changes what a read means, such as borrowed objects, replace refs, an included

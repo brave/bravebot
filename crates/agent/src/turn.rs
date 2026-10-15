@@ -4608,10 +4608,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                                 .to_string()
                                         }
                                     };
-                                    // Only where git ran: the output of git log or show is what
-                                    // read_git answers with nobody asked, where the repository is
-                                    // trusted, and for any other program the sentence is noise.
-                                    let history = if output.ran_git {
+                                    // Only where git ran in a directory whose repository read_git
+                                    // opens: the output of git log or show is what read_git answers
+                                    // with nobody asked, and for any other program, or a repository
+                                    // it declines, the sentence is noise. Decided here and not when
+                                    // the line ran, so a line whose output is shown pays nothing.
+                                    let history = if output.ran_git_in.iter().any(|directory| {
+                                        workspace.read_git_opens(&policy, directory)
+                                    }) {
                                         " To read a repository's history, use read_git: it reads \
                                      .git without starting git, and in a trusted repository \
                                      nobody is asked."
