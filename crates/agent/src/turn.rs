@@ -709,14 +709,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         servers,
         cancel,
         Some(&mut decisions),
-        // A turn a person asked for reads what its hooks said off the [`Outcome`].
-        None,
-        // And how many rounds it made, off the same [`Outcome`].
-        None,
-        // It has no parent to tell what it did to the workspace.
-        None,
-        // And it opens the run's wallet rather than being lent one: it is the run.
-        None,
+        Handback::default(),
     );
     CompletedTurn { outcome, decisions }
 }
@@ -778,10 +771,12 @@ pub(crate) fn delegated(
         servers,
         cancel,
         Some(&mut decisions),
-        Some(notices),
-        Some(rounds),
-        Some(worked),
-        wallet,
+        Handback {
+            said_about_hooks: Some(notices),
+            rounds_taken: Some(rounds),
+            worked: Some(worked),
+            lent_wallet: wallet,
+        },
     );
     *vouched = Vouched {
         trust: decisions.trust,
@@ -2117,6 +2112,32 @@ fn fire_hooks<R: Reporter + ?Sized>(
     said
 }
 
+/// What a delegate's caller takes back from [`run_inner`], each written however the turn ended.
+///
+/// The default, with every field `None`, is a turn a person asked for: it has no parent to hand
+/// anything back to and it opens the run's wallet rather than being lent one, because it is the
+/// run.
+#[derive(Default)]
+struct Handback<'a> {
+    /// What the hooks had to say, written whether or not the rounds produced an outcome, and for
+    /// the same reason the retained record is. Only a delegate's caller passes one: a turn a
+    /// person asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
+    /// boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
+    said_about_hooks: Option<&'a mut Vec<String>>,
+    /// How many rounds of tool calls the turn made, written however it ended. Only a delegate's
+    /// caller passes one, for the record of how the delegate ended (TRACE-8).
+    rounds_taken: Option<&'a mut usize>,
+    /// What the turn did to its workspace, written however it ended. Only a delegate's caller
+    /// passes one, for the turn that spawned it (TURN-4).
+    worked: Option<&'a mut Worked>,
+    /// The credential store the run that started this one is spending from. Only a delegate's
+    /// caller passes one, and a delegate spends nothing else: there is one subscription per
+    /// process and a credential is single-use, so a second wallet opened here would re-read a
+    /// file the parent's spends have not reached and hand out the credential it is already
+    /// presenting (PREM-5).
+    lent_wallet: Option<&'a dyn crate::shared::Spends>,
+}
+
 /// One turn, with the hooks a person attached to its beginning and its end around it.
 ///
 /// A wrapper rather than two calls inside the loop, so that the moment a turn is over is the
@@ -2139,24 +2160,14 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     cancel: &Cancel,
     // Published on every ordinary return, after child cleanup and before result handling.
     retained: Option<&mut Decisions>,
-    // What the hooks had to say, written whether or not the rounds produced an outcome, and for
-    // the same reason the record above is. Only a delegate's caller passes one: a turn a person
-    // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
-    // boundary while the hooks it fired are still the person's own to hear about (HOOK-7).
-    said_about_hooks: Option<&mut Vec<String>>,
-    // How many rounds of tool calls the turn made, written however it ended. Only a delegate's
-    // caller passes one, for the record of how the delegate ended (TRACE-8).
-    rounds_taken: Option<&mut usize>,
-    // What the turn did to its workspace, written however it ended. Only a delegate's caller
-    // passes one, for the turn that spawned it (TURN-4).
-    worked: Option<&mut Worked>,
-    // The credential store the run that started this one is spending from. Only a delegate's
-    // caller passes one, and a delegate spends nothing else: there is one subscription per
-    // process and a credential is single-use, so a second wallet opened here would re-read a
-    // file the parent's spends have not reached and hand out the credential it is already
-    // presenting (PREM-5).
-    lent_wallet: Option<&dyn crate::shared::Spends>,
+    handback: Handback<'_>,
 ) -> Result<Outcome, TurnError> {
+    let Handback {
+        said_about_hooks,
+        rounds_taken,
+        worked,
+        lent_wallet,
+    } = handback;
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
