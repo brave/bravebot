@@ -332,7 +332,7 @@ pub struct BedrockClient<'a> {
     recalled: Refusals,
     /// How long to wait before the first retry. Doubled for each retry after that.
     ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    /// [`BACKOFF`] unless a test shortens it.
     backoff: Duration,
 }
 
@@ -384,6 +384,7 @@ impl<'a> BedrockClient<'a> {
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
