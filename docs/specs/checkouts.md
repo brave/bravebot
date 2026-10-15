@@ -381,10 +381,11 @@ working directory holds the checkout, as it does for a session in the home direc
 refusal the planner is given names that directory and says the person can close it with
 `/add-dir close` and its path, or start bravebot again without it.
 
-A read refused for being outside the workspace says, where opening the directory it is in would
-open one that holds the working directory, that no delegate is given a checkout while that
-directory is open. It names the drop first, which reaches the file and costs nothing. A directory
-that holds nothing of the kind is offered without the warning.
+A path refused for being outside the workspace says, where the directory to open holds the working
+directory, that no delegate is given a checkout while that directory is open. The directory to open
+is the one a file is in, and the directory itself where the path names one. For a file, a read names
+the drop first, which reaches the file and costs nothing. A directory that holds nothing of the
+kind is offered without the warning.
 
 The warning is given where the directory is opened as well, by `/add-dir` and by `--add-dir`, and
 not only where a read or a spawn is refused afterwards, which is after the planner has spent the
@@ -424,6 +425,8 @@ does the description of `isolation`.
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_working_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_added_directory_that_holds_the_checkouts`
 `verified-by: bravebot_agent::workspace::a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_costs`
+`verified-by: bravebot_agent::workspace::a_directory_the_planner_names_is_offered_as_itself`
+`verified-by: bravebot_agent::workspace::a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in`
 `verified-by: bravebot_agent::workspace::a_directory_that_holds_the_working_directory_is_the_one_that_ends_checkouts`
 `verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`

@@ -2745,6 +2745,14 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::OpenItself,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenItselfEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Kept,
         },
         WorkspaceError::Escapes {
@@ -8661,6 +8669,260 @@ fn a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_cos
         .describe(&held);
     assert!(
         told.contains("permissions.readsStayInWorkspace") && !told.contains("checkout"),
+        "{told}"
+    );
+}
+
+/// CHECKOUT-7, TRUST-10. A directory the planner names is refused with that directory as the one
+/// to open, and the warning about checkouts is given when that directory holds the working
+/// directory, not when its parent does.
+///
+/// The failures this rejects are offering the directory a path is in whatever the path names, which
+/// sends a person to open the parent of a sibling and warns that doing so ends checkouts when
+/// opening the sibling does not, and leaving the warning off every directory, which hides it for the
+/// directory that holds the working directory.
+#[test]
+fn a_directory_the_planner_names_is_offered_as_itself() {
+    let holder = Scratch::new("directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("notes.txt"), "a note").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let pattern = [Labelled::trusted("note".to_string())];
+
+    let beside = sibling.display().to_string();
+    let listed = workspace
+        .list(&mut policy, &Labelled::trusted(beside.clone()), None, None)
+        .expect_err("a directory beside the workspace is outside it");
+    let searched = workspace
+        .grep(
+            &mut policy,
+            &pattern,
+            &Labelled::trusted(beside.clone()),
+            None,
+            true,
+            1,
+        )
+        .expect_err("a search of it is refused too");
+    for error in [listed, searched] {
+        assert!(
+            matches!(
+                &error,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::OpenItself,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        let told = error.describe(&beside);
+        assert!(
+            told.contains("open the directory this path names") && told.contains("/add-dir"),
+            "{told}"
+        );
+        assert!(
+            !told.contains("the directory it is in"),
+            "the parent of a directory was offered as the one to open: {told}"
+        );
+        assert!(
+            !told.contains("checkout"),
+            "a sibling that holds nothing was warned about: {told}"
+        );
+    }
+
+    let holding = holder.path.display().to_string();
+    let error = workspace
+        .list(&mut policy, &Labelled::trusted(holding.clone()), None, None)
+        .expect_err("the directory above the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenItselfEndsCheckouts,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&holding);
+    assert!(
+        told.contains("open the directory this path names")
+            && told.contains("no delegate is given a checkout"),
+        "{told}"
+    );
+    assert!(!told.contains("the directory it is in"), "{told}");
+}
+
+/// CHECKOUT-7, TRUST-10. A file, and a name nothing is at yet, is still offered through the
+/// directory it is in, and that directory is the one asked about checkouts.
+///
+/// The failures this rejects are reading any path outside the workspace as a directory to open,
+/// and reading a name that does not exist yet as one, which would offer a person the file's own
+/// name to `/add-dir`, where nothing can be opened.
+#[test]
+fn a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in() {
+    let holder = Scratch::new("file-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("notes.txt"), "a note").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let text = Labelled::trusted("text".to_string());
+
+    let existing = sibling.join("notes.txt").display().to_string();
+    let read = workspace
+        .read(&mut policy, &Labelled::trusted(existing.clone()))
+        .expect_err("a file beside the workspace is outside it");
+    let new_beside = sibling.join("new.txt").display().to_string();
+    let written = workspace
+        .write(&mut policy, &Labelled::trusted(new_beside.clone()), &text)
+        .expect_err("a new file there is refused too");
+    for (error, named) in [(read, &existing), (written, &new_beside)] {
+        let told = error.describe(named);
+        assert!(told.contains("open the directory it is in"), "{told}");
+        assert!(
+            !told.contains("this path names"),
+            "a file was offered as a directory to open: {told}"
+        );
+        assert!(!told.contains("checkout"), "{told}");
+    }
+
+    let new_in_holder = holder.path.join("new.txt").display().to_string();
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(new_in_holder.clone()),
+            &text,
+        )
+        .expect_err("a new file beside the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenEndsCheckouts,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&new_in_holder);
+    assert!(
+        told.contains("open the directory it is in")
+            && told.contains("no delegate is given a checkout"),
+        "{told}"
+    );
+}
+
+/// DROP-5. A read that names a directory outside the workspace is not told it can drop it, since a
+/// dropped directory attaches nothing.
+///
+/// The failure this rejects is turning every open-it remedy into an open-or-drop one for a read,
+/// which offers the planner a route that ends in another refusal.
+#[test]
+fn a_read_naming_a_directory_outside_the_workspace_is_not_told_to_drop_it() {
+    let holder = Scratch::new("read-directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let beside = sibling.display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(beside.clone()))
+        .expect_err("a directory beside the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenItself,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&beside);
+    assert!(!told.contains("drop"), "{told}");
+    assert!(
+        told.contains("open the directory this path names"),
+        "{told}"
+    );
+}
+
+/// PERM-16. Where `permissions.readsStayInWorkspace` keeps the file tools inside the workspace, a
+/// directory beside it is refused as the setting's doing and not offered to be opened, since
+/// `/add-dir` would refuse it.
+///
+/// The failure this rejects is deciding that a path names a directory before asking whether the
+/// setting keeps the tools inside, which sends a person to `/add-dir` for a directory it cannot
+/// open.
+#[test]
+fn a_directory_is_not_offered_to_be_opened_where_reads_stay_in_the_workspace() {
+    let holder = Scratch::new("kept-directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let beside = sibling.display().to_string();
+    let error = workspace
+        .list(&mut policy, &Labelled::trusted(beside.clone()), None, None)
+        .expect_err("the setting keeps the tools inside the workspace");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Kept,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&beside);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace") && !told.contains("/add-dir"),
         "{told}"
     );
 }
