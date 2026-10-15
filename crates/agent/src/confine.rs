@@ -1158,11 +1158,20 @@ impl Confinement {
     /// program chose, since a program's error text is not where the profile is decided. It ends
     /// with the fixed sentence about credential locations.
     pub fn profile(&self, steps: &[&Step]) -> String {
+        self.profile_offering(steps, false)
+    }
+
+    /// [`Confinement::profile`], naming the one-line `unconfined` route to a step that signs where
+    /// `unconfined_offered` says the session would accept the request, so a planner is never
+    /// pointed at an argument it would be refused.
+    pub fn profile_offering(&self, steps: &[&Step], unconfined_offered: bool) -> String {
         let (signs, refused) = self.signing_state(steps);
-        let source = if signs {
-            SIGNING_KEY_SOURCE_SENTENCE
-        } else {
-            ""
+        let source = match (signs, unconfined_offered) {
+            (false, _) => String::new(),
+            (true, false) => format!("{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}."),
+            (true, true) => format!(
+                "{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}{SIGNING_UNCONFINED_WAY_OUT}."
+            ),
         };
         let refusal = if refused {
             SIGNING_KEY_REFUSED_SENTENCE
@@ -1779,6 +1788,20 @@ const SIGNING_KEY_SOURCE_SENTENCE: &str = " A step that signs a commit is lent t
      set in a repository's own configuration is not read, so git signing with a key that is \
      neither of these fails with \"Couldn't load public key\" until the person adds that key to \
      the agent or sets it in one of those places.";
+
+/// Said after [`SIGNING_KEY_SOURCE_SENTENCE`], so that the other way a signature fails, which
+/// prints "No private key found", is told from it. Fixed text: it does not branch on what the
+/// program printed.
+const SIGNING_AGENT_SENTENCE: &str = " A step that signs never reads a private key: it signs \
+     through the person's ssh agent. A signature that fails with \"No private key found\" means \
+     the configured public key was lent but the agent does not hold its private key, not that the \
+     key is missing or that the sandbox hides it, and it is solved by the person loading the key \
+     with `ssh-add`";
+
+/// The way through [`SIGNING_AGENT_SENTENCE`] names where the session accepts a request for a line
+/// with no sandbox, ending without a full stop so the caller can end the sentence.
+const SIGNING_UNCONFINED_WAY_OUT: &str = ", or by running that one commit line with \
+     'unconfined': true, which the person is asked to approve and which runs with no sandbox";
 
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
@@ -6495,6 +6518,33 @@ mod tests {
         let after = confined.profile(&[&commit]);
         assert!(after.contains(SIGNING_KEY_SOURCE_SENTENCE), "{after}");
         assert!(!after.contains("other.pub"), "{after}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a failure of a step that signs says what "No private key found" means and the
+    /// way through, and names `'unconfined': true` only where the session would accept it.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_told_what_no_private_key_found_means() {
+        let (home, confined) =
+            a_confinement_over_a_home_that("agent-held", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let status = step("/usr/bin/git", &["status"]);
+
+        let plain = confined.profile(&[&commit]);
+        assert!(plain.contains("No private key found"), "{plain}");
+        assert!(plain.contains("never reads a private key"), "{plain}");
+        assert!(plain.contains("`ssh-add`"), "{plain}");
+        assert!(!plain.contains("unconfined"), "{plain}");
+
+        let offered = confined.profile_offering(&[&commit], true);
+        assert!(offered.contains("No private key found"), "{offered}");
+        assert!(offered.contains("'unconfined': true"), "{offered}");
+        assert!(offered.contains("`ssh-add`"), "{offered}");
+
+        let none = confined.profile_offering(&[&status], true);
+        assert!(!none.contains("No private key found"), "{none}");
+        assert!(!none.contains("unconfined"), "{none}");
         std::fs::remove_dir_all(&home).unwrap();
     }
 

@@ -1011,6 +1011,12 @@ to carry it, always says, whether or not the person's git signs with ssh, that t
 directory, and that a `user.signingkey` set in a repository's own configuration is not read. The text is fixed: it holds no value from any
 configuration and does not change with the repository, so that a signature which fails with "Couldn't
 load public key" is traced to the setting by the planner without reading anything it was not lent.
+It also says that a step that signs never reads a private key and signs through the person's ssh
+agent, that a signature failing with "No private key found" means the configured key was lent but
+the agent does not hold it, and that the person solves it by loading the key with `ssh-add`. Where
+the session would accept `'unconfined': true` for the line (the condition under which a refused
+write names it, [SANDBOX-29](#SANDBOX-29)) it adds that the one commit line may be run with it, the
+person being asked to approve it; otherwise it names no such argument.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else

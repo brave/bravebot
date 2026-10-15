@@ -8283,6 +8283,12 @@ fn unconfined_accepted<S: Sink>(
     }
 }
 
+/// Whether the planner may be pointed at `'unconfined': true`: where [`unconfined_accepted`] holds
+/// and the front end can ask about the line.
+fn unconfined_is_offered<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
+    tools.asks_about_unconfined && unconfined_accepted(policy, tools).is_ok()
+}
+
 /// What a planner whose write was refused for leaving the workspace is told it can do instead, or
 /// nothing where the session would not accept the request (SANDBOX-29).
 ///
@@ -8292,7 +8298,7 @@ fn unconfined_accepted<S: Sink>(
 /// [`crate::workspace::WorkspaceError::describe`], which ends without a full stop, and to end
 /// without one so a caller can go on.
 fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'static str {
-    match tools.asks_about_unconfined && unconfined_accepted(policy, tools).is_ok() {
+    match unconfined_is_offered(policy, tools) {
         true => {
             ". A run line that redirects its output to a file there, started with \
              'unconfined': true, can write it: the person is asked to approve that one line, \
@@ -9093,9 +9099,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 );
                 tools.jobs.confined_as(
                     &name,
-                    confinement
-                        .as_ref()
-                        .map(|confinement| confinement.profile(&plan.steps())),
+                    confinement.as_ref().map(|confinement| {
+                        confinement
+                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
+                    }),
                 );
                 reporter.job(crate::report::JobEvent::Started {
                     name: name.clone(),
@@ -9177,9 +9184,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 );
                 tools.jobs.confined_as(
                     &name,
-                    confinement
-                        .as_ref()
-                        .map(|confinement| confinement.profile(&plan.steps())),
+                    confinement.as_ref().map(|confinement| {
+                        confinement
+                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
+                    }),
                 );
                 policy.record_handoff(&name, moved.after);
                 reporter.job(crate::report::JobEvent::Started {
@@ -9395,9 +9403,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // The codes and not `ended_well`: that is the verdict of the part that ran last, so
                 // `make test ; echo done` would be told it exited 0 with the failed stage unnamed
                 // (RUN-13).
-                let confinement = confinement
-                    .as_ref()
-                    .map(|confinement| confinement.profile(&plan.steps()));
+                let confinement = confinement.as_ref().map(|confinement| {
+                    confinement
+                        .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
+                });
                 how_it_ended(&ran.codes, confinement.as_deref())
             };
             let lines = text.lines().count();
