@@ -952,6 +952,63 @@ fn a_missing_file_fails_the_turn() {
     assert!(error.to_string().contains("does-not-exist.rs"));
 }
 
+/// NAME-5: a name that climbs out of the workspace, or is absolute, is refused when the turn reads
+/// it, and the file it points at never reaches the model. The completion and the finished-name
+/// check refuse these first, but a line sent without going through either arrives here as the
+/// same name, and this read is what stands between it and a file the person never opened.
+#[test]
+fn a_named_file_outside_the_workspace_is_refused_and_never_sent() {
+    let scratch = Scratch::new("named-outside");
+    let workspace_dir = scratch.path.join("work");
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    let outside = scratch.path.join("outside.txt");
+    std::fs::write(&outside, "OUTSIDE-CONTENTS").unwrap();
+    std::fs::write(workspace_dir.join("inside.txt"), "INSIDE-CONTENTS").unwrap();
+    let workspace = Workspace::new(&workspace_dir).expect("workspace");
+
+    for (name, spelled) in [
+        ("../outside.txt", "climbing out with .."),
+        (outside.to_str().expect("utf-8 path"), "an absolute path"),
+    ] {
+        let (endpoint, received) = serve(&reply_with("unused"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("explain").with_file(name);
+        let outcome = turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        );
+        assert!(outcome.is_err(), "{spelled}: the turn read a file outside");
+        assert!(
+            received.try_recv().is_err(),
+            "{spelled}: a request went out after the refusal"
+        );
+    }
+
+    let (endpoint, received) = serve(&reply_with("ok"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("explain").with_file("inside.txt"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("a file inside the workspace is still read");
+    let body = received.recv().expect("request body");
+    assert!(body.contains("INSIDE-CONTENTS"));
+    assert!(!body.contains("OUTSIDE-CONTENTS"));
+}
+
 /// Serve a sequence of replies, one per request, so a multi-step loop can be driven.
 ///
 /// A confined check's request does not come out of the sequence. Every prompt that would promote

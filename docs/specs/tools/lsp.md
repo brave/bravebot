@@ -325,6 +325,7 @@ answers and only one of them was asked.
 `verified-by: bravebot_lsp::server::an_unconfigured_language_is_reported_as_unconfigured`
 `verified-by: bravebot_lsp::server::a_missing_binary_is_reported_as_missing`
 `verified-by: bravebot_lsp::server::a_server_that_fails_to_start_is_reported_as_such`
+`verified-by: bravebot_lsp::server::asking_with_no_server_says_which_of_the_three_cases_it_is`
 `verified-by: bravebot_agent::lsp::nothing_found_is_not_reported_as_no_server`
 `verified-by: bravebot_agent::lsp::no_server_does_not_fall_back_to_a_search`
 
