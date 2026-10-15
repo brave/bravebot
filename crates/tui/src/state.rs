@@ -19113,6 +19113,71 @@ mod tests {
         assert_eq!(after("one two three", 0, "fz"), 0);
     }
 
+    /// A backward jump looks at the first character of the line, the last position it can reach, and
+    /// a target there is the previous occurrence like any other. That holds on the first row and on
+    /// a later one, and for the keys that repeat a jump the other way as much as for `F` and `T`.
+    #[test]
+    fn a_backward_jump_reaches_a_target_that_begins_the_line() {
+        assert_eq!(after("xab", 2, "Fx"), 0);
+        assert_eq!(after("xab", 2, "Tx"), 1);
+        assert_eq!(after("ab\nxcd", 5, "Fx"), 3);
+        assert_eq!(after("ab\nxcd", 5, "Tx"), 4);
+        // Turned round by `,`, which is the same jump the other way, and repeated by `;`.
+        assert_eq!(after("-ab-", 0, "f-,"), 0);
+        assert_eq!(after("-ab-", 0, "t-,"), 1);
+        assert_eq!(after("-a-b-", 4, "F-;"), 0);
+        // The second of two, so the walk has to look at the first character after finding another.
+        assert_eq!(after("-a-b", 3, "2F-"), 0);
+    }
+
+    /// Looking at the first character of the line does not mean looking at what is not part of the
+    /// walk: the character under the caret is not an occurrence, and the row before is another line.
+    /// A caret already at the start of its line has nothing behind it, so `T` there stays put rather
+    /// than stopping one short of the character it is standing on.
+    #[test]
+    fn a_backward_jump_only_looks_behind_the_caret_and_along_its_own_line() {
+        assert_eq!(after("xab", 0, "Fx"), 0);
+        assert_eq!(after("xab", 0, "Tx"), 0);
+        assert_eq!(after("ab\nxcd", 3, "Fx"), 3);
+        assert_eq!(after("ab\nxcd", 3, "Tx"), 3);
+        assert_eq!(after("x\nab", 3, "Fx"), 3);
+        assert_eq!(after("x\nab", 3, "Tx"), 3);
+    }
+
+    /// The stretch an operator takes is measured by the same walk, so `dFx` and `dTx` reach a target at
+    /// the start of the line as they do one in the middle of it.
+    #[test]
+    fn an_operator_takes_the_stretch_back_to_a_target_that_begins_the_line() {
+        assert_eq!(edited("xab", 2, "dFx"), "b");
+        assert_eq!(edited("xab", 2, "dTx"), "xb");
+    }
+
+    /// A marker is one character to the caret, and one that begins the line is a place `F` can land.
+    /// A character the marker is spelled with is still not a place to land, so `F1` finds nothing.
+    #[test]
+    fn a_backward_jump_can_land_on_a_marker_that_begins_the_line() {
+        let staged = |keys: &str| {
+            let mut s = vi();
+            s.attach(picture(b"pixels"));
+            for c in " ab".chars() {
+                s.type_char(c);
+            }
+            let end = s.input.len() - 1;
+            s.enter_vi_normal();
+            s.caret = end;
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.caret, end)
+        };
+        assert_eq!(staged("F[").0, 0);
+        let (caret, end) = staged("F1");
+        assert_eq!(
+            caret, end,
+            "a digit inside the marker is not somewhere to land"
+        );
+    }
+
     /// The jump is over the line the caret is on, not the whole input. These keys are for reaching a
     /// bracket in front of you, and one that crossed a newline would land off the row being read.
     #[test]
