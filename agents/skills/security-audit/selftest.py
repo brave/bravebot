@@ -2250,6 +2250,7 @@ def test_answers_registered():
             ("crates/agent/src/tools.rs", True),
             ("crates/tui/src/asks.rs", True),
             ("crates/tui/src/app.rs", True),
+            ("crates/tui/src/app/actions.rs", True),
             ("docs/specs/asking.md", True),
             ("crates/core/src/label.rs", False),
         ]:
@@ -2519,6 +2520,7 @@ def test_the_stop_hook():
         ("crates/ui-bridge/src/running.rs", True),
         ("crates/cli/src/plain.rs", True),
         ("crates/tui/src/app.rs", True),
+        ("crates/tui/src/app/actions.rs", True),
         ("crates/tui/src/confirm.rs", True),
         ("docs/specs/prompting.md", True),
         ("crates/core/src/label.rs", False),

@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
 guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read
