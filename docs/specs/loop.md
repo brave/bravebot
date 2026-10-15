@@ -7,6 +7,8 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
   - crates/tui/src/status.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
