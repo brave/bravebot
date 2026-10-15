@@ -1123,6 +1123,7 @@ because no part of `auth` would use them.
 `verified-by: bravebot_cli::main::a_system_prompt_flag_with_no_words_is_refused`
 `verified-by: bravebot_cli::main::words_that_open_with_a_dash_are_taken_when_they_are_a_sentence`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+`verified-by: bravebot_cli::running::a_session_in_lines_sends_the_system_prompts_with_a_typed_line`
 `verified-by: bravebot_cli::running::a_run_given_system_prompts_sends_them_and_keeps_the_rest_of_the_system_prompt`
 `verified-by: bravebot_cli::running::a_system_prompt_flag_with_no_words_exits_with_the_argument_status`
 `verified-by: bravebot_cli::running::a_manifest_run_is_refused_the_system_prompt_flags`
