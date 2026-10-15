@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/remembered.rs
   - crates/agent/src/scrub.rs
+  - crates/config/build.rs
   - crates/config/src/scrub.rs
   - crates/core/src/command.rs
   - crates/core/src/programs.rs
@@ -563,11 +564,32 @@ Bedrock backend starts. Reading the token for a request is unaffected: only the 
 starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set.
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
 
+**The planner is told what is removed.** The description of `run`, on a turn that offers it, names
+the credentials this agent holds, the signing key and its key id, and says that the variables the
+person's settings name as a gateway's token or to be withheld are removed as well, without listing
+them. It says that a program reporting one of them unset, or failing for want of one, says nothing
+about whether the person has set it. Nothing is said where the filtering is switched off. The build
+script that bakes the configuration into a binary says the same in its failure. Of the variables it
+finds missing it names those `run` removes, as removed if `run` started the build, and none that
+`run` leaves alone, so a build started by `run` is not read as a fault on the person's machine.
+
 **Why.** A person approving a run reads the argv, the resolved binary and the directory. The
 environment is not among those, so a credential travelling alongside them is granted without having
 been seen, and "run `git log`" is approved as an inspection of the repository. A subprocess has no
 use for these: a program the planner chose is doing what somebody approved, not authenticating as
 this agent.
+
+**Why the planner is told.** A program that reports the signing key unset looks like a gap in the
+person's setup, and a planner that cannot tell the removal from a gap reports it as one and
+instructs the person to configure what their shell already holds. Every build, test and check that
+needs a removed variable then fails for a reason nothing in the planner's context explains.
+
+**Why only the fixed names are listed.** The two credentials are the same for everyone and fixed in
+the source. The other names are strings from a settings file: an entry in a provider's `env` is
+free-form and can be a key pasted into the wrong field, and `run.scrubEnv` takes entries from a
+checkout's layer as well. Listing them would send a person's mistake to the model provider with every
+request and put a string its author chose in the planner's context, so such variables are removed
+from the program and said to exist without being named.
 
 **The rest of the environment stays, and that is not an oversight.** `run aws s3 ls` and `run gh pr
 list` are ordinary requests, and no rule matching variable names can tell one of those from an
@@ -615,6 +637,16 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`
+`verified-by: bravebot_agent::tools::run_names_its_own_credentials_and_says_what_an_unset_report_means`
+`verified-by: bravebot_agent::tools::only_the_run_description_is_given_the_statement_and_after_what_it_said`
+`verified-by: bravebot_agent::tools::a_turn_whose_filtering_is_off_says_nothing_of_a_removal`
+`verified-by: bravebot_agent::tools::a_list_without_run_is_given_no_statement`
+`verified-by: bravebot_agent::withheld_variables::the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote`
+`verified-by: bravebot_config::scrub::the_credentials_told_to_the_planner_are_the_fixed_ones`
+`verified-by: bravebot_agent::turn::a_turn_tells_the_planner_which_variables_run_removes`
+`verified-by: bravebot_config::build_script::a_build_missing_the_withheld_credentials_says_run_removes_them`
+`verified-by: bravebot_config::build_script::a_build_missing_only_a_variable_run_leaves_alone_does_not_blame_run`
+`verified-by: bravebot_config::build_script::a_build_names_only_the_missing_variables_run_removes`
 
 <a id="RUN-13"></a>
 ### RUN-13: the caller is told how the run ended, whichever way the label went

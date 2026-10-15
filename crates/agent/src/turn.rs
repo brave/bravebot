@@ -2458,6 +2458,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         };
 
         tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
+        tools::state_withheld_variables(&mut offered);
 
         // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
         // turn offered read_output at all. A definition or a delegate left without it has no release

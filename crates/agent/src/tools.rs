@@ -1656,6 +1656,51 @@ pub fn state_confinement(
     }
 }
 
+/// Say in the `run` description which variables its programs are not handed (RUN-12).
+///
+/// Appended to the table's description for the reason [`state_confinement`] is. Nothing where the
+/// list does not offer `run`, and nothing where the filtering is switched off: a planner is not told
+/// of a removal that does not happen.
+///
+/// Only the names fixed in the source are listed, from [`bravebot_config::scrub::builtin_credentials`].
+/// A name a settings file wrote is removed from the program and never said here: an entry in a
+/// provider's `env` is a free-form string that may be a key pasted into the wrong field, and
+/// `run.scrubEnv` takes names from a checkout's layer as well. The statement says such variables
+/// exist, which is what lets a planner read an unset report from one of them correctly.
+///
+/// A fact about this machine and what follows from it, with no instruction. Without the fact a
+/// program reporting one of these unset reads as a gap in the person's setup, and a planner reports
+/// it as one.
+pub fn state_withheld_variables(tools: &mut [Tool]) {
+    state_withheld(tools, &bravebot_config::scrub::builtin_credentials());
+}
+
+/// [`state_withheld_variables`], for the names it is handed.
+fn state_withheld(tools: &mut [Tool], names: &[&str]) {
+    if names.is_empty() {
+        return;
+    }
+    if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
+        run.function.description.push(' ');
+        run.function
+            .description
+            .push_str(&withheld_variables_sentence(names));
+    }
+}
+
+/// What [`state_withheld`] appends.
+fn withheld_variables_sentence(names: &[&str]) -> String {
+    let listed: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    format!(
+        "The credentials this agent holds for itself ({}), and the variables the person's settings \
+         name as a gateway's token or to be withheld, which are not listed, are removed from the \
+         environment of every program this tool starts, whatever the person's shell holds. A program \
+         that reports one of them unset, or fails for want of one, says nothing about whether the \
+         person has set it.",
+        listed.join(", ")
+    )
+}
+
 /// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
 /// resolved. Nothing where the list does not offer the tool.
 fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definitions) {
@@ -18541,6 +18586,115 @@ mod tests {
             assert!(
                 workspace_write.contains("may read this machine"),
                 "{workspace_write}"
+            );
+        }
+
+        fn a_planners_table() -> Vec<Tool> {
+            for_planner(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                &bravebot_core::delegate::Definitions::default(),
+                Deadlines::BUILT_IN,
+                Running::Offered,
+            )
+        }
+
+        fn descriptions(tools: &[Tool]) -> Vec<(String, String)> {
+            tools
+                .iter()
+                .map(|tool| {
+                    (
+                        tool.function.name.clone(),
+                        tool.function.description.clone(),
+                    )
+                })
+                .collect()
+        }
+
+        /// RUN-12: the planner is told which credentials a program it starts does not get, and that a
+        /// program reporting one of them unset says nothing about the person's setup. Without the
+        /// names a build reporting `SERVICES_KEY_AICHAT` unset reads as a gap on the person's
+        /// machine, which a planner then reports as one. The regressions it rejects are a statement
+        /// that lists only some of the names, one that lists none, one that says variables are
+        /// removed without saying what an unset report then means, and one that lists the names a
+        /// settings file wrote instead of saying such variables exist.
+        #[test]
+        fn run_names_its_own_credentials_and_says_what_an_unset_report_means() {
+            let names = ["FIRST_REMOVED_KEY", "SECOND_REMOVED_ID"];
+            let mut table = a_planners_table();
+            state_withheld(&mut table, &names);
+            let run = descriptions(&table)
+                .into_iter()
+                .find(|(name, _)| name == "run")
+                .map(|(_, description)| description)
+                .expect("run is offered");
+
+            for name in names {
+                assert!(
+                    run.contains(&format!("`{name}`")),
+                    "{name} is not named: {run}"
+                );
+            }
+            assert!(
+                run.contains("says nothing about whether the person has set it"),
+                "the statement does not say what an unset report means: {run}"
+            );
+            assert!(
+                run.contains("the person's settings name as a gateway's token or to be withheld, which are not listed"),
+                "the statement does not say that settings add variables it does not list: {run}"
+            );
+        }
+
+        /// RUN-12: the statement is the `run` description's and nothing else's, and it follows the
+        /// text that was there. A tool whose description gained it would tell a planner that cannot
+        /// start a program about a removal, and one that replaced the text would lose the routing the
+        /// description exists for.
+        #[test]
+        fn only_the_run_description_is_given_the_statement_and_after_what_it_said() {
+            let plain = descriptions(&a_planners_table());
+            let mut table = a_planners_table();
+            state_withheld(&mut table, &["REMOVED_KEY"]);
+            let stated = descriptions(&table);
+
+            assert_eq!(stated.len(), plain.len());
+            for ((name, before), (_, after)) in plain.iter().zip(&stated) {
+                if name == "run" {
+                    assert!(
+                        after.starts_with(before.as_str()) && after.len() > before.len(),
+                        "run was not given the statement after its own text: {after}"
+                    );
+                } else {
+                    assert_eq!(after, before, "{name} was changed");
+                }
+            }
+        }
+
+        /// RUN-12: where the filtering is switched off nothing is removed, and a planner told of a
+        /// removal that does not happen would explain a missing variable by a cause that is not there.
+        /// The regression it rejects is a statement made whatever the list holds.
+        #[test]
+        fn a_turn_whose_filtering_is_off_says_nothing_of_a_removal() {
+            let plain = descriptions(&a_planners_table());
+            let mut table = a_planners_table();
+            state_withheld(&mut table, &[]);
+
+            assert_eq!(descriptions(&table), plain);
+        }
+
+        /// A list without `run` has no program for the statement to be about, and naming credentials
+        /// on a tool that cannot start one tells the planner of a boundary it never meets.
+        #[test]
+        fn a_list_without_run_is_given_no_statement() {
+            let mut table = a_planners_table();
+            table.retain(|tool| tool.function.name != "run");
+            let plain = descriptions(&table);
+            state_withheld(&mut table, &["REMOVED_KEY"]);
+
+            assert_eq!(descriptions(&table), plain);
+            assert!(
+                !descriptions(&table)
+                    .iter()
+                    .any(|(_, description)| description.contains("REMOVED_KEY"))
             );
         }
 
