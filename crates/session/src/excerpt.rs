@@ -5,7 +5,7 @@
 //! had, and what the session wrote without keeping is said to be missing rather than filled in.
 
 use bravebot_agent::Conversation;
-use bravebot_agent::conversation::Said;
+use bravebot_agent::conversation::{Composed, Said};
 use bravebot_core::label::Confidentiality;
 use bravebot_i18n::t;
 
@@ -87,9 +87,7 @@ impl Record {
             .archive
             .iter()
             .chain(&self.conversation.messages)
-            .any(|stored| {
-                stored.composed == Some(bravebot_agent::conversation::Composed::Imported)
-            });
+            .any(|stored| stored.composed == Some(Composed::Imported));
         if !ours || copied {
             return Err(Refused::NotOurs);
         }
@@ -102,7 +100,13 @@ impl Record {
         let mut unkept = false;
         for said in conversation.recounted() {
             match said {
-                Said::User(text) => {
+                // A shell line's output is shown as it was recorded untagged, as a turn of the
+                // person's, and the tag leaves it so.
+                Said::User(text)
+                | Said::Composed {
+                    why: Composed::Written,
+                    text,
+                } => {
                     let typed = text.split(HEADING_START).next().unwrap_or_default();
                     turns.push(vec![("You", typed.to_string())]);
                 }
@@ -227,6 +231,24 @@ mod tests {
         assert!(excerpt.text.contains("\"fix the build\" (abc-123)"));
         assert!(!excerpt.cut);
         assert_eq!(excerpt.chars, excerpt.text.chars().count());
+    }
+
+    /// A shell line's output is tagged `Written`, and it is carried as the person's turn, as it was
+    /// when it was recorded untagged.
+    #[test]
+    fn a_shell_lines_output_is_still_in_the_excerpt() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("build it"));
+        conversation.push_composed_from(
+            Message::user("I ran `make` in the shell myself. It printed: linker exploded"),
+            Composed::Written,
+            bravebot_agent::request_view::Provenance::Trusted("shell output"),
+        );
+        let mut record = a_record(Vec::new());
+        record.conversation = conversation.snapshot();
+        let excerpt = record.excerpt().expect("an excerpt");
+        assert!(excerpt.text.contains("linker exploded"));
+        assert!(!excerpt.text.contains("not included"));
     }
 
     /// A prompt that named a session is stored with the excerpt after the line, and naming that
