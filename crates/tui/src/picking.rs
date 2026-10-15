@@ -16,7 +16,7 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::list_picker::Outcome;
+use crate::list_picker::{self, Outcome};
 use crate::theme::Theme;
 use bravebot_aichat::models::Model;
 
@@ -59,41 +59,25 @@ impl Picking {
     /// Interpret one key press.
     pub fn press(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Step {
         match self {
-            Picking::Model(picker) => match model_prompt::handle_key(picker, code, modifiers) {
-                model_prompt::Outcome::Continue => Step::Continue,
-                model_prompt::Outcome::Cancel => Step::Cancelled,
-                model_prompt::Outcome::Select => picker
-                    .chosen()
-                    .cloned()
-                    .map_or(Step::Cancelled, |model| Step::Picked(Picked::Model(model))),
-            },
-            Picking::Theme(picker) => match theme_prompt::press(picker, code, modifiers) {
-                Outcome::Continue => Step::Continue,
-                Outcome::Cancel => Step::Cancelled,
-                Outcome::Select => picker
-                    .chosen()
-                    .cloned()
-                    .map_or(Step::Cancelled, |theme| Step::Picked(Picked::Theme(theme))),
-            },
+            Picking::Model(picker) => {
+                let outcome = match model_prompt::handle_key(picker, code, modifiers) {
+                    model_prompt::Outcome::Continue => Outcome::Continue,
+                    model_prompt::Outcome::Cancel => Outcome::Cancel,
+                    model_prompt::Outcome::Select => Outcome::Select,
+                };
+                step(outcome, picker.chosen().cloned(), Picked::Model)
+            }
+            Picking::Theme(picker) => {
+                let outcome = theme_prompt::press(picker, code, modifiers);
+                step(outcome, picker.chosen().cloned(), Picked::Theme)
+            }
             Picking::Effort(picker) => {
-                match crate::list_picker::handle_key(picker, code, modifiers) {
-                    Outcome::Continue => Step::Continue,
-                    Outcome::Cancel => Step::Cancelled,
-                    Outcome::Select => picker
-                        .chosen()
-                        .copied()
-                        .map_or(Step::Cancelled, |row| Step::Picked(Picked::Effort(row))),
-                }
+                let outcome = list_picker::handle_key(picker, code, modifiers);
+                step(outcome, picker.chosen().copied(), Picked::Effort)
             }
             Picking::Editing(picker) => {
-                match crate::list_picker::handle_key(picker, code, modifiers) {
-                    Outcome::Continue => Step::Continue,
-                    Outcome::Cancel => Step::Cancelled,
-                    Outcome::Select => picker
-                        .chosen()
-                        .copied()
-                        .map_or(Step::Cancelled, |row| Step::Picked(Picked::Editing(row))),
-                }
+                let outcome = list_picker::handle_key(picker, code, modifiers);
+                step(outcome, picker.chosen().copied(), Picked::Editing)
             }
         }
     }
@@ -106,5 +90,15 @@ impl Picking {
             Picking::Effort(picker) => effort_prompt::draw(frame, picker),
             Picking::Editing(picker) => config_prompt::draw(frame, picker),
         }
+    }
+}
+
+/// What a key did, given the row under the cursor. A row taken with nothing under the cursor leaves
+/// the picker as a cancel does.
+fn step<R>(outcome: Outcome, chosen: Option<R>, picked: impl FnOnce(R) -> Picked) -> Step {
+    match outcome {
+        Outcome::Continue => Step::Continue,
+        Outcome::Cancel => Step::Cancelled,
+        Outcome::Select => chosen.map_or(Step::Cancelled, |row| Step::Picked(picked(row))),
     }
 }

@@ -230,11 +230,7 @@ struct Beside<'a> {
 /// own (CMD-8).
 fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
     let action = handle_key_while_working(session, key);
-    // The row a picker was left on, if this key left it. Said under the turn as any command carried
-    // out mid-turn is.
-    if let Some(picked) = session.take_pick() {
-        session.answer_while_working(|session| carry_out_pick(session, beside.config, picked));
-    }
+    carry_out_held_pick(session, beside.config);
     match action {
         Action::SendNow => stop_what_is_running(session, cancel),
         Action::Rename(name) => {
@@ -281,6 +277,17 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::ChooseEffort => open_effort_picker(session),
         Action::ChooseEditing => open_editing_picker(session),
         action => act_while_working(session, action, crate::clipboard::paste),
+    }
+}
+
+/// Carry out the row a picker was left on, if it was left on one.
+///
+/// Said under the turn as any command carried out mid-turn is. Asked after every key, and every
+/// frame as well: a row taken while another working loop had the keys is held until a loop that
+/// holds the configuration can carry it out, and the turn that follows is the first.
+fn carry_out_held_pick(session: &mut Session, config: &mut Config) {
+    if let Some(picked) = session.take_pick() {
+        session.answer_while_working(|session| carry_out_pick(session, config, picked));
     }
 }
 
@@ -1052,7 +1059,7 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     // a keystroke never sees it. Before the empty case as much as the rest, because that one spends
     // a hint said once a session on a sentence neither mode leaves room to draw, and answers with
     // the clipboard read that would put a picture in a box nobody can see.
-    if session.scrolling() || session.watching().is_some() {
+    if session.scrolling() || session.watching().is_some() || session.picking().is_some() {
         return Action::None;
     }
     // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since
@@ -5423,7 +5430,8 @@ fn opening_trust(
 /// A view left open when the command began answers the press first, since a queued command line
 /// begins one as the turn ends and nothing closes a view then. The delegate view takes every key
 /// (WATCH-9) and the scroller its own (SCROLL-1), so Ctrl-C and Escape are theirs while either is
-/// open, and the first press after it closes is the one that reaches the command. Otherwise a
+/// open, and the first press after it closes is the one that reaches the command. A picker left
+/// open takes the keys the same way. Otherwise a
 /// running command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a
 /// turn: the way out is the press after that, at the box. Every other key waits. A command is
 /// brief, and taking a prompt here would leave it half-typed when the output lands on top of it.
@@ -5437,6 +5445,8 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     } else if session.scrolling() {
         let action = scroller_key(session, key);
         act_while_working(session, action, crate::clipboard::paste);
+    } else if session.picking().is_some() {
+        session.press_in_picking(key.code, key.modifiers);
     } else if stops_a_command(session, key) {
         stop_what_is_running(session, cancel);
     }
@@ -6839,6 +6849,7 @@ fn run_turn_animated(
                 turn_key(session, key, &cancel, &mut beside);
             }
         })?;
+        carry_out_held_pick(session, beside.config);
 
         // A question that arrives once the work has been stopped is refused undrawn, by the
         // wrapper below; see [`drain_worker_until_stopped`].
@@ -21533,9 +21544,53 @@ mod tests {
             None,
             "the pick was carried out without a loop for it"
         );
-        let picked = session.take_pick().expect("the pick was dropped");
-        carry_out_pick(&mut session, &mut a_config_needing_no_sign_in(), picked);
+        carry_out_held_pick(&mut session, &mut a_config_needing_no_sign_in());
         assert_eq!(session.effort(), Some(Effort::Low));
+        assert!(
+            session.take_pick().is_none(),
+            "the pick was carried out twice"
+        );
+    }
+
+    /// A paste is not a key, so it reaches the session whatever mode is open. While a picker is
+    /// open it lands nowhere, at rest and mid-turn alike. The regression it rejects is text going
+    /// into a box that is drawn under the picker and takes none of the keys.
+    #[test]
+    fn a_paste_while_a_picker_is_open_lands_nowhere() {
+        let mut at_rest = Session::new("none");
+        let mut mid_turn = a_turn_running_on("first");
+        for session in [&mut at_rest, &mut mid_turn] {
+            session.open_picking(crate::picking::Picking::Effort(
+                crate::effort_prompt::Picker::new(None),
+            ));
+        }
+
+        assert_eq!(handle_paste(&mut at_rest, "pasted text"), Action::None);
+        assert_eq!(
+            handle_paste_while_working(&mut mid_turn, "pasted text"),
+            Action::None
+        );
+
+        assert_eq!(at_rest.input(), "");
+        assert_eq!(mid_turn.input(), "");
+    }
+
+    /// A picker still open when a command begins takes the keys, as it takes them during a turn,
+    /// and the press that stops the command is the one after it has closed.
+    #[test]
+    fn a_picker_left_open_takes_the_keys_while_a_command_runs() {
+        let mut session = Session::new("none");
+        session.open_picking(crate::picking::Picking::Effort(
+            crate::effort_prompt::Picker::new(None),
+        ));
+        let cancel = Cancel::new();
+
+        command_key(&mut session, key(KeyCode::Esc), &cancel);
+        assert!(session.picking().is_none(), "Escape left the picker open");
+        assert!(!cancel.is_cancelled(), "Escape stopped the command");
+
+        command_key(&mut session, key(KeyCode::Esc), &cancel);
+        assert!(cancel.is_cancelled(), "Escape no longer stops the command");
     }
 
     /// A configuration whose roster is three named tiers and nothing fetched, so the picker is

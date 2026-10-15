@@ -339,11 +339,15 @@ does not read:
   the command leaves alone.
 - **`/model`.** A turn is sent with the model in force when it begins and does not read the choice
   again, so a model picked mid-turn is the next turn's. The turn is still compared with the model
-  it was sent with when it ends, and not with the one picked meanwhile.
+  it was sent with when it ends, and not with the one picked meanwhile. What `/status` and the
+  footer name, and the window the context gauge is read against, are the model picked from the
+  moment it is picked, since the next request is the one that has to fit.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
   turn's.
-- **`/config`.** It picks the style the box edits in. Only the box reads it, so the turn does not.
+- **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
+  the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
+  it ([INPUT-24](terminal-input.md#INPUT-24)).
 - **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config` opens a list. While a turn
   runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
   and asked about. The list takes every key the box would have taken, is drawn over the frame with
@@ -420,6 +424,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
 `verified-by: bravebot_tui::app::the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn`
 `verified-by: bravebot_tui::app::a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_paste_while_a_picker_is_open_lands_nowhere`
+`verified-by: bravebot_tui::app::a_picker_left_open_takes_the_keys_while_a_command_runs`
 `verified-by: bravebot_tui::render::a_picker_opened_mid_turn_is_drawn_over_the_turn`
 `verified-by: bravebot_tui::theme_prompt::a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back`
 `verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
