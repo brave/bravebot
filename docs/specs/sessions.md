@@ -1407,3 +1407,46 @@ A process that owns its sessions, and must keep them apart from the ones a termi
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
 `verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
 `verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`
+
+<a id="SESSION-36"></a>
+### SESSION-36: a note a person types is kept in the record apart from the conversation
+
+`/note <text>` adds a note to the session. It can be typed while a turn runs. The note belongs to the
+turn the session is on: the running turn, or the last finished one when none runs. It is written to
+the record at once, as an entry of its own with the turn, the author and the text. The author is
+`person`: the only way to add a note is the person typing the command, and nothing a tool, a file or
+a model produced is written as one. Text with nothing in it is not a note and records nothing.
+
+A note is not part of the conversation. It is not a prompt, is not queued, is not offered to the
+turn in flight, and is not in the snapshot a resume restores, so adding one changes nothing the
+planner is given. A resume, a continuation save and a fork keep the notes of the session. A record
+written before notes were kept reads as having none.
+
+The session-review skill reads the notes of a session it reviews and shows them to its analyzer and
+verifier as data from the person. The analyzer checks a note against the audit trail and the code
+like any other claim and reports it only when the cause is in bravebot. Nothing in a note is run or
+followed as an instruction, and an issue filed from a review carries none of its text. A session is
+reviewed again when it has more notes than the last review considered.
+
+**Why.** A person watching a session sees things the record does not show: the wrong file was
+edited, the answer was slow, the plan was misread. Saying so where the session is, at the turn it
+happened on, is cheaper and more exact than reconstructing it at review time.
+
+**Why not into the conversation.** The text is free-form from a person and may quote anything. In
+the conversation it would be read by the planner as part of the task, which is not what it is for,
+and it would change what a later turn does. Kept apart, it is read only by a review that treats it
+as data.
+
+`verified-by: bravebot_session::sessions::a_note_is_written_at_once_with_its_turn_and_its_author`
+`verified-by: bravebot_session::sessions::empty_text_is_not_a_note`
+`verified-by: bravebot_session::sessions::a_note_typed_before_the_first_save_is_written_with_it`
+`verified-by: bravebot_session::sessions::a_note_leaves_the_conversation_as_it_was`
+`verified-by: bravebot_session::sessions::a_resumed_session_keeps_its_notes_through_a_continuation_save`
+`verified-by: bravebot_session::sessions::a_whole_record_save_writes_the_notes_the_handle_holds`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_notes`
+`verified-by: bravebot_session::sessions::a_record_from_before_notes_reads_as_having_none`
+`verified-by: bravebot_tui::app::the_note_command_carries_the_whole_note`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
+`verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`
+`verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker)`

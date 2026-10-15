@@ -309,6 +309,23 @@ pub(super) fn rename_session(
     }
 }
 
+/// Add a note a person typed to the session record, and say so (SESSION-36).
+///
+/// The note goes to the record and nowhere else: it is not a prompt, is not queued, and gives up no
+/// rewind point, since no point holds a note. It belongs to the turn the session is on, which is
+/// the running turn when one is. The text is not repeated back, as it may hold an escape.
+pub(super) fn note_session(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    text: &str,
+) {
+    if stored.add_note(session.turns, text) {
+        session.note(t!(session_note_added, turn = session.turns));
+    } else {
+        session.note(t!(session_note_needs_text));
+    }
+}
+
 /// The record `/resume` is to carry on from, or `None` after saying why there is none.
 ///
 /// An id is read as `--resume` reads one, and a manifest run or a record a running background

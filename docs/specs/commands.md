@@ -285,14 +285,14 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox` in every form, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
+were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`,
 `/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
@@ -335,6 +335,9 @@ does not read:
   under whatever name the session has by then. The rename gives up every rewind point
   ([SESSION-19](sessions.md#SESSION-19)), the one the running turn opened among them. `/rename`
   with no name renames nothing and gives up none.
+- **`/note`.** The note is written to the record at once, on the turn that is running, and the turn
+  is handed nothing ([SESSION-36](sessions.md#SESSION-36)). It gives up no rewind point, since no
+  point holds a note. `/note` with no text records nothing and says what it needs.
 - **`/issue` and `/pr`.** The record is written after the turn with whatever links the session has
   by then, and no turn reads them ([PANEL-12](info-panel.md#PANEL-12)).
 - **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory

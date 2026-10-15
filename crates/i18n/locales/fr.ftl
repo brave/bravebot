@@ -2175,6 +2175,7 @@ command-reach = Retenir un répertoire ou un identifiant pour une commande, ou l
 command-sandbox = Afficher le mode du bac à sable, ou le changer dès le prochain tour
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
+command-note = Noter quelque chose au dossier de la session, sans le mettre dans la conversation
 command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
 command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
@@ -2249,6 +2250,8 @@ session-resumed = session reprise : { $title }
 session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
+session-note-added = note ajoutée au tour { $turn }, dans le dossier seulement : le planificateur ne la reçoit pas
+session-note-needs-text = /note demande la note, comme /note le mauvais fichier a été modifié ici
 # Ce que répondent /issue et /pr. Une valeur refusée n'est pas répétée, car elle peut contenir un
 # caractère de contrôle.
 session-issue-is = cette session est pour { $url }. /issue clear l'enlève

@@ -92,6 +92,11 @@ pub(crate) const BACKGROUND_COMMAND: &str = "/bg";
 /// The line that renames this session, taking the new name as its argument.
 pub(crate) const RENAME_COMMAND: &str = "/rename";
 
+/// The line that adds a note to the session record, taking the note as its argument.
+///
+/// The note is kept beside the conversation and never in it (SESSION-36).
+pub(crate) const NOTE_COMMAND: &str = "/note";
+
 /// The lines that say which issue and which pull request the session is for, taking the link.
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
 pub(crate) const PR_COMMAND: &str = "/pr";
@@ -248,7 +253,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 45] {
+pub fn commands() -> [Command; 46] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -308,6 +313,12 @@ pub fn commands() -> [Command; 45] {
             name: RENAME_COMMAND,
             argument: "<name>",
             description: t!(command_rename),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: NOTE_COMMAND,
+            argument: "<note>",
+            description: t!(command_note),
             mid_turn: MidTurn::Changes,
         },
         Command {

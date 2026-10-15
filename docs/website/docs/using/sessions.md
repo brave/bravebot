@@ -239,6 +239,24 @@ that needs an answer can be found without opening each one. At the box there is 
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
+## Noting something on a session
+
+```
+/note it edited the wrong config file
+```
+
+`/note` adds a note to the session while it runs, on the turn the session is on. It is written to the
+record at once, with the turn number and the fact that you typed it, in a place of its own. It is not
+part of the conversation: the model is never given it, so it changes nothing about the work. Typed
+while a turn runs with nothing waiting, it is carried out at once. A resume, a `/branch` and a
+continued session keep the notes, and a record from before notes existed has none.
+
+A note is for whoever reviews the session later. `/session-review` reads the notes of the sessions it
+reviews and treats each as a lead from you: it checks the note against the session's audit trail and
+the code, and reports it only when the cause is in bravebot. Nothing in a note is run or followed as
+an instruction, and a filed issue carries none of its words. A session with a new note is reviewed
+again for that note.
+
 ## Telling sessions apart
 
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
