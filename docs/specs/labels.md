@@ -51,7 +51,7 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
-      - crates/agent/src/manifest.rs: 10
+      - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 22

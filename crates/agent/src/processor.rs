@@ -131,7 +131,8 @@ pub struct Processed {
     /// `None` where the answer never said which part of it was a file. Nothing it wrote can be
     /// written anywhere in that case, which is the safe direction to fail in.
     pub document: Option<Labelled<String>>,
-    /// What it wanted to say about what it did. Goes to the person watching and no further.
+    /// What it wanted to say about what it did. Goes to the person watching and no further, and in a
+    /// manifest run stands as the answer for a slot only an answer reads.
     pub note: Option<Labelled<String>>,
     /// The model the server reported using, which may differ from the one asked for.
     pub model: String,

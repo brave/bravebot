@@ -415,6 +415,23 @@ fn without_leading_reasoning(text: &str) -> &str {
     text
 }
 
+/// Whether the slot the step at `index` fills is only ever shown to the person: read by at least
+/// one later step, and by nothing but the plan's answers.
+fn shown_only(plan: &Manifest, index: usize) -> bool {
+    let Some(slot) = plan.steps()[index].out_slot() else {
+        return false;
+    };
+    let mut readers = plan.steps()[index + 1..]
+        .iter()
+        .filter(|later| later.reads().contains(slot))
+        .peekable();
+    readers.peek().is_some() && readers.all(|later| later.tool() == manifest::ANSWER)
+}
+
+/// What a process step's instruction gains when its first answer marked no document.
+const MARK_AGAIN: &str = "Your last answer marked no document. Give the whole result after the \
+line that marks where the document begins.";
+
 /// The tags a reply may open with. Written out rather than built from names so the set a reader
 /// has to trust is visible, and so nothing is allocated to look for one that is not there.
 const REASONING_TAGS: [(&str, &str); 3] = [
@@ -1190,6 +1207,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 index,
+                shown_only(&plan, index),
                 step,
                 entry,
                 accounting,
@@ -1352,6 +1370,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     index: usize,
+    shown_only: bool,
     step: &Step,
     entry: &'static Advertised,
     accounting: &mut Accounting,
@@ -1471,42 +1490,64 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             // slot that reads its file here may come back worse than it was reserved at.
             crate::tools::materialise(policy, workspace, slots, "process", step.reads())?;
 
-            // `about` is a turn-loop field the schema does not name. Passing nothing is the
-            // driver not inventing a slot the plan did not: what comes back names the one
-            // document the call was given, where the whole of what it was given is one document,
-            // and no document otherwise.
-            let spec = policy
-                .before_processor(
-                    &format!("step_{index}"),
-                    step.reads(),
-                    &instruction,
-                    None,
-                    slots,
-                )
-                .map_err(|d| d.to_string())?;
-            let asked_at = std::time::Instant::now();
-            let processed = crate::processor::run(policy, chat, slots, &spec);
-            let waited = asked_at.elapsed();
-            accounting.elapsed.inference += waited;
-            let usage = match &processed {
-                Ok(done) => Some(done.usage),
-                Err(crate::processor::ProcessorError::Chat(error)) => error.completed_usage(),
-                Err(_) => None,
-            };
-            if let Some(usage) = usage {
-                accounting.spent.add_usage(usage);
-            }
-            accounting.publish(reporter);
-            let processed = processed.map_err(|e| e.to_string())?;
-
             // An answer that marked no document has nothing for the slot the plan named, and the
             // input is not a substitute for it: a plan reads that slot to write somewhere else,
-            // so standing the input in would copy one file over whatever comes next. The step
-            // fails instead, which is the direction an unmarked answer fails in everywhere.
-            let Some(document) = processed.document else {
-                return Err(
-                    "the processor produced no document, so there is nothing to store".to_string(),
-                );
+            // so standing the input in would copy one file over whatever comes next. In a turn
+            // the planner asks again for the line; a plan has no planner left, so the driver asks
+            // once more itself, with the plan's instruction and one fixed sentence, both trusted.
+            // An empty reply shares that one further try. Whichever went wrong, a second failure
+            // fails the step, which is the direction an unmarked answer fails in everywhere.
+            let mut asked = instruction;
+            let mut retried = false;
+            let (spec, processed, document) = loop {
+                // `about` is a turn-loop field the schema does not name. Passing nothing is the
+                // driver not inventing a slot the plan did not: what comes back names the one
+                // document the call was given, where the whole of what it was given is one
+                // document, and no document otherwise.
+                let spec = policy
+                    .before_processor(&format!("step_{index}"), step.reads(), &asked, None, slots)
+                    .map_err(|d| d.to_string())?;
+                let asked_at = std::time::Instant::now();
+                let processed = crate::processor::run(policy, chat, slots, &spec);
+                let waited = asked_at.elapsed();
+                accounting.elapsed.inference += waited;
+                let usage = match &processed {
+                    Ok(done) => Some(done.usage),
+                    Err(crate::processor::ProcessorError::Chat(error)) => error.completed_usage(),
+                    Err(_) => None,
+                };
+                if let Some(usage) = usage {
+                    accounting.spent.add_usage(usage);
+                }
+                accounting.publish(reporter);
+                let mut processed = match processed {
+                    Ok(done) => done,
+                    Err(crate::processor::ProcessorError::Chat(error))
+                        if error.is_empty_reply() && !retried =>
+                    {
+                        retried = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
+
+                if let Some(document) = processed.document.take() {
+                    break (spec, processed, document);
+                }
+                // A slot the plan only shows the person has no file for an unmarked answer to
+                // land in: what the processor said goes to the person either way, so it stands as
+                // the answer, at its own label, rather than failing the step.
+                if shown_only && let Some(said) = processed.note.take() {
+                    break (spec, processed, said);
+                }
+                if retried {
+                    return Err(
+                        "the processor produced no document, so there is nothing to store"
+                            .to_string(),
+                    );
+                }
+                retried = true;
+                asked = Labelled::trusted(format!("{}\n\n{MARK_AGAIN}", step.text("instruction")));
             };
             let note = policy.render_in_place("process", &document, |text| {
                 crate::tools::tally(text.lines().count(), "line", "lines")
