@@ -33,6 +33,7 @@ cli-tagline =
     bravebot { $version } : un agent polyvalent résistant à l'injection de prompt
 cli-usage-heading = Utilisation :
 cli-usage-interactive = Démarrer une session interactive
+cli-usage-interactive-prompt = Démarrer une session interactive et envoyer l'invite comme premier tour
 cli-usage-plain = Démarrer une session en lignes, sans rien prendre au terminal
 cli-usage-task = Exécuter une seule tâche
 cli-usage-piped = ... avec une entrée redirigée, jamais fiable
@@ -63,6 +64,7 @@ permissions-check-allow = autoriser
 permissions-check-none = aucune règle ne correspond, les contrôles ordinaires décident
 permissions-check-rule = règle
 permissions-check-file = fichier
+permissions-check-reason = raison
 permissions-check-granted = accordée à la question pour cet espace de travail, écrite dans { $path }
 permissions-check-not-in-force = sans effet : { $rule } dans { $path } autoriserait cet appel une fois accordée à la question
 cli-usage-sessions = Lister les sessions qui continuent après la fermeture du terminal
@@ -168,6 +170,7 @@ cli-option-tools = Ne proposer à l'agent que ces outils, séparés par des virg
 cli-option-no-shell = Ne proposer à l'agent aucun outil qui lance un programme ou lit ce qu'il a affiché
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
+cli-option-interactive = Ouvrir la session interactive et envoyer cette invite comme premier tour ; --model et --effort peuvent la suivre
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'exécution, puis l'objet de résultat
@@ -297,6 +300,25 @@ cli-no-such-session = aucune session { $id } dans ce répertoire
 cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
 cli-from-pr-needs-a-value = --from-pr nécessite un numéro ou une adresse de pull request
+cli-interactive-needs-a-prompt = -i prend l'invite à envoyer comme premier tour de la session
+# Dit quand autre chose que --model ou --effort suit l'invite de -i. La session ouverte prend les
+# options que toute façon de démarrer prend, déjà retirées de la ligne à ce stade ; ce qui reste
+# décrit une exécution unique.
+cli-interactive-takes-nothing-else =
+    -i prend une seule invite, entre guillemets si elle contient des espaces, puis --model et --effort,
+    donc '{ $argument }' est refusé. --file et les autres options d'une tâche vont avec une exécution
+    unique (-p).
+# Dit quand -i est venu après les options propres à une tâche au lieu de venir en premier.
+cli-interactive-not-with-a-task =
+    -i ouvre une session et vient en premier, suivi de son invite puis de --model et --effort. --file
+    et les autres options d'une tâche vont avec une exécution unique (-p).
+# Dit quand -i est venu après une autre façon de démarrer une session, comme --resume ou --fork.
+cli-interactive-not-with-another-start = -i ouvre une nouvelle session et vient en premier, donc il ne va pas avec { $flag }.
+# Dit quand -i a reçu autre chose qu'un terminal sur stdin ou stdout, là où rien ne peut afficher
+# la session et où personne ne regarde la tâche.
+cli-interactive-needs-a-terminal =
+    -i ouvre une session sur ce terminal, donc son entrée et sa sortie doivent être celles d'un même
+    terminal. Utilisez -p pour exécuter la tâche sans personne pour la regarder.
 cli-fork-needs-a-name = --fork nécessite un identifiant de session
 cli-piped-input-unreadable = avertissement : impossible de lire l'entrée redirigée : { $problem }
 cli-piped-input-too-large =
@@ -1211,6 +1233,22 @@ path-removed = retiré : aucune commande ne { $access } plus { $path }
 path-refused-number = aucun chemin demandé n'est numéroté { $number }
 path-usage = /reach paths liste les chemins que les programmes ont été autorisés à atteindre dans cette session. /reach paths remove <numéro> en retire un.
 
+## Programmes demandant des hôtes que la liste des hôtes autorisés ne couvre pas
+
+host-title = laisser les programmes joindre d'autres hôtes ?
+host-asked = { $count ->
+    [one] un programme démarré par cette session a demandé un hôte que sandbox.network.allowedHosts ne liste pas :
+   *[other] des programmes démarrés par cette session ont demandé { $count } hôtes que sandbox.network.allowedHosts ne liste pas :
+    }
+host-row = { $host }
+host-explained =
+    Le programme a été refusé, relancez-le donc après un oui. Chaque commande que le planificateur
+    lance à partir de maintenant et jusqu'à la fin de cette session peut joindre ces hôtes, sauf si
+    sandbox.network.deniedHosts les nomme. Rien n'est écrit sur le disque, donc la prochaine session
+    redemande.
+host-yes = Oui, pour cette session
+host-no = Non
+
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
 trust-directory-title = faire confiance à ce répertoire ?
@@ -1861,6 +1899,8 @@ status-hosts-counts = { $allowed } autorisé(s), { $denied } refusé(s)
 status-hosts-files = de { $files } ; un hôte qu'aucune entrée ne couvre est refusé
 status-hosts-managed = les réglages gérés
 status-hosts-refused = un hôte qu'aucune entrée ne couvre est refusé
+status-hosts-files-ask = de { $files } ; un hôte qu'aucune entrée ne couvre vous est soumis
+status-hosts-asked = un hôte qu'aucune entrée ne couvre vous est soumis
 status-this-session = Cette session
 status-time = Temps
 status-time-inference = sur le modèle
@@ -2180,6 +2220,14 @@ skill-model-refused = { $skill } demande { $model }, que cette machine ne demand
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
 skill-model-substituted = { $skill } a demandé { $model } et a reçu la réponse d'un autre modèle
 source-denied-by-rule = { $source } n'a pas été chargé : une règle deny de vos réglages le couvre
+# Les skills de ~/.bravebot/skills qui n'ont pas été chargés parce que le chemin vers leur fichier passe
+# par le répertoire de travail ou un répertoire ouvert à côté, où un tour peut écrire, et qu'aucun
+# répertoire de skills du projet ne les offrait à leur place. ~/.bravebot/skills reste tel quel.
+home-skills-reached-through-the-workspace =
+    { $count ->
+        [one] 1 skill de ~/.bravebot/skills n'a pas été chargé : le chemin vers son fichier passe par un répertoire où cette session peut écrire
+       *[other] { $count } skills de ~/.bravebot/skills n'ont pas été chargés : le chemin vers leurs fichiers passe par un répertoire où cette session peut écrire
+    }
 reference-bad-alias = la référence { $alias } n'a pas été utilisée : un alias ne peut pas être vide ni contenir /, espaces, accents graves ou virgules
 reference-repository-not-fetched = la référence { $alias } n'a pas été utilisée : une entrée qui nomme un dépôt n'est pas récupérée, donnez-lui un chemin
 reference-no-path = la référence { $alias } n'a pas été utilisée : elle ne nomme aucun répertoire
@@ -2637,6 +2685,10 @@ paste-folded = { $lines ->
 paste-invisible-removed = { $count ->
     [one] { $count } caractère invisible a été retiré de ce texte collé
    *[other] { $count } caractères invisibles ont été retirés de ce texte collé
+    }
+cli-prompt-invisible-removed = { $count ->
+    [one] { $count } caractère invisible a été retiré de l'invite donnée à -i
+   *[other] { $count } caractères invisibles ont été retirés de l'invite donnée à -i
     }
 drop-name-not-written =
     le nom d'un fichier déposé contient un caractère de contrôle ou un caractère qu'un terminal n'affiche pas, donc aucun chemin n'a été écrit dans la commande
