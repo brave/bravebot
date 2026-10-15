@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url)
 const source = buildSync({ entryPoints: ['src/shared/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(require, module, module.exports)
-const { parseBots, withBot, isBotModel } = module.exports
+const { parseBots, withBot, isBotModel, isSlug, slugFor } = module.exports
 const definition = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', home: '/tmp/bot-homes/web-dev', avatar: 'v2:preview', session: null }
 
 test('model selection survives storage, updates, and unrelated bot edits', () => {
@@ -288,4 +288,15 @@ test('a bot written before home folders keeps its conversations in the folder it
   // Written back and read again, the pairs survive as pairs.
   const again = parseBots(JSON.parse(JSON.stringify({ bots: [bot] }))).bots[0]
   assert.deepEqual(again.conversations, bot.conversations)
+})
+
+test('a slug the desktop composes is always one the agent accepts, even when the cut falls on a word break', () => {
+  const names = ['a'.repeat(47) + ' b', 'a'.repeat(47) + ' --- b', 'a'.repeat(60), '???', '', 'Web dev']
+  for (const name of names) {
+    const slug = slugFor(name)
+    assert.equal(isSlug(slug), true, `${JSON.stringify(name)} -> ${slug}`)
+    assert.ok(slug.length <= 48)
+    for (const taken of [new Set([slug]), new Set([slug, `${slug}-2`])]) assert.equal(isSlug(slugFor(name, taken)), true)
+  }
+  assert.equal(slugFor('a'.repeat(47) + ' b'), 'a'.repeat(47))
 })
