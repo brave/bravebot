@@ -885,6 +885,72 @@ mod tests {
         assert_eq!(listing.hunks(), 3);
     }
 
+    /// PATH-003: a name that is not text and the name its lossy rendering spells are two files,
+    /// and `key_of` gives both the same key. A list that told files apart by that key would show
+    /// one of them, and a put-back that wrote to the path the key spells would rewrite the other.
+    /// Each file holds a different edit, so a hunk read from or written to the wrong one shows in
+    /// the list and in the files. Linux holds such a name on disk; macOS refuses to create it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_text_and_its_lossy_lookalike_are_listed_and_put_back_apart() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut project = Project::new("hunks-lossy-names", AFTER);
+        let by_bytes = project
+            .workspace
+            .root()
+            .join(OsStr::from_bytes(b"b-\xff.txt"));
+        let lookalike = project.workspace.root().join("b-\u{FFFD}.txt");
+        assert_ne!(by_bytes, lookalike);
+        assert_eq!(key_of(&by_bytes), key_of(&lookalike));
+        let lookalike_now = BEFORE.replace("five", "FIVE");
+        std::fs::write(&by_bytes, AFTER).unwrap();
+        std::fs::write(&lookalike, &lookalike_now).unwrap();
+        let kept = |path: &Path| Backup {
+            path: path.to_path_buf(),
+            was: Before::Bytes(BEFORE.as_bytes().to_vec()),
+            captured_trust: Integrity::Trusted,
+        };
+        let backups = [kept(&by_bytes), kept(&lookalike)];
+
+        let listing = list(
+            &project.workspace,
+            &backups,
+            &project.snapshot,
+            &project.trust,
+            &mut NullSink,
+        )
+        .unwrap();
+
+        assert_eq!(listing.left, []);
+        assert_eq!(
+            listing
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>(),
+            [by_bytes.clone(), lookalike.clone()]
+        );
+        assert_eq!(listing.files[0].hunks, hunks_of(BEFORE, AFTER));
+        assert_eq!(listing.files[1].hunks, hunks_of(BEFORE, &lookalike_now));
+
+        project
+            .reject(&backups[0], &listing.files[0].hunks[1])
+            .unwrap();
+
+        let by_bytes_now = "one\nTWO\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
+        assert_eq!(std::fs::read_to_string(&by_bytes).unwrap(), by_bytes_now);
+        assert_eq!(std::fs::read_to_string(&lookalike).unwrap(), lookalike_now);
+
+        project
+            .reject(&backups[1], &listing.files[1].hunks[0])
+            .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&lookalike).unwrap(), BEFORE);
+        assert_eq!(std::fs::read_to_string(&by_bytes).unwrap(), by_bytes_now);
+    }
+
     /// Much of a file rewritten has no hunks to name. The path is named with the reason, and
     /// choosing a hunk of it is refused the same way.
     #[test]
