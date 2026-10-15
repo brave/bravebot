@@ -8,6 +8,10 @@ governs:
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/vi.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/editing.rs
+  - crates/tui/src/state/scroller.rs
+  - crates/tui/src/state/settings.rs
   - crates/tui/src/wrap.rs
   - crates/tui/src/editor.rs
   - crates/tui/src/history_search.rs

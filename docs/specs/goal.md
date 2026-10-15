@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
 guards:
   - symbol: Session::start_goal

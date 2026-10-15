@@ -4,6 +4,9 @@ title: Seeing what happened outside the transcript
 status: normative
 governs:
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
   - crates/tui/src/render/transcript.rs

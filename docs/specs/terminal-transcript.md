@@ -14,6 +14,8 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/scroller.rs
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/list_picker.rs

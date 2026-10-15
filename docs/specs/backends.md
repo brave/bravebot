@@ -17,6 +17,8 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/accounts.rs
+  - crates/tui/src/state/settings.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/env_var.rs
   - crates/config/src/lib.rs

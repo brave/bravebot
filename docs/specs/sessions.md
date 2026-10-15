@@ -10,6 +10,9 @@ governs:
   - crates/cli/src/session_search.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/accounts.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs

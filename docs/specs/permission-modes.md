@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/settings.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/manifest.rs
 guards:
