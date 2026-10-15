@@ -38,8 +38,9 @@ run `/add-dir` on it and say which directory.
 (`12,13 https://github.com/brave/bravebot/pull/14`), and `all` stands for every open
 brave/bravebot pull request whose author is `git config user.name`. With several, the script runs
 the step for all of them at once, each in its own process, and prints each one's output under a
-`== #<number>` heading in the order given. Its exit code is 1 if any failed, else 2 if any is
-still running. The fixing in steps 2 to 5 is then done for each pull request in its own worktree;
+`== #<number>` heading as soon as that pull request is done, so in the order they finish. Its exit
+code is 1 if any failed, else 2 if any is still running. The fixing in steps 2 to 5 is then done
+for each pull request in its own worktree;
 hand each pull request to its own subagent when there are several that need it, and do the rest of
 the steps for all of them at once.
 
@@ -137,10 +138,15 @@ of its commits unsigned than it has now.
    usable key it prints GitHub's refusal. If it pushed, `... review <pr>` asks netzenbot-reviewer to review the new head,
    since a review it already gave covers the old one. If it printed `nothing to push` and steps 3
    and 4 found nothing to change (no failing check, no open thread, no review asking for changes),
-   the pull request needs only a new review: run `... review <pr>` anyway. Then `... ci <pr> --wait`, which returns as soon as a check fails or after
-   about nine minutes, exiting 0 when all pass, 1 when one failed and 2 when checks are still
-   running. On 1, go back to step 3 with the new logs; new review comments appear in step 4.
-   Stop after three rounds and report what is left.
+   the pull request needs only a new review: run `... review <pr>` anyway. Then `... ci <pr> --wait`
+   with `deadline_seconds: 600` on the `run` call, since the default of 300 seconds stops it first.
+   A pull request's wait ends as soon as one of its checks fails, and every wait ends nine minutes
+   after the script started, so the call takes nine minutes at most however many pull requests it
+   was given. It exits 0 when all pass, 1 when one failed and 2 when checks are still running.
+   Where the `run` tool's ceiling is lower than 600, pass the ceiling as `deadline_seconds` and
+   `--wait-seconds` 60 under it, so the wait ends first and prints what is still pending. A run
+   stopped anyway returns the pull requests printed so far. On 1, go back to step 3 with the new
+   logs; new review comments appear in step 4. Stop after three rounds and report what is left.
 
 Report the old and new head, one line per resolved conflict on how both sides were kept, each CI
 failure and what fixed it or why it was left, each review comment and what changed or why nothing
