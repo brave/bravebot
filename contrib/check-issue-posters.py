@@ -8,8 +8,9 @@ carry five variants of the rules and a change to a scale came to be a change to 
 
 This fails when the definition would not load as a delegate definition (the rules of
 crates/agent/src/agents.rs `read_definition`), when it writes a label name that
-labelling-issues.md does not, when a skill that runs `gh issue create` does not name
-`issue-poster`, and when agents/AGENTS.md does not point at it.
+labelling-issues.md does not, when any file under agents/skills runs `gh issue create`, and when
+agents/AGENTS.md does not point at the definition. A skill hands each draft to the definition; no
+script of a skill files an issue itself.
 
 Standard library only, like the other checks CI runs without a toolchain.
 """
@@ -143,14 +144,13 @@ def read(path):
 
 
 def posting_skills(skills):
-    """Every skill with a file that files an issue, as (skill, file)."""
+    """Every file under a skill that files an issue, as (skill, file)."""
     found = []
     for skill in sorted(skills.iterdir()) if skills.is_dir() else []:
         for path in sorted(skill.rglob("*")):
             text = read(path) if path.is_file() else None
             if text is not None and POSTS.search(text):
                 found.append((skill, path))
-                break
     return found
 
 
@@ -177,12 +177,10 @@ def problems(root):
         complaints.append(f"{INSTRUCTIONS}: does not name `{POSTER}`, so a session filing an issue is not told to use it")
 
     for skill, path in posting_skills(root / SKILLS):
-        text = read(skill / "SKILL.md")
-        if text is None or POSTER not in text:
-            complaints.append(
-                f"{skill.relative_to(root)}/SKILL.md: {path.name} files an issue and the skill does not "
-                f"name `{POSTER}`. Point it at {AGENT} rather than restating the labelling rules."
-            )
+        complaints.append(
+            f"{path.relative_to(root)}: files an issue with `gh issue create`. Hand the draft to {AGENT} "
+            "instead, which searches the backlog, checks the labels and posts through agents/issue_helper.py."
+        )
     return complaints
 
 
@@ -192,7 +190,7 @@ def check(root):
         print(complaint, file=sys.stderr)
     if complaints:
         return 1
-    print("check-issue-posters: the definition loads, writes only documented labels, and every poster names it")
+    print("check-issue-posters: the definition loads, writes only documented labels, and no skill files an issue itself")
     return 0
 
 
@@ -266,7 +264,7 @@ CASES = [
     ("no definition at all", {"agent": None}, "not found"),
     ("instructions that do not point at it", {"instructions": "Be nice.\n"}, "does not name"),
     (
-        "a skill typing the command without naming it",
+        "a skill typing the command",
         {"skills": {"filer": {"SKILL.md": "Run `gh issue create --label bug`.\n"}}},
         "agents/skills/filer/SKILL.md",
     ),
@@ -276,8 +274,13 @@ CASES = [
         "post.py",
     ),
     (
-        "a skill that posts and names it",
+        "a skill whose script files the issue and whose text names the definition",
         {"skills": {"filer": {"SKILL.md": "Use issue-poster.\n", "post.py": 'gh(["issue", "create"])\n'}}},
+        "post.py",
+    ),
+    (
+        "a skill that hands drafts to the definition",
+        {"skills": {"filer": {"SKILL.md": "Hand each draft to issue-poster.\n", "draft.py": "print('draft')\n"}}},
         None,
     ),
     (

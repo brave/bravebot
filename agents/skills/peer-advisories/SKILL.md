@@ -43,12 +43,11 @@ edit there.
 
 ## Three things a run must not do
 
-**A run never posts by hand.** `peer-advisories.py post` and `peer-advisories.py ran` are the only
-things here that write to the tracker. It skips an advisory an issue body already cites and a title the tracker already holds,
-posts one issue every ten seconds or so, stops after 100 issues, and refuses before posting
-anything when a label is missing. `gh` is absent from this skill's `allowed-tools` so that a
-`gh issue create` typed here asks first. An issue filed outside this script goes through the
-[issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script here files an issue. Every issue
+goes through the [issue-poster](../../agents/issue-poster.md) definition (step 6), and
+`peer-advisories.py filed` and `peer-advisories.py ran` are the only things here that write to the
+tracker's records. `gh` is absent from this skill's `allowed-tools` so that a `gh` call that files
+an issue typed here asks first, and so does every call the poster makes.
 
 **A run never fixes anything.** It vets, drafts, files and records. Fixing is a separate task.
 
@@ -123,20 +122,28 @@ Print its output: one title and label set per confirmed defect. The labels follo
 planner or steers an approved effect, an `area/*` where one is clear, `release-blocking` on every
 one, and never an `importance`, `urgency` or `size`.
 
-### Step 6: file (zero model tokens)
+### Step 6: file
+
+Read `{work_dir}/drafts.json`: one entry per draft, with `id`, `title`, `labels` and `body_file`.
+For each entry in turn, up to 100 in a run, hand it to the
+[issue-poster](../../agents/issue-poster.md) definition with the title, the body file, the labels
+the entry names, the assignee only where the user named somebody, and this instruction: the issue
+is a finding nobody has read, so apply no `importance`, `urgency` or `size`; search the open and
+closed issues for the advisory id `{id}` in the body as well as for the title, and post nothing
+when an issue already cites it. A `dry-run` run files nothing and records nothing.
+
+A missing label refuses the post and prints the `gh label create` line; creating a label is the
+user's call, so stop and tell them. Stop at a failure and print it.
+
+Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/peer-advisories/peer-advisories.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
+python3 agents/skills/peer-advisories/peer-advisories.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
-At ten seconds or so an issue, a hundred take about twenty minutes. Run the step in the background
-and wait for it, so that no time limit on a tool call stops it partway.
-
-Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody. Print the
-output. A missing label stops the step before anything is posted and prints the `gh label create`
-for it; creating a label is the user's call, so stop and tell them. A `gh` failure while posting
-stops the step at that draft. Run the step once more: it skips every draft `filed.json` records and
-searches the tracker for the rest before posting. Where it fails again, print the error and stop.
+Pass `--existing` where the poster posted nothing because an issue already covered the advisory,
+and that issue's number as `{number}`. A draft `filed.json` already records is not handed to the
+poster again.
 
 ### Step 7: record (zero model tokens)
 

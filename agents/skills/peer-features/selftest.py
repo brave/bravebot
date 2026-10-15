@@ -12,7 +12,6 @@ import re
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -708,71 +707,56 @@ class Work(unittest.TestCase):
         self.assertEqual(entries["parity-session-fork"]["reason"], "the rule")
         self.assertEqual(entries["spec:HOOK"]["reason"], "1 candidates, 1 already decided")
 
-    def poster(self, cited=(), labels=None):
-        calls = []
+    def run_filed(self, gid, issue, *flags):
+        return quiet(pf.main, ["filed", "--work-dir", str(self.work), "--id", gid, "--issue", issue, *flags])
 
-        def gh(args, repo=None):
-            calls.append(args)
-            query = args[args.index("--search") + 1]
-            return json.dumps([{"number": 5, "title": "t", "state": "OPEN", "url": "u"}] if any(g in query for g in cited) else [])
+    def filed_json(self):
+        return json.loads((self.work / "filed.json").read_text())
 
-        def post(repo, draft, assignee=None):
-            calls.append(["create", draft["id"]])
-            return f"https://github.com/brave/bravebot/issues/{100 + len(calls)}"
-
-        return calls, types.SimpleNamespace(
-            gh=gh,
-            helper=pf.pa.load_poster().helper,
-            post=post,
-            existing_labels=lambda repo: set(labels or ["parity", "enhancement", "beyond-parity", "area/turns", "area/interface"]),
-            assignable=lambda repo, login: True,
-            already_filed=lambda repo, draft: None,
-            JITTER=(0.0, 0.0),
-        )
-
-    def post_args(self, **extra):
-        return self.args(**dict({"repo": "brave/bravebot", "assignee": None, "max": 12, "pace": 0.0}, **extra))
-
-    def test_post_skips_a_gap_the_tracker_already_cites_and_a_missing_label_stops_everything(self):
+    def filing_drafts(self):
         self.confirmed(gap(), gap("beyond-fork-anywhere", area="interface"))
         self.grouped()
         quiet(pf.draft, self.args())
-        calls, poster = self.poster(cited=["parity-session-fork"], labels=["parity"])
-        code, _ = quiet(pf.pa.post, self.post_args(), poster=poster)
-        self.assertEqual((code, calls), (2, []))
 
-        calls, poster = self.poster(cited=["parity-session-fork"])
-        code, _ = quiet(pf.pa.post, self.post_args(), poster=poster)
+    def test_filed_merges_into_what_is_already_recorded_and_says_how(self):
+        self.filing_drafts()
+        code, out = self.run_filed("parity-session-fork", "41")
         self.assertEqual(code, 0)
-        self.assertIn('"parity-session-fork" in:body', calls[0][calls[0].index("--search") + 1])
-        self.assertEqual([c for c in calls if c[0] == "create"], [["create", "beyond-fork-anywhere"]])
-        filed = json.loads((self.work / "filed.json").read_text())
-        self.assertEqual(filed["parity-session-fork"], {"issue": 5, "how": "existing"})
-        self.assertEqual(filed["beyond-fork-anywhere"]["how"], "filed")
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn("parity-session-fork", out)
+        self.assertIn("#41", out)
+        self.run_filed("beyond-fork-anywhere", "42", "--existing")
+        self.assertEqual(
+            self.filed_json(),
+            {"parity-session-fork": {"issue": 41, "how": "filed"}, "beyond-fork-anywhere": {"issue": 42, "how": "existing"}},
+        )
 
-    def test_post_skips_a_draft_when_the_tracker_cites_a_gap_merged_into_it(self):
+    def test_filed_refuses_and_writes_nothing_for_an_unknown_id_or_a_bad_issue_number(self):
+        self.filing_drafts()
+        for gid, issue in (("parity-other", "5"), ("parity-session-fork", "0"), ("parity-session-fork", "-3"),
+                           ("parity-session-fork", "x"), ("parity-session-fork", "1.5"), ("parity-session-fork", "")):
+            with self.subTest(id=gid, issue=issue):
+                code, _ = self.run_filed(gid, issue)
+                self.assertEqual(code, 2)
+                self.assertFalse((self.work / "filed.json").exists())
+
+    def test_filed_refuses_without_a_readable_drafts_file(self):
+        self.assertEqual(self.run_filed("parity-session-fork", "5")[0], 2)
+        (self.work / "drafts.json").write_text("not json")
+        self.assertEqual(self.run_filed("parity-session-fork", "5")[0], 2)
+        self.assertFalse((self.work / "filed.json").exists())
+
+    def test_a_merged_draft_is_a_valid_id_and_record_ledgers_what_filed_wrote(self):
         self.confirmed(gap(), unit="spec:HOOK")
         self.confirmed(gap("parity-fork-conversation"), unit="peer:codex")
         self.grouped({"gaps": ["parity-session-fork", "parity-fork-conversation"]})
         quiet(pf.draft, self.args())
-        calls, poster = self.poster(cited=["parity-fork-conversation"])
-        code, out = quiet(pf.pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 0)
-        self.assertEqual([c for c in calls if c[0] == "create"], [])
-        self.assertIn("skip   parity-session-fork  #5 holds it", out)
-        self.assertEqual(json.loads((self.work / "filed.json").read_text()), {"parity-session-fork": {"issue": 5, "how": "existing"}})
-
-    def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
-        """A confirmed gap left unfiled keeps its unit unreviewed for the next run, and a runaway run must still stop."""
-        drafts = [{"id": f"parity-gap-{n}", "title": f"gap {n}", "labels": ["parity"]} for n in range(101)]
-        (self.work / "drafts.json").write_text(json.dumps(drafts))
-        calls, poster = self.poster()
-        with mock.patch.object(pf.pa, "load_poster", lambda: poster):
-            code, out = quiet(pf.main, ["post", "--work-dir", str(self.work), "--pace", "0"])
-        self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in calls if c[0] == "create"], [d["id"] for d in drafts[:100]])
-        self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
-        self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
+        self.assertEqual(self.run_filed("parity-fork-conversation", "5")[0], 2)
+        self.assertEqual(self.run_filed("parity-session-fork", "5", "--existing")[0], 0)
+        quiet(pf.record, self.args(), today="2026-10-04")
+        entries = pf.read_ledger(self.root / pf.LEDGER)
+        self.assertEqual((entries["parity-session-fork"]["verdict"], entries["parity-session-fork"]["issue"]), ("tracked", "#5"))
+        self.assertEqual((entries["parity-fork-conversation"]["verdict"], entries["parity-fork-conversation"]["issue"]), ("merged", "#5"))
 
 
 class Tree(unittest.TestCase):

@@ -76,12 +76,11 @@ advisory lists that has no row. A tool added to the advisory lists needs a row h
 
 ## Four things a run must not do
 
-**A run never posts by hand.** `peer-features.py post` is the only thing here that writes to the
-tracker, and it is the advisory skill's `post`: it skips a gap an issue body already cites, by its
-own id or by one merged into it, and a title the tracker already holds, posts one issue every ten seconds or so, stops after 100 issues,
-and refuses before posting anything when a label is missing. `gh` is absent from this skill's
-`allowed-tools` so that a `gh issue create` typed here asks first. An issue filed outside this
-script goes through the [issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script here files an issue. Every issue
+goes through the [issue-poster](../../agents/issue-poster.md) definition (step 8), and
+`peer-features.py filed` is the only thing here that records the result. `gh` is absent from this
+skill's `allowed-tools` so that a `gh` call that files an issue typed here asks first, and so does every call
+the poster makes.
 
 **A run never fixes anything and never edits a spec.** It compares, drafts, files and records. Where
 closing a gap needs a clause, the issue says so. Specs change through their own review.
@@ -193,22 +192,29 @@ follow [labelling-issues.md](../../../docs/development/labelling-issues.md): `pa
 `enhancement` with `beyond-parity`, and an `area/*` where one is clear. Never `importance`, `urgency`
 or `size`, which the [triage-issues skill](../triage-issues/SKILL.md) judges.
 
-### Step 8: file (zero model tokens)
+### Step 8: file
+
+Read `{work_dir}/drafts.json`: one entry per draft, with `id`, `title`, `labels`, `body_file` and
+the ids `merged` into it. For each entry in turn, up to 100 in a run, hand it to the
+[issue-poster](../../agents/issue-poster.md) definition with the title, the body file, the labels
+the entry names, the assignee only where the user named somebody, and this instruction: the issue
+is a finding nobody has read, so apply no `importance`, `urgency` or `size`; search the open and
+closed issues for the gap id and for each merged id in the body as well as for the title, and post
+nothing when an issue already cites one. A `dry-run` run files nothing and records nothing.
+
+A missing label refuses the post and prints the `gh label create` line; creating a label is the
+user's call, so stop and tell them. `beyond-parity` is the one a first run is likely to lack, and
+labelling-issues.md gives its description and colour. Stop at a failure and print it.
+
+Then record each report, so that step 9 and a second run both see it:
 
 ```bash
-python3 agents/skills/peer-features/peer-features.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
+python3 agents/skills/peer-features/peer-features.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
-At ten seconds or so an issue, a hundred take about twenty minutes. Run the step in the background
-and wait for it, so that no time limit on a tool call stops it partway.
-
-Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody. Print the
-output. A missing label stops the step before anything is posted and prints the `gh label create` for
-it; creating a label is the user's call, so stop and tell them. `beyond-parity` is the one a first run
-is likely to lack, and labelling-issues.md gives its description and colour. A `gh` failure while
-posting stops the step at that draft. Run the step once more: it skips every draft `filed.json`
-records and searches the tracker for the rest before posting. Where it fails again, print the error
-and stop.
+Pass `--existing` where the poster posted nothing because an issue already covered the gap, and
+that issue's number as `{number}`. A draft `filed.json` already records is not handed to the
+poster again.
 
 ### Step 9: record (zero model tokens)
 

@@ -43,7 +43,6 @@ audit = load("security-audit")
 verifying = load("verify-findings")
 collect = load("collect-findings")
 drafts = load("draft-issues")
-posting = load("post-issues")
 
 FAILURES = []
 
@@ -2856,40 +2855,12 @@ def test_bodies_say_where_and_why():
     )
 
 
-def test_posting_skips_what_the_tracker_already_holds():
-    """Dedup, on the pair of findings that break the obvious way of doing it.
+def test_a_draft_key_is_one_its_title_keeps():
+    """The key the issue-poster definition searches the tracker for has to be in the title.
 
-    Two specs with unpinned clauses produce one sentence with one word changed. Comparing wording
-    alone calls the second a duplicate of the first, and the second never gets filed.
+    The summary names a path and the title shortens it to the file name, so a key taken from the
+    summary can match no title on the tracker, and a search for it reads as nothing like this being filed.
     """
-    tracker = []
-
-    def fake_gh(args, repo):
-        """`gh issue list --search`, near enough: every term has to be in the title.
-
-        Returning the whole tracker whatever was asked for would pass a query that finds nothing,
-        which is the way a duplicate actually got filed: the search looked for a key that no title
-        holds, found none, and read that as nothing like this being on the tracker.
-        """
-        if args[:2] != ["issue", "list"]:
-            raise AssertionError(f"a dedup check called gh {' '.join(args[:2])}")
-        query = args[args.index("--search") + 1]
-        terms = [one.lower() for one in query.split() if ":" not in one]
-        return json.dumps(
-            [one for one in tracker if all(term in one["title"].lower() for term in terms)]
-        )
-
-    posting.gh = fake_gh
-
-    check(
-        "a run is paced to one issue every ten seconds and change",
-        posting.PACE == 10.0 and posting.JITTER == (1.0, 5.0),
-        f"{posting.PACE}, {posting.JITTER}",
-    )
-
-    # The shape the enumerator writes, including the part that makes this hard: the summary names a
-    # path and the title shortens it to the file name, so the summary's own string is not in the
-    # title and a key taken from it matches nothing on the tracker.
     findings = [
         {
             "kind": "unpinned-guarantee",
@@ -2905,95 +2876,20 @@ def test_posting_skips_what_the_tracker_already_holds():
             "title": "nothing pins 2 clauses of `processors.md`, so a change that breaks one passes every check",
             "summary": "`docs/specs/processors.md` has 2 clauses at `verified-by: none`",
         },
-        # And the case with nothing to anchor to: everything this one names is a path its title does
-        # not keep, so the wording is the whole of what dedup has.
-        {
-            "kind": "exception-count-disagreement",
-            "impact": "low",
-            "area": "trust",
-            "title": "the review pass names fewer admitted exceptions than the spec, so an unnamed one reads as a violation",
-            "summary": "`docs/development/reviewing-for-the-rule.md` says 2 and `docs/specs/labels.md` names 3",
-        },
     ]
     out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
     written = with_cwd(ROOT, lambda: drafts.draft(findings, out))
     check(
         "a draft's key is one its own title keeps, where the finding names one at all",
-        all(one["key"].lower() in one["title"].lower() for one in written[:2]),
-        str([(one["key"], one["title"]) for one in written[:2]]),
+        all(one["key"].lower() in one["title"].lower() for one in written),
+        str([(one["key"], one["title"]) for one in written]),
     )
-
-    tracker = [{"number": 11, "state": "OPEN", "url": "u", "title": written[0]["title"]}]
+    report = drafts.report(written, out)
     check(
-        "a finding the tracker already holds is not filed again",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
+        "the report sends each draft to the issue-poster definition",
+        "agents/agents/issue-poster.md" in report and "post-issues" not in report,
+        report,
     )
-    check(
-        "a finding whose wording matches another spec's is still filed",
-        posting.already_filed("brave/bravebot", written[1]) is None,
-    )
-
-    tracker = [{"number": 12, "state": "CLOSED", "url": "u", "title": written[0]["title"]}]
-    check(
-        "an issue somebody read and closed is an answer, not a gap",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
-    )
-
-    tracker = [{"number": 13, "state": "OPEN", "url": "u", "title": written[2]["title"]}]
-    check(
-        "a finding with no key its title keeps is still recognised by its wording",
-        posting.already_filed("brave/bravebot", written[2]) is not None,
-        f"key {written[2]['key']!r} is not in {written[2]['title']!r}",
-    )
-
-    tracker = []
-    check(
-        "a finding nothing on the tracker names is filed",
-        posting.already_filed("brave/bravebot", written[0]) is None,
-    )
-
-
-def test_an_assignee_reaches_the_create():
-    """The login has to arrive at `gh issue create`, not just at the parser.
-
-    Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
-    through files every issue unassigned and still passes every other check here.
-    """
-    original = posting.helper.gh
-    calls = []
-
-    def fake_gh(args, repo=None):
-        calls.append(list(args))
-        return "https://github.com/brave/bravebot/issues/1"
-
-    posting.helper.gh = fake_gh
-    draft = {"title": "t", "body_file": "b", "labels": ["security"]}
-
-    posting.post("brave/bravebot", draft, "netzenbot")
-    passed = calls[-1]
-    check(
-        "the login a run was given is the one the create is passed",
-        "--assignee" in passed and passed[passed.index("--assignee") + 1] == "netzenbot",
-        str(passed),
-    )
-
-    posting.post("brave/bravebot", draft)
-    check(
-        "a run given no login names no assignee, so an unassigned issue stays the default",
-        "--assignee" not in calls[-1],
-        str(calls[-1]),
-    )
-
-    def refusing_gh(args, repo=None):
-        raise RuntimeError("Not Found")
-
-    posting.helper.gh = refusing_gh
-    check(
-        "a login the repository would refuse is caught before anything is posted",
-        not posting.assignable("brave/bravebot", "nobody"),
-    )
-
-    posting.helper.gh = original
 
 
 def test_a_run_writes_a_manifest_and_posts_nothing():
@@ -3069,8 +2965,7 @@ def main():
         test_titles,
         test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
-        test_posting_skips_what_the_tracker_already_holds,
-        test_an_assignee_reaches_the_create,
+        test_a_draft_key_is_one_its_title_keeps,
         test_a_run_writes_a_manifest_and_posts_nothing,
         test_the_manifest_is_read_from_the_work_directory,
     ):

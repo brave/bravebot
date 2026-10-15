@@ -4,8 +4,7 @@
     python3 agents/skills/peer-advisories/peer-advisories.py pending [--max N] [GHSA-ID ...]
     python3 agents/skills/peer-advisories/peer-advisories.py verify --work-dir DIR
     python3 agents/skills/peer-advisories/peer-advisories.py draft --work-dir DIR
-    python3 agents/skills/peer-advisories/peer-advisories.py post --work-dir DIR [--dry-run]
-        [--assignee LOGIN] [--max N]
+    python3 agents/skills/peer-advisories/peer-advisories.py filed --work-dir DIR --id ID --issue N [--existing]
     python3 agents/skills/peer-advisories/peer-advisories.py record --work-dir DIR [--dry-run]
     python3 agents/skills/peer-advisories/peer-advisories.py ran --work-dir DIR [--dry-run]
 
@@ -13,18 +12,19 @@ docs/peer-advisories-vetted holds one line per advisory already vetted, keyed by
 run reads only what is new. `ran` records the date of the run, which the ledger cannot do when a run
 vets nothing new, in a comment on issue #1901 that `make bump-version` reads. No model takes part in
 anything this script does.
+
+This script files nothing. Each draft in DIR/drafts.json is handed to the `issue-poster` definition
+(agents/agents/issue-poster.md), which files it with agents/issue_helper.py. `filed` then records the
+issue number it was given in DIR/filed.json, which `record` reads.
 """
 
 import argparse
 import datetime
-import importlib.util
 import json
-import random
 import re
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -36,7 +36,6 @@ RUN_ISSUE = 1901
 # contrib/release-preflight.py reads this line back; selftest.py holds the two to one format.
 RUN_COMMENT = re.compile(r"peer-advisories ran (\d{4}-\d{2}-\d{2}) against ([0-9a-f]{12})")
 MAX = 8
-MAX_POSTS = 100
 
 REPOSITORIES = (
     ("anthropics/claude-code", "Claude Code"),
@@ -617,102 +616,47 @@ def draft(args):
     return 0
 
 
-# Posting.
+# Recording which issue holds a draft.
 
 
-def load_poster():
-    spec = importlib.util.spec_from_file_location("audit_post", HERE.parent / "security-audit" / "post-issues.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def add_filed_command(commands):
+    """The `filed` subparser, which every skill that drafts issues exposes."""
+    one = commands.add_parser("filed", help="record the issue that holds a draft")
+    one.add_argument("--work-dir", required=True)
+    one.add_argument("--id", required=True, help="the id of a draft in drafts.json")
+    one.add_argument("--issue", required=True, help="the issue number")
+    one.add_argument("--existing", action="store_true", help="the issue was already on the tracker")
+    return one
 
 
-def cited_by(poster, repo, ghsa):
-    """The issue whose body already names this advisory, or None."""
-    found = json.loads(
-        poster.gh(
-            ["issue", "list", "--state", "all", "--limit", "5", "--search", f'"{ghsa}" in:body',
-             "--json", "number,title,state,url"],
-            repo,
-        )
-    )
-    return found[0] if found else None
+def filed(args):
+    """Merge {id: {issue, how}} into WORK/filed.json, which `record` reads.
 
-
-def post(args, poster=None):
-    poster = poster or load_poster()
+    Refuses, writing nothing, an id that is not a draft in WORK/drafts.json, an issue that is not a
+    positive integer, an unreadable drafts.json and an unreadable filed.json.
+    """
     work = Path(args.work_dir)
-    drafts = read_json_list(work / "drafts.json")
-    if not drafts:
-        print("no drafts to post")
-        return 0
-    filed_path = work / "filed.json"
-    filed = read_json(filed_path) or {}
-
-    why = poster.helper.refusal(
-        args.repo,
-        {label for d in drafts for label in d["labels"]},
-        args.assignee,
-        have=poster.existing_labels,
-        can_assign=poster.assignable,
-    )
-    if why:
-        print("\n".join(why), file=sys.stderr)
-        return 2
-
-    posted, held, left = 0, 0, []
-    for d in drafts:
-        if d["id"] in filed:
-            print(f"  done   {d['id']}  #{filed[d['id']]['issue']}")
-            continue
-        if posted >= args.max:
-            left.append(d)
-            continue
-        try:
-            cited = (cited_by(poster, args.repo, gid) for gid in [d["id"], *d.get("merged", [])])
-            duplicate = next(filter(None, cited), None) or poster.already_filed(args.repo, d)
-        except (RuntimeError, ValueError) as problem:
-            print(f"could not search {args.repo}: {problem}", file=sys.stderr)
-            return 2
-        if duplicate:
-            held += 1
-            print(f"  skip   {d['id']}  #{duplicate['number']} holds it ({duplicate['state'].lower()})")
-            if not args.dry_run:
-                filed[d["id"]] = {"issue": duplicate["number"], "how": "existing"}
-                filed_path.write_text(json.dumps(filed, indent=2), encoding="utf-8")
-            continue
-        if args.dry_run:
-            posted += 1
-            print(f"  would  {d['id']}  {d['title']}\n{'':9}{', '.join(d['labels'])}")
-            continue
-        if posted:
-            time.sleep(args.pace + random.uniform(*poster.JITTER))
-        try:
-            url = poster.post(args.repo, d, args.assignee)
-        except RuntimeError as problem:
-            print(f"could not file {d['id']}: {problem}", file=sys.stderr)
-            return 1
-        number = re.search(r"/issues/(\d+)$", url)
-        if not number:
-            print(f"filed {d['id']} but could not read an issue number from {url!r}", file=sys.stderr)
-            return 1
-        posted += 1
-        filed[d["id"]] = {"issue": int(number.group(1)), "how": "filed"}
-        filed_path.write_text(json.dumps(filed, indent=2), encoding="utf-8")
-        print(f"  filed  {d['id']}  {url}")
-
-    print(f"{posted} {'would be filed' if args.dry_run else 'filed'}, {held} already on the tracker")
-    if left:
-        print(f"{len(left)} not attempted, at the cap of {args.max}: {', '.join(d['id'] for d in left)}")
-    return 0
-
-
-def read_json_list(path):
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return data if isinstance(data, list) else []
+        drafts = json.loads((work / "drafts.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as problem:
+        raise Problem(f"cannot read {work / 'drafts.json'}: {one_line(problem, 160)}") from problem
+    if not isinstance(drafts, list):
+        raise Problem(f"{work / 'drafts.json'} is not a list of drafts")
+    if args.id not in {d.get("id") for d in drafts if isinstance(d, dict)}:
+        raise Problem(f"{args.id!r} is not the id of a draft in {work / 'drafts.json'}")
+    if not re.fullmatch(r"[0-9]+", str(args.issue)) or int(args.issue) < 1:
+        raise Problem(f"{args.issue!r} is not a positive issue number")
+    path = work / "filed.json"
+    held = {}
+    if path.exists():
+        held = read_json(path)
+        if held is None:
+            raise Problem(f"cannot read {path}")
+    how = "existing" if args.existing else "filed"
+    held[args.id] = {"issue": int(args.issue), "how": how}
+    path.write_text(json.dumps(held, indent=2), encoding="utf-8")
+    print(f"recorded {args.id} as issue #{int(args.issue)} ({how}) in {path}")
+    return 0
 
 
 # Recording.
@@ -792,13 +736,7 @@ def main(argv=None):
                        ("draft", "write an issue body per confirmed defect")):
         commands.add_parser(name, help=text).add_argument("--work-dir", required=True)
 
-    one = commands.add_parser("post", help="file the drafts the tracker does not hold")
-    one.add_argument("--work-dir", required=True)
-    one.add_argument("--repo", default=REPO)
-    one.add_argument("--dry-run", action="store_true")
-    one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=MAX_POSTS)
-    one.add_argument("--pace", type=float, default=10.0)
+    add_filed_command(commands)
 
     one = commands.add_parser("record", help="write the decided verdicts into the ledger")
     one.add_argument("--work-dir", required=True)
@@ -814,7 +752,7 @@ def main(argv=None):
         if not GHSA.fullmatch(ghsa):
             parser.error(f"{ghsa!r} is not a GHSA id")
     try:
-        return {"pending": pending, "verify": verify, "draft": draft, "post": post, "record": record, "ran": ran}[args.command](args)
+        return {"pending": pending, "verify": verify, "draft": draft, "filed": filed, "record": record, "ran": ran}[args.command](args)
     except Problem as problem:
         print(f"peer-advisories: {problem}", file=sys.stderr)
         return 2

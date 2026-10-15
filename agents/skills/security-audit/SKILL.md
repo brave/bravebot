@@ -4,7 +4,8 @@ description:
   'Audit this repository against the rule that untrusted content never enters the
   driver or the planner. Enumerates the label surface mechanically, then reads the
   code in ten lanes, tries to disprove every candidate, and files one issue per
-  finding that survives, skipping anything the tracker already holds.
+  finding that survives, through the issue-poster definition, skipping anything the tracker
+  already holds.
   Triggers on: security audit, /security-audit, make check-security, find security
   issues, audit the trust boundary, is the rule still holding, prompt injection
   review, file security issues.'
@@ -53,14 +54,12 @@ the issue asks for the check.
 
 ## Two things a run must not do
 
-**A run never posts by hand.** It posts, and `post-issues.py` is the only thing in here that
-does. Everything keeping that safe is in the script rather than in this file, because a model
-cannot be relied on to pace itself, to compare a title against forty existing ones, or to stop
-at a cap it read about several thousand tokens ago. So `gh` is deliberately absent from this
-skill's `allowed-tools`: a `gh issue create` typed out here asks first, and the script's calls
-do not. That is on purpose, and reaching for `gh` to work around the script is the one move that
-loses the dedup, the pacing and the cap at once. An issue that is not a finding of this audit goes
-through the [issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script in this skill files an issue.
+Every issue goes through the [issue-poster](../../agents/issue-poster.md) definition, which
+searches open and closed issues for the same finding, applies the labels, posts and reads the
+issue back. `gh` is deliberately absent from this skill's `allowed-tools`: a `gh` call that files
+an issue typed out here asks first, and so does every call the poster makes. That is the gate, and
+reaching for `gh` to work around the poster loses the search and the label check.
 
 **A run never fixes anything.** It reports, it drafts, it files. Fixing is a separate task the
 user asks for afterwards, because a pass that decides what to change should not also be the pass
@@ -81,8 +80,7 @@ The heavy data goes through files, never through this session's context:
 4. **Verifiers** (subagent tokens only) each try to kill one candidate.
 5. **collect-findings.py** (zero model tokens) merges, renders the report, sets the exit code.
 6. **draft-issues.py** (zero model tokens) writes one issue body per confirmed finding.
-7. **post-issues.py** (zero model tokens) files the ones the tracker does not already hold, one
-   every ten seconds or so.
+7. **issue-poster** files the ones the tracker does not already hold, one delegate per draft.
 
 This session orchestrates. It reads no source file, no candidate, no verdict and no issue
 body. Every one of those is a path passed between steps. `{work_dir}/surface.json` holds every
@@ -216,32 +214,30 @@ draft that got one shows it and a draft that did not is unchanged.
 
 ### Step 9: file them
 
-```bash
-python3 agents/skills/security-audit/post-issues.py --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
-```
+Hand each draft to the [issue-poster](../../agents/issue-poster.md) definition, one delegate at a
+time and no more than twelve in a run, with the draft's title, its body file, the labels the
+draft names, the assignee only where the user named somebody, and this instruction: the issue is
+a finding nobody has read, so apply no `importance`, `urgency` or `size`. A lane that
+malfunctions malfunctions at scale and a shared tracker is the wrong place to find that out, so
+stop at twelve and list the titles left.
 
-Print its output. One line per draft saying `filed` with the URL, or `skip` with the number of
-the issue that says it already. Three things are the script's and not yours to redo:
+The poster does what no model can be relied on to do here:
 
 - **A finding the tracker already holds is skipped**, open or closed. Somebody who read a
   finding and closed it has answered it, and filing it again next week is arguing with them by
   machine.
-- **One issue every ten seconds**, plus one to five more so the gap is not a constant. Six
-  issues in the same second read as a script having got loose.
-- **A cap.** A lane that malfunctions malfunctions at scale, and a shared tracker is the wrong
-  place to find that out. What the cap left is printed by title.
+- **A label the repository lacks refuses the post** and prints the `gh label create` line for a
+  person to run.
 
-The labels are the ones on the draft. Every issue carries `security`, `needs-security-review`,
+Print each report: the issue URL, or the number of the issue that says it already. The labels are
+the ones on the draft. Every issue carries `security`, `needs-security-review`,
 its kind label, a `severity/*` and an `area/*` where the finding has one. `importance`,
 `urgency` and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to judge, and
 guessing at one here would put a finding nobody has read into somebody's queue.
 
-A label the repository does not have stops the whole step before anything is posted, and the
-output names the `gh label create` for each one. Creating a label changes what everybody sees,
-so it is the user's to run, not this skill's. `--assignee` is checked the same way and for the
-same reason: a login the repository would refuse fails the create it is passed to, and finding
-that out partway through leaves half a report filed. Pass it only where the user named somebody,
-since an issue assigned to a person nobody asked for is in their queue either way.
+Creating a label changes what everybody sees, so it is the user's to run, not this skill's. Pass
+an assignee only where the user named somebody, since an issue assigned to a person nobody asked
+for is in their queue either way.
 
 ### Step 10: say what happened
 
