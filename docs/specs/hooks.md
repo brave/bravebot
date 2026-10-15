@@ -6,6 +6,7 @@ governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
   - crates/agent/src/delegate.rs

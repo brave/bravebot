@@ -35,6 +35,7 @@ use crate::timing::{Elapsed, Timing};
 use crate::tools;
 use crate::workspace::{Paging, Workspace, WorkspaceError};
 
+mod delegate_end;
 mod prompts;
 mod task;
 
@@ -1587,26 +1588,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
-        // Built from which way the result came back, the run's own counts and the fixed name of a
-        // failure, so the record says why it stopped without holding what any service or tool said
-        // (TRACE-8). The planner is still told only that it did not finish (BACKEND-37).
-        let finish = {
-            use bravebot_core::delegate::Finish;
-            match (&delegated, ran) {
-                (_, None) => Finish::Lost,
-                (Ok(_), Some((took, rounds))) => Finish::Answered { took, rounds },
-                (Err(error), Some((took, rounds))) => match error.ending() {
-                    crate::outcome::Ending::Stopped { .. } => Finish::Stopped { took, rounds },
-                    ending => Finish::Failed {
-                        took,
-                        rounds,
-                        why: ending
-                            .diagnosis()
-                            .map_or("internal", |diagnosis| diagnosis.category.name()),
-                    },
-                },
-            }
-        };
+        let finish = delegate_end::finish_of(&delegated, ran);
         policy.record_delegate_end(id, working.rounds, finish);
 
         // After the decisions it made are taken back, so a rule that distrusts a path survives the
@@ -1629,42 +1611,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
-                let tally = tools::tally(rounds, "round", "rounds");
-                // Two counts the driver already holds: the rounds this delegate made, and the
-                // bound its spec fixed before it started. Nothing here reads the report, so the
-                // comparison is between driver-held numbers and never between bytes a delegate
-                // wrote (DELEGATE-26).
-                let reached = rounds >= working.rounds;
-                let note = match (working.stop.was_honoured(), reached) {
-                    (true, _) => format!(
-                        "the person stopped a {kind} delegate after {tally} and it answered with \
-                         what it had"
-                    ),
-                    (false, true) => format!(
-                        "a {kind} delegate reached its limit of {tally} and answered with what it \
-                         had, so it may not be finished"
-                    ),
-                    (false, false) => format!("a {kind} delegate answered after {tally}"),
-                };
-                // Said before the report, in the driver's own words, as whose work a report is
-                // is (DELEGATE-14). The report keeps the label its own context earned.
-                let stopped = match working.stop.was_honoured() {
-                    true => {
-                        format!("The person stopped the {kind} delegate {id} before it reported. ")
-                    }
-                    false => String::new(),
-                };
-                // Beside the report rather than inside it, so the planner reads the same sentence
-                // whether it is shown the words or handed a reference to them (AGENT-4). The
-                // delegate is told on its limiting round to say what stopped it (DELEGATE-6), and
-                // that is model text the planner may never see.
-                let bound = match (working.stop.was_honoured(), reached) {
-                    (false, true) => format!(
-                        " It stopped at its limit of {} and may not be finished.",
-                        tools::tally(working.rounds, "round", "rounds")
-                    ),
-                    _ => String::new(),
-                };
+                let (note, stopped, bound) = delegate_end::answered_sentences(
+                    &kind,
+                    id,
+                    rounds,
+                    working.rounds,
+                    working.stop.was_honoured(),
+                );
                 let slot = conversation.next_reference();
                 let presented = match policy.present(
                     "delegate",
@@ -1721,82 +1674,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
             }
             Err(_) => {
                 account.add_spent(&partial);
-                // The same comparison the answering arm makes, on the same two driver-held counts.
-                // A delegate that spent its whole budget and then failed to answer is the common
-                // way the bound is reached rather than a corner of it, and the planner told only
-                // that it did not finish retries the identical task (DELEGATE-26).
-                let reached = ran.is_some_and(|(_, rounds)| rounds >= working.rounds);
-                let bound = match reached {
-                    true => format!(
-                        " It had spent its limit of {}, so the same task will not get further.",
-                        tools::tally(working.rounds, "round", "rounds")
-                    ),
-                    false => String::new(),
-                };
-                // The same fixed name the trail records, and never the error's own text.
-                let note = match finish {
-                    bravebot_core::delegate::Finish::Failed { why, .. } => {
-                        format!("the delegate could not finish ({why})")
-                    }
-                    bravebot_core::delegate::Finish::Stopped { .. } => {
-                        "the delegate was stopped".to_string()
-                    }
-                    _ => "the delegate could not finish".to_string(),
-                };
-                let note = match reached {
-                    true => format!(
-                        "{note}, having spent its limit of {}",
-                        tools::tally(working.rounds, "round", "rounds")
-                    ),
-                    false => note,
-                };
-                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{bound}");
+                let (note, body) =
+                    delegate_end::unfinished_account(&finish, ran, working.rounds, id);
                 (note, body, true, None, Provenance::Driver)
             }
         };
 
         if let Some((retired, checkout)) = retired {
-            use crate::workspace::Retired;
-            let (said, mark) = match retired {
-                Retired::Removed => (
-                    format!(
-                        "Its checkout {} was removed, since nothing was done in it.",
-                        checkout.id()
-                    ),
-                    "its checkout was removed".to_string(),
-                ),
-                // The size is the person's alone. It is a measure of files programs wrote, and the
-                // planner decides nothing by it.
-                Retired::Kept => (
-                    format!(
-                        "Its checkout {} of commit {} was kept at {}, since something was done in \
-                         it. {} apply_checkout with checkout \"{}\" brings the files it names \
-                         back into the working directory, asking the person about each.",
-                        checkout.id(),
-                        checkout.commit(),
-                        checkout.path().display(),
-                        crate::delegate::checkout_candidates(&checkout.candidates()),
-                        checkout.id()
-                    ),
-                    match checkout.size() {
-                        Some(size) => format!(
-                            "its checkout {} was kept, taking {} on disk",
-                            checkout.id(),
-                            size.spelled()
-                        ),
-                        None => format!("its checkout {} was kept", checkout.id()),
-                    },
-                ),
-                Retired::Stuck => (
-                    format!(
-                        "Its checkout {} of commit {} could not be removed and is at {}.",
-                        checkout.id(),
-                        checkout.commit(),
-                        checkout.path().display()
-                    ),
-                    "its checkout could not be removed".to_string(),
-                ),
-            };
+            let (said, mark) = delegate_end::checkout_account(retired, &checkout);
             body.push_str("\n\n");
             body.push_str(&said);
             note = format!("{note}; {mark}");
@@ -7026,5 +6911,64 @@ mod tests {
                 0
             );
         }
+    }
+
+    /// The driver's sentences about how a delegate ended come from two driver-held counts and one
+    /// flag, so the four ways they combine are told apart here without a turn (DELEGATE-26).
+    #[test]
+    fn the_sentences_about_an_answered_delegate_follow_the_stop_and_the_bound() {
+        let id = DelegateId::nth(2);
+        let said =
+            |rounds, stopped| delegate_end::answered_sentences("review", id, rounds, 3, stopped);
+
+        let (note, stopped, bound) = said(2, false);
+        assert_eq!(note, "a review delegate answered after 2 rounds");
+        assert_eq!((stopped.as_str(), bound.as_str()), ("", ""));
+
+        let (note, stopped, bound) = said(3, false);
+        assert!(note.starts_with("a review delegate reached its limit of 3 rounds"));
+        assert_eq!(stopped, "");
+        assert_eq!(
+            bound,
+            " It stopped at its limit of 3 rounds and may not be finished."
+        );
+
+        let (note, stopped, bound) = said(3, true);
+        assert!(note.starts_with("the person stopped a review delegate after 3 rounds"));
+        assert!(stopped.starts_with("The person stopped the review delegate "));
+        assert_eq!(bound, "");
+    }
+
+    /// A delegate that failed says its limit was spent only where it was, and the note carries the
+    /// fixed name of the failure rather than the error's text.
+    #[test]
+    fn the_account_of_an_unfinished_delegate_says_the_limit_only_where_it_was_spent() {
+        use bravebot_core::delegate::Finish;
+        let id = DelegateId::nth(1);
+        let took = std::time::Duration::from_secs(1);
+        let failed = Finish::Failed {
+            took,
+            rounds: 3,
+            why: "timeout",
+        };
+
+        let (note, body) = delegate_end::unfinished_account(&failed, Some((took, 3)), 3, id);
+        assert_eq!(
+            note,
+            "the delegate could not finish (timeout), having spent its limit of 3 rounds"
+        );
+        assert!(body.ends_with(
+            " It had spent its limit of 3 rounds, so the same task will not get further."
+        ));
+
+        let (note, body) = delegate_end::unfinished_account(&failed, Some((took, 2)), 3, id);
+        assert_eq!(note, "the delegate could not finish (timeout)");
+        assert!(body.ends_with("did not finish."));
+
+        let stopped = Finish::Stopped { took, rounds: 1 };
+        let (note, _) = delegate_end::unfinished_account(&stopped, Some((took, 1)), 3, id);
+        assert_eq!(note, "the delegate was stopped");
+        let (note, _) = delegate_end::unfinished_account(&Finish::Lost, None, 3, id);
+        assert_eq!(note, "the delegate could not finish");
     }
 }
