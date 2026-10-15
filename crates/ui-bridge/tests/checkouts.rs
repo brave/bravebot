@@ -353,6 +353,82 @@ fn a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it() {
     );
 }
 
+/// CHECKOUT-16: a record naming a checkout whose directory is gone opens, and the records the
+/// session saves from then on go on naming it, so a session that can reach it finds it. The
+/// worker the next turn starts is given a number of its own, and the record names both.
+#[test]
+fn a_reopened_session_keeps_a_checkout_it_cannot_place_in_the_record_and_numbers_past_it() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = repository("checkout-gone-before-a-reopen");
+    let mut rules = a_worker_writing("ASK-FOR-ONE", "WORKER-WRITES-ONE", "one.txt");
+    rules.extend(a_worker_writing(
+        "ASK-FOR-TWO",
+        "WORKER-WRITES-TWO",
+        "two.txt",
+    ));
+    let endpoint = serve(rules);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let first = window.turn(&session, "ASK-FOR-ONE");
+    let id = session_id(&first);
+    std::fs::remove_dir_all(standing(&project, "c1")).unwrap();
+
+    let mut reopened = Window::with_settings(window.settings.clone());
+    let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
+    let session = opened["session"].as_str().unwrap().to_string();
+    let second = reopened.turn(&session, "ASK-FOR-TWO");
+
+    assert_eq!(session_id(&second), id);
+    let mut recorded = kept(&project, &id);
+    recorded.sort();
+    assert_eq!(
+        recorded,
+        [
+            ("c1".to_string(), vec!["one.txt".to_string()]),
+            ("c2".to_string(), vec!["two.txt".to_string()]),
+        ],
+        "the record lost the checkout that could not be placed, or the new worker was given its number"
+    );
+}
+
+/// CHECKOUT-16: a fork made in the window starts with no checkouts, and the session it was cut from
+/// goes on listing the one its worker made. Two records listing one directory would each be a
+/// reason to keep it, and neither session would know the other still used it.
+#[test]
+fn a_fork_starts_with_no_checkout_and_the_session_it_was_cut_from_keeps_its_own() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = repository("checkout-fork");
+    let mut rules = a_worker_writing("ASK-FOR-ONE", "WORKER-WRITES-ONE", "one.txt");
+    rules.push(("SAY-HELLO", vec![endpoint::answer()]));
+    let endpoint = serve(rules);
+    let (mut window, session) = Window::on(&project, &endpoint);
+    let first = window.turn(&session, "ASK-FOR-ONE");
+    let parent = session_id(&first);
+
+    let forked = window.call(
+        "session.fork",
+        json!({"session": session, "prompt": 0, "text": "ASK-FOR-ONE"}),
+    );
+    let child = forked["session"].as_str().unwrap().to_string();
+    let second = window.turn(&child, "SAY-HELLO");
+
+    let fork = session_id(&second);
+    assert_ne!(fork, parent, "the fork wrote the parent's record");
+    assert_eq!(
+        kept(&project, &fork),
+        [],
+        "the fork lists a checkout it was not given"
+    );
+    assert_eq!(
+        kept(&project, &parent),
+        [("c1".to_string(), vec!["one.txt".to_string()])],
+        "forking took the checkout from the session it was cut from"
+    );
+}
+
 /// CHECKOUT-14: the note that the working directory's file was written since the checkout was made
 /// survives the end of the turn the checkout was made in. A checkout brought back by a later turn
 /// is judged against every write the session made, so the question about `out.txt` says the planner

@@ -868,6 +868,8 @@ Unix names none: the sweep removes them, and one it leaves is held by a running 
 `verified-by: bravebot_ui_bridge::checkouts::a_second_turns_worker_gets_the_next_checkout_and_the_first_stays_listed`
 `verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it`
 `verified-by: bravebot_ui_bridge::checkouts::a_checkout_stays_locked_between_turns`
+`verified-by: bravebot_ui_bridge::checkouts::a_reopened_session_keeps_a_checkout_it_cannot_place_in_the_record_and_numbers_past_it`
+`verified-by: bravebot_ui_bridge::checkouts::a_fork_starts_with_no_checkout_and_the_session_it_was_cut_from_keeps_its_own`
 
 <a id="CHECKOUT-17"></a>
 ### CHECKOUT-17: a rewind leaves a checkout as it is, and says so
