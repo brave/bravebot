@@ -4532,16 +4532,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 .of_content()
                 .of_a_picture(media)
             }
-            Err(e) => Produced::problem(format!(
-                "error: {}",
-                file_tool_failure(
-                    policy,
-                    "read_file",
-                    path_field(destination),
-                    &e,
-                    &shown_path
-                )
-            )),
+            Err(e) => file_tool_problem(
+                policy,
+                "read_file",
+                path_field(destination),
+                &e,
+                &shown_path,
+            ),
         });
     }
 
@@ -4564,16 +4561,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
-            Err(e) => Produced::problem(format!(
-                "error: {}",
-                file_tool_failure(
-                    policy,
-                    "read_file",
-                    path_field(destination),
-                    &e,
-                    &shown_path
-                )
-            )),
+            Err(e) => file_tool_problem(
+                policy,
+                "read_file",
+                path_field(destination),
+                &e,
+                &shown_path,
+            ),
         });
     }
 
@@ -4619,16 +4613,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             });
         }
         Err(e) => {
-            return priced(Produced::problem(format!(
-                "error: {}",
-                file_tool_failure(
-                    policy,
-                    "read_file",
-                    path_field(destination),
-                    &e,
-                    &shown_path
-                )
-            )));
+            return priced(file_tool_problem(
+                policy,
+                "read_file",
+                path_field(destination),
+                &e,
+                &shown_path,
+            ));
         }
     };
 
@@ -5102,6 +5093,21 @@ fn file_tool_failure<S: Sink>(
     )
 }
 
+/// [`file_tool_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
+/// path the workspace turned away is worded and recorded in one place.
+fn file_tool_problem<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    field: &str,
+    e: &crate::workspace::WorkspaceError,
+    named: &str,
+) -> Produced {
+    Produced::problem(format!(
+        "error: {}",
+        file_tool_failure(policy, tool, field, e, named)
+    ))
+}
+
 /// The argument a path arrived in.
 fn path_field(destination: Destination) -> &'static str {
     match destination {
@@ -5473,10 +5479,7 @@ fn list_files<S: Sink>(
             }
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
-        Err(e) => Produced::problem(format!(
-            "error: {}",
-            file_tool_failure(policy, "list_files", "directory", &e, &proposed_dir)
-        )),
+        Err(e) => file_tool_problem(policy, "list_files", "directory", &e, &proposed_dir),
     }
 }
 
@@ -5541,10 +5544,7 @@ fn repo_map<S: Sink>(
                     .capped(incomplete)
             }
         }
-        Err(e) => Produced::problem(format!(
-            "error: {}",
-            file_tool_failure(policy, "repo_map", "directory", &e, &proposed_dir)
-        )),
+        Err(e) => file_tool_problem(policy, "repo_map", "directory", &e, &proposed_dir),
     }
 }
 
@@ -6568,16 +6568,13 @@ fn edit_file<S: Sink, C: Confirmer>(
     let source = match workspace.read(policy, &path) {
         Ok(contents) => contents,
         Err(e) => {
-            return Produced::problem(format!(
-                "error: {}",
-                file_tool_failure(
-                    policy,
-                    "edit_file",
-                    path_field(destination),
-                    &e,
-                    &shown_path
-                )
-            ));
+            return file_tool_problem(
+                policy,
+                "edit_file",
+                path_field(destination),
+                &e,
+                &shown_path,
+            );
         }
     };
 
@@ -6794,16 +6791,13 @@ fn edit_file<S: Sink, C: Confirmer>(
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
         // arm that reaches here in practice, and it carries the path the write was routed on.
-        Err(e) => Produced::problem(format!(
-            "error: {}",
-            file_tool_failure(
-                policy,
-                "edit_file",
-                path_field(destination),
-                &e,
-                &shown_path
-            )
-        )),
+        Err(e) => file_tool_problem(
+            policy,
+            "edit_file",
+            path_field(destination),
+            &e,
+            &shown_path,
+        ),
     }
 }
 
@@ -11802,10 +11796,7 @@ fn search<S: Sink>(
             }
         }
         // Worded about the name typed. The error carries where it landed, which a link can choose.
-        Err(e) => Produced::problem(format!(
-            "error: {}",
-            file_tool_failure(policy, "search", "directory", &e, &proposed_where)
-        )),
+        Err(e) => file_tool_problem(policy, "search", "directory", &e, &proposed_where),
     }
 }
 
@@ -16598,6 +16589,8 @@ mod tests {
             }
         }
 
+        type DirectoryTool = fn(&mut Policy<'_, RecordingSink>, &Workspace, &Value) -> Produced;
+
         fn armed(
             workspace: &Workspace,
             arming: crate::watch::Arming,
@@ -16887,6 +16880,55 @@ mod tests {
                 "the refused watch was not recorded once, as the planner named it"
             );
             assert!(!clean, "a turn whose watch was refused would end as clean");
+        }
+
+        /// A directory tool turned away from a directory outside the workspace answers with an
+        /// `error:` result that names the directory as typed, and records the refusal once under
+        /// the tool and field that took it.
+        #[test]
+        fn a_directory_tool_refused_for_leaving_the_workspace_says_error_and_is_recorded() {
+            let scratch = Scratch::new("directory-escape");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&project).unwrap();
+            let workspace = Workspace::new(&project).expect("workspace");
+
+            for (tool, run) in [
+                ("list_files", list_files::<RecordingSink> as DirectoryTool),
+                ("repo_map", repo_map::<RecordingSink> as DirectoryTool),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "look at a directory");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let produced = run(&mut policy, &workspace, &json!({"directory": ".."}));
+                drop(policy);
+                let told = &produced.note;
+
+                assert!(
+                    told.starts_with("error: '..' resolves outside the workspace"),
+                    "{tool}: {told}"
+                );
+                let recorded = sink
+                    .blocked()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            bravebot_core::event::Event::GateBlocked {
+                                gate: "confine",
+                                reason,
+                                ..
+                            } if reason.starts_with(&format!("{tool}.directory: '..'"))
+                        )
+                    })
+                    .count();
+                assert_eq!(recorded, 1, "{tool}: the refusal was not recorded once");
+            }
         }
 
         /// A read of a file is refused once the context has met untrusted content, because what
