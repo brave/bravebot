@@ -189,8 +189,8 @@ transition renamed several of them, so those are named as alternatives and a pac
 release still installs on the other.
 
 `brave-bot` is the package name in both formats. Upgrades and conflicts key on it, so like the
-macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which an apt or
-dnf repository would want as a package of its own.
+macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which
+[the CLI packages](#the-cli-packages) below ship as a package of its own.
 
 The packages are fused and unsigned, as the Mac bundles are. Signing them, and an apt or dnf
 repository to serve updates from, are issue #770; the app has no updater on any platform.
@@ -200,6 +200,28 @@ release, because a container shares the host's kernel and AppArmor policy and so
 the sandbox the packages exist for. On a machine of each, the package has to install, start from
 its launcher with the sandbox on, start its agent, ignore `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
 and `--inspect`, and uninstall cleanly.
+
+### The CLI packages
+
+```sh
+make linux-amd64 linux-arm64 strip
+make cli-packages-linux
+```
+
+The CLI in the apt and dnf repositories, one package per architecture under the name `bravebot`,
+from the same binaries the releases page publishes. It reads `dist/bravebot-linux-<arch>` and
+writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
+on a Linux host and needing no Rust toolchain. The payload is the one binary at
+`/usr/bin/bravebot`; both formats are packed by the same two digest-pinned containers the app's
+packages use, described under [the Linux packages](#the-linux-packages) above; and those four
+names are the ones the publish job uploads.
+
+The dependencies declared are the binary's own, from its dynamic section: `libm`, `libc`,
+`libpthread` and `libdl`, all of them `libc6` on Debian and `glibc` on Fedora, required at version
+2.30 or newer in both formats, the newest symbol version either architecture asks for. Nothing
+from the Electron dependency list the app declares is copied, since none of it is needed. The
+packages are unsigned: signing them, and the apt and dnf repositories that serve them, are the
+publish side's.
 
 ### The Windows installers
 
