@@ -2596,7 +2596,8 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
   `off`, which has no profile to add to, with no profile directory, and in a workspace the person
-  has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records the refusal under `sandbox`,
+  naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
@@ -2844,7 +2845,9 @@ none to add to.
   managed `run.network` of `closed`, for the reason the managed file floors `off` there
   ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
-  The sentence does not suggest the argument: the planner learns it from the `run` description.
+  The sentence does not suggest the argument: the planner learns it from the `run` description. The
+  trail records the refusal under `sandbox`, naming `unconfined` and each cause that held
+  ([TRACE-1](trace.md#TRACE-1)).
 - **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
 - **A redirection may leave the workspace.** `printf 'howdy\n' > ../hello.txt` writes the file when
   the person approves the line. The confinement that keeps a redirection's destination inside the

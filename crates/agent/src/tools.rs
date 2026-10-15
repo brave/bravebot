@@ -33,7 +33,7 @@ use bravebot_core::credentials::Scanned;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{RecordingSink, Sink};
 use bravebot_core::label::Label;
-use bravebot_core::policy::{Destination, Policy};
+use bravebot_core::policy::{Destination, Policy, RunRequestCause};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::todo::{self, Item, List, Status};
 use bravebot_core::value::Labelled;
@@ -8240,17 +8240,20 @@ const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a 
 /// `off` there: a line with no profile is not held to a closed network. A turn nobody is at to ask
 /// is refused by the confirmer, and the mode that asks nothing does not approve it
 /// ([`crate::permission_mode`]).
-fn unconfined_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
-    let accepted = unconfined_is_accepted(
+fn unconfined_accepted<S: Sink>(
+    policy: &Policy<'_, S>,
+    tools: &Tools<'_>,
+) -> Result<(), Vec<RunRequestCause>> {
+    let causes = unconfined_refusals(
         tools.confine_runs,
         tools.sandbox,
         policy.trusts_path(&tools.workspace.trust_key(".")),
         network_pinned_closed(bravebot_config::settled_run_network()),
         tools.delegated,
     );
-    match accepted {
+    match causes.is_empty() {
         true => Ok(()),
-        false => Err(NOT_ACCEPTING_UNCONFINED.to_string()),
+        false => Err(causes),
     }
 }
 
@@ -8301,19 +8304,32 @@ fn redirections_may_leave(
 }
 
 /// The rule [`unconfined_accepted`] applies, over the facts it reads, so each refusal is a row of a
-/// table a test can walk.
-fn unconfined_is_accepted(
+/// table a test can walk. Every condition that fails is a cause, in the order SANDBOX-29 lists
+/// them, and a request is accepted exactly where none does. The mode is read only where the turn
+/// confines its runs, as it is everywhere else.
+fn unconfined_refusals(
     confine_runs: bool,
     mode: bravebot_sandbox::SandboxMode,
     workspace_trusted: bool,
     network_pinned_closed: bool,
     delegated: bool,
-) -> bool {
-    confine_runs
-        && mode == bravebot_sandbox::SandboxMode::WorkspaceWrite
-        && workspace_trusted
-        && !network_pinned_closed
-        && !delegated
+) -> Vec<RunRequestCause> {
+    let mut causes = Vec::new();
+    if !confine_runs {
+        causes.push(RunRequestCause::NoConfinement);
+    } else if mode != bravebot_sandbox::SandboxMode::WorkspaceWrite {
+        causes.push(RunRequestCause::SandboxMode(mode.name()));
+    }
+    if !workspace_trusted {
+        causes.push(RunRequestCause::UntrustedWorkspace);
+    }
+    if network_pinned_closed {
+        causes.push(RunRequestCause::ManagedClosedNetwork);
+    }
+    if delegated {
+        causes.push(RunRequestCause::Delegate);
+    }
+    causes
 }
 
 /// Whether the administrator's file closed the network, which only a managed pin does here: a person
@@ -8364,13 +8380,38 @@ fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requ
 /// for and a credential lent to a script a checkout wrote is the case SANDBOX-16 keeps scopes
 /// from. A turn nobody is at to ask is refused by the confirmer the prompt goes to, since a
 /// request is always asked about.
-fn requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
-    let confined = tools.confines_programs();
-    let trusted = policy.trusts_path(&tools.workspace.trust_key("."));
-    match confined && trusted {
+fn requests_accepted<S: Sink>(
+    policy: &Policy<'_, S>,
+    tools: &Tools<'_>,
+) -> Result<(), Vec<RunRequestCause>> {
+    let causes = requests_refusals(
+        tools.confine_runs,
+        tools.sandbox,
+        policy.trusts_path(&tools.workspace.trust_key(".")),
+    );
+    match causes.is_empty() {
         true => Ok(()),
-        false => Err(NOT_ACCEPTING_REQUESTS.to_string()),
+        false => Err(causes),
     }
+}
+
+/// The rule [`requests_accepted`] applies, over the facts it reads, with every condition that fails
+/// as a cause for the same reason [`unconfined_refusals`] gives.
+fn requests_refusals(
+    confine_runs: bool,
+    mode: bravebot_sandbox::SandboxMode,
+    workspace_trusted: bool,
+) -> Vec<RunRequestCause> {
+    let mut causes = Vec::new();
+    if !confine_runs {
+        causes.push(RunRequestCause::NoConfinement);
+    } else if mode == bravebot_sandbox::SandboxMode::Off {
+        causes.push(RunRequestCause::SandboxMode(mode.name()));
+    }
+    if !workspace_trusted {
+        causes.push(RunRequestCause::UntrustedWorkspace);
+    }
+    causes
 }
 
 /// Run a program, after a person approves the exact arguments.
@@ -8470,9 +8511,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(diagnostic) => return Produced::problem(diagnostic),
     };
     if !requested.is_empty()
-        && let Err(refusal) = requests_accepted(policy, tools)
+        && let Err(causes) = requests_accepted(policy, tools)
     {
-        return Produced::problem(refusal);
+        policy.refuse_run_request("scopes", &causes);
+        return Produced::problem(NOT_ACCEPTING_REQUESTS);
     }
 
     // Whether the planner asks for this one line to start with no profile. Refused rather than
@@ -8489,8 +8531,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
              profile for a scope to be added to.",
         );
     }
-    if unconfined && let Err(refusal) = unconfined_accepted(policy, tools) {
-        return Produced::problem(refusal);
+    if unconfined && let Err(causes) = unconfined_accepted(policy, tools) {
+        policy.refuse_run_request("unconfined", &causes);
+        return Produced::problem(NOT_ACCEPTING_UNCONFINED);
     }
 
     // Assembled from the planner's own words, which are untrusted. A person reading the line at
@@ -8748,7 +8791,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         .filter(|_| !unconfined)
         .map(|confinement| confinement.with_requested(&requested));
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
-        return Produced::problem(NOT_ACCEPTING_REQUESTS.to_string());
+        let cause = match confinement {
+            Some(_) => RunRequestCause::NoProfileDirectory,
+            None => RunRequestCause::NoPlatformSandbox,
+        };
+        policy.refuse_run_request("scopes", &[cause]);
+        return Produced::problem(NOT_ACCEPTING_REQUESTS);
     }
     if unconfined {
         policy.record_sandbox_mode("unconfined");
@@ -13250,32 +13298,62 @@ mod tests {
     /// SANDBOX-29: a request to run one line with no profile is accepted in `workspace-write` of a trusted
     /// workspace in the turn that holds the session, and refused in each other case, one row each:
     /// `strict`, `read-only` and `off`, an untrusted workspace, a managed closed network and a
-    /// delegate. The first row is the control, so a function that refused everything fails it. The
-    /// regression it rejects is a refusal that was never wired in, which lets that one setting hand
-    /// the line a shell's reach.
+    /// delegate. The first row is the control, so a function that refused everything fails it. Each
+    /// refusal names the cause that held, and a session where several hold names every one in the
+    /// clause's order (TRACE-1), so a person who fixes the first is not refused again for the next.
+    /// The mode is not read for a turn that confines nothing. The regression it rejects is a refusal
+    /// that was never wired in, which lets that one setting hand the line a shell's reach, and one
+    /// whose cause is dropped or misnamed, which leaves the trail saying the wrong setting did it.
     #[test]
     fn an_unconfined_request_is_accepted_only_where_every_condition_holds() {
+        use RunRequestCause::{
+            Delegate, ManagedClosedNetwork, NoConfinement, SandboxMode, UntrustedWorkspace,
+        };
         use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
-        for (confine, mode, trusted, pinned, delegated, accepted, why) in [
+        for (confine, mode, trusted, pinned, delegated, causes, why) in [
             (
                 true,
                 WorkspaceWrite,
                 true,
                 false,
                 false,
-                true,
+                vec![],
                 "the control",
             ),
-            (true, Strict, true, false, false, false, "strict"),
-            (true, ReadOnly, true, false, false, false, "read-only"),
-            (true, Off, true, false, false, false, "off"),
+            (
+                true,
+                Strict,
+                true,
+                false,
+                false,
+                vec![SandboxMode("strict")],
+                "strict",
+            ),
+            (
+                true,
+                ReadOnly,
+                true,
+                false,
+                false,
+                vec![SandboxMode("read-only")],
+                "read-only",
+            ),
+            (
+                true,
+                Off,
+                true,
+                false,
+                false,
+                vec![SandboxMode("off")],
+                "off",
+            ),
             (
                 true,
                 WorkspaceWrite,
                 false,
                 false,
                 false,
-                false,
+                vec![UntrustedWorkspace],
                 "untrusted",
             ),
             (
@@ -13284,25 +13362,83 @@ mod tests {
                 true,
                 true,
                 false,
-                false,
+                vec![ManagedClosedNetwork],
                 "managed closed",
             ),
-            (true, WorkspaceWrite, true, false, true, false, "a delegate"),
+            (
+                true,
+                WorkspaceWrite,
+                true,
+                false,
+                true,
+                vec![Delegate],
+                "a delegate",
+            ),
             (
                 false,
                 WorkspaceWrite,
                 true,
                 false,
                 false,
-                false,
+                vec![NoConfinement],
                 "no confinement",
+            ),
+            (
+                false,
+                Strict,
+                true,
+                false,
+                false,
+                vec![NoConfinement],
+                "no confinement names no mode",
+            ),
+            (
+                true,
+                Strict,
+                false,
+                true,
+                true,
+                vec![
+                    SandboxMode("strict"),
+                    UntrustedWorkspace,
+                    ManagedClosedNetwork,
+                    Delegate,
+                ],
+                "every cause at once",
             ),
         ] {
             assert_eq!(
-                unconfined_is_accepted(confine, mode, trusted, pinned, delegated),
-                accepted,
+                unconfined_refusals(confine, mode, trusted, pinned, delegated),
+                causes,
                 "{why}"
             );
+        }
+    }
+
+    /// SANDBOX-26: a request for a credential scope is accepted where the turn confines its runs
+    /// under a mode other than `off`, in a workspace the person has trusted, and refused with each
+    /// cause that held otherwise. The first row is the control. The regression it rejects is a cause
+    /// the trail leaves out, which names the mode when it was the trust that withheld the request.
+    #[test]
+    fn a_scope_request_is_accepted_only_where_the_session_confines_and_trusts() {
+        use RunRequestCause::{NoConfinement, SandboxMode, UntrustedWorkspace};
+        use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        for (confine, mode, trusted, causes, why) in [
+            (true, Strict, true, vec![], "the control"),
+            (true, ReadOnly, true, vec![], "read-only"),
+            (true, WorkspaceWrite, true, vec![], "workspace-write"),
+            (true, Off, true, vec![SandboxMode("off")], "off"),
+            (true, Strict, false, vec![UntrustedWorkspace], "untrusted"),
+            (false, Strict, true, vec![NoConfinement], "no confinement"),
+            (
+                true,
+                Off,
+                false,
+                vec![SandboxMode("off"), UntrustedWorkspace],
+                "off and untrusted",
+            ),
+        ] {
+            assert_eq!(requests_refusals(confine, mode, trusted), causes, "{why}");
         }
     }
 
@@ -17722,6 +17858,291 @@ mod tests {
                 refused[0]
             );
             assert!(!clean, "a turn whose run was refused would end as clean");
+        }
+
+        /// The facts of a session that decide whether a `run` call may ask for reach past its profile.
+        #[derive(Clone, Copy)]
+        struct Session {
+            confined: bool,
+            mode: bravebot_sandbox::SandboxMode,
+            trusted: bool,
+            delegated: bool,
+            profile: bool,
+            asks_about_unconfined: bool,
+        }
+
+        /// A confining session in a trusted workspace, with a profile directory, under `mode`.
+        fn session_under(mode: bravebot_sandbox::SandboxMode) -> Session {
+            Session {
+                confined: true,
+                mode,
+                trusted: true,
+                delegated: false,
+                profile: true,
+                asks_about_unconfined: false,
+            }
+        }
+
+        /// What the planner was told, every gate the trail refused at as `(gate, reason)`, and
+        /// whether the turn would end as clean, for one `run` call made in `session`.
+        fn run_in(
+            name: &str,
+            arguments: &Value,
+            session: Session,
+        ) -> (String, Vec<(&'static str, String)>, bool) {
+            let scratch = Scratch::new(name);
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            if session.trusted {
+                trust.trust(".");
+            }
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let produced = with_tools(&workspace, |tools| {
+                tools.confine_runs = session.confined;
+                tools.sandbox = session.mode;
+                tools.delegated = session.delegated;
+                tools.profile = session.profile.then(|| std::path::Path::new("/profile"));
+                tools.asks_about_unconfined = session.asks_about_unconfined;
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    arguments,
+                )
+            });
+            assert!(!produced.ran_a_program, "a refused call ran a program");
+            let said = told(&mut policy, &produced.text);
+            let clean = policy.finish();
+
+            let refused = sink
+                .blocked()
+                .filter_map(|event| match event {
+                    Event::GateBlocked { gate, reason, .. } => Some((*gate, reason.clone())),
+                    _ => None,
+                })
+                .collect();
+            (said, refused, clean)
+        }
+
+        /// The `sandbox` refusals among `refused`.
+        fn sandbox_refusals<'a>(refused: &'a [(&'static str, String)]) -> Vec<&'a str> {
+            refused
+                .iter()
+                .filter(|(gate, _)| *gate == "sandbox")
+                .map(|(_, reason)| reason.as_str())
+                .collect()
+        }
+
+        /// TRACE-1, SANDBOX-29: a request to run one line with no sandbox that the session refuses
+        /// leaves one refusal under `sandbox` that names `unconfined` and every cause that held, and
+        /// the sentence the planner reads is the one it always was, naming no setting. One row for
+        /// each cause the session can show here; a managed closed network is settled once for the
+        /// process, so its row is in the table of the rule itself. The regressions it rejects are a
+        /// refusal that leaves no entry, an entry naming one cause where two held, and a sentence
+        /// that began to say which setting withheld the request.
+        #[test]
+        fn a_refused_unconfined_request_is_recorded_with_each_cause_that_held() {
+            use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+            let prefix = "run.unconfined: the request was refused and the line did not run: ";
+            for (session, cause) in [
+                (
+                    session_under(Strict),
+                    "the strict sandbox mode does not take it",
+                ),
+                (
+                    session_under(ReadOnly),
+                    "the read-only sandbox mode does not take it",
+                ),
+                (session_under(Off), "the off sandbox mode does not take it"),
+                (
+                    Session {
+                        trusted: false,
+                        ..session_under(WorkspaceWrite)
+                    },
+                    "the workspace is not trusted",
+                ),
+                (
+                    Session {
+                        delegated: true,
+                        ..session_under(WorkspaceWrite)
+                    },
+                    "a delegate may not ask",
+                ),
+                (
+                    Session {
+                        confined: false,
+                        ..session_under(WorkspaceWrite)
+                    },
+                    "this turn confines none of its runs",
+                ),
+                (
+                    Session {
+                        trusted: false,
+                        delegated: true,
+                        ..session_under(Strict)
+                    },
+                    "the strict sandbox mode does not take it; the workspace is not trusted; a \
+                     delegate may not ask",
+                ),
+            ] {
+                let (said, refused, clean) = run_in(
+                    "run-unconfined-refused",
+                    &json!({"command": "echo hi", "unconfined": true}),
+                    session,
+                );
+                assert_eq!(said, NOT_ACCEPTING_UNCONFINED, "{cause}");
+                assert!(!said.contains("unconfined"), "{cause}: {said}");
+                assert_eq!(
+                    sandbox_refusals(&refused),
+                    [format!("{prefix}{cause}")],
+                    "{cause}: {refused:?}"
+                );
+                assert!(
+                    !clean,
+                    "{cause}: a turn whose run was refused ended as clean"
+                );
+            }
+        }
+
+        /// TRACE-1, SANDBOX-26: a request for a credential scope that the session refuses leaves one
+        /// refusal under `sandbox` that names `scopes` and every cause that held, at both places the
+        /// request is refused: before the line is read, and after it, for want of a profile
+        /// directory to record the request under. The sentence is unchanged.
+        #[test]
+        fn a_refused_scope_request_is_recorded_with_each_cause_that_held() {
+            use bravebot_sandbox::SandboxMode::{Off, Strict};
+            let prefix = "run.scopes: the request was refused and the line did not run: ";
+            let mut rows = vec![
+                (session_under(Off), "the off sandbox mode does not take it"),
+                (
+                    Session {
+                        trusted: false,
+                        ..session_under(Strict)
+                    },
+                    "the workspace is not trusted",
+                ),
+                (
+                    Session {
+                        confined: false,
+                        ..session_under(Strict)
+                    },
+                    "this turn confines none of its runs",
+                ),
+                (
+                    Session {
+                        trusted: false,
+                        ..session_under(Off)
+                    },
+                    "the off sandbox mode does not take it; the workspace is not trusted",
+                ),
+            ];
+            // The request gets past the first place it is refused, so the second decides it: a
+            // platform with no sandbox refuses it for that, and one with a sandbox for want of a
+            // profile directory to record the request under.
+            rows.push(match bravebot_sandbox::base::Prelude::current() {
+                Some(_) => (
+                    Session {
+                        profile: false,
+                        ..session_under(Strict)
+                    },
+                    "the session has no profile directory",
+                ),
+                None => (
+                    session_under(Strict),
+                    "this platform has no sandbox to confine runs with",
+                ),
+            });
+            for (session, cause) in rows {
+                let (said, refused, clean) = run_in(
+                    "run-scopes-refused",
+                    &json!({"command": "echo hi", "scopes": ["remote"]}),
+                    session,
+                );
+                assert_eq!(said, NOT_ACCEPTING_REQUESTS, "{cause}");
+                assert_eq!(
+                    sandbox_refusals(&refused),
+                    [format!("{prefix}{cause}")],
+                    "{cause}: {refused:?}"
+                );
+                assert!(
+                    !clean,
+                    "{cause}: a turn whose run was refused ended as clean"
+                );
+            }
+        }
+
+        /// TRACE-1: a request the session accepts leaves no refusal, so the entry is the answer to a
+        /// refusal and not a note on every request. Nobody is there to ask, so the confirmer turns
+        /// each line away, which is a different gate's record. The regression it rejects is an entry
+        /// written before the session's answer is known.
+        #[test]
+        fn an_accepted_request_for_reach_leaves_no_sandbox_refusal() {
+            use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+            for (session, arguments) in [
+                (
+                    session_under(WorkspaceWrite),
+                    json!({"command": "echo hi", "unconfined": true}),
+                ),
+                (
+                    session_under(Strict),
+                    json!({"command": "echo hi", "scopes": ["remote"]}),
+                ),
+            ] {
+                let (said, refused, _) = run_in("run-request-accepted", &arguments, session);
+                assert!(
+                    said.starts_with("refused: the user did not approve running this"),
+                    "the request did not get as far as the confirmer, so the session did not accept \
+                     it: {said}"
+                );
+                assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+            }
+        }
+
+        /// TRACE-1: a write refused for leaving the workspace names `unconfined` as the way out only
+        /// where the session would accept it, and asking that question is not a refusal of the
+        /// request. The one entry is the `confine` refusal of the redirection, whichever way the
+        /// session answers. The regression it rejects is the record written where the rule is
+        /// evaluated rather than where a request is refused.
+        #[test]
+        fn pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it() {
+            use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+            for (mode, points) in [(WorkspaceWrite, true), (Strict, false)] {
+                let session = Session {
+                    asks_about_unconfined: true,
+                    ..session_under(mode)
+                };
+                let (said, refused, _) = run_in(
+                    "run-redirect-points-at-unconfined",
+                    &json!({"command": "echo hi > ../escaped.txt"}),
+                    session,
+                );
+                assert_eq!(
+                    said.contains("'unconfined': true"),
+                    points,
+                    "{mode}: the way out was not offered exactly where it is accepted: {said}"
+                );
+                assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{mode}");
+                assert_eq!(
+                    refused
+                        .iter()
+                        .filter(|(gate, _)| *gate == "confine")
+                        .count(),
+                    1,
+                    "{mode}: {refused:?}"
+                );
+            }
         }
 
         /// SANDBOX-28: a delegate that names `request_path` anyway is answered as an unknown name,
