@@ -4965,7 +4965,9 @@ fn file_tool_failure<S: Sink>(
             remedy: Remedy::Open
                 | Remedy::OpenOrDrop
                 | Remedy::OpenEndsCheckouts
-                | Remedy::DropOrOpenEndsCheckouts,
+                | Remedy::DropOrOpenEndsCheckouts
+                | Remedy::OpenItself
+                | Remedy::OpenItselfEndsCheckouts,
             ..
         }
     );
