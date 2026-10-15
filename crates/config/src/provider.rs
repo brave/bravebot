@@ -499,7 +499,7 @@ impl fmt::Debug for Credential {
 /// request: both are written into the URL, and a `/`, `@`, `?` or `#` in one would send the key to
 /// another host or another route than the one named. The location picks the host, so it is checked
 /// more tightly than the project, which only sits in the path.
-fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
+pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
     let project = project?;
     let location = location.unwrap_or(VERTEX_DEFAULT_LOCATION);
     let project_ok = project.starts_with(|c: char| c.is_ascii_alphanumeric())
