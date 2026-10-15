@@ -19,12 +19,24 @@ one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and the file tools refuse a
 workspace until it is opened with `/add-dir` or, where the person has turned permission prompts off,
 a granted `request_path`. The refusal says which applies, as that skill says.
 
-Each `rebase.py` step runs `git` against the remote or signs the commits it rewrites from inside
-the script, so its command line shows no operation for the sandbox to lend a credential for. When
-the `run` tool takes a `scopes` argument, pass `scopes: ["remote", "signing"]` on `start`,
-`continue`, `check` and `push`. The person is asked about the line each time. On macOS the sandbox
-also refuses a write under `.git` from any program other than `git`, which these scopes do not
-lift, so run `start`, `continue` and `push` with `unconfined: true` where the session accepts it.
+Where the `run` tool takes `scopes` and `unconfined` arguments, give each step the ones below on its
+first call. The person is asked about a line with either argument every time, so the first call has
+to be one that can work. `rebase.py` runs `gh` on every step to read the pull request, and `git`
+against the remote on `start` and `push`, so its command line shows no operation for the sandbox to
+lend a credential for, and `start` and `continue` sign the commits they rewrite.
+
+- On macOS, `start`, `continue`, `check` and `push`: `unconfined: true`, and no `scopes`. The sandbox
+  there refuses a write under `.git` from any program other than `git`. These steps run `git` as
+  children of Python, and `check` opens its log in the worktree's git directory from Python, so a
+  confined call fails with `Operation not permitted`. A scope does not lift that, `run` rejects
+  `unconfined` and `scopes` together, and a line with no sandbox needs no scope to reach the remote
+  credential, the signing key or a local port.
+- Where nothing holds `.git` back (Linux and Windows): `scopes: ["remote", "signing"]` on `start` and
+  `continue`, `scopes: ["remote"]` on `check` and `push`, and no `unconfined`.
+
+What to do when the session refuses an argument is in
+[When the session refuses an argument](../pr-fix/SKILL.md#when-the-session-refuses-an-argument) in
+the pr-fix skill.
 
 1. `python3 agents/skills/rebase/rebase.py start <pr>`
 2. For each `path:start-end` it prints, Read only that range of the worktree's file and Edit it
