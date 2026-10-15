@@ -395,7 +395,8 @@ this mode, but with no check asked for, `read_output` releases it without showin
 run that sets [`read: true`](../reference/run-tool.md#reading-the-output-in-the-same-result) gets the
 output at once, unless it is longer than one result may hold, and the audit trail records the release
 as the mode's, as it would for `read_output`.
-With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing.
+With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing. The
+result for such a run says so, and says that `read_output` is the way to see the output.
 
 What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode

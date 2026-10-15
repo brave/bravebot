@@ -321,6 +321,11 @@ running them, which is not what happened: the label is about who answered for th
 shown the output and a run the mode approved vouches for nothing: the planner is told that
 `read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
 in the same result. The advice does not name the mode, which the planner is told only in plan mode.
+Bypassing with [screening](../security/permissions.md#bypassing) changes it too. Nobody is shown the
+output there either, and nothing can be vouched for, but a check's word answers, so the planner is
+told that `read_output` hands the output back as text it can read or reports it kept back, and, on a
+run's result that passed `read: true`, that the argument was not applied. It says nothing of what
+decided, and names neither the mode nor the check.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from

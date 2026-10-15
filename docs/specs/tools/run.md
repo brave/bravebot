@@ -673,6 +673,20 @@ argument of `run` alone. None of it names the mode, as no mode but plan mode is 
 ([MODE-3](../permission-modes.md#MODE-3)): a model told nobody is watching has been handed a reason
 to be bolder.
 
+Where permissions are bypassed with screening asked for ([CHECK-11](../vetting.md#CHECK-11)),
+nobody is shown what `read_output` releases and a run the mode approved vouches for no program, so
+the planner is told neither that the user is shown the output and decides nor that a vouch would make
+output visible. The check's word answers there, and a word that is not `safe` keeps the output back,
+so `read_output` is not a yes either. The planner is told that
+`read_output` hands the output back as text it can read, or reports that it was kept back, and
+nothing of what decided which, as [CHECK-9](../vetting.md#CHECK-9) requires. `read` is not applied
+there ([RUN-22](#RUN-22)), so a run's result for a call that passed `read: true` says it was not
+applied and that `read_output` is the way to see the output. A call that did not pass it is told
+nothing of `read`, and neither is a job's result nor the account the turn gives of an ended job,
+since `read` is an argument of `run` alone. None of it names the mode or a check, and none of it is
+said to a turn that was not offered `read_output` ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7)),
+which has no such tool to be pointed at.
+
 **Why.** [RUN-4](#RUN-4) is about who answered for the command, not about programs being
 unreadable, and a planner that reads it the second way stops running them. One did: told once that
 `sed` on a source file could not be shown to it, it spent the rest of a session reading files
@@ -681,10 +695,27 @@ answered it in one call, and it never asked the user to vouch for anything eithe
 batching it had been using and cost them a turn that produced nothing. The same sentence was added
 to a quarantined *read* for the same reason, and the run path never got it.
 
+**Why the screened case is worded apart.** Told that the user is shown the output and decides, where
+nobody is shown anything, a planner takes the reference to be out of its reach until a prompt
+returns, and none does. Told that `read_output` always hands the output back, it is told something
+false whenever the check objects. Saying that the output comes back or is kept back is true on both
+branches and gives the planner nothing about what decided, which is what
+[CHECK-9](../vetting.md#CHECK-9) keeps from it. A `read` that changed nothing and was not remarked
+on leaves a call that looks like a quarantined result with no explanation, and the planner repeats
+the call with `read: true` to try to see the output.
+
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
 is not inferring it: the planner still cannot vouch for anything, and a person still answers.
 
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
+`verified-by: bravebot_agent::turn::a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides`
+`verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied`
+`verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides`
+`verified-by: bravebot_agent::turn::what_a_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
+`verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back`
+`verified-by: bravebot_agent::turn::a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers`
+`verified-by: bravebot_agent::permission_mode::a_checks_word_answers_for_the_person_only_when_bypassing_with_screening`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
 `verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
@@ -1455,7 +1486,8 @@ reference states it, so no byte the program printed is read to decide.
 
 Everywhere else `read` changes nothing. Where a person or a check answers `read_output`, the output
 is quarantined, nobody is asked and no check is made, since a prompt or a check made here would be
-spent on output the planner has not called `read_output` for. Where the turn was not offered
+spent on output the planner has not called `read_output` for. Where a check answers in the person's
+place, the result says that `read` was not applied ([RUN-14](#RUN-14)). Where the turn was not offered
 `read_output`, as a definition may leave it ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7),
 [DELEGATE-4](../delegation.md#DELEGATE-4)), `read` would widen what it was confined to, so it is not
 a release there either. A `read` that is absent or null is a call without it, and one that is
