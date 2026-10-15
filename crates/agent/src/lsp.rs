@@ -376,7 +376,7 @@ impl Rendered {
 /// since a tab in a file being shown is the file's own indentation. This one is over a filename
 /// rather than over file content, and a tab in a filename is not indentation: it is a column
 /// break in a list of paths, so it is pictured with the rest.
-fn pictured(name: &str) -> String {
+pub(crate) fn pictured(name: &str) -> String {
     name.chars()
         .map(|c| match c {
             // The Control Pictures block, which runs from NUL to US and then has one more for

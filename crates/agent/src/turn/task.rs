@@ -153,6 +153,18 @@ pub struct Task {
     /// delegate's turn: a delegate is not shown the tool and a call to it is answered as an
     /// unknown name.
     pub advisor: Option<String>,
+    /// Where messages from other sessions wait for this session's planner (MSG-6).
+    ///
+    /// `None` for every session that is not a background one, and for every delegate: a delegate's
+    /// task came from a planner, so a message aimed at the session is for the planner that started
+    /// it and stays in the inbox for that planner's next request.
+    ///
+    /// A caller that sets one also implements [`Reporter::session_message`], which is the only thing
+    /// that shows the person a message going in: the default says nothing, and a planner that
+    /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
+    ///
+    /// [`Reporter::session_message`]: crate::report::Reporter::session_message
+    pub inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -449,6 +461,7 @@ impl Task {
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
             advisor: None,
+            inbox: None,
             model: None,
             effort: None,
             output_schema: None,
@@ -621,6 +634,12 @@ impl Task {
     /// Name the model the planner may consult, or `None` to leave it to the `advisorModel` setting.
     pub fn with_advisor(mut self, model: Option<String>) -> Self {
         self.advisor = model;
+        self
+    }
+
+    /// Give the turn the inbox of the background session it runs in, or `None` for any other.
+    pub fn with_inbox(mut self, inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>) -> Self {
+        self.inbox = inbox;
         self
     }
 

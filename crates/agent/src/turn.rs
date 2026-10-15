@@ -1423,6 +1423,106 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
     }
 }
 
+/// Put every message another session sent in front of the planner (MSG-6 to MSG-9, MSG-11).
+///
+/// Called at the top of a round, before the request is built, so a message that arrived while the
+/// last round ran is read by the planner before it is asked again, and one that waited for a
+/// session with no turn running is read with the prompt that began this one. Nothing here starts a
+/// turn: a session with no turn running is not asked.
+///
+/// A message is the sender's text under the label it was sent with, taken in by the policy layer
+/// and presented through the same gate as any other result. A trusted one reaches the planner
+/// quoted in a frame the driver wrote, and anything else is handed over as a reference, so a
+/// message that lost its label on the way is quarantined. Nothing here reads the text: it is
+/// carried to the planner or to a slot, and drawn on the screen.
+///
+/// A delegate asks for none. The inbox belongs to the session, and a message aimed at it is for the
+/// planner the person is talking to.
+fn take_session_messages<S: Sink, R: Reporter>(
+    task: &Task,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+) -> Result<(), TurnError> {
+    use crate::messages::{Arrived, Body, frame, shown_name};
+
+    if task.delegate.is_some() {
+        return Ok(());
+    }
+    let Some(inbox) = &task.inbox else {
+        return Ok(());
+    };
+    // Every message taken out of the inbox is dealt with before the turn can fail on one of them,
+    // because what is left in the batch is in no inbox any longer.
+    let mut refused = None;
+    for Arrived {
+        from,
+        name,
+        label,
+        text,
+    } in inbox.take()
+    {
+        let name = shown_name(&name);
+        let content = policy.admit_session_message(&label, text);
+        let slot = conversation.next_reference();
+        let presented = match policy.present(
+            "session_message",
+            slot,
+            "a message from another session",
+            &content,
+            conversation.quarantine(),
+        ) {
+            Ok(presented) => presented,
+            Err(denial) => {
+                refused.get_or_insert(denial.to_string());
+                continue;
+            }
+        };
+        let given = content.label();
+        let (told, drawn) = match &presented {
+            Presentation::Visible(text) => {
+                policy.heard_from_session(given);
+                (
+                    frame(&from, &name, given, Body::Said(text)),
+                    crate::report::Reported::Said(text.clone()),
+                )
+            }
+            Presentation::Quarantined(reference) => {
+                let shown = preview_for(policy, "session_message", &content);
+                (
+                    frame(&from, &name, given, Body::Kept(&reference.describe())),
+                    crate::report::Reported::Kept(crate::report::Shown {
+                        origin: "a message from another session".to_string(),
+                        reach: crate::report::Reach::NotThePlanner,
+                        label: given.to_string(),
+                        lines: shown.lines,
+                        preview: shown.preview,
+                    }),
+                )
+            }
+        };
+        reporter.session_message(crate::report::HeardMessage {
+            from,
+            name,
+            label: given.to_string(),
+            body: drawn,
+        });
+        // Written rather than a notice: a person resuming the session is shown the frame as it
+        // went to the planner, so the record says why it changed course, and the words of a
+        // message the planner was only given a reference to are not in it.
+        conversation.push_composed_from(
+            Message::user(told),
+            Composed::Written,
+            provenance_of(&presented, "session message"),
+        );
+        conversation.observed(policy.context_label());
+    }
+    match refused {
+        Some(refusal) => Err(TurnError::Precommit(refusal)),
+        None => Ok(()),
+    }
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -3127,6 +3227,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     if !std::mem::replace(&mut told_of_kept_jobs, true) {
                         tell_of_kept_jobs(jobs, conversation);
                     }
+
+                    // And whatever another session sent, in the same place and for the same reason: it
+                    // reaches the planner at the start of a request, so a session with no turn running
+                    // keeps it until a person starts one (MSG-6).
+                    take_session_messages(task, &mut policy, conversation, &mut reporter)?;
 
                     // Before anything new is sent, compaction included, since a summary is a request that
                     // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
