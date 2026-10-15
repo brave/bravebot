@@ -108,7 +108,7 @@ read against what is happening, in this order:
 
 | What is happening | What Ctrl-C does |
 |---|---|
-| a turn in flight, or a command running | stops it, and the session stays where it was |
+| a turn in flight, a summary, an aside or a goal check, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
 | nothing running, an empty box | offers the way out |
 | nothing running, an empty box, the way out already offered | ends the session |
@@ -156,12 +156,15 @@ damage is that a stopped turn puts its prompt back where the box can take it, so
 and the time rather than the work. That is a bound and not a defence, and it is written here so nobody
 reads the rung that leaves as protecting the rest of the ladder.
 
-Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
-single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
-leaves once it comes back. An aside is such a request too, and so is the check a goal is judged by,
-which [goal.md](goal.md) governs. What the table leaves out of all three is a mode: a picker, a scroller, a
-delegate's view or a prompt search open over the request answers both keys itself, exactly as it
-does over a turn, and the press that reaches the request is the one after the mode has closed.
+Escape only ever stops, and never leaves. A summary, an aside and the check a goal is judged by are
+each one request. Both keys stop one the way they stop a turn: the request is walked away from, the
+conversation is as it was, and the person is told. A summary that has already come back is kept, the
+stop having landed too late to be one. Stopping a goal check also takes the goal off
+([GOAL-10](goal.md#GOAL-10)). No press made while one of these is out leaves.
+
+What the table leaves out of all of them is a mode: a picker, a scroller, a delegate's view or a
+prompt search open over the request answers both keys itself, exactly as it does over a turn, and
+the press that reaches the request is the one after the mode has closed.
 
 Taking the line says so, on the line beneath the box, and says which key ends the session. The
 offer lives for exactly one press, since it answers the press just made and the next press is the
@@ -252,9 +255,15 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
-`verified-by: bravebot_tui::app::a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c`
-`verified-by: bravebot_tui::app::a_leave_asked_for_during_a_request_survives_its_end`
-`verified-by: bravebot_tui::app::a_request_is_left_on_the_second_press_and_not_from_a_run`
+`verified-by: bravebot_tui::app::a_stop_key_stops_a_summary_or_an_aside_and_never_leaves`
+`verified-by: bravebot_tui::app::a_stopped_summary_question_or_brief_says_so_and_is_not_reported_as_a_failure`
+`verified-by: bravebot_tui::app::a_summary_that_came_back_is_kept_though_a_stop_landed_with_it`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered`
+`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_agent::turn::a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
 `verified-by: bravebot_tui::app::stopping_the_work_takes_the_offer_to_leave_down_with_it`
 `verified-by: bravebot_tui::app::stopping_a_single_request_takes_the_offer_to_leave_down`
 `verified-by: bravebot_tui::app::stopping_a_goal_check_takes_the_offer_to_leave_down`

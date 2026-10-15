@@ -15855,6 +15855,7 @@ fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() 
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs")
     .expect("there is something to summarise");
@@ -15930,6 +15931,7 @@ fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_
         &mut sink,
         bravebot_core::trust::TrustStore::new(workspace.root()),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs")
     .expect("there is something to summarise");
@@ -28661,6 +28663,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -28945,6 +28948,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting on request must not be refused")
     .expect("a long conversation has something to summarise");
@@ -28961,6 +28965,111 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
             .as_text()
             .is_some_and(|text| text.starts_with(bravebot_agent::conversation::COMPACTED_PREFIX)),
         "the summary did not replace what it stood for"
+    );
+}
+
+/// The stop a person presses while `/compact` is out has to reach the request, or the key waits
+/// out the whole reply. Set before the call so nothing is timed: a stop that never reached the
+/// request lets it go out, and the conversation comes back shortened.
+#[test]
+fn a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversation_whole() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    let error = turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &cancel,
+    )
+    .err()
+    .expect("a stopped summary produces none");
+
+    assert!(
+        matches!(&error, bravebot_agent::compact::CompactError::Chat(chat) if chat.is_cancelled()),
+        "got {error:?}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a stopped summary shortened the conversation"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request went out after the stop"
+    );
+}
+
+/// A stop that lands while the summary request is already out has to end the wait, not just keep
+/// the next request from going. The server holds its answer for far longer than the bound on the
+/// call, so a stop that only works before a request is sent leaves the call waiting out the reply.
+#[test]
+fn a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request() {
+    let (arrived, request_arrived) = mpsc::channel::<()>();
+    let (release, held) = mpsc::channel::<()>();
+    let (endpoint, _received) = serve_rounds(Vec::new(), false, move |_| {
+        let _ = arrived.send(());
+        let _ = held.recv_timeout(std::time::Duration::from_secs(60));
+        Some(Some(reply_with("they were porting the parser")))
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            request_arrived
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the summary request never reached the server");
+            cancel.cancel();
+        })
+    };
+    let started = std::time::Instant::now();
+
+    let outcome = turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &cancel,
+    );
+    let waited = started.elapsed();
+    let _ = release.send(());
+    stopper.join().expect("the stopping thread");
+
+    let error = outcome.err().expect("a stopped summary produces none");
+    assert!(
+        matches!(&error, bravebot_agent::compact::CompactError::Chat(chat) if chat.is_cancelled()),
+        "got {error:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(20),
+        "the call waited {waited:?} on a request it had been told to stop"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a stopped summary shortened the conversation"
     );
 }
 
@@ -28985,6 +29094,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -29043,6 +29153,7 @@ fn a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         Some("keep the lexer benchmarks"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -29081,6 +29192,7 @@ fn the_trail_records_that_a_focus_was_given_and_never_its_words() {
             &mut sink,
             bravebot_core::trust::TrustStore::new("/work"),
             focus,
+            &bravebot_core::cancel::Cancel::new(),
         )
         .expect("compacting runs")
         .expect("a long conversation has something to summarise");
@@ -29167,6 +29279,7 @@ fn a_compaction_runs_on_the_summary_model_the_settings_name() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting must not be refused")
     .expect("a long conversation has something to summarise");
@@ -29199,6 +29312,7 @@ fn a_compaction_with_no_summary_model_runs_on_the_sessions_own() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting must not be refused")
     .expect("a long conversation has something to summarise");
@@ -29251,6 +29365,7 @@ fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conve
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     );
 
     let failure = match refused {
@@ -29293,6 +29408,7 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -29323,6 +29439,7 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -29366,6 +29483,7 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     );
 
     let failure = match refused {
@@ -29381,6 +29499,42 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
     assert!(
         sent.is_empty(),
         "a model with no sign-in was sent a check: {sent:?}"
+    );
+}
+
+/// The stop reaches the goal check as it reaches a summary and a question. Nothing is judged, and
+/// no verdict comes back for the driver to read: a stopped check is not a verdict of any kind.
+#[test]
+fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("MET\nthe listing shows a.txt")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    let error = turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &cancel,
+    )
+    .err()
+    .expect("a stopped check judges nothing");
+
+    assert!(
+        matches!(&error, bravebot_agent::goal::GoalError::Chat(chat) if chat.is_cancelled()),
+        "got {error:?}"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request went out after the stop"
     );
 }
 
@@ -29408,6 +29562,7 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -29463,6 +29618,7 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -29494,6 +29650,7 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |written| watched.push_str(written),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29521,6 +29678,52 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
     assert_eq!(watched, "because the grammar nests");
 }
 
+/// The stop reaches a question asked beside the work as it reaches a summary, and for the same
+/// reason: the key is the only thing between the press and waiting out the answer. Nothing is
+/// answered, nothing is drawn, and the exchange it was asked beside is as it was.
+#[test]
+fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("because the grammar nests")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let before = conversation.len();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    let mut watched = String::new();
+    let error = turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(
+            &conversation,
+            "why is the parser recursive?",
+            Vec::new(),
+        ),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |written| watched.push_str(written),
+        &cancel,
+    )
+    .err()
+    .expect("a stopped question has no answer");
+
+    assert!(
+        matches!(&error, bravebot_agent::aside::AsideError::Chat(chat) if chat.is_cancelled()),
+        "got {error:?}"
+    );
+    assert!(watched.is_empty(), "something was drawn after the stop");
+    assert_eq!(conversation.len(), before);
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request went out after the stop"
+    );
+}
+
 /// What `/recap` runs. The request holds the driver's recap question and the exchange and offers no
 /// tools, the answer is cut to the limit however long the model made it, and the conversation is as
 /// long afterwards as it was.
@@ -29543,6 +29746,7 @@ fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("a recap must not be refused");
 
@@ -29601,6 +29805,7 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29654,6 +29859,7 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29697,6 +29903,7 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29732,6 +29939,7 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("judging a stopping condition must not be refused");
 
@@ -29761,6 +29969,7 @@ fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29790,6 +29999,7 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29822,6 +30032,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("asking beside the work must not be refused");
 
@@ -29920,6 +30131,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         None,
+        &bravebot_core::cancel::Cancel::new(),
     )
     .expect("compacting runs");
 

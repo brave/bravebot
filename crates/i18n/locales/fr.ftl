@@ -2527,9 +2527,6 @@ goal-spent =
     l'objectif a renvoyé le travail { $rounds } fois sans être atteint, et s'est arrêté plutôt que
     de continuer
 goal-failed = l'objectif n'a pas pu être vérifié ({ $problem }), il est donc retiré
-goal-uninterruptible =
-    la vérification déjà en cours tient en une requête et ne peut pas être arrêtée en chemin, mais
-    rien de plus ne sera envoyé
 goal-ended-unexpectedly = la vérification de l'objectif s'est terminée de façon inattendue
 goal-replaces-loop =
     la boucle qui tournait a été arrêtée : une session ne travaille qu'à une chose à la fois
@@ -2711,7 +2708,7 @@ command-reported-a-failure = la commande a signalé un échec
 
 ## Raccourcir une longue conversation
 
-compact-uninterruptible = un résumé ne peut pas être interrompu ; il tient en une requête
+compact-stopped = le résumé a été arrêté ; la conversation est restée telle quelle
 compact-ended-unexpectedly = le résumé s'est terminé de façon inattendue
 compact-done =
     { $summarised } messages antérieurs résumés, les { $kept } derniers gardés tels quels
@@ -2719,7 +2716,7 @@ compact-nothing-to-do = il n'y a encore rien à résumer
 compact-failed = la conversation n'a pas pu être résumée : { $problem }
 turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
-btw-uninterruptible = la question ne peut pas être interrompue ; elle prend une requête
+btw-stopped = la question a été arrêtée
 btw-ended-unexpectedly = la question s'est terminée de façon inattendue
 btw-failed = la question n'a pas pu recevoir de réponse : { $problem }
 
@@ -3092,6 +3089,7 @@ handoff-nothing-to-hand-off = rien à transmettre pour l'instant : la session n'
 handoff-ready = le résumé est dans la zone de saisie. Modifiez-le, puis Entrée démarre une nouvelle session à partir de lui, ou Échap l'abandonne. Les décisions sur les fichiers et les autorisations données ici ne sont pas reprises
 handoff-untrusted = le résumé n'a pas été proposé : cette conversation a rencontré du contenu non fiable, donc la nouvelle session ne partirait pas de ce que le planificateur aurait pu retenir
 handoff-failed = le résumé n'a pas pu être écrit : { $problem }
+handoff-stopped = la rédaction du résumé a été arrêtée
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 resume-handed-off = depuis { $id }
 

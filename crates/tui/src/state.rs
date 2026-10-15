@@ -7597,12 +7597,7 @@ impl Session {
     /// charge `tokens` and the wall clock to the turn in flight. Returns the milliseconds the wall
     /// clock read, for the caller to charge to whichever other figures it knows about.
     fn leave_work(&mut self, tokens: u64) -> u64 {
-        // A request nothing can stop is waited out with the way out already taken (INPUT-4), and
-        // the press that took it must still be standing when the request comes back, or the
-        // session carries on as though it was never made.
-        if self.status != Status::Quitting {
-            self.status = Status::Idle;
-        }
+        self.status = Status::Idle;
         // An aside that wrote something as it went has been drawing it at the tail, where the
         // turn's own half-written reply is drawn. Left up it would read as the planner having
         // said it, which the planner has not: what an aside wrote is the aside's, and the row it
