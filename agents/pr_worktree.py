@@ -6,6 +6,7 @@ Each script loads this module by path and binds the names it uses, so a fix made
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
@@ -124,18 +125,58 @@ def marker_ranges(text):
     return ranges
 
 
+def rebasing_branch(tree):
+    """The branch a rebase stopped in `tree` is rewriting, which git lists as a detached head.
+
+    Read from the worktree's own git directory, so a directory that is not a worktree any more is
+    not mistaken for one by a repository around it, and no process is started per worktree.
+    """
+    pointer = Path(tree, ".git")
+    try:
+        if pointer.is_file():
+            text = pointer.read_text(encoding="utf-8").strip()
+            gitdir = Path(tree, text[len("gitdir: "):]) if text.startswith("gitdir: ") else None
+        else:
+            gitdir = pointer if pointer.is_dir() else None
+        for name in ("rebase-merge", "rebase-apply"):
+            head = gitdir / name / "head-name" if gitdir else None
+            if head and head.is_file():
+                text = head.read_text(encoding="utf-8").strip()
+                return text[len("refs/heads/"):] if text.startswith("refs/heads/") else None
+    except (OSError, UnicodeDecodeError):
+        pass  # another run may be removing the worktree as it is listed
+    return None
+
+
 def worktrees(here):
-    """{branch: path} for every worktree on a branch, and the main worktree's path.
+    """({branch: held} for every worktree on a branch, the main worktree's path).
+
+    `held.path` is the worktree. `held.lock` is None when it is not locked, else the reason git
+    records for the lock, which is "" when it has none. A worktree stopped in a rebase holds the
+    branch the rebase is rewriting.
 
     A worktree whose directory was deleted is still listed until pruned; it holds nothing.
     """
-    found, path, main = {}, None, None
-    for line in git("worktree", "list", "--porcelain", cwd=here).splitlines():
-        if line.startswith("worktree "):
-            path = Path(line[len("worktree "):])
-            main = main or path
-        elif line.startswith("branch refs/heads/") and path.exists():
-            found[line[len("branch refs/heads/"):]] = path
+    found, main = {}, None
+    for block in git("worktree", "list", "--porcelain", cwd=here).split("\n\n"):
+        path = branch = lock = None
+        detached = False
+        for line in block.splitlines():
+            key, _, value = line.partition(" ")
+            if key == "worktree":
+                path = Path(value)
+            elif key == "branch" and value.startswith("refs/heads/"):
+                branch = value[len("refs/heads/"):]
+            elif key == "detached":
+                detached = True
+            elif key == "locked":
+                lock = value
+        main = main or path
+        if path is None or not path.exists():
+            continue
+        branch = branch or (rebasing_branch(path) if detached else None)
+        if branch:
+            found[branch] = SimpleNamespace(path=path, lock=lock)
     return found, main
 
 
@@ -161,6 +202,7 @@ def pull(number, view, here, remotes, create, script):
     base, head = view["baseRefName"], view["headRefName"]
     branch = local_branch(head, base, number)
     checked_out, main = worktrees(here)
+    held = checked_out.get(branch)
     return SimpleNamespace(
         number=number,
         url=view["url"],
@@ -174,9 +216,56 @@ def pull(number, view, here, remotes, create, script):
         head_remote=head_remote,
         onto=f"{base_remote}/{base}",
         tip=f"{head_remote}/{head}",
-        tree=checked_out.get(branch) or worktree_path(main, number),
-        checked_out=branch in checked_out,
+        main=main,
+        tree=held.path if held else worktree_path(main, number),
+        checked_out=held is not None,
+        lock=held.lock if held else None,
     )
+
+
+def refuse_held_worktree(pr):
+    """Stop a step before it changes a worktree it is not to use.
+
+    A branch is checked out in one place only, so the steps work in whichever worktree already holds
+    it. That tree is theirs to use when it is not locked, is not the main working tree, and is in
+    the directory `start` puts worktrees in, which the pr-fix skill says the file tools reach. A
+    tree the step was run from is the caller's own.
+    """
+    if not pr.checked_out or pr.tree.resolve() == pr.here.resolve():
+        return
+    home = worktree_path(pr.main, pr.number).parent
+    is_main = pr.tree.resolve() == pr.main.resolve()
+    inside = not is_main and pr.tree.resolve().is_relative_to(home.resolve())
+    locked = pr.lock is not None
+    if inside and not locked:
+        return
+    facts = []
+    if locked:
+        facts.append(f'locked with the reason "{pr.lock}"' if pr.lock else "locked")
+    if is_main:
+        facts.append("the main working tree")
+    elif not inside:
+        facts.append(f"outside {home}")
+    tree = shlex.quote(str(pr.tree))
+    lines = [
+        f"{pr.branch} is already checked out at {pr.tree}, which is {' and '.join(facts)}.",
+        "Nothing was fetched, rebased or pushed. Ask the person before touching that tree.",
+    ]
+    if is_main:
+        lines.append("Check another branch out there, then run start again.")
+    elif inside:
+        lines.append(f"If the lock is stale, `git worktree unlock {tree}` and run start again.")
+    else:
+        lines.append(
+            f"To check the branch out in {worktree_path(pr.main, pr.number)} instead: "
+            + (f"`git worktree unlock {tree}`, then " if locked else "")
+            + f"`git worktree remove {tree}`, then run start again."
+        )
+        lines.append(
+            "`git worktree remove` refuses a tree with uncommitted changes, such as a rebase stopped on a "
+            "conflict, and `--force` discards them. It deletes ignored files such as a build directory."
+        )
+    die("\n".join(lines))
 
 
 def lookup(number, create, script, fields):

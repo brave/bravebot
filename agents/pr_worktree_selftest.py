@@ -164,13 +164,31 @@ def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_n
         assert plan("crates/gone/src/lib.rs") == [["make", "-k", "check-spec"]], "a deleted crate is not linted"
 
 
-def a_clone_with_a_deleted_worktree(root):
-    """A repository whose worktree `feature` was removed by hand, so git still lists it until pruned."""
+def a_clone(root):
     clone = root / "clone"
     git("init", "-q", "-b", "main", str(clone), cwd=root)
     (clone / "a.txt").write_text("one\n")
     git("add", "a.txt", cwd=clone)
     git("commit", "-q", "-m", "one", cwd=clone)
+    return clone
+
+
+def check_out_as_another_workflow(clone, tree, branch, start_point="HEAD", lock=None):
+    """Check `branch` out at `tree` before the script under test does. `lock` is None for an unlocked tree, else its reason ("" for none)."""
+    git("worktree", "add", "-q", "-b", branch, str(tree), start_point, cwd=clone)
+    if lock is not None:
+        git("worktree", "lock", *(["--reason", lock] if lock else []), str(tree), cwd=clone)
+
+
+def stop_a_rebase_on_a_conflict(tree, onto):
+    """Leave `tree` stopped in a rebase onto `onto`, which git reports as a failed command."""
+    done = subprocess.run(["git", "rebase", onto], cwd=tree, capture_output=True, text=True)
+    assert done.returncode and pr_worktree.rebase_dir(tree), done.stdout + done.stderr
+
+
+def a_clone_with_a_deleted_worktree(root):
+    """A repository whose worktree `feature` was removed by hand, so git still lists it until pruned."""
+    clone = a_clone(root)
     tree = root / "clone-feature"
     git("worktree", "add", "-q", "-b", "feature", str(tree), cwd=clone)
     shutil.rmtree(tree)
@@ -182,7 +200,7 @@ def test_a_worktree_whose_directory_was_deleted_by_hand_holds_no_branch():
         clone, tree = a_clone_with_a_deleted_worktree(Path(tmp).resolve())
         assert "branch refs/heads/feature" in git("worktree", "list", "--porcelain", cwd=clone)
         found, main = pr_worktree.worktrees(clone)
-        assert found == {"main": clone}, found
+        assert {branch: held.path for branch, held in found.items()} == {"main": clone}, found
         assert main == clone
 
 
@@ -234,6 +252,91 @@ def test_a_line_separator_in_an_error_message_cannot_start_a_new_line():
     message = "bad\u2028name\u0085here"
     out = pr_worktree.printed(SimpleNamespace(stderr="", stdout=json.dumps({"message": message})))
     assert len(out.splitlines()) == 1 and json.loads(out) == {"message": message}, out
+
+
+def test_a_worktrees_lock_and_its_reason_belong_to_that_worktree_alone():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_clone(root)
+        for branch, lock in (("a-open", None), ("b-held", "another run, slot 7"), ("c-no-reason", ""), ("d-open", None)):
+            check_out_as_another_workflow(clone, root / f"clone-{branch}", branch, lock=lock)
+        found, main = pr_worktree.worktrees(clone)
+        assert {branch: held.lock for branch, held in found.items()} == {
+            "main": None,
+            "a-open": None,
+            "b-held": "another run, slot 7",
+            "c-no-reason": "",
+            "d-open": None,
+        }, found
+        assert found["b-held"].path == root / "clone-b-held"
+        assert main == clone
+
+
+def test_the_branch_a_stopped_rebase_rewrites_is_read_from_the_worktrees_own_git_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        admin = root / "admin"
+        tree = root / "tree"
+        tree.mkdir()
+        (tree / ".git").write_text(f"gitdir: {admin}\n")
+        assert pr_worktree.rebasing_branch(tree) is None, "no rebase is stopped"
+        for state in ("rebase-merge", "rebase-apply"):
+            (admin / state).mkdir(parents=True)
+            (admin / state / "head-name").write_text("refs/heads/feature\n")
+            assert pr_worktree.rebasing_branch(tree) == "feature", state
+            (admin / state / "head-name").write_text("detached HEAD\n")
+            assert pr_worktree.rebasing_branch(tree) is None, "a rebase of a detached head rewrites no branch"
+            (admin / state / "head-name").write_bytes(b"\xff\xfe")
+            assert pr_worktree.rebasing_branch(tree) is None, "unreadable state holds nothing"
+            (admin / state / "head-name").unlink()
+            (admin / state).rmdir()
+        (tree / ".git").unlink()
+        assert pr_worktree.rebasing_branch(tree) is None
+
+
+def test_a_detached_worktree_git_can_no_longer_read_does_not_take_the_rebase_of_the_repository_around_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_clone(root)
+        (clone / ".git" / "rebase-merge").mkdir()
+        (clone / ".git" / "rebase-merge" / "head-name").write_text("refs/heads/feature\n")
+        broken = clone / ".worktrees" / "broken"
+        git("worktree", "add", "-q", "--detach", str(broken), cwd=clone)
+        (broken / ".git").unlink()
+        found, main = pr_worktree.worktrees(clone)
+        assert {branch: held.path for branch, held in found.items()} == {"main": clone}, found
+
+
+def refuses_every_step_in_a_locked_worktree(script, pr, clone, tree, fork):
+    """`tree` is locked and stopped on a conflict resolved in it, so an unguarded `continue` finishes the rebase there and `push` then publishes it."""
+    git("fetch", "-q", "upstream", cwd=clone)
+    stop_a_rebase_on_a_conflict(tree, "upstream/main")
+    (tree / "a.txt").write_text("resolved\n")
+
+    def snapshot():
+        return (
+            git("rev-parse", "HEAD", cwd=tree),
+            git("status", "--porcelain", cwd=tree),
+            script.rebase_dir(tree) is not None,
+            git("rev-parse", "feature", cwd=fork),
+        )
+
+    before = snapshot()
+    steps = (("continue", script.resume), ("check", lambda held: script.check(held, [])), ("push", script.push))
+    for name, step in steps:
+        code, out = quietly(step, pr())
+        assert code == 1 and f"is already checked out at {tree}" in out and "locked" in out, (name, out)
+        assert snapshot() == before, f"{name} left the locked tree as it was"
+
+    git("add", "a.txt", cwd=tree)
+    subprocess.run(
+        ["git", "rebase", "--continue"], cwd=tree, check=True, capture_output=True,
+        env={**os.environ, "GIT_EDITOR": "true"},
+    )
+    before = snapshot()
+    code, out = quietly(script.push, pr())
+    assert code == 1 and "is already checked out" in out, out
+    assert snapshot() == before, "a locked tree's commits are not pushed"
 
 
 def test_each_command_is_logged_and_only_a_failure_prints_its_tail():
@@ -312,7 +415,7 @@ def an_ssh_remote(root):
     git("remote", "set-url", "--push", "origin", f"ssh://git@example.invalid{remote}", cwd=clone)
     pr = SimpleNamespace(
         number=9, url="https://github.com/brave/bravebot/pull/9", tree=clone, branch="feature",
-        head="feature", head_remote="origin", onto="origin/main", tip="origin/feature",
+        head="feature", head_remote="origin", onto="origin/main", tip="origin/feature", checked_out=False,
     )
     return pr, remote
 

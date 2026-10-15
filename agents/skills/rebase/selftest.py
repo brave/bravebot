@@ -199,6 +199,46 @@ def test_a_worktree_deleted_by_hand_after_the_rebase_finished_is_checked_out_aga
         assert tree.is_dir()
 
 
+def test_a_worktree_locked_by_something_else_is_not_fetched_into_or_rebased():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone = root / "bravebot"
+        tree = root / "bravebot-elsewhere"
+        git("fetch", "-q", "origin", cwd=clone)
+        helpers.check_out_as_another_workflow(clone, tree, "feature", "origin/feature", lock="another run, slot 7")
+        head, upstream = git("rev-parse", "HEAD", cwd=tree), git("rev-parse", "upstream/main", cwd=clone)
+
+        code, out = quietly(rebase.start, pr())
+        assert code == 1, out
+        assert f"feature is already checked out at {tree}, which is locked" in out, out
+        assert 'with the reason "another run, slot 7" and outside' in out, out
+        assert rebase.rebase_dir(tree) is None and git("rev-parse", "HEAD", cwd=tree) == head
+        assert git("rev-parse", "upstream/main", cwd=clone) == upstream, "nothing was fetched"
+
+
+def test_start_run_again_while_its_own_rebase_is_stopped_reports_the_conflict_again():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and "a.txt:1-5" in out, out
+
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and "a.txt:1-5" in out, out
+        assert "exists and is not a worktree" not in out, "the tree holds the branch while its rebase is stopped"
+
+
+def test_continue_check_and_push_leave_a_locked_worktree_alone_as_start_does():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone = root / "bravebot"
+        tree = root / "bravebot-elsewhere"
+        git("fetch", "-q", "origin", cwd=clone)
+        helpers.check_out_as_another_workflow(clone, tree, "feature", "origin/feature", lock="another run, slot 7")
+        helpers.refuses_every_step_in_a_locked_worktree(rebase, pr, clone, tree, root / "fork.git")
+
+
 def main():
     tests =[(name, one) for name, one in globals().items() if name.startswith("test_")]
     for name, one in tests:

@@ -19,6 +19,10 @@ one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and the file tools refuse a
 workspace until it is opened with `/add-dir` or, where the person has turned permission prompts off,
 a granted `request_path`. The refusal says which applies, as that skill says.
 
+`start`, `continue`, `check` and `push` also stop, before they fetch, rebase or push, at a worktree
+that already holds the branch and is locked, is the main working tree, or is outside the directory
+`start` puts worktrees in, as [the pr-fix skill](../pr-fix/SKILL.md) says.
+
 Where the `run` tool takes `scopes` and `unconfined` arguments, give each step the ones below on its
 first call. The person is asked about a line with either argument every time, so the first call has
 to be one that can work. `rebase.py` runs `gh` on every step to read the pull request, and `git`

@@ -19,6 +19,15 @@ pushes over only the head it fetched. Spend tokens on conflicts, failures and co
 
 Edit only inside the worktree it prints, never the checkout this was started from.
 
+A branch is checked out in one worktree only. When a worktree already holds the pull request's
+branch, the steps work in that one, and `start` prints its path, which is not always
+`.worktrees/pr-<pr>`. `start`, `continue`, `check` and `push` stop before they fetch, rebase or push
+when that worktree is locked, is the main working tree, or is outside the directory `start` puts
+worktrees in. They print where the branch is checked out, the reason for the lock and what the
+person can do: `git worktree unlock` a stale lock, or `git worktree remove` the tree so that `start`
+checks the branch out again in `.worktrees/pr-<pr>`. Ask the person before doing either, and never
+with `--force`, which discards uncommitted work, including a rebase stopped on a conflict.
+
 The worktree is inside the main clone, in `.worktrees/`, which `.gitignore` lists, so the file tools
 reach it with no `/add-dir`. `.envrc` and cargo's `target` directory are looked up from the
 worktree itself, as in any other worktree.

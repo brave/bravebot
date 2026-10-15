@@ -116,6 +116,7 @@ def report(pr):
 
 
 def start(pr):
+    pr_worktree.refuse_held_worktree(pr)
     git("worktree", "prune", cwd=pr.here)
     fetch(pr.here, pr.base_remote, pr.base)
     fetch(pr.here, pr.head_remote, pr.head)
@@ -150,6 +151,7 @@ def start(pr):
 
 
 def resume(pr):
+    pr_worktree.refuse_held_worktree(pr)
     tree = pr.tree
     if rebase_dir(tree) is None:
         return report(pr)
@@ -177,6 +179,7 @@ def resume(pr):
 
 
 def check(pr, targets):
+    pr_worktree.refuse_held_worktree(pr)
     tree = pr.tree
     if rebase_dir(tree):
         die(f"finish the rebase first: `{SCRIPT} continue {pr.number}`")
@@ -188,6 +191,7 @@ def check(pr, targets):
 
 
 def push(pr):
+    pr_worktree.refuse_held_worktree(pr)
     tree = pr.tree
     if rebase_dir(tree):
         die(f"finish the rebase first: `{SCRIPT} continue {pr.number}`")

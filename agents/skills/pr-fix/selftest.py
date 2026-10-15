@@ -4,6 +4,8 @@
 import contextlib
 import importlib.util
 import json
+import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -365,6 +367,176 @@ def test_a_worktree_deleted_by_hand_does_not_stop_the_pull_request_being_checked
         assert code == 1 and "a.txt" in out, out
         assert tree.is_dir()
 
+
+def a_branch_held_elsewhere(root, tree, lock=None):
+    """The world, with `feature` already checked out at `tree` as another workflow would leave it."""
+    pr, _, _ = world(root)
+    clone = root / "bravebot"
+    git("fetch", "-q", "origin", cwd=clone)
+    helpers.check_out_as_another_workflow(clone, tree, "feature", "origin/feature", lock=lock)
+    return pr, clone
+
+
+def unchanged(clone, tree):
+    """What a refused start leaves as it was: the tree's head, status and rebase, and the ref a fetch moves."""
+    return (
+        git("rev-parse", "HEAD", cwd=tree),
+        git("status", "--porcelain", cwd=tree),
+        pr_fix.rebase_dir(tree),
+        git("rev-parse", "upstream/main", cwd=clone),
+    )
+
+
+def test_a_worktree_locked_by_something_else_is_not_fetched_into_or_rebased_even_in_the_worktrees_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot" / ".worktrees" / "pr-9"
+        pr, clone = a_branch_held_elsewhere(root, tree, lock="another run, slot 7")
+        before = unchanged(clone, tree)
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert f"feature is already checked out at {tree}" in out, out
+        assert 'locked with the reason "another run, slot 7"' in out, out
+        assert "outside" not in out, "a tree where start keeps its worktrees is not out of reach"
+        assert f"`git worktree unlock {tree}`" in out, "the way to use that tree is to unlock it"
+        assert unchanged(clone, tree) == before, "nothing was fetched or rebased"
+
+
+def test_a_worktree_outside_the_worktrees_directory_is_not_used_and_removing_it_lets_start_carry_on():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot-elsewhere"
+        pr, clone = a_branch_held_elsewhere(root, tree)
+        before = unchanged(clone, tree)
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert f"feature is already checked out at {tree}, which is outside {clone / '.worktrees'}." in out, out
+        assert "locked" not in out, "an unlocked tree has no lock to speak of"
+        assert f"`git worktree remove {tree}`" in out and "unlock" not in out, out
+        assert unchanged(clone, tree) == before, "nothing was fetched or rebased"
+
+        git("worktree", "remove", str(tree), cwd=clone)
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "a.txt" in out, "start went on to the conflict it was refused before"
+        assert pr().tree == clone / ".worktrees" / "pr-9"
+
+
+def test_a_worktree_both_locked_and_outside_says_so_and_names_the_unlock_before_the_removal():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot elsewhere"
+        pr, clone = a_branch_held_elsewhere(root, tree, lock="")
+        before = unchanged(clone, tree)
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert f"which is locked and outside {clone / '.worktrees'}." in out, out
+        quoted = shlex.quote(str(tree))
+        assert quoted != str(tree), "the fixture's path needs quoting to be pasted"
+        unlock, remove = f"`git worktree unlock {quoted}`", f"`git worktree remove {quoted}`"
+        assert unlock in out and remove in out and out.index(unlock) < out.index(remove), out
+        assert unchanged(clone, tree) == before, "nothing was fetched or rebased"
+
+        git("worktree", "unlock", str(tree), cwd=clone)
+        git("worktree", "remove", str(tree), cwd=clone)
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "a.txt" in out, out
+
+
+def test_a_locked_worktree_stopped_in_a_rebase_of_the_branch_still_holds_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot-elsewhere"
+        pr, clone = a_branch_held_elsewhere(root, tree, lock="another run, slot 7")
+        git("fetch", "-q", "upstream", cwd=clone)
+        helpers.stop_a_rebase_on_a_conflict(tree, "upstream/main")
+        assert pr().checked_out and pr().tree == tree, "git lists a tree stopped in a rebase as a detached head"
+        before = unchanged(clone, tree)
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert 'locked with the reason "another run, slot 7" and outside' in out, out
+        assert unchanged(clone, tree) == before, "the stopped rebase is as it was"
+
+
+def test_a_branch_checked_out_in_the_main_clone_is_not_offered_for_removal():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone = root / "bravebot"
+        git("fetch", "-q", "origin", cwd=clone)
+        git("checkout", "-q", "-b", "feature", "origin/feature", cwd=clone)
+        elsewhere = root / "nested" / "other"
+        git("worktree", "add", "-q", "-b", "other", str(elsewhere), "upstream/main", cwd=clone)
+
+        code, out = quietly(pr_fix.start, pr(elsewhere))
+        assert code == 1, out
+        assert f"feature is already checked out at {clone}, which is the main working tree." in out, out
+        assert "git worktree remove" not in out and "unlock" not in out, "git refuses both for the main tree"
+
+
+def test_the_main_clone_is_not_starts_to_use_when_the_environment_names_the_directory_around_it():
+    with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {pr_fix.pr_worktree.WORKTREES_ENV: "../"}):
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone = root / "bravebot"
+        git("fetch", "-q", "origin", cwd=clone)
+        git("checkout", "-q", "-b", "feature", "origin/feature", cwd=clone)
+        elsewhere = root / "nested" / "other"
+        git("worktree", "add", "-q", "-b", "other", str(elsewhere), "upstream/main", cwd=clone)
+        before = (git("rev-parse", "HEAD", cwd=clone), pr_fix.rebase_dir(clone))
+
+        code, out = quietly(pr_fix.start, pr(elsewhere))
+        assert code == 1 and "the main working tree" in out, out
+        assert (git("rev-parse", "HEAD", cwd=clone), pr_fix.rebase_dir(clone)) == before, "the main clone was not rebased"
+
+
+def test_continue_check_and_push_leave_a_locked_worktree_alone_as_start_does():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot-elsewhere"
+        pr, clone = a_branch_held_elsewhere(root, tree, lock="another run, slot 7")
+        helpers.refuses_every_step_in_a_locked_worktree(pr_fix, pr, clone, tree, root / "fork.git")
+
+
+def test_start_run_again_while_its_own_rebase_is_stopped_reports_the_conflict_again():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "a.txt:1-5" in out, out
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "a.txt:1-5" in out, out
+        assert "exists and is not a worktree" not in out, "the tree holds the branch while its rebase is stopped"
+
+
+def test_the_directory_the_environment_names_is_where_start_keeps_worktrees_and_it_uses_them_in_place():
+    with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {pr_fix.pr_worktree.WORKTREES_ENV: "../trees"}):
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "a.txt" in out, out
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        code, out = quietly(pr_fix.resume, pr())
+        assert code == 0 and "push 9" in out, out
+        assert pr().tree == root / "trees" / "bravebot-9", "the branch is now found checked out there"
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 0 and "push 9" in out and "already checked out" not in out, out
+
+
+def test_a_worktree_start_is_run_from_is_used_even_when_it_is_locked_and_outside():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        tree = root / "bravebot-mine"
+        pr, _ = a_branch_held_elsewhere(root, tree, lock="mine")
+
+        code, out = quietly(pr_fix.start, pr(tree))
+        assert code == 1 and "a.txt" in out and "already checked out" not in out, out
+        assert pr_fix.rebase_dir(tree) is not None, "the rebase ran in the tree the caller is in"
 
 ROLLUP = [
     {"__typename": "CheckRun", "name": "fmt", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u1"},
