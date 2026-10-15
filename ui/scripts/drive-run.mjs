@@ -5,16 +5,12 @@
 // made in the interface reaches the turn that is blocked waiting for it.
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
+import { checker, launchLive } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 /** Wait for a locator to appear, reporting rather than throwing. */
 async function appears(locator, seconds, what) {
@@ -28,32 +24,7 @@ async function appears(locator, seconds, what) {
   }
 }
 
-// The left column has two tabs and remembers which was last open, so a run after somebody left it
-// on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
-// find the session list present in the DOM and invisible, and every click below would time out
-// against an element that is right there. Everything here is about that list, so it is put back on
-// screen first: a driver leaves the window as the next one expects to find it, and does not assume
-// it was left that way.
-async function showSessions(page) {
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .waitFor({ state: 'visible', timeout: 15000 })
-    .catch(() => undefined)
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .click({ timeout: 3000 })
-    .catch(() => undefined)
-  await page.waitForTimeout(250)
-}
-
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
-await showSessions(page)
-page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
-page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
+const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
 if ((await page.locator('.session').count()) === 0) {

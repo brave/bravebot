@@ -26,7 +26,7 @@
 // Like the other drivers this perturbs `bravebot-ui.json`, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -41,13 +41,7 @@ mkdirSync('/tmp/bravebot-ui', { recursive: true })
 // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
 const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
-
-const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const { check, problems } = checker()
 
 // Where the app keeps what it remembers, asked of the app rather than composed here: `userData` is
 // Electron's to decide and differs by platform. A launch of its own, because this driver's key has

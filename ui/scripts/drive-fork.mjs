@@ -13,18 +13,14 @@
 // modal and would hang the run, so `Menu.prototype.popup` is replaced with something that
 // records the items and clicks the one this asked for — the same trick `drive-menu.mjs` plays,
 // with the click added, because here the item is the thing being tested.
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { checker, launchLive } from './drive-support.mjs'
 
 const OUT = '/tmp/bravebot-ui'
 mkdirSync(OUT, { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 const skip = (what) => console.log(`  --   ${what}`)
 // Set once the app is up and there is a file to put back; `done` runs before that on the
 // skip path, when nothing has been touched.
@@ -40,32 +36,7 @@ const done = async (word) => {
   process.exit(0)
 }
 
-// The left column has two tabs and remembers which was last open, so a run after somebody left it
-// on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
-// find the session list present in the DOM and invisible, and every click below would time out
-// against an element that is right there. Everything here is about that list, so it is put back on
-// screen first: a driver leaves the window as the next one expects to find it, and does not assume
-// it was left that way.
-async function showSessions(page) {
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .waitFor({ state: 'visible', timeout: 15000 })
-    .catch(() => undefined)
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .click({ timeout: 3000 })
-    .catch(() => undefined)
-  await page.waitForTimeout(250)
-}
-
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
-await showSessions(page)
-page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
-page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
+const { app, page } = await launchLive()
 await page.waitForTimeout(2200)
 
 /** Ask the agent something directly, the way the window does. */

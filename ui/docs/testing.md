@@ -207,7 +207,8 @@ pinned to light and that its renderer bundle cannot switch appearance at runtime
 (columns, bots, recents, theme) and `experience.json`, and the agent it starts uses your `HOME`,
 which means your real `~/.bravebot` sessions, history and configuration. Read a driver before
 running it, and do not run one you have not read on a machine whose bots or sessions you care
-about. These launch without `--user-data-dir`:
+about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
+launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
 `drive`, `drive-ask`, `drive-bot-memory`, `drive-bot-turn`, `drive-bots`, `drive-columns`,
 `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
