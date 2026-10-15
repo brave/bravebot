@@ -497,8 +497,18 @@ A block naming a gateway this system already knows an endpoint for reaches it wi
 endpoint the block does state is where its requests go regardless. Where neither holds, the entry
 configures no service.
 
-The set of known names is compiled in. Nothing is fetched to resolve one, and no service is asked what
-its own endpoint is.
+The set of known names is compiled in: `openrouter`, reached at `https://openrouter.ai/api/v1`, and
+`openai`, reached at `https://api.openai.com/v1`. Nothing is fetched to resolve one, and no service is
+asked what its own endpoint is.
+
+A known name supplies an endpoint. An `openai` entry is otherwise reached as any other gateway is,
+with its key as a bearer token in `authorization`, and names where that key lives as
+[BACKEND-16](#BACKEND-16) says. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
+[Known costs](#known-costs) records what that offers for this service.
+
+One thing differs for `openai`: the name a reply reports is not compared with the name asked for, as
+[BACKEND-18](#BACKEND-18) compares a gateway's. A name such as `gpt-4o` is an alias for a dated model,
+and the reply names the model behind it, which is the alias working and not a substitution.
 
 **Why.** The tool this block's shape is borrowed from resolves an endpoint from a registry it fetches,
 so a block copied out of it names one nowhere and requiring the field refuses a block that tool
@@ -514,6 +524,9 @@ what keeps a known name usable against a proxy or a private deployment.
 
 `verified-by: bravebot_config::provider::a_known_provider_name_supplies_its_own_endpoint`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
+`verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
+`verified-by: bravebot_agent::backend::an_openai_alias_is_not_expected_to_be_the_name_that_comes_back`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
 
 <a id="BACKEND-18"></a>
@@ -598,6 +611,7 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::a_window_the_block_stated_outranks_the_one_reported`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
+`verified-by: bravebot_aichat::client::an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
@@ -2637,3 +2651,35 @@ as the `model` key is, and the switch is decided by a category the driver derive
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
   the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
   `NotInstalled`.
+
+- **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
+  states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has
+  nothing to drop on, and the picker holds embedding, speech and image models beside the chat ones.
+  That waives BACKEND-5's promise that picking a listed name works, for the rows of this one
+  service. Filtering by id would be a guess about OpenAI's naming, and a model named otherwise would
+  be hidden from somebody who could use it. A list compiled into the binary, as BACKEND-49 compiles
+  one for Vertex AI, would go stale with each release, and each id on it would first have to be
+  answered with a tool call and its result by the service. A block naming `models` is offered those
+  and no others.
+
+- **A model OpenAI serves only through its Responses API is offered and fails when picked.** The
+  route is chat completions, and the listing does not say which models take it. A block naming
+  `models` offers only the ones it names.
+
+- **Each OpenAI roster costs a request that is expected to be refused.** BACKEND-19 asks what the
+  credential may reach at `/models/user` before it asks for the whole listing, and OpenAI is not
+  known to serve that route. The listing is asked second.
+
+- **A refusal of the `cache_control` markers of BACKEND-32 by OpenAI costs one refused request.**
+  Whether OpenAI reads them is not known here. A refusal with an invalid-request status is asked
+  again without them, once for each model in each process, and an accepted request is marked as
+  BACKEND-32 says.
+
+- **The name `openai` means OpenAI's behaviour at any endpoint.** An entry keyed `openai` is not
+  checked for a substituted model, even where its `baseURL` names a proxy that does substitute
+  one. A proxy whose replies should be compared is reached by keying the entry with another name.
+
+- **A bare name beginning `openai/` reaches an `openai` entry.** BACKEND-18 reads a name as
+  qualified before it reads it as a bare name a block lists, so `openai/gpt-oss-120b` listed by
+  another gateway and written without that gateway's id goes to OpenAI. A name picked from `/model`
+  is recorded qualified, as `openrouter/openai/gpt-oss-120b`, and is not affected.

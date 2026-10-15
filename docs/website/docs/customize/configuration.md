@@ -1505,6 +1505,10 @@ holds its credential. It is opencode's block, so one copied from `opencode.json`
 a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
 has the fields, the credential, which models are offered, and how to name one.
 
+OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
+needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
+models `/model` offers.
+
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
 `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
 offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered

@@ -697,11 +697,19 @@ impl<'a> Backend<'a> {
     /// which upstream served it is a different question from which model did: `provider.order` picks
     /// between hosts of the same model, so a name that comes back changed is a substitution there as
     /// much as on the aichat endpoint.
+    ///
+    /// False for an `openai` entry, whose names are aliases for dated models: the reply names the
+    /// one the alias resolved to, which is the alias working. Compared anyway, nearly every OpenAI
+    /// turn would report a substitution.
     pub fn reports_the_model_it_was_asked_for(config: &Config, model: &str) -> bool {
-        !config
-            .bedrock
-            .as_ref()
-            .is_some_and(|bedrock| bedrock.offers(model))
+        let behind_an_alias = config
+            .provider_for(model)
+            .is_some_and(|(provider, _)| provider.answers_under_the_model_behind_an_alias());
+        !behind_an_alias
+            && !config
+                .bedrock
+                .as_ref()
+                .is_some_and(|bedrock| bedrock.offers(model))
     }
 
     /// The name the service was actually asked for, given the name a session holds.
@@ -1470,6 +1478,36 @@ mod tests {
             &with_a_gateway(),
             "z-ai/glm-4.6"
         ));
+    }
+
+    /// OpenAI names a model by an alias and answers with the dated model behind it, so the name that
+    /// comes back differing is the alias working. Another gateway beside it is still compared, and
+    /// both spellings of an OpenAI name are covered: qualified by the id, and bare where the block
+    /// lists it.
+    #[test]
+    fn an_openai_alias_is_not_expected_to_be_the_name_that_comes_back() {
+        let config = with_providers(
+            r#"{"provider": {
+                "openai": {"env": ["A_TOKEN_VARIABLE"], "models": {"an-alias": {}}},
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }}"#,
+        );
+        for model in ["openai/an-alias", "an-alias", "openai/an-alias-not-listed"] {
+            assert!(
+                !Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was expected to come back under its own name"
+            );
+        }
+        for model in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+            assert!(
+                Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was not compared with the name that came back"
+            );
+        }
     }
 
     /// A request the configuration cannot sign is refused rather than sent unauthenticated, which
