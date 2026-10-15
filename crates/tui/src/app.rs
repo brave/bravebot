@@ -6626,15 +6626,7 @@ fn run_turn_animated(
     if session.take_driver_prompt() || wrote == Wrote::TheDriver {
         task = task.written_by_the_driver();
     }
-    // A watch's fire is recorded as the watch's, from the terminal's own record of which one it
-    // was, so a surface drawing the session back draws the row it draws for a fire the bridge
-    // started rather than a prompt somebody typed (LAYER-6).
-    if let Some((number, path)) = session.firing_watch() {
-        task = task.composed_rather_than_typed(bravebot_agent::conversation::Composed::Watch {
-            number,
-            path,
-        });
-    }
+    task = with_firing_watch(task, session);
     // The jobs the session keeps, so one started here is still running when the next turn begins
     // (RUN-15).
     if let Some(kept) = kept_jobs {
@@ -7176,6 +7168,21 @@ fn finish_turn(
         asked_about: asked,
         exposed,
         events,
+    }
+}
+
+/// A watch's fire recorded as the watch's, from the terminal's own record of which one it was, so a
+/// surface drawing the session back draws the row it draws for a fire the bridge started rather
+/// than a prompt somebody typed (LAYER-6). A turn nobody's watch fired is left as typed.
+fn with_firing_watch(task: Task, session: &Session) -> Task {
+    match session.firing_watch() {
+        Some((number, path)) => {
+            task.composed_rather_than_typed(bravebot_agent::conversation::Composed::Watch {
+                number,
+                path,
+            })
+        }
+        None => task,
     }
 }
 
@@ -18089,6 +18096,35 @@ mod tests {
         // The rung that leaves offers first, so the press that takes it is a second one.
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// LAYER-6: the task a fire's turn is built with carries the watch it belongs to, so the
+    /// prompt is recorded as the watch's, and a turn nobody's watch fired carries nothing.
+    #[test]
+    fn a_fires_task_is_tagged_with_its_watch_and_a_typed_one_is_not() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            with_firing_watch(Task::new("p"), &session).composed,
+            None,
+            "a typed prompt was tagged"
+        );
+        session.arm_watch(
+            "notes.md",
+            "/work",
+            bravebot_agent::watch::Looked::Saw("first".to_string()),
+        );
+        session
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+                bravebot_agent::watch::Looked::Saw("second".to_string())
+            })
+            .expect("a fire");
+        assert_eq!(
+            with_firing_watch(Task::new("p"), &session).composed,
+            Some(bravebot_agent::conversation::Composed::Watch {
+                number: 1,
+                path: "notes.md".to_string(),
+            })
+        );
     }
 
     /// A turn that failed still ended. A watch left marked as firing would never fire again, and
