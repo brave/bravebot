@@ -38976,6 +38976,98 @@ fn a_refused_fetch_sends_no_request() {
     );
 }
 
+/// FETCH-2: a rejected approval tells the planner not to retry the URL and to ask the person what
+/// they would prefer, so the model neither repeats the call nor looks for another route.
+#[test]
+fn a_fetch_the_person_rejects_tells_the_planner_not_to_retry_it() {
+    let scratch = Scratch::new("fetch-rejected-sentence");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("never served")]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/private"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        requests
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a request went out for a fetch the person rejected"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(
+            "refused: the user did not approve fetching this. Do not retry the same URL; ask \
+             what they would prefer."
+        ),
+        "{second}"
+    );
+}
+
+/// FETCH-2: a `deny` rule refuses a fetch without a question and tells the planner not to retry
+/// the URL or look for another route to the host.
+#[test]
+fn a_fetch_from_a_denied_host_is_refused_without_asking_and_says_not_to_retry() {
+    let scratch = Scratch::new("fetch-denied-sentence");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("never served")]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task =
+        Task::new("fetch it").with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(confirmer.asked.is_empty(), "{:?}", confirmer.asked);
+    assert!(
+        requests
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a denied host was reached"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("refused: ")
+            && second.contains("deny rule")
+            && second.contains(
+                "Do not retry this URL and do not look for another route to that host: say in \
+                 your reply what you needed from it."
+            ),
+        "{second}"
+    );
+}
+
 /// The person is shown the host the URL reaches as a field of its own, taken by the parser. A URL
 /// with userinfo reads as one site and reaches another; the host is what they are answering about.
 #[test]
@@ -56651,6 +56743,52 @@ fn a_declined_destination_sends_no_request_and_leaves_the_file() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(second.contains("did not approve"), "{second}");
+}
+
+/// DOWNLOAD-2: a host the person rejects sends nothing and saves nothing, and the planner is told
+/// not to retry the URL.
+#[test]
+fn a_download_from_a_host_the_person_rejects_tells_the_planner_not_to_retry_it() {
+    let scratch = Scratch::new("download-host-rejected");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"never"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a rejected host was reached"
+    );
+    assert!(!scratch.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(
+            "refused: the user did not approve fetching this. Do not retry the same URL; ask \
+             what they would prefer."
+        ),
+        "{second}"
+    );
 }
 
 /// The size cap is a figure a person set. A body over it saves nothing, because half a file is

@@ -9665,6 +9665,46 @@ fn git_directory(
 /// reads for fewer tokens.
 const FETCH_ACCEPT: &str = "text/markdown, */*;q=0.9";
 
+/// The refusal a `deny` rule gives a URL (FETCH-2), shared by `fetch_url` and `download_url`.
+///
+/// Before the person is asked. A rule refusing something is a statement that it does not happen,
+/// and there is nothing to show or approve once it has been made. The answer is the policy's, so
+/// no labelled content is read here.
+fn fetch_rules_refusal<S: Sink>(policy: &mut Policy<'_, S>, url: &str) -> Option<Produced> {
+    match policy.before_fetch_rules(url) {
+        Ok(()) => None,
+        Err(denial) => Some(Produced::problem(format!(
+            "refused: {denial}. Do not retry this URL and do not look for another route to that \
+             host: say in your reply what you needed from it."
+        ))),
+    }
+}
+
+/// Puts a host that needs approval to the person (FETCH-2, FETCH-4) and returns the refusal when
+/// they reject it, shared by `fetch_url` and `download_url`. The answer is the person's, so no
+/// labelled content is read here.
+fn fetch_not_approved<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    confirmer: &mut C,
+    url: &str,
+    host: &str,
+) -> Option<Produced> {
+    if !policy.fetch_needs_approval(url) {
+        return None;
+    }
+    let request = crate::confirm::FetchRequest {
+        url: url.to_string(),
+        host: host.to_string(),
+    };
+    (confirmer.confirm_fetch(&request) == Decision::Reject).then(|| {
+        Produced::problem(
+            "refused: the user did not approve fetching this. Do not retry the same URL; \
+             ask what they would prefer."
+                .to_string(),
+        )
+    })
+}
+
 fn fetch_url<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -9694,27 +9734,11 @@ fn fetch_url<S: Sink, C: Confirmer>(
         ));
     };
 
-    // Before the person is asked. A rule refusing something is a statement that it does not
-    // happen, and there is nothing to show or approve once it has been made.
-    if let Err(denial) = policy.before_fetch_rules(&url) {
-        return Produced::problem(format!(
-            "refused: {denial}. Do not retry this URL and do not look for another route to that \
-             host: say in your reply what you needed from it."
-        ));
+    if let Some(refusal) = fetch_rules_refusal(policy, &url) {
+        return refusal;
     }
-
-    if policy.fetch_needs_approval(&url) {
-        let request = crate::confirm::FetchRequest {
-            url: url.clone(),
-            host: host.clone(),
-        };
-        if confirmer.confirm_fetch(&request) == Decision::Reject {
-            return Produced::problem(
-                "refused: the user did not approve fetching this. Do not retry the same URL; \
-                 ask what they would prefer."
-                    .to_string(),
-            );
-        }
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+        return refusal;
     }
 
     // Bound to this exact URL, so an approval cannot be spent on another.
@@ -9854,11 +9878,8 @@ fn download_url<S: Sink, C: Confirmer>(
 
     // Before anybody is asked, for the reason it is in `fetch_url`: a rule is a statement that
     // something does not happen.
-    if let Err(denial) = policy.before_fetch_rules(&url) {
-        return Produced::problem(format!(
-            "refused: {denial}. Do not retry this URL and do not look for another route to that \
-             host: say in your reply what you needed from it."
-        ));
+    if let Some(refusal) = fetch_rules_refusal(policy, &url) {
+        return refusal;
     }
 
     let found = match path_argument(
@@ -9874,18 +9895,10 @@ fn download_url<S: Sink, C: Confirmer>(
     };
     let (path, shown_path, proposed_path) = (found.path, found.shown, found.released);
 
-    if policy.fetch_needs_approval(&url) {
-        let request = crate::confirm::FetchRequest {
-            url: url.clone(),
-            host: host.clone(),
-        };
-        if confirmer.confirm_fetch(&request) == Decision::Reject {
-            return Produced::problem(
-                "refused: the user did not approve fetching this. Do not retry the same URL; \
-                 ask what they would prefer."
-                    .to_string(),
-            );
-        }
+    // After the destination is known to be admissible, so the person is not asked about a host
+    // for a path that would have been refused.
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+        return refusal;
     }
 
     // What the file holds now is not read: it is replaced whole, and the person is told so.
