@@ -433,10 +433,10 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         "existing": request.is_overwrite(),
         "added": diff.added(),
         "removed": diff.removed(),
-        // False when the diff had to give up on an exact answer, which happens on two
-        // large and wholly dissimilar files: the table it needs is quadratic and is
-        // bounded rather than allowed to allocate without limit. A reviewer is entitled
-        // to know they are reading an approximation of the change.
+        // False when the diff had to give up on an exact answer, which happens where a
+        // stretch of the two files is too large or too different to line up within the
+        // steps one diff may take. A reviewer is entitled to know they are reading an
+        // approximation of the change.
         "exact": diff.is_exact(),
         "changes": diff.condensed(CONTEXT_LINES).iter().map(change).collect::<Vec<_>>(),
     })
