@@ -7048,6 +7048,7 @@ mod tests {
             ".ssh/keys",
             ".bravebot",
             ".bravebot/profiles",
+            ".bravebot/sessions",
             ".aws",
             ".kube",
             ".config/gcloud",
@@ -7068,6 +7069,8 @@ mod tests {
             ".ssh/keys",
             ".bravebot",
             ".bravebot/profiles",
+            // A read-write grant, so the session records that a program may read are refused here.
+            ".bravebot/sessions",
             ".aws",
             ".kube",
             ".config/gcloud",

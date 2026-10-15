@@ -59,7 +59,7 @@ Present whether or not an agent ever runs.
 | Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
 | IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `~/.gitlab-runner/config.toml`; the 1Password CLI's `~/.config/op/` |
 | Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json` under `~/.local/share/DBeaverData/` or `~/Library/DBeaverData/`, JetBrains password safe, TablePlus, pgAdmin `~/.pgadmin/pgadmin4.db` |
-| IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history; `~/.config/github-copilot/hosts.json` |
+| IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history, and this agent's own `~/.bravebot/sessions/`; `~/.config/github-copilot/hosts.json` |
 | Browser | `Login Data`, `Cookies`, `Web Data`, `Local State`; `logins.json`, `key4.db`, `cookies.sqlite`; `userDataDir`, `storageState.json` outside the tree |
 | Certs & signing | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` outside the tree; mkcert `rootCA-key.pem`; `~/.android/debug.keystore`, release keystores; `~/Library/MobileDevice/Provisioning Profiles/`, App Store Connect `.p8`; code-signing certs: OS keychain / cert store |
 | Network & host | `*.ovpn`, `~/.config/openconnect/`; SMB credential files under the home directory; the X display's cookie `~/.Xauthority` |
@@ -142,8 +142,9 @@ Everything outside the working tree has it already: `read_file`, `write_file`, `
 covers what the agent authenticates with, `~/.bravebot/leo-premium.json`,
 `~/.bravebot/gateway-keys.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
 legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
-it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and no `allowRead` or `allowWrite`
-row, scope variable or `/reach` grant lifts that. Two things get past it: a command a turn runs
+it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
+which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
+row, scope variable or `/reach` grant lifts the rest, and none grants a write there. Two things get past it: a command a turn runs
 with `sandbox` off, and `/add-dir`, which makes a named directory reachable for the session.
 
 **2. Something else performs the action.** The agent asks for an outcome and never sees a secret.

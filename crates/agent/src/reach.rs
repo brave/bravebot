@@ -248,7 +248,7 @@ impl Grant {
     /// at `~/.ssh` is refused here whatever it was when it was allowed.
     pub fn directory(&self, home: &Path) -> Option<PathBuf> {
         match &self.reached {
-            Reached::Directory(path) => judged_directory(path, home),
+            Reached::Directory(path) => judged_directory(path, home, self.write),
             Reached::Scope(_) => None,
         }
     }
@@ -909,7 +909,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 Some(rest) => profile.join(rest),
                 None => PathBuf::from(entry),
             };
-            match judged_directory(&named, profile) {
+            match judged_directory(&named, profile, write) {
                 Some(path) => Reached::Directory(path),
                 None => return t!(reach_refused_entry, entry = entry).to_string(),
             }
@@ -1351,6 +1351,7 @@ mod tests {
     #[test]
     fn a_directory_that_holds_a_key_or_does_not_exist_is_refused() {
         let place = Place::new("refused-directory");
+        std::fs::create_dir_all(place.profile.join(".bravebot/logs")).expect("logs");
         let above = place
             .profile
             .parent()
@@ -1363,11 +1364,7 @@ mod tests {
             place.profile.join(".ssh").display().to_string(),
             "~/.ssh".to_string(),
             place.profile.join(".bravebot").display().to_string(),
-            place
-                .profile
-                .join(".bravebot/sessions")
-                .display()
-                .to_string(),
+            place.profile.join(".bravebot/logs").display().to_string(),
             "~/.bravebot".to_string(),
             place.profile.join("missing").display().to_string(),
             "relative/dir".to_string(),
@@ -1383,6 +1380,38 @@ mod tests {
         }
         assert!(place.held("s").is_empty());
         assert!(!Store::new(&place.home).path().exists());
+    }
+
+    /// The session records are the one part of `~/.bravebot` a person may open to a program, and
+    /// only for reading. The regression it rejects: the records refused for a read, which sends
+    /// back every script that reads them for a request, or allowed for a write, which lets a
+    /// program rewrite a transcript a later session resumes from.
+    #[test]
+    fn the_session_records_may_be_reached_for_reading_and_not_for_writing() {
+        let place = Place::new("reach-session-records");
+        let sessions = place.profile.join(".bravebot/sessions");
+        for entry in [
+            sessions.display().to_string(),
+            "~/.bravebot/sessions".to_string(),
+        ] {
+            let refused = t!(reach_refused_entry, entry = entry.as_str()).to_string();
+            assert_ne!(
+                place.say("s", &format!("{entry} -- ls")),
+                refused,
+                "{entry}"
+            );
+            assert_eq!(
+                place.say("s", &format!("{entry} write -- ls")),
+                refused,
+                "{entry}"
+            );
+        }
+        let held = place.held("s");
+        assert!(!held.is_empty());
+        for grant in &held {
+            assert!(!grant.write);
+            assert_eq!(grant.directory(&place.profile), Some(sessions.clone()));
+        }
     }
 
     /// A directory that was fine when it was allowed is judged again when it is used. The
