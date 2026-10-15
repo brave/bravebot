@@ -276,7 +276,7 @@ carries the conversation into the project directory.
 Only a start with `--resume`, `--continue` or the picker, and the process `/bg` starts
 ([WORKTREE-9](#WORKTREE-9)), returns to a worktree. `/resume` of such a record from a running session
 is refused, and says to start `bravebot --resume <id>`. The desktop
-application, which keeps no checkouts, refuses to open a record that names a worktree.
+application refuses to open a record that names a worktree.
 
 A one-shot run that continues a record with a task ([CLI-25](cli.md#CLI-25)) works in the directory it
 was started in, so it cannot enter a worktree. `--continue` or `--resume <id>` with a task is refused
@@ -495,9 +495,9 @@ made in the change that builds this one.
 - **A base other than HEAD,** a pull request in place of a name, a setting for where worktrees go, and
   directories linked in from the project, such as a dependency cache.
 - **What the terminal title and the info panel show** as the directory.
-- **What the desktop application shows of a worktree.** [checkouts.md](checkouts.md) does not specify
-  what it shows of a checkout, and this does not either. It refuses a record that names one
-  ([WORKTREE-7](#WORKTREE-7)).
+- **What the desktop application shows of a worktree.** [checkouts.md](checkouts.md) has the window
+  list, show and apply none of a delegate's checkouts, and this says no more of a worktree. It refuses
+  a record that names one ([WORKTREE-7](#WORKTREE-7)).
 
 ## Known costs
 
