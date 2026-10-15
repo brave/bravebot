@@ -946,7 +946,7 @@ fn table(
              \
              Output comes back as text you can read where the user has vouched for every \
              command in the line; otherwise it comes back as a reference, like a file you may \
-             not read: pass it to read_output to ask the user to show it to you, hand it to \
+             not read: pass it to read_output to see it, hand it to \
              spawn_processor, or write it to a file with write_file. Do use it to compile and \
              test what you changed. \
              \
@@ -1123,9 +1123,7 @@ fn table(
         ),
         Tool::function(
             "read_output",
-            "Ask to be shown what a command printed. Give the reference a run handed back. The \
-             user sees the output and decides; if they agree, it comes back to you as text you \
-             can read. Use it whenever you ran something to find something out, which is most of \
+            "Ask to be shown what a command printed. Give the reference a run handed back. Use it whenever you ran something to find something out, which is most of \
              the time: a run's output is quarantined by default, so `which`, `find`, `uname` and \
              the like tell you nothing until you ask for the result. Ask for the errors too when \
              a run fails, or you will not know why it failed and must not claim it succeeded. \
@@ -1701,6 +1699,24 @@ fn withheld_variables_sentence(names: &[&str]) -> String {
          person has set it.",
         listed.join(", ")
     )
+}
+
+/// Say in the `read_output` description who answers a read of what a run printed, for the session
+/// as it stands when the request is built (RUN-14).
+///
+/// `answer` is the sentence for that case. It is appended to the table's description for the
+/// reason [`state_confinement`] is, and nothing where the list does not offer `read_output`, so a
+/// turn left without it is not pointed at a tool it has not got. Called on each request's copy of
+/// the list and not on the list itself, so a mode the person changes in the middle of a turn is
+/// what the next request says, and a statement is never appended twice.
+pub fn state_read_output_answer(tools: &mut [Tool], answer: &str) {
+    if let Some(read_output) = tools
+        .iter_mut()
+        .find(|tool| tool.function.name == "read_output")
+    {
+        read_output.function.description.push(' ');
+        read_output.function.description.push_str(answer);
+    }
 }
 
 /// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
