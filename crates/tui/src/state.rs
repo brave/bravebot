@@ -19344,6 +19344,19 @@ mod tests {
         s.input
     }
 
+    /// `;` and `,` are motions to an operator, the last jump again and the last jump the other way
+    /// round, so `d;` takes the stretch up to and including the next match. With no jump to repeat
+    /// the pair changes nothing and ends the wait.
+    #[test]
+    fn an_operator_takes_the_repeated_jump_as_its_stretch() {
+        assert_eq!(edited("a-b-c-d", 0, "f-d;"), "ac-d");
+        assert_eq!(edited("a-b-c-d", 5, "F-d;"), "a-c-d");
+        assert_eq!(edited("a-b-c-d", 3, "f-d,"), "a-b-d");
+        assert_eq!(edited("a-b-c-d", 0, "f-c;X"), "aXc-d");
+        assert_eq!(edited("a-b-c-d", 0, "d;"), "a-b-c-d");
+        assert_eq!(edited("a-b-c-d", 0, "d,x"), "-b-c-d");
+    }
+
     /// A count in front of a motion is how many times over it is meant, and `0` stays the key for
     /// the first column: it continues a count that has begun and begins none of its own, so `10l`
     /// is ten characters rather than a jump to column zero and then one step.

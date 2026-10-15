@@ -317,6 +317,19 @@ impl Session {
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
         if let Some(pending) = self.half_typed.take() {
+            // `;` and `,` after an operator are the repeated jump as a motion (INPUT-26), which is
+            // state the session holds and the pair of keys alone cannot name. With nothing to
+            // repeat the pair means nothing, as any other key that is not a motion does.
+            if let (crate::vim::Pending::Operate(operator), ';' | ',', Some(find)) =
+                (pending, c, self.last_find)
+            {
+                let repeated = if c == ';' { find } else { find.reversed() };
+                self.carry_out(crate::vim::Command::Change(
+                    operator,
+                    crate::vim::Extent::To(crate::vim::Motion::ToChar(repeated)),
+                ));
+                return;
+            }
             self.carry_out(pending.then(c));
             return;
         }
