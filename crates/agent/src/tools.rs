@@ -786,7 +786,11 @@ fn table(
              is written, so be exact about the shape of the answer: the complete document and \
              nothing else. What the change should be is its decision, not yours. It reads the \
              whole document, so it can work out what is wrong and where the fix goes, and leave \
-             a file alone if it turns out not to be the one you are after.",
+             a file alone if it turns out not to be the one you are after. Once your context holds \
+             private content, as it does after read_output or vet_content shows you some, after \
+             a delegate reports some, and in a conversation resumed with some, every call is \
+             refused for the rest of the conversation: what you write is private from then on, \
+             and a processor takes no private instruction.",
             json!({
                 "type": "object",
                 "properties": {
@@ -4520,14 +4524,22 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // nothing to hand back but another name for the same thing, which reads as the read having
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
+        // No processor can be started once the context holds private content, so the move that
+        // names one is left out rather than offered and refused.
+        let work_on_it = if policy.processors_closed() {
+            String::new()
+        } else {
+            format!(
+                " Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
+                 path_ref to write what comes back to the same file."
+            )
+        };
         return priced(confirmed(
             format!(
                 "{shown_path} already names that file, and nothing will show you what is in \
-                 it. Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
-                 path_ref to write what comes back to the same file. If the work would go better \
-                 with you reading it yourself, say so in your reply: the user can vouch for the \
-                 file, and then you will be shown it. They know which file {shown_path} is even \
-                 though you do not."
+                 it.{work_on_it} If the work would go better with you reading it yourself, say \
+                 so in your reply: the user can vouch for the file, and then you will be shown \
+                 it. They know which file {shown_path} is even though you do not."
             ),
             format!("nothing to read: {shown_path} already holds it"),
         ));
@@ -13238,6 +13250,34 @@ mod tests {
         assert!(
             !description.chars().any(|c| c.is_ascii_digit()),
             "the description told the model how many it may start: {description}"
+        );
+    }
+
+    /// A conversation shown private content refuses every processor call for the rest of it, and
+    /// the tool's description is where a planner learns that before it earns the refusal. Each way
+    /// a context comes to hold private content is named, so a planner can tell it is in one.
+    #[test]
+    fn the_processor_is_described_as_refused_once_private_content_has_been_shown() {
+        let offered = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let processor = offered
+            .iter()
+            .find(|t| t.function.name == "spawn_processor")
+            .expect("the turn is offered a processor");
+        let description = &processor.function.description;
+        assert!(
+            description.contains("every call is refused for the rest of the conversation"),
+            "{description}"
+        );
+        assert!(
+            ["read_output", "vet_content", "delegate", "resumed"]
+                .iter()
+                .all(|way| description.contains(way)),
+            "{description}"
         );
     }
 

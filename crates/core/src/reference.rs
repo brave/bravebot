@@ -68,6 +68,12 @@ pub struct Reference {
     /// base64 says nothing anybody can use, and one was reported as "1 lines" for a whole
     /// screenshot. Set by the driver from a table of extensions.
     pub picture: Option<String>,
+    /// Whether the planner's context already held private content when this reference was made.
+    ///
+    /// Every `spawn_processor` call is refused from then on (PROC-4), so a reference described as
+    /// something to give one sends the planner into a refusal. Set by the policy that made the
+    /// reference, the only party that knows what the context holds.
+    pub processors_closed: bool,
 }
 
 impl Reference {
@@ -86,7 +92,15 @@ impl Reference {
             bytes: Some(bytes),
             label,
             picture: None,
+            processors_closed: false,
         }
+    }
+
+    /// Say that no processor can be given this reference, because the planner's context holds
+    /// private content.
+    pub fn closed_to_processors(mut self) -> Self {
+        self.processors_closed = true;
+        self
     }
 
     /// Say this reference is a picture of this media type.
@@ -127,6 +141,7 @@ impl Reference {
             bytes,
             label,
             picture: None,
+            processors_closed: false,
         }
     }
 
@@ -166,12 +181,25 @@ impl Reference {
             }
         };
 
+        // Once the context holds private content no processor can be started, so the move that
+        // names one is left out rather than offered and refused.
         let next = match self.kind {
+            Kind::File if self.processors_closed => format!(
+                "Quarantined: you will not be shown what this file holds, and read_file has \
+                 nothing to add: {} already is the file. Where you have to read it yourself, \
+                 vet_content asks the user to show it to you.",
+                self.slot
+            ),
             Kind::File => format!(
                 "Quarantined: you will not be shown what this file holds, and read_file has \
                  nothing to add: {} already is the file. Give it to spawn_processor to work on, \
                  and name it as write_file's path_ref to put the result back. Where you have to \
                  read it yourself, vet_content asks the user to show it to you.",
+                self.slot
+            ),
+            Kind::Content if self.processors_closed => format!(
+                "Quarantined: you will not be shown it. Write {} into a file as contents_ref. \
+                 Where you have to read it yourself, vet_content asks the user to show it to you.",
                 self.slot
             ),
             Kind::Content => format!(
@@ -187,6 +215,13 @@ impl Reference {
                 "Quarantined: a directory this listing stopped at rather than a file in it, so \
                  there is nothing behind {} to read, process or write. List the directory you \
                  named again with a greater depth to reach what is inside it.",
+                self.slot
+            ),
+            Kind::Kept if self.processors_closed => format!(
+                "You may read all of it: only its length kept it out of the result. Call \
+                 read_output with {} and an offset in bytes to be shown the part from there, as \
+                 much as one result holds, without the user being asked. Write it into a file as \
+                 contents_ref.",
                 self.slot
             ),
             Kind::Kept => format!(
@@ -349,6 +384,64 @@ mod tests {
         assert!(
             described.contains("contents_ref"),
             "the planner was not told how to write it out: {described}"
+        );
+    }
+
+    /// Every `spawn_processor` call is refused once the planner's context holds private content,
+    /// so advice to give a reference to one is a refusal the planner is invited to earn. The
+    /// other moves stay, because they are all the planner has left.
+    #[test]
+    fn a_reference_closed_to_processors_names_none_and_keeps_the_other_moves() {
+        let content = reference().closed_to_processors().describe();
+        assert!(!content.contains("spawn_processor"), "{content}");
+        assert!(
+            content.contains("Write ref:1 into a file as contents_ref")
+                && content.contains("vet_content"),
+            "the moves that remain were dropped with the processor: {content}"
+        );
+
+        let file = Reference::unread(
+            SlotId::new("ref:2"),
+            "an entry in \".\"",
+            None,
+            Label::untrusted_private(),
+        )
+        .closed_to_processors()
+        .describe();
+        assert!(!file.contains("spawn_processor"), "{file}");
+        assert!(
+            file.contains("ref:2 already is the file") && file.contains("vet_content"),
+            "{file}"
+        );
+
+        // A picture is looked at only by a processor or by a person, so once no processor can
+        // be started the person is the one move left, and it is still offered.
+        let picture = Reference::unread(
+            SlotId::new("ref:3"),
+            "an entry in \".\"",
+            None,
+            Label::untrusted_private(),
+        )
+        .of_a_picture("image/png")
+        .closed_to_processors()
+        .describe();
+        assert!(!picture.contains("spawn_processor"), "{picture}");
+        assert!(picture.contains("vet_content"), "{picture}");
+
+        let kept = Reference::new(
+            SlotId::new("ref:4"),
+            "git log",
+            900,
+            90_000,
+            Label::trusted_private(),
+        )
+        .of_kept_output()
+        .closed_to_processors()
+        .describe();
+        assert!(!kept.contains("spawn_processor"), "{kept}");
+        assert!(
+            kept.contains("read_output with ref:4 and an offset") && kept.contains("contents_ref"),
+            "{kept}"
         );
     }
 
