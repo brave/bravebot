@@ -598,6 +598,49 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
     // above a diff that may push anything below it out of sight: which file, how long, and that
     // the rest of the write's question is untouched. Where `r` is written down is part of what it
     // grants, so the path is on the screen.
+    lines.extend(standing_rows(request));
+
+    // All of it. What does not fit is scrolled to, rather than dropped: the hunks nobody shows
+    // you are exactly the ones an approval is supposed to cover.
+    //
+    // Broken to the width here rather than by the paragraph, so a hunk wider than the box
+    // continues on another marked row instead of at column 0 outside the margin.
+    let deciding = lines.len();
+    let changes = diff.condensed(CONTEXT_LINES);
+    for change in changes.iter() {
+        let body = match change {
+            Change::Added(text) => {
+                Span::styled(format!("+{text}"), Style::default().fg(theme::ok()))
+            }
+            Change::Removed(text) => {
+                Span::styled(format!("-{text}"), Style::default().fg(theme::fail()))
+            }
+            Change::Kept(text) => {
+                Span::styled(format!(" {text}"), Style::default().fg(theme::muted()))
+            }
+            Change::Elided(count) => Span::styled(
+                format!(" {}", t!(write_unchanged, count = *count)),
+                Style::default().fg(theme::muted()),
+            ),
+        };
+        lines.extend(marked_rows(&margin, &[body], inside.width as usize));
+    }
+
+    let keys = write_keys(request, inside.width as usize);
+
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, deciding, 1, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// The rows saying what `a` and `r` settle, where they are offered, with the blank row that
+/// follows them.
+fn standing_rows(request: &WriteRequest) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     if request.may_always {
         let muted = Style::default().fg(theme::muted());
         lines.push(Line::from(Span::styled(
@@ -633,33 +676,13 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
         }
         lines.push(Line::raw(""));
     }
+    lines
+}
 
-    // All of it. What does not fit is scrolled to, rather than dropped: the hunks nobody shows
-    // you are exactly the ones an approval is supposed to cover.
-    //
-    // Broken to the width here rather than by the paragraph, so a hunk wider than the box
-    // continues on another marked row instead of at column 0 outside the margin.
-    let deciding = lines.len();
-    let changes = diff.condensed(CONTEXT_LINES);
-    for change in changes.iter() {
-        let body = match change {
-            Change::Added(text) => {
-                Span::styled(format!("+{text}"), Style::default().fg(theme::ok()))
-            }
-            Change::Removed(text) => {
-                Span::styled(format!("-{text}"), Style::default().fg(theme::fail()))
-            }
-            Change::Kept(text) => {
-                Span::styled(format!(" {text}"), Style::default().fg(theme::muted()))
-            }
-            Change::Elided(count) => Span::styled(
-                format!(" {}", t!(write_unchanged, count = *count)),
-                Style::default().fg(theme::muted()),
-            ),
-        };
-        lines.extend(marked_rows(&margin, &[body], inside.width as usize));
-    }
-
+/// The write prompt's key rows as a function of whether a yes is taken yet. A prompt offering both
+/// standing answers makes the row wider than the box, so the key that stops the turn gets a row of
+/// its own.
+fn write_keys(request: &WriteRequest, width: usize) -> impl Fn(bool) -> Vec<Line<'static>> {
     let answers = |answerable: bool, gap: &str| {
         let mut key_spans = vec![
             Span::styled("  y", approving(theme::ok(), answerable)),
@@ -680,14 +703,14 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
         Line::from(key_spans)
     };
     let stop = Line::from(Vec::from(stopping()));
-    let wide = answers(true, "    ").width() + stop.width() > inside.width as usize;
+    let wide = answers(true, "    ").width() + stop.width() > width;
     // Both standing answers make the row wider than the box on a 100-column terminal, so the key
     // that stops the turn gets a row of its own rather than being broken across two. A prompt
     // offering neither keeps its one row, closing its gaps where it is still too wide, and with it
     // every row it had for the body.
     let stop_below = request.may_always && wide;
     let gap = if wide && !stop_below { "  " } else { "    " };
-    let keys = |answerable: bool| {
+    move |answerable: bool| {
         let answers = answers(answerable, gap);
         let stop = stop.clone();
         if stop_below {
@@ -699,15 +722,7 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
             row.spans.extend(stop.spans);
             vec![row]
         }
-    };
-
-    pinned::draw(
-        frame,
-        inside,
-        Question::scrolled(lines, deciding, 1, &keys),
-        scroll,
-        seen,
-    )
+    }
 }
 
 /// What the user did with a run question.
@@ -1075,8 +1090,166 @@ fn draw_run(
         ]),
         Line::raw(""),
     ];
-    let mut lines = Vec::new();
+    let mut lines = plan_rows(request);
+    lines.push(Line::raw(""));
+    lines.extend(effect_rows(request, inside.width as usize));
 
+    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Each line wraps on its own, so the rows of a run of lines are where measuring before and
+    // after it puts them.
+    let measure = |lines: &[Line<'static>]| wrapped(lines.to_vec()).line_count(inside.width);
+    // Everything above is what running the line does, so it is what every key that runs it waits
+    // on. What `a` and `r` grant on top of that is below, and each of them waits on its own part.
+    let plan = 0..measure(&lines);
+    let mut always = 0..0;
+    let mut record = 0..0;
+    let mut family = 0..0;
+    let mut reach = 0..0;
+    let mut key = 0..0;
+
+    // What `a` would actually grant, in as many words. It is two things, not one, and the second
+    // is the one nothing else in the interface would tell them: what the command prints stops
+    // being quarantined and the model reads it. Nothing checks that assertion, so the person
+    // making it has to be asked for it in those terms.
+    lines.push(Line::raw(""));
+    let from = measure(&lines);
+    lines.extend(always_rows(request, offers_always));
+    if offers_always {
+        always = from..measure(&lines);
+    }
+
+    // What `r` would grant, where it is offered. Three things a reader cannot get from the key's
+    // one word: that it lasts past this session, that every session in this directory reads it, and
+    // that it stops the asking without making anything readable. The place it is written down is
+    // part of the grant rather than a footnote, because nobody can endorse a record they were not
+    // shown, and deleting the line from that file is the way back.
+    if let Some(path) = request.record.as_ref().filter(|_| request.may_record()) {
+        lines.push(Line::raw(""));
+        let from = measure(&lines);
+        lines.extend(record_rows(path));
+        record = from..measure(&lines);
+    }
+
+    // What `f` would grant, where the table lists the line: the same record, with the number left
+    // free. The line is drawn as the entry will hold it, so the reader sees the slot, and the
+    // sentence under it names what stays fixed, because "any number" is the half a person is most
+    // likely to read as wider than it is.
+    if let Some(family_line) = request.family_display() {
+        lines.push(Line::raw(""));
+        let from = measure(&lines);
+        lines.extend(family_rows(&family_line));
+        family = from..measure(&lines);
+    }
+
+    // What `m` and `e` would remember, where they are offered: the programs by name, the scopes, and
+    // the place the record is written. The second sentence is the half a person is most likely to
+    // assume the other way round, since the plan they are looking at asked for the scope: it is
+    // asked about again next time, with the scope on it, and nothing is vouched for.
+    let kept = request.kept_reach_shapes();
+    if let Some(path) = request.reach_record.as_ref().filter(|_| !kept.is_empty()) {
+        lines.push(Line::raw(""));
+        let from = measure(&lines);
+        lines.extend(reach_rows(request, &kept, path));
+        reach = from..measure(&lines);
+    }
+
+    // The keys a digit chooses between for the owner this push leaves to ssh, numbered as the
+    // digits are, with what `y` does instead and where the choice is written. The owner is the
+    // host and account the argv names, which the plan above already shows.
+    if let Some(choice) = &request.key_choice {
+        lines.push(Line::raw(""));
+        let from = measure(&lines);
+        lines.extend(key_choice_rows(choice, inside.width as usize));
+        key = from..measure(&lines);
+    }
+
+    // What answers a line whose arguments differ from one run to the next, since no key on this
+    // screen does. Drawn only where the person has already answered a prompt for this binary under
+    // other arguments, so it is not a sentence every prompt carries. It names the file rather than
+    // a pattern to put in it: which argument held the message is a judgment about the program, and
+    // a box with a pattern already filled in would be this system making that judgment. The costs
+    // are given with it because a pattern grants more than anything here, and somebody answering
+    // the same shape of prompt all day would otherwise learn the durable form from nowhere.
+    if let Some(path) = &request.pattern {
+        lines.push(Line::raw(""));
+        lines.extend(pattern_rows(path));
+    }
+
+    let total = measure(&lines);
+    let header = wrapped(header);
+    let body = wrapped(lines);
+    // Measured with the keys live, which is the same text: whether they are taken changes how they
+    // are coloured and not how many rows they take, so it can be decided after the layout.
+    let laid = Pinned::new(
+        inside,
+        (
+            rows_in(&header, inside.width),
+            u16::try_from(total).unwrap_or(u16::MAX),
+            0,
+            rows_in(
+                &wrapped(vec![run_keys(request, offers_always, |_| true)]),
+                inside.width,
+            ),
+        ),
+        scroll,
+    );
+    // Rows past the most the layout scrolls to are never marked, so a body that long is never
+    // taken rather than taken unread.
+    shown.mark(inside.width, total, &laid);
+    let drawn = RunDrawn {
+        furthest: laid.furthest,
+        page: laid.body.height.saturating_sub(1).max(1),
+        whole: laid.whole && laid.body.height > 0,
+        unread: shown.unseen(plan),
+        always_unread: shown.unseen(always),
+        record_unread: shown.unseen(record),
+        family_unread: shown.unseen(family),
+        reach_unread: shown.unseen(reach),
+        key_unread: shown.unseen(key),
+    };
+
+    // Said in place of how far there is to scroll while a key waits on it, since what the person
+    // needs to know then is why the key does nothing.
+    let waiting = drawn.always_unread
+        + drawn.record_unread
+        + drawn.family_unread
+        + drawn.reach_unread
+        + drawn.key_unread;
+    let hint = if drawn.unread > 0 {
+        Line::styled(
+            format!("   {}", t!(run_unseen, count = drawn.unread)),
+            Style::default().fg(theme::running()),
+        )
+    } else if waiting > 0 {
+        Line::styled(
+            format!("   {}", t!(run_grant_unseen, count = waiting)),
+            Style::default().fg(theme::running()),
+        )
+    } else {
+        Line::styled(
+            scroll_hint(laid.furthest - laid.offset),
+            Style::default().fg(theme::brand_primary()),
+        )
+    };
+    laid.render(
+        frame,
+        header,
+        body,
+        hint,
+        wrapped(Vec::new()),
+        wrapped(vec![run_keys(request, offers_always, |answer| {
+            drawn.takes(answer)
+        })]),
+    );
+
+    drawn
+}
+
+/// The rows naming what the plan runs: the line the planner wrote, one row pair per stage, the files
+/// it writes and the reference fed to its first program.
+fn plan_rows(request: &RunRequest) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let steps = request.plan.steps();
     // The line the planner wrote, above the plan and marked as context. It is not what the answer
     // binds to: two spellings that compile alike are one thing to agree to, and the plan below is
     // the one being agreed to. Shown all the same, because a reader comparing the two is what
@@ -1149,9 +1322,13 @@ fn draw_run(
                 .add_modifier(Modifier::BOLD),
         )));
     }
+    lines
+}
 
-    lines.push(Line::raw(""));
-
+/// The rows saying what confinement the line runs under, whether the planner asked to leave it,
+/// which ambient authority a yes hands over and whether the output reaches the model.
+fn effect_rows(request: &RunRequest, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     // Said every time, because it is the thing a reviewer is most likely to assume otherwise. Where
     // the turn confines what it starts, the programs are held to the directories listed and to what
     // each stage brings; where it does not, they run with the access the user's own shell has.
@@ -1160,7 +1337,7 @@ fn draw_run(
             lines.extend(indented(
                 confined.heading(),
                 Style::default().fg(theme::running()),
-                inside.width as usize,
+                width,
             ));
             for directory in &confined.directories {
                 lines.push(Line::from(Span::styled(
@@ -1174,7 +1351,7 @@ fn draw_run(
                 lines.extend(indented(
                     sentence,
                     Style::default().fg(theme::running()),
-                    inside.width as usize,
+                    width,
                 ));
             }
         }
@@ -1189,7 +1366,7 @@ fn draw_run(
         lines.extend(indented(
             t!(run_unconfined),
             Style::default().fg(theme::fail()),
-            inside.width as usize,
+            width,
         ));
     }
 
@@ -1205,7 +1382,7 @@ fn draw_run(
         lines.extend(indented(
             t!(run_spends_authority),
             Style::default().fg(theme::fail()),
-            inside.width as usize,
+            width,
         ));
         for spent in &spends {
             lines.push(Line::from(Span::styled(
@@ -1225,27 +1402,13 @@ fn draw_run(
             Style::default().fg(theme::fail()),
         )));
     }
+    lines
+}
 
-    let wrapped = |lines: Vec<Line<'static>>| Paragraph::new(lines).wrap(Wrap { trim: false });
-    // Each line wraps on its own, so the rows of a run of lines are where measuring before and
-    // after it puts them.
-    let measure = |lines: &[Line<'static>]| wrapped(lines.to_vec()).line_count(inside.width);
-    // Everything above is what running the line does, so it is what every key that runs it waits
-    // on. What `a` and `r` grant on top of that is below, and each of them waits on its own part.
-    let plan = 0..measure(&lines);
-    let mut always = 0..0;
-    let mut record = 0..0;
-    let mut family = 0..0;
-    let mut reach = 0..0;
-    let mut key = 0..0;
-
-    // What `a` would actually grant, in as many words. It is two things, not one, and the second
-    // is the one nothing else in the interface would tell them: what the command prints stops
-    // being quarantined and the model reads it. Nothing checks that assertion, so the person
-    // making it has to be asked for it in those terms.
+/// The rows for `a`: what it grants where it is offered, or every reason there is no `a`.
+fn always_rows(request: &RunRequest, offers_always: bool) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     if offers_always {
-        lines.push(Line::raw(""));
-        always.start = measure(&lines);
         lines.push(Line::from(Span::styled(
             format!("  {}", t!(run_always_explained)),
             Style::default().fg(theme::muted()),
@@ -1296,13 +1459,11 @@ fn draw_run(
             format!("     {}", t!(run_always_this_directory)),
             Style::default().fg(theme::muted()),
         )));
-        always.end = measure(&lines);
     } else {
         // Each of these asks every time whatever is remembered, so offering to stop asking would be
         // offering something that will not happen. Every reason that holds is given, not the first
         // one: a reader who acts on the only reason they were shown and still sees no `a` has been
         // told to change the wrong thing about the line.
-        lines.push(Line::raw(""));
         let mut why = Vec::new();
         if request.releases_private() {
             why.push(t!(run_private_not_remembered));
@@ -1329,274 +1490,187 @@ fn draw_run(
             )));
         }
     }
+    lines
+}
 
-    // What `r` would grant, where it is offered. Three things a reader cannot get from the key's
-    // one word: that it lasts past this session, that every session in this directory reads it, and
-    // that it stops the asking without making anything readable. The place it is written down is
-    // part of the grant rather than a footnote, because nobody can endorse a record they were not
-    // shown, and deleting the line from that file is the way back.
-    if let Some(path) = request.record.as_ref().filter(|_| request.may_record()) {
-        lines.push(Line::raw(""));
-        record.start = measure(&lines);
+/// The rows for `r`: what it records and where.
+fn record_rows(path: &std::path::Path) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(run_remember_explained)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_remember_every_session)),
+        Style::default().fg(theme::muted()),
+    )));
+    // The half a person is most likely to assume the other way, since the key beside it does
+    // grant it, so it is the half that is coloured.
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_remember_only_asking)),
+        Style::default().fg(theme::running()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_remember_where)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("       {}", path.display()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines
+}
+
+/// The rows for `f`: the line with its number left free and what stays fixed.
+fn family_rows(family_line: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(run_remember_family_explained)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("       {family_line}"),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_remember_family_only_number)),
+        Style::default().fg(theme::running()),
+    )));
+    lines
+}
+
+/// The rows for `m` and `e`: the programs and scopes they keep, and where the record is written.
+fn reach_rows(request: &RunRequest, kept: &[String], path: &std::path::Path) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(run_keep_reach_explained)),
+        Style::default().fg(theme::muted()),
+    )));
+    for shape in kept {
         lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_remember_explained)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_remember_every_session)),
-            Style::default().fg(theme::muted()),
-        )));
-        // The half a person is most likely to assume the other way, since the key beside it does
-        // grant it, so it is the half that is coloured.
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_remember_only_asking)),
-            Style::default().fg(theme::running()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_remember_where)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("       {}", path.display()),
+            format!("       {shape}"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        record.end = measure(&lines);
     }
-
-    // What `f` would grant, where the table lists the line: the same record, with the number left
-    // free. The line is drawn as the entry will hold it, so the reader sees the slot, and the
-    // sentence under it names what stays fixed, because "any number" is the half a person is most
-    // likely to read as wider than it is.
-    if let Some(family_line) = request.family_display() {
-        lines.push(Line::raw(""));
-        family.start = measure(&lines);
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_remember_family_explained)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("       {family_line}"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_remember_family_only_number)),
-            Style::default().fg(theme::running()),
-        )));
-        family.end = measure(&lines);
-    }
-
-    // What `m` and `e` would remember, where they are offered: the programs by name, the scopes, and
-    // the place the record is written. The second sentence is the half a person is most likely to
-    // assume the other way round, since the plan they are looking at asked for the scope: it is
-    // asked about again next time, with the scope on it, and nothing is vouched for.
-    let kept = request.kept_reach_shapes();
-    if let Some(path) = request.reach_record.as_ref().filter(|_| !kept.is_empty()) {
-        lines.push(Line::raw(""));
-        reach.start = measure(&lines);
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_keep_reach_explained)),
-            Style::default().fg(theme::muted()),
-        )));
-        for shape in &kept {
-            lines.push(Line::from(Span::styled(
-                format!("       {shape}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-        }
+    lines.push(Line::from(Span::styled(
+        format!(
+            "     {}",
+            t!(
+                run_keep_reach_scopes,
+                scopes = request
+                    .requested_credential_scopes()
+                    .iter()
+                    .map(|scope| scope.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        ),
+        Style::default().fg(theme::running()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_keep_reach_still_asked)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_keep_reach_lifetimes)),
+        Style::default().fg(theme::muted()),
+    )));
+    let asked_again = request.requested_not_remembered();
+    if !asked_again.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(
                 "     {}",
-                t!(
-                    run_keep_reach_scopes,
-                    scopes = request
-                        .requested_credential_scopes()
-                        .iter()
-                        .map(|scope| scope.name())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                t!(run_keep_reach_asked_again, names = asked_again.join(", "))
             ),
-            Style::default().fg(theme::running()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_keep_reach_still_asked)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_keep_reach_lifetimes)),
-            Style::default().fg(theme::muted()),
-        )));
-        let asked_again = request.requested_not_remembered();
-        if !asked_again.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "     {}",
-                    t!(run_keep_reach_asked_again, names = asked_again.join(", "))
-                ),
-                Style::default().fg(theme::muted()),
-            )));
-        }
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_keep_reach_where)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("       {}", path.display()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_keep_reach_undo)),
-            Style::default().fg(theme::muted()),
-        )));
-        reach.end = measure(&lines);
-    }
-
-    // The keys a digit chooses between for the owner this push leaves to ssh, numbered as the
-    // digits are, with what `y` does instead and where the choice is written. The owner is the
-    // host and account the argv names, which the plan above already shows.
-    if let Some(choice) = &request.key_choice {
-        lines.push(Line::raw(""));
-        key.start = measure(&lines);
-        lines.extend(indented(
-            t!(
-                run_key_choice_explained,
-                first = "1",
-                last = choice.candidates.len().to_string(),
-                owner = choice.owner()
-            ),
-            Style::default().fg(theme::muted()),
-            inside.width as usize,
-        ));
-        for (at, candidate) in choice.candidates.iter().enumerate() {
-            lines.push(Line::from(Span::styled(
-                format!("       {}  {}", at + 1, candidate.display()),
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-        }
-        lines.push(Line::from(Span::styled(
-            format!("       0  {}", t!(run_key_choice_default)),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_key_choice_yes)),
-            Style::default().fg(theme::running()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_keep_reach_where)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("       {}", choice.record.display()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_key_choice_undo)),
-            Style::default().fg(theme::muted()),
-        )));
-        key.end = measure(&lines);
-    }
-
-    // What answers a line whose arguments differ from one run to the next, since no key on this
-    // screen does. Drawn only where the person has already answered a prompt for this binary under
-    // other arguments, so it is not a sentence every prompt carries. It names the file rather than
-    // a pattern to put in it: which argument held the message is a judgment about the program, and
-    // a box with a pattern already filled in would be this system making that judgment. The costs
-    // are given with it because a pattern grants more than anything here, and somebody answering
-    // the same shape of prompt all day would otherwise learn the durable form from nowhere.
-    if let Some(path) = &request.pattern {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!(run_pattern_varies)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_pattern_where)),
-            Style::default().fg(theme::muted()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("       {}", path.display()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        // The half that makes a pattern a wider grant than any key here, so it is the half that is
-        // coloured.
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_pattern_covers_unread)),
-            Style::default().fg(theme::running()),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t!(run_pattern_only_asking)),
             Style::default().fg(theme::muted()),
         )));
     }
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_keep_reach_where)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("       {}", path.display()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_keep_reach_undo)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines
+}
 
-    let total = measure(&lines);
-    let header = wrapped(header);
-    let body = wrapped(lines);
-    // Measured with the keys live, which is the same text: whether they are taken changes how they
-    // are coloured and not how many rows they take, so it can be decided after the layout.
-    let laid = Pinned::new(
-        inside,
-        (
-            rows_in(&header, inside.width),
-            u16::try_from(total).unwrap_or(u16::MAX),
-            0,
-            rows_in(
-                &wrapped(vec![run_keys(request, offers_always, |_| true)]),
-                inside.width,
-            ),
+/// The rows for the digit keys: the candidate keys, what `y` does instead and where the choice is written.
+fn key_choice_rows(
+    choice: &bravebot_agent::confirm::KeyChoice,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.extend(indented(
+        t!(
+            run_key_choice_explained,
+            first = "1",
+            last = choice.candidates.len().to_string(),
+            owner = choice.owner()
         ),
-        scroll,
-    );
-    // Rows past the most the layout scrolls to are never marked, so a body that long is never
-    // taken rather than taken unread.
-    shown.mark(inside.width, total, &laid);
-    let drawn = RunDrawn {
-        furthest: laid.furthest,
-        page: laid.body.height.saturating_sub(1).max(1),
-        whole: laid.whole && laid.body.height > 0,
-        unread: shown.unseen(plan),
-        always_unread: shown.unseen(always),
-        record_unread: shown.unseen(record),
-        family_unread: shown.unseen(family),
-        reach_unread: shown.unseen(reach),
-        key_unread: shown.unseen(key),
-    };
+        Style::default().fg(theme::muted()),
+        width,
+    ));
+    for (at, candidate) in choice.candidates.iter().enumerate() {
+        lines.push(Line::from(Span::styled(
+            format!("       {}  {}", at + 1, candidate.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("       0  {}", t!(run_key_choice_default)),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_key_choice_yes)),
+        Style::default().fg(theme::running()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_keep_reach_where)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("       {}", choice.record.display()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_key_choice_undo)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines
+}
 
-    // Said in place of how far there is to scroll while a key waits on it, since what the person
-    // needs to know then is why the key does nothing.
-    let waiting = drawn.always_unread
-        + drawn.record_unread
-        + drawn.family_unread
-        + drawn.reach_unread
-        + drawn.key_unread;
-    let hint = if drawn.unread > 0 {
-        Line::styled(
-            format!("   {}", t!(run_unseen, count = drawn.unread)),
-            Style::default().fg(theme::running()),
-        )
-    } else if waiting > 0 {
-        Line::styled(
-            format!("   {}", t!(run_grant_unseen, count = waiting)),
-            Style::default().fg(theme::running()),
-        )
-    } else {
-        Line::styled(
-            scroll_hint(laid.furthest - laid.offset),
-            Style::default().fg(theme::brand_primary()),
-        )
-    };
-    laid.render(
-        frame,
-        header,
-        body,
-        hint,
-        wrapped(Vec::new()),
-        wrapped(vec![run_keys(request, offers_always, |answer| {
-            drawn.takes(answer)
-        })]),
-    );
-
-    drawn
+/// The rows for the pattern box: where to write one and what it covers.
+fn pattern_rows(path: &std::path::Path) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(run_pattern_varies)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_pattern_where)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("       {}", path.display()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    // The half that makes a pattern a wider grant than any key here, so it is the half that is
+    // coloured.
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_pattern_covers_unread)),
+        Style::default().fg(theme::running()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("     {}", t!(run_pattern_only_asking)),
+        Style::default().fg(theme::muted()),
+    )));
+    lines
 }
 
 /// The run question's keys, with each that `live` says is not taken drawn muted. A key not taken
@@ -1882,25 +1956,12 @@ fn draw_output(
     }
 
     let keys = |answerable: bool| {
-        let mut key_spans = vec![
-            Span::styled("  y", approving(theme::ok(), answerable)),
-            Span::raw(format!(" {}    ", t!(output_yes))),
-        ];
-        // Offered only where the check completed and found nothing. It is not an answer to the
-        // question on the screen: it turns off the asking, so the moment the check reported an
-        // injection attempt, or could not be made at all, is the worst moment to draw it.
-        // [`vetting_answer_for`] asks the same question again rather than being told the answer,
-        // because a grant must not rest on a drawing.
-        if request.verdict.is_safe() {
-            key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
-            key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
-        }
-        key_spans.extend([
-            Span::styled("n", refusing()),
-            Span::raw(format!(" {}    ", t!(output_no))),
-        ]);
-        key_spans.extend(stopping());
-        vec![Line::from(key_spans)]
+        vetting_keys(
+            t!(output_yes),
+            t!(output_no),
+            request.verdict.is_safe(),
+            answerable,
+        )
     };
 
     pinned::draw(
@@ -1910,6 +1971,31 @@ fn draw_output(
         scroll,
         seen,
     )
+}
+
+/// The key row of a prompt about a slot a check looked at, as a function of whether a yes is taken
+/// yet. `yes` and `no` are the prompt's own words for those keys.
+///
+/// `a` is offered only where the check completed and found nothing. It is not an answer to the
+/// question on the screen: it turns off the asking, so the moment the check reported an injection
+/// attempt, or could not be made at all, is the worst moment to draw it. [`vetting_answer_for`] asks
+/// the same question again rather than being told the answer, because a grant must not rest on a
+/// drawing.
+fn vetting_keys(yes: &str, no: &str, offers_always: bool, answerable: bool) -> Vec<Line<'static>> {
+    let mut key_spans = vec![
+        Span::styled("  y", approving(theme::ok(), answerable)),
+        Span::raw(format!(" {yes}    ")),
+    ];
+    if offers_always {
+        key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
+        key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
+    }
+    key_spans.extend([
+        Span::styled("n", refusing()),
+        Span::raw(format!(" {no}    ")),
+    ]);
+    key_spans.extend(stopping());
+    vec![Line::from(key_spans)]
 }
 
 /// What the user decided about being shown one quarantined slot.
@@ -2308,31 +2394,11 @@ fn draw_vet(
     }
 
     let keys = |answerable: bool| {
-        let mut key_spans = vec![
-            Span::styled("  y", approving(theme::ok(), answerable)),
-            Span::raw(format!(
-                " {}    ",
-                match &request.picture {
-                    Some(_) => t!(vet_picture_yes),
-                    None => t!(vet_yes),
-                }
-            )),
-        ];
-        // Offered only where the check completed and found nothing. It is not an answer to the
-        // question on the screen: it turns off the asking, so the moment the check reported an
-        // injection attempt, or could not be made at all, is the worst moment to draw it.
-        // [`vet_answer_for`] asks the same question again rather than being told the answer,
-        // because a grant must not rest on a drawing.
-        if request.verdict.is_safe() {
-            key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
-            key_spans.push(Span::raw(format!(" {}    ", t!(vet_always))));
-        }
-        key_spans.extend([
-            Span::styled("n", refusing()),
-            Span::raw(format!(" {}    ", t!(vet_no))),
-        ]);
-        key_spans.extend(stopping());
-        vec![Line::from(key_spans)]
+        let yes = match &request.picture {
+            Some(_) => t!(vet_picture_yes),
+            None => t!(vet_yes),
+        };
+        vetting_keys(yes, t!(vet_no), request.verdict.is_safe(), answerable)
     };
 
     // Where the picture's rows begin once the rows above it are wrapped, which is not the line
