@@ -15,6 +15,8 @@ governs:
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/models.rs
+  - crates/tui/src/app/terminal.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
   - crates/config/src/bedrock.rs
