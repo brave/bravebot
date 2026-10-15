@@ -225,8 +225,8 @@ was being judged would leave the session, and the tenth round would go out regar
 A command the person typed while a turn ran waits in the queue and is carried out before the goal is
 judged, so a queued `/exit` or `/clear` ends the goal before another round is sent.
 
-A mode open over the session is nearer than the goal here as well. A scroller, a delegate's view or
-a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
+A mode open over the session is nearer than the goal here as well. A picker, a scroller, a delegate's
+view or a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
 and [terminal-input.md](terminal-input.md) have them do everywhere else, and the check is the
 likeliest place to meet one: nothing closes a view when a turn ends, so one opened during the turn
 just judged is still standing there.

@@ -655,10 +655,16 @@ fn diff_lines(
 /// worth jumping to are, are both answers about a paragraph wrapped at a particular width.
 pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     let columns = frame.area().width;
-    Laid {
+    let laid = Laid {
         columns,
         ..draw_frame(frame, session)
+    };
+    // Over whatever the frame holds, as it is at rest: the panel is a question about the session
+    // behind it, and a turn goes on being drawn there.
+    if let Some(picking) = session.picking() {
+        picking.draw(frame);
     }
+    laid
 }
 
 fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
@@ -5482,7 +5488,7 @@ mod tests {
     }
 
     /// Rejects: a label taken from somewhere other than the command's own column of the table, or
-    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    /// one shared by every row, either of which tells a person `/compact` runs now when it waits.
     #[test]
     fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
         let mut session = Session::new("none");
@@ -5493,7 +5499,8 @@ mod tests {
         let output = rendered_at(&session, 120, 40);
 
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
-        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
         assert!(labelled(
             &row_for(&output, 120, "/theme [name]"),
             "now/queued"
@@ -5561,6 +5568,30 @@ mod tests {
         assert!(
             output.contains("no loop is running"),
             "the answer was not drawn: {output}"
+        );
+    }
+
+    /// A picker opened while a turn runs is drawn over the frame, with the turn still drawn behind
+    /// it, and only while it is open.
+    #[test]
+    fn a_picker_opened_mid_turn_is_drawn_over_the_turn() {
+        let mut session = Session::new("none");
+        for c in "refactor the parser".chars() {
+            session.type_char(c);
+        }
+        session.submit().expect("the prompt is sent");
+        let title = t!(effort_picker_title);
+        assert!(!rendered_at(&session, 120, 40).contains(title));
+
+        session.open_picking(crate::picking::Picking::Effort(
+            crate::effort_prompt::Picker::new(None),
+        ));
+
+        let output = rendered_at(&session, 120, 40);
+        assert!(output.contains(title), "the picker was not drawn: {output}");
+        assert!(
+            output.contains("refactor the parser"),
+            "the turn was not drawn behind it: {output}"
         );
     }
 

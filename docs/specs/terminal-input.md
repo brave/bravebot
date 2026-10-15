@@ -159,7 +159,7 @@ reads the rung that leaves as protecting the rest of the ladder.
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
 leaves once it comes back. An aside is such a request too, and so is the check a goal is judged by,
-which [goal.md](goal.md) governs. What the table leaves out of all three is a mode: a scroller, a
+which [goal.md](goal.md) governs. What the table leaves out of all three is a mode: a picker, a scroller, a
 delegate's view or a prompt search open over the request answers both keys itself, exactly as it
 does over a turn, and the press that reaches the request is the one after the mode has closed.
 

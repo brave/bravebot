@@ -1404,6 +1404,17 @@ pub struct Session {
     /// `None` at rest, on the same footing as the scroller: a mode is what decides whether a
     /// letter typed is a letter in the box or one narrowing a list.
     history_search: Option<crate::history_search::Search>,
+    /// The picker `/config`, `/theme` or `/effort` opened while a turn was running, or that was
+    /// still open when it ended.
+    ///
+    /// A mode on the same footing as the search: while one is open it takes every key and is drawn
+    /// over the frame. At rest the same pickers are loops of their own and leave this `None`.
+    picking: Option<crate::picking::Picking>,
+    /// What the picker last closed on, until the loop that can carry it out has done so.
+    ///
+    /// The key handler only has the session, and what a pick changes may live elsewhere: the
+    /// saved theme, and for a later pick the configuration.
+    picked: Option<crate::picking::Picked>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
     /// How many lines of results are held for expansion across the session, so what a long
@@ -1819,6 +1830,11 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// The model the turn in flight was begun with.
+    ///
+    /// `/model` is carried out while a turn runs and changes `model` for the turn after, so what the
+    /// turn is checked against when it ends has to be what it was sent with.
+    turn_model: Option<String>,
     /// The name the configuration gives each Bedrock model, by request name, for the panel to draw
     /// `model` by. Empty where no account is configured.
     model_labels: Vec<(String, String)>,
@@ -1955,6 +1971,8 @@ impl Session {
             asides: Vec::new(),
             held_view: None,
             history_search: None,
+            picking: None,
+            picked: None,
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
@@ -2035,6 +2053,7 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            turn_model: None,
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
@@ -2212,6 +2231,14 @@ impl Session {
     /// The model to request, or `None` to use the configured default.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// The model the turn in flight was sent with, which is [`Session::model`] when none is running.
+    pub fn model_of_the_turn(&self) -> Option<&str> {
+        match self.a_turn_is_running() {
+            true => self.turn_model.as_deref(),
+            false => self.model(),
+        }
     }
 
     /// Draw the models this configuration names by those names, as [`crate::status::model_label`]
@@ -7150,6 +7177,7 @@ impl Session {
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
         self.turn_in_flight = true;
+        self.turn_model = self.model.clone();
         self.stopping = false;
         self.back_to_the_tail();
         self.turns += 1;
@@ -8115,6 +8143,43 @@ impl Session {
 
     pub fn searching_history(&self) -> bool {
         self.history_search.is_some()
+    }
+
+    /// Open a picker, which takes every key until it is left.
+    pub fn open_picking(&mut self, picking: crate::picking::Picking) {
+        self.picking = Some(picking);
+    }
+
+    /// The picker that is open, for the renderer and for a test.
+    pub fn picking(&self) -> Option<&crate::picking::Picking> {
+        self.picking.as_ref()
+    }
+
+    /// Give a key to the open picker, and close it when the key left it.
+    ///
+    /// What was picked is held for [`Session::take_pick`] rather than returned, because the loops
+    /// that can carry a pick out are not the ones the key arrived in.
+    pub fn press_in_picking(
+        &mut self,
+        code: ratatui::crossterm::event::KeyCode,
+        modifiers: ratatui::crossterm::event::KeyModifiers,
+    ) {
+        let Some(picking) = &mut self.picking else {
+            return;
+        };
+        match picking.press(code, modifiers) {
+            crate::picking::Step::Continue => {}
+            crate::picking::Step::Cancelled => self.picking = None,
+            crate::picking::Step::Picked(picked) => {
+                self.picking = None;
+                self.picked = Some(picked);
+            }
+        }
+    }
+
+    /// What the picker closed on, taken so it is carried out once.
+    pub fn take_pick(&mut self) -> Option<crate::picking::Picked> {
+        self.picked.take()
     }
 
     /// What is being searched for, for the renderer and for a test.
