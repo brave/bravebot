@@ -5618,8 +5618,9 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
     session.cleared_by_interrupt = false;
 
     if is_ctrl_c(key) {
-        session.quit();
+        press_to_leave(session);
     } else {
+        session.offered_to_leave = false;
         session.note_once(uninterruptible);
     }
 }
@@ -6394,9 +6395,28 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
     session.abandon_half_typed();
 
     if session.goal().is_some() {
+        session.offered_to_leave = false;
         session.clear_goal();
         session.note_once(t!(goal_uninterruptible));
     } else if is_ctrl_c(key) {
+        press_to_leave(session);
+    } else {
+        session.offered_to_leave = false;
+    }
+}
+
+/// Ctrl-C while a request nothing can stop is out, with nothing else left to take (INPUT-4).
+///
+/// The rung that leaves, held to the guard the idle one is held to: the first press offers and
+/// the second leaves, and neither is taken from a key that arrived with others, since one byte
+/// another program writes must not end a session from here either. The leave is `Quitting`,
+/// which the request's own end leaves standing, so it takes effect when the request returns.
+fn press_to_leave(session: &mut Session) {
+    if !session.key_arrived_alone {
+        session.note(t!(leave_not_pressed));
+    } else if !session.offered_to_leave {
+        session.offered_to_leave = true;
+    } else {
         session.quit();
     }
 }
@@ -22930,6 +22950,8 @@ mod tests {
         );
 
         one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        assert!(!session.is_quitting(), "one press left");
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
         assert!(session.is_quitting(), "ctrl-c did not leave");
     }
 
@@ -22978,10 +23000,68 @@ mod tests {
         assert!(!session.is_quitting(), "escape ended the session");
 
         goal_check_key(&mut session, ctrl('c'));
+        assert!(!session.is_quitting(), "one press left");
+        goal_check_key(&mut session, ctrl('c'));
         assert!(
             session.is_quitting(),
             "ctrl-c did not leave with the goal already off"
         );
+    }
+
+    /// The leave is made while the request is out and has to be standing when it comes back: the
+    /// request's own end used to put the status back to idle, and the loop that reads it after the
+    /// request never saw the press. Driven through each of the ends the loop reaches.
+    #[test]
+    fn a_leave_asked_for_during_a_request_survives_its_end() {
+        for end in [
+            (|session: &mut Session| session.end_aside(0)) as fn(&mut Session),
+            |session| session.end_run(0, None),
+        ] {
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+            one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+            one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+
+            end(&mut session);
+
+            assert!(
+                session.is_quitting(),
+                "the request's end took the leave back"
+            );
+        }
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.end_aside(0);
+        assert!(!session.is_quitting());
+        assert_eq!(session.status, Status::Idle, "an ordinary end is not idle");
+    }
+
+    /// Nothing on the ladder ends the session on one press, a request included, and a run of keys
+    /// is one press however many it holds.
+    #[test]
+    fn a_request_is_left_on_the_second_press_and_not_from_a_run() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+
+        session.key_arrived_alone = false;
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        assert!(!session.offered_to_leave, "a run of bytes armed the offer");
+        assert!(!session.is_quitting(), "a run of bytes left");
+
+        session.key_arrived_alone = true;
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        assert!(session.offered_to_leave, "the first press did not offer");
+        assert!(!session.is_quitting(), "one press left");
+
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        assert!(
+            !session.offered_to_leave,
+            "another key left the offer standing"
+        );
+        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+        assert!(!session.is_quitting(), "the offer outlived the key between");
     }
 
     /// With nothing sent there is nothing to search, and a panel saying so is a mode a person then
