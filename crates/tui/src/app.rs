@@ -1117,6 +1117,37 @@ fn title_state_during(message: &crate::remote_confirm::ToMain) -> crate::title::
     }
 }
 
+/// Whether `message` is an approval a manifest run's step puts to the person: drawn, and holding
+/// the worker until it is answered.
+fn manifest_step_asks(message: &crate::remote_confirm::ToMain) -> bool {
+    use crate::remote_confirm::ToMain;
+    matches!(
+        message,
+        ToMain::Write(_) | ToMain::Fetch(_) | ToMain::Vouch(_) | ToMain::Exposure(_)
+    )
+}
+
+/// Turn the title to waiting before a manifest run's step puts `message` to the person, when it
+/// does. Returns whether it asked, to be given to [`end_manifest_step`].
+fn begin_manifest_step(
+    message: &crate::remote_confirm::ToMain,
+    mark: impl FnOnce(crate::title::State),
+) -> bool {
+    let asks = manifest_step_asks(message);
+    if asks {
+        mark(crate::title::State::Waiting);
+    }
+    asks
+}
+
+/// Turn the title back to working once the approval [`begin_manifest_step`] reported has been
+/// answered.
+fn end_manifest_step(asks: bool, mark: impl FnOnce(crate::title::State)) {
+    if asks {
+        mark(crate::title::State::Working);
+    }
+}
+
 /// Say in the title what the session is doing. A title that cannot be written is not a reason to
 /// stop a turn or leave a question unasked.
 fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crate::title::State) {
@@ -6057,6 +6088,10 @@ fn manifest_animated(
             let Some(message) = run.progress(session, message) else {
                 return;
             };
+            // The approvals a step reaches are drawn and block the worker on the person, so the title
+            // says so for as long as they are open, as it does in a turn. The plan question marks
+            // itself, and the questions this mode cannot ask are refused undrawn.
+            let asks = begin_manifest_step(&message, |state| mark_title(terminal, state));
             match message {
                 // The one question this mode asks that a turn does not, and the reason the session
                 // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
@@ -6124,6 +6159,7 @@ fn manifest_animated(
                     }
                 }
             }
+            end_manifest_step(asks, |state| mark_title(terminal, state));
         });
 
         if !carrying_on {
@@ -13811,6 +13847,68 @@ mod tests {
             title_state_during(&ToMain::Streaming("text".into())),
             State::Working
         );
+    }
+
+    /// A manifest run's steps put writes, fetches, vouches and credential exposures to the person,
+    /// and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
+    /// messages that ask nothing must not.
+    #[test]
+    fn every_approval_a_manifest_step_draws_turns_the_title_to_waiting() {
+        use crate::remote_confirm::ToMain;
+        assert!(manifest_step_asks(&write_question("notes.md")));
+        assert!(manifest_step_asks(&fetch_question()));
+        assert!(manifest_step_asks(&ToMain::Vouch(
+            bravebot_agent::confirm::VouchRequest {
+                path: "notes.md".into(),
+                preview: String::new(),
+                truncated: false,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::Exposure(
+            bravebot_agent::confirm::ExposureRequest {
+                path: "notes.md".into(),
+                credentials: Vec::new(),
+            }
+        )));
+        assert!(!manifest_step_asks(&ToMain::Streaming("text".into())));
+        assert!(!manifest_step_asks(&ToMain::Ask(
+            bravebot_core::ask::Asking::default()
+        )));
+    }
+
+    /// The title a manifest run's step leaves is what the person finds a tab by, so the transition
+    /// the loop makes around each message is the one pinned here: waiting while an approval is open,
+    /// working once it is answered, and nothing written for a message that asks nothing.
+    #[test]
+    fn a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after() {
+        use crate::remote_confirm::ToMain;
+        use crate::title::State;
+
+        let marked_around = |message: &ToMain| {
+            let mut marked = Vec::new();
+            let asks = begin_manifest_step(message, |state| marked.push(state));
+            end_manifest_step(asks, |state| marked.push(state));
+            marked
+        };
+
+        assert_eq!(
+            marked_around(&write_question("notes.md")),
+            [State::Waiting, State::Working]
+        );
+        assert_eq!(
+            marked_around(&fetch_question()),
+            [State::Waiting, State::Working]
+        );
+        assert!(marked_around(&ToMain::Streaming("text".into())).is_empty());
+
+        let mut before = Vec::new();
+        let asks = begin_manifest_step(&write_question("notes.md"), |state| before.push(state));
+        assert_eq!(before, [State::Waiting], "waiting before the answer");
+        let mut after = Vec::new();
+        end_manifest_step(asks, |state| after.push(state));
+        assert_eq!(after, [State::Working], "working once it is answered");
     }
 
     /// The mode lasts one command. Leaving it on would send the next thing typed to a shell, which
