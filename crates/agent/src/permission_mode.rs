@@ -132,14 +132,6 @@ impl PermissionMode {
         self != Self::Bypass || auto_vetting
     }
 
-    /// Whether the check's word is what answers a prompt that would promote quarantined content:
-    /// bypassing with auto-vetting asked for. Nobody is shown the bytes there, and a word that is
-    /// not `safe` keeps them back, so what the planner is told about reading them can promise
-    /// neither a person's decision nor a release.
-    pub fn promotes_on_a_checks_word(self, auto_vetting: bool) -> bool {
-        self == Self::Bypass && auto_vetting
-    }
-
     /// Who the trail is told released one slot's bytes, which is not always who the prompt would
     /// have asked.
     ///
@@ -1273,28 +1265,6 @@ mod tests {
         }
         assert!(PermissionMode::Bypass.checks_before_promoting(true));
         assert!(!PermissionMode::Bypass.checks_before_promoting(false));
-    }
-
-    /// Only bypassing with screening asked for has a check's word answering in the person's place.
-    /// Auto-vetting alone leaves a prompt for any word but `safe`, so somebody can still be asked,
-    /// and bypassing alone makes no check at all, so a test of either one alone is told apart from
-    /// the pair here.
-    #[test]
-    fn a_checks_word_answers_for_the_person_only_when_bypassing_with_screening() {
-        assert!(PermissionMode::Bypass.promotes_on_a_checks_word(true));
-        assert!(!PermissionMode::Bypass.promotes_on_a_checks_word(false));
-        for asks in [
-            PermissionMode::Ask,
-            PermissionMode::AcceptEdits,
-            PermissionMode::Plan,
-        ] {
-            for screening in [false, true] {
-                assert!(
-                    !asks.promotes_on_a_checks_word(screening),
-                    "{asks:?} with screening {screening} was taken for a mode no person answers in"
-                );
-            }
-        }
     }
 
     /// The release nobody was asked about and no check was made about is the mode's own, and the

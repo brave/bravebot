@@ -705,19 +705,19 @@ argument of `run` alone. None of it names the mode, as no mode but plan mode is 
 ([MODE-3](../permission-modes.md#MODE-3)): a model told nobody is watching has been handed a reason
 to be bolder.
 
-Where permissions are bypassed with screening asked for ([CHECK-11](../vetting.md#CHECK-11)),
-nobody is shown what `read_output` releases and a run the mode approved vouches for no program, so
-the planner is told neither that the user is shown the output and decides nor that a vouch would make
-output visible. The check's word answers there, and a word that is not `safe` keeps the output back,
-so `read_output` is not a yes either. The planner is told that
-`read_output` hands the output back as text it can read, or reports that it was kept back, and
-nothing of what decided which, as [CHECK-9](../vetting.md#CHECK-9) requires. `read` is not applied
-there ([RUN-22](#RUN-22)), so a run's result for a call that passed `read: true` says it was not
-applied and that `read_output` is the way to see the output. A call that did not pass it is told
-nothing of `read`, and neither is a job's result nor the account the turn gives of an ended job,
-since `read` is an argument of `run` alone. None of it names the mode or a check, and none of it is
-said to a turn that was not offered `read_output` ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7)),
-which has no such tool to be pointed at.
+Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode, a check's word
+answers `read_output` whenever it is `safe` ([CHECK-12](../vetting.md#CHECK-12)), so the user is not
+shown that output and a vouch stops no asking. A word that is not `safe` puts the output to the user
+where permissions are asked and keeps it back where they are bypassed, so `read_output` is not a sure
+yes either. The planner is told that `read_output` hands the output back as text it can read, or
+reports that it was kept back, and nothing of what decided which, as
+[CHECK-9](../vetting.md#CHECK-9) requires. The words are the same in every mode, so they say nothing
+of which one it is in. `read` is not applied there ([RUN-22](#RUN-22)), so a run's result for a call
+that passed `read: true` says it was not applied and that `read_output` is the way to see the
+output. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
+the account the turn gives of an ended job, since `read` is an argument of `run` alone. None of it
+names the mode or a check, and none of it is said to a turn that was not offered `read_output`
+([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7)), which has no such tool to be pointed at.
 
 **Why.** [RUN-4](#RUN-4) is about who answered for the command, not about programs being
 unreadable, and a planner that reads it the second way stops running them. One did: told once that
@@ -728,13 +728,14 @@ batching it had been using and cost them a turn that produced nothing. The same 
 to a quarantined *read* for the same reason, and the run path never got it.
 
 **Why the screened case is worded apart.** Told that the user is shown the output and decides, where
-nobody is shown anything, a planner takes the reference to be out of its reach until a prompt
-returns, and none does. Told that `read_output` always hands the output back, it is told something
-false whenever the check objects. Saying that the output comes back or is kept back is true on both
-branches and gives the planner nothing about what decided, which is what
-[CHECK-9](../vetting.md#CHECK-9) keeps from it. A `read` that changed nothing and was not remarked
-on leaves a call that looks like a quarantined result with no explanation, and the planner repeats
-the call with `read: true` to try to see the output.
+a check releases it and nobody is shown anything, a planner takes the reference to be out of its
+reach until a prompt returns, and none does. In a mode that asks, a prompt returns only for a word
+that is not `safe`, so the claim is false for every output the check finds nothing in. Told that
+`read_output` always hands the output back, it is told something false whenever the check objects.
+Saying that the output comes back or is kept back is true on both branches and gives the planner
+nothing about what decided, which is what [CHECK-9](../vetting.md#CHECK-9) keeps from it. A `read`
+that changed nothing and was not remarked on leaves a call that looks like a quarantined result with
+no explanation, and the planner repeats the call with `read: true` to try to see the output.
 
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
 is not inferring it: the planner still cannot vouch for anything, and a person still answers.
@@ -745,9 +746,9 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides`
 `verified-by: bravebot_agent::turn::what_a_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person`
+`verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back`
 `verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back`
 `verified-by: bravebot_agent::turn::a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers`
-`verified-by: bravebot_agent::permission_mode::a_checks_word_answers_for_the_person_only_when_bypassing_with_screening`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
 `verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
@@ -1208,9 +1209,10 @@ before it, since an entry names its directory by path and holds nothing that ide
 directory standing there, where the startup answer holds its identity
 ([TRUST-23](../trust-map.md#TRUST-23)). A
 covered line is never put to that person again, so it can no longer be vouched for and its output
-stays quarantined: `read_output` still puts one result to them, which is [RUN-14](#RUN-14)'s advice,
-and the way back is to delete the line. The record is keyed by a directory, so a person working in
-two clones of one repository answers in each, and a session begun in a subdirectory is a different
+stays quarantined: `read_output` still puts one result to them where no screening is asked for,
+which is [RUN-14](#RUN-14)'s advice, and the way back is to delete the line. The record is keyed by
+a directory, so a person working in two clones of one repository answers in each, and a session
+begun in a subdirectory is a different
 directory from the one above it. That key is a directory's name with every character outside a small
 set mapped to `-`, which is lossy, so two directories whose names reduce to the same one are answered
 by one record; [sessions.md](../sessions.md) records the same cost of the session store, where it

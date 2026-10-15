@@ -100,8 +100,9 @@ enum ReadOutputIs {
     /// Bypassing with no screening asked for, in a turn offered `read_output`: the answer is yes, with
     /// nobody asked and no check made.
     Unasked,
-    /// Bypassing with screening asked for, in a turn offered `read_output`: nobody is asked, a check's
-    /// word answers, and a word that is not `safe` keeps the output back.
+    /// Screening asked for, in a turn offered `read_output`: a check's word answers whenever it is
+    /// `safe`, and any other word keeps the output back where nobody is asked or puts it to the person
+    /// where somebody is. Said the same in every mode, so it does not name one.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
     /// the output and decides.
@@ -2485,12 +2486,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
         tools::state_withheld_variables(&mut offered);
 
-        // Who answers a read of what a run printed: nobody in a bypass with no screening, a check in
-        // one with screening, and a person elsewhere. The first two hold only in a turn offered
-        // read_output: a definition or a delegate left without it has no release for `read` to make a
-        // round early, and making one would widen what it was confined to, and it has no tool to be
-        // pointed at. The mode is read once for each answer and asked again wherever it is used, since
-        // the person can leave bypassing while the turn runs.
+        // Who answers a read of what a run printed: nobody in a bypass with no screening, a check's
+        // word wherever screening is asked for, and a person elsewhere. The first two hold only in a
+        // turn offered read_output: a definition or a delegate left without it has no release for
+        // `read` to make a round early, and making one would widen what it was confined to, and it
+        // has no tool to be pointed at. The mode is read once for each answer and asked again
+        // wherever it is used, since the person can leave bypassing while the turn runs.
         let offers_read_output = offered
             .iter()
             .any(|tool| tool.function.name == "read_output");
@@ -2500,7 +2501,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 ReadOutputIs::Asked
             } else if !mode.checks_before_promoting(task.auto_vetting) {
                 ReadOutputIs::Unasked
-            } else if mode.promotes_on_a_checks_word(task.auto_vetting) {
+            } else if task.auto_vetting {
                 ReadOutputIs::ByACheck
             } else {
                 ReadOutputIs::Asked
@@ -4513,14 +4514,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // plan mode tells the planner which one it is in, since a model told
                                     // nobody is watching has been handed a reason to be bolder.
                                     //
-                                    // Bypassing with screening asked for is neither of those. Nobody is
-                                    // shown the output and a run the mode approved vouches for nothing,
-                                    // so neither half above is said, but a check's word answers and a
-                                    // word that objects keeps the output back, so read_output is not a
+                                    // Screening asked for is neither of those, in any mode. A check's
+                                    // word answers whenever it is safe, so the user is not shown that
+                                    // output and a vouch stops no asking, and a word that objects keeps
+                                    // the output back or puts it to the person, so read_output is not a
                                     // yes either. It is said to come back or be kept back, and nothing
-                                    // more about what decides which (CHECK-9). A `read` asked for there
-                                    // changed nothing, which is said, so the call does not read as a
-                                    // quarantined result with no explanation.
+                                    // more about what decides which (CHECK-9), in the same words in
+                                    // every mode. A `read` asked for there changed nothing, which is
+                                    // said, so the call does not read as a quarantined result with no
+                                    // explanation.
                                     //
                                     // `read` is an argument of run alone, so it is offered on a run's
                                     // result and not on a job's. It is not offered again where it was
