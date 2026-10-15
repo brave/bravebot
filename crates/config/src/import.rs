@@ -481,7 +481,7 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
                     .as_ref()
                     .is_some_and(|can| can.iter().any(|capability| capability == TOOLS))
         })
-        .max_by_key(|model| moment(&model.modified_at));
+        .max_by_key(|model| crate::time::rfc3339(&model.modified_at));
     let Some(chosen) = chosen else {
         return ollama_left(host, Reason::NoToolModel, Some(host));
     };
@@ -524,91 +524,6 @@ fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
             reason,
         }],
     }
-}
-
-/// An RFC 3339 time as seconds and nanoseconds since the epoch, or `None` where it is not one.
-///
-/// Compared as a time rather than as text, because each carries its own offset: a model pulled
-/// later in New York can read as earlier than one pulled in Paris. Anything unreadable is `None`,
-/// which sorts before every time.
-fn moment(text: &str) -> Option<(i64, u32)> {
-    let bytes = text.as_bytes();
-    let digits = |range: std::ops::Range<usize>| {
-        let part = text.get(range)?;
-        part.bytes()
-            .all(|byte| byte.is_ascii_digit())
-            .then(|| part.parse::<i64>().ok())
-            .flatten()
-    };
-    if [4, 7].iter().any(|&at| bytes.get(at) != Some(&b'-'))
-        || !matches!(bytes.get(10), Some(b'T' | b't'))
-        || [13, 16].iter().any(|&at| bytes.get(at) != Some(&b':'))
-    {
-        return None;
-    }
-    let (year, month, day) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
-    let (hour, minute, second) = (digits(11..13)?, digits(14..16)?, digits(17..19)?);
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-
-    let mut at = 19;
-    let mut nanos = 0;
-    if bytes.get(at) == Some(&b'.') {
-        let start = at + 1;
-        at = start;
-        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-            at += 1;
-        }
-        let fraction = text
-            .get(start..at)
-            .filter(|fraction| !fraction.is_empty())?;
-        let mut padded: String = fraction.chars().take(9).collect();
-        while padded.len() < 9 {
-            padded.push('0');
-        }
-        nanos = padded.parse::<u32>().ok()?;
-    }
-    let offset = match text.get(at..)? {
-        "Z" | "z" => 0,
-        zone => {
-            let sign = match zone.as_bytes().first() {
-                Some(b'+') => 1,
-                Some(b'-') => -1,
-                _ => return None,
-            };
-            if zone.len() != 6 || zone.as_bytes()[3] != b':' {
-                return None;
-            }
-            let (hours, minutes) = (digits(at + 1..at + 3)?, digits(at + 4..at + 6)?);
-            if hours > 23 || minutes > 59 {
-                return None;
-            }
-            sign * (hours * 3600 + minutes * 60)
-        }
-    };
-    let days = days_from_civil(year, month, day);
-    Some((
-        days * 86_400 + hour * 3600 + minute * 60 + second - offset,
-        nanos,
-    ))
-}
-
-/// Days since 1970-01-01 for a civil date: Howard Hinnant's `days_from_civil`, which shifts the
-/// epoch to 0000-03-01 so leap days fall at the end of the year and the arithmetic needs no table.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 /// A parse of a source file, which clears itself when it goes: a source may hold a key.

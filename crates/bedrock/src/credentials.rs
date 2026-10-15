@@ -649,57 +649,14 @@ pub fn decode(bytes: &mut [u8]) -> Result<Credentials, CredentialError> {
     })
 }
 
-/// The epoch seconds in an `Expiration`, or `None` if it is not the shape this reads.
+/// The epoch seconds in an `Expiration`, or `None` if it is not an RFC 3339 time.
 ///
-/// The CLI emits RFC 3339 in UTC, and only the fixed-width prefix through the seconds is read:
-/// `YYYY-MM-DDTHH:MM:SS`. Anything after it is a zone suffix or a fraction, and neither changes
-/// which second this is to a useful precision. Parsed by hand for the reason the signing timestamp
-/// is formatted by hand, and an unparsable value is not an error anywhere: it means a caller
-/// re-asks the CLI rather than trusting a date it could not read.
+/// The CLI emits RFC 3339 in UTC, read by [`bravebot_config::time::rfc3339`], which applies a zone
+/// offset where one is written and refuses a value with no zone or with text after it. An
+/// unparsable value is not an error anywhere: it means a caller re-asks the CLI rather than
+/// trusting a date it could not read.
 fn expiry_seconds(text: &str) -> Option<u64> {
-    let digits = |range: std::ops::Range<usize>| text.get(range)?.parse::<i64>().ok();
-
-    // Rejected rather than skipped over: a value whose separators are somewhere else is not the
-    // format this claims to read, and guessing at it would produce a confidently wrong date.
-    if [4, 7]
-        .iter()
-        .any(|&at| text.as_bytes().get(at) != Some(&b'-'))
-        || text.as_bytes().get(10) != Some(&b'T')
-        || [13, 16]
-            .iter()
-            .any(|&at| text.as_bytes().get(at) != Some(&b':'))
-    {
-        return None;
-    }
-
-    let (year, month, day) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
-    let (hour, minute, second) = (digits(11..13)?, digits(14..16)?, digits(17..19)?);
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-
-    let days = days_from_civil(year, month, day);
-    u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second).ok()
-}
-
-/// Days since 1970-01-01 for a civil date.
-///
-/// Howard Hinnant's `days_from_civil`, the inverse of the conversion the signing crate uses to
-/// format a timestamp: the epoch shifts to 0000-03-01 so leap days fall at the end of the year and
-/// the arithmetic needs no table.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    bravebot_config::time::rfc3339(text).and_then(|(seconds, _)| u64::try_from(seconds).ok())
 }
 
 /// The first line of a program's stderr, bounded.
@@ -1237,6 +1194,18 @@ mod tests {
         let known = KnownGood::default();
         known.keep(Some("work"), None);
         assert!(!known.holds(Some("work"), 0));
+    }
+
+    /// The CLI states UTC, but a value in another zone names a different instant. Read as UTC, a
+    /// `+09:00` expiry is nine hours late and keeps a session marked good after it ran out. A value
+    /// that states no zone is not read, so the CLI is asked again.
+    #[test]
+    fn an_expiry_in_another_zone_is_read_as_the_instant_it_names() {
+        assert_eq!(
+            expiry_seconds("2026-09-05T12:04:02+09:00"),
+            Some(1_788_577_442)
+        );
+        assert_eq!(expiry_seconds("2026-09-05T03:04:02"), None);
     }
 
     /// An unreadable expiry must not become a confident date. Read as one, a garbled value either
