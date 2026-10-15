@@ -20,6 +20,7 @@ issue number it was given in DIR/filed.json, which `record` reads.
 
 import argparse
 import datetime
+import importlib.util
 import json
 import re
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -29,6 +30,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+
+_shared = importlib.util.spec_from_file_location("work_dir", HERE.parents[1] / "work_dir.py")
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
 LEDGER = "docs/peer-advisories-vetted"
 RELEASE_BLOCKING = "release-blocking"
 REPO = "brave/bravebot"
@@ -362,7 +368,7 @@ def pending(args):
         "advisories": {a["ghsa_id"]: a for a in chosen},
         "vet": vet,
     }
-    (work / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    workdir.write_manifest(work, manifest)
 
     vetted = sum(1 for ghsa in advisories if ledger.get(ghsa, {}).get("verdict") in FINAL)
     print(
@@ -448,9 +454,9 @@ def load_verify(path, ghsa):
 
 
 def manifest_of(work):
-    manifest = read_json(Path(work) / "manifest.json")
+    manifest = read_json(workdir.manifest_path(work))
     if manifest is None:
-        raise Problem(f"{work} has no manifest.json; run pending first")
+        raise Problem(f"{work} has no {workdir.MANIFEST}; run pending first")
     return manifest
 
 

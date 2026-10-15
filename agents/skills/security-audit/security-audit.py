@@ -52,6 +52,12 @@ _spec = importlib.util.spec_from_file_location(
 mechanics = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mechanics)
 
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
 ERROR = "error"
 WARNING = "warning"
 
@@ -3189,8 +3195,7 @@ def main():
             f"{len(found['releases'])} releases, {len(lanes)} lanes",
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings), file=sys.stderr)
     if args.json:

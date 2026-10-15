@@ -41,6 +41,7 @@ def _load(name, path):
 
 specs = _load("check_spec_specs", HERE.parent / "check-spec" / "specs.py")
 drafting = _load("check_spec_draft_issues", HERE.parent / "check-spec" / "draft-issues.py")
+workdir = _load("work_dir", HERE.parents[1] / "work_dir.py")
 
 LANES = ("unreferenced", "test-only", "allowances", "duplicates", "literals", "size")
 PREFIX = {
@@ -1116,8 +1117,7 @@ def prepare(root, lanes, prefixes, work_dir, limit, size_limit):
             f"{lane}: {len(candidates)} candidates for {len(prompts)} reviewers"
             + (f", {entry['left_out']} more past the cap" if entry["left_out"] else "")
         )
-    path = work_dir / "manifest.json"
-    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = workdir.write_manifest(work_dir, manifest)
     return result, path
 
 
@@ -1304,14 +1304,6 @@ def render_drafts(drafts, out):
     return "\n".join(lines)
 
 
-def read_manifest(work_dir):
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     command = argv.pop(0) if argv and argv[0] in ("prepare", "collect", "draft") else "prepare"
@@ -1343,7 +1335,7 @@ def main(argv=None):
         print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest)}))
         return 0
 
-    manifest = read_manifest(args.work_dir)
+    manifest = workdir.read_manifest(args.work_dir)
     if manifest is None:
         return 2
     os.chdir(manifest["root"])
