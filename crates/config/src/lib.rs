@@ -35,6 +35,7 @@ pub mod scrub;
 mod settings;
 #[cfg(test)]
 mod testutil;
+pub mod time;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use run_network::{
