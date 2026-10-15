@@ -369,6 +369,48 @@ def body_start(text, start):
     return len(text)
 
 
+ITEM = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:(?:unsafe|async|const|extern(?:\s+\"[^\"]*\")?)\s+)*"
+    r"(?:fn|mod|use|impl|struct|enum|trait|type|static|const|union|macro_rules!)\b"
+)
+ATTRIBUTES = re.compile(r"(?:\s*#!?\[[^\]]*\])*\s*")
+FIELD = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?[A-Za-z_]\w*\s*(?::(?!:)|,)")
+
+
+def field_end(text, start):
+    """The index just past a field that begins at `start`: its `,` outside parentheses, brackets,
+    braces and angle brackets, or the end of the text before the `}` closing the struct it is in."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif c == "<":
+            depth += 1
+        elif c == ">" and text[i - 1] not in "-=":
+            depth = max(depth - 1, 0)
+        elif c == "," and depth == 0:
+            return i + 1
+    return len(text)
+
+
+def attributed_end(bare, after):
+    """The index where the item or field attributed by an attribute ending at `after` ends, and
+    whether it is a `{ }` block. A field of a struct, or of a struct literal, ends at its `,` and
+    the next `{` belongs to something else; anything else runs to its body's end or its `;`."""
+    first = ATTRIBUTES.match(bare, after).end()
+    if FIELD.match(bare, first) and not ITEM.match(bare, first):
+        return field_end(bare, first), False
+    at = body_start(bare, after)
+    if at < len(bare) and bare[at] == "{":
+        return matching_brace(bare, at), True
+    return at + 1, False
+
+
 def rust_modules(bare):
     """The lines of items under `#[cfg(test)]`, or under a `cfg` that needs `test` to be set, and
     the names of the `mod name;` declarations in the file: every one, and those under such a `cfg`.
@@ -379,11 +421,8 @@ def rust_modules(bare):
         condition = found.group(1)
         if not re.search(r"\btest\b", condition) or re.search(r"not\s*\(\s*test\b", condition):
             continue
-        at = body_start(bare, found.end())
-        if at < len(bare) and bare[at] == "{":
-            end = matching_brace(bare, at)
-        else:
-            end = at + 1
+        end, braced = attributed_end(bare, found.end())
+        if not braced:
             declared = MODULE.search(bare, found.end(), end)
             if declared:
                 test_modules.append(declared.group(1))
