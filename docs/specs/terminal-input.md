@@ -1007,8 +1007,8 @@ again along with Escape and Ctrl-C. It opens on the newest prompt, seeded with w
 the person typed into the box, and with nothing where that line is a prompt walked back to: the
 history put that one there whole, and a search looking for it answers with it alone. While it is open
 every letter narrows the list rather than reaching the box, and each word typed has to appear
-somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S swaps between every
-prompt and the ones sent from this workspace, and backspacing past the start closes the search as the
+somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S cycles the scope through
+everywhere, this project and this session and back to everywhere, and backspacing past the start closes the search as the
 scroller's does. The chord is on the key list (INPUT-13), and in the border of the box while an older
 prompt is being walked back to, which is the moment somebody has shown they want one, except where
 that border is too narrow to hold it beside which prompt is being shown (INPUT-31).
@@ -1056,6 +1056,11 @@ those the same way.
 `verified-by: bravebot_tui::history_search::backspacing_widens_the_list`
 `verified-by: bravebot_tui::history_search::the_scope_narrows_to_the_prompts_sent_from_this_workspace`
 `verified-by: bravebot_tui::history_search::a_prompt_from_before_workspaces_were_kept_is_in_the_wide_list_only`
+`verified-by: bravebot_tui::history_search::the_scope_cycles_everywhere_project_session_and_back`
+`verified-by: bravebot_tui::history_search::the_session_scope_holds_this_sessions_prompts_and_nothing_else`
+`verified-by: bravebot_tui::history_search::an_empty_scope_is_skipped_and_one_scope_left_does_nothing`
+`verified-by: bravebot_tui::history_search::changing_the_scope_puts_the_cursor_on_the_newest_match`
+`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
 
 <a id="INPUT-20"></a>
 ### INPUT-20: the list says which prompt each row is
@@ -1065,7 +1070,12 @@ how long ago that prompt was sent, and nothing where the entry predates times be
 prompt under the cursor is drawn in full beside the list, with a word for how many lines did not
 fit; where the terminal is too narrow for two columns the list is what is kept. A window over more
 matches than fit says so, the scope in force is named, and a search matching nothing says that
-rather than showing an empty panel.
+rather than showing an empty panel. The scope is one of everywhere, this project and this session:
+this project holds the prompts sent from the workspace the session runs in, an entry recorded with
+no workspace is in everywhere only, and this session holds the prompts this process sent and the
+ones a resumed record holds. Up walks the same three scopes (INPUT-40), and the two share one
+definition of which entries each holds. A scope holding nothing is skipped by the cycle, and with
+one scope left Ctrl-S does nothing. The key line under the search says the chord cycles the scope.
 
 **Why.** A row is one line of what may be a paragraph, and two prompts about the same thing begin
 alike: what tells them apart is the rest of the text and when each was sent. An age is the one thing
@@ -1926,9 +1936,9 @@ Block-wise selection is a known cost rather than a clause.
 ### INPUT-31: Ctrl-S on a prompt walked back to searches this workspace instead
 
 While the box holds a prompt reached by walking back through the history, Ctrl-S opens the search over
-the prompts sent, with the scope already narrowed to this workspace: the scope the search's own Ctrl-S
-selects (INPUT-19). It is that search in every other respect, opened on the newest match with nothing
-typed into it, closed the same way, and the wide list is one more press of the same key from inside it.
+the prompts sent, with the scope already on this project: the scope the search's own Ctrl-S
+cycles to after everywhere (INPUT-19). It is that search in every other respect, opened on the newest match with nothing
+typed into it, closed the same way, and the other scopes are further presses of the same key from inside it.
 On any other line the key still puts the line away or brings one back (INPUT-17), and a line put away
 earlier is still there afterwards. The border of the box names this chord beside Ctrl-R while an older
 prompt is being walked back to, and gives the two up one at a time where the row will not hold them
@@ -1954,23 +1964,28 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-40"></a>
-### INPUT-40: Up walks every stored prompt, and the scope chord narrows it to this session's
+### INPUT-40: Up walks every stored prompt, and the scope chord cycles it through this project and this session
 
 Up and Down walk every stored prompt, from every session and workspace, and Up stops at the oldest
-of them (INPUT-18). While a sent prompt is on screen and this session has sent one, the scope
-chord, Ctrl-N by default, walks only the prompts this session sent, and the ones its record holds
-when it was resumed, staying on the prompt on screen, and pressed again goes back to every stored
-prompt. Where the prompt on screen is not this session's, the narrow scope lands on the newest of
-this session's before it, and failing that the oldest of them. The border of the box names the
-scope with the position, `All 78/83` or `This session 2/3`, and the chord that changes it. The
-scope stays where the person put it: ending the walk, editing the line and sending do not change
+of them (INPUT-18). While a sent prompt is on screen, the scope
+chord, Ctrl-N by default, cycles the walk through every stored prompt, the prompts sent from this
+workspace, and the prompts this session sent and the ones its record holds when it was resumed,
+and back to every stored prompt, staying on the prompt on screen where it is in the new scope.
+Where the prompt on screen is not in the new scope, the walk lands on the newest prompt of the
+new scope before it, and failing that the oldest of it. An entry stored with no workspace is in
+every stored prompt only. The search shares the three scopes and the definition of what each
+holds (INPUT-19). The border of the box names the scope with the position, `All 78/83`,
+`This project 12/20` or `This session 2/3`, and the chord that changes it. The scope
+stays where the person put it: ending the walk, editing the line and sending do not change
 it. `/clear` starts a new session's own prompts and puts the scope back on every stored prompt,
 and a prompt queued during a turn counts as sent from the moment it is queued (INPUT-10). The
 stored file is unchanged: which prompts are this session's is known from what this process sent
 and from the turns of a resumed record.
 
-Where this session has sent nothing, the walk is over every stored prompt, the chord is not
-offered on the border, and pressing it does nothing. Where the history has nothing to switch, in a
+A scope that holds nothing is skipped by the cycle: where this session has sent nothing the
+session scope is skipped, and where no stored prompt belongs to this workspace the project scope
+is. Where one scope is left, the chord is not offered on the border and pressing it does nothing.
+Withdrawing the last prompt of the scope in force puts the walk back on every stored prompt. Where the history has nothing to switch, in a
 line being typed or with nothing recalled, the chord is not typed and does nothing, except that a
 chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Alt-Left and
 Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
@@ -1986,13 +2001,22 @@ prompts through the search (INPUT-19).
 is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
 away for a person who wants only this conversation's last prompts. The scope holds once chosen,
 because a person who narrowed it to this conversation would otherwise be put back on last week's
-prompts by the next send. It is not offered before this session has sent a prompt, since the chord
-would have nothing to narrow to. The switch is a letter chord because a letter chord reaches the
+prompts by the next send. A scope with nothing in it is not offered, since the chord would
+have nothing to move to. The switch is a letter chord because a letter chord reaches the
 app in every terminal, while a Ctrl arrow chord may be taken by the system (Mission Control on
-macOS) and never arrive. It is one chord that toggles because a pair of directions is two things
-to remember.
+macOS) and never arrive. It is one chord that cycles because a pair of directions is two things
+to remember, and the search answers to the same three scopes so that what a person learns in
+one carries to the other.
 
 `verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::history::the_scope_cycles_everywhere_project_session_and_back`
+`verified-by: bravebot_tui::history::a_scope_switch_before_every_prompt_of_the_scope_lands_on_the_oldest`
+`verified-by: bravebot_tui::history::a_prompt_with_no_recorded_project_is_in_the_everywhere_scope_only`
+`verified-by: bravebot_tui::history::a_scope_with_nothing_in_it_is_skipped`
+`verified-by: bravebot_tui::history::with_one_scope_left_the_chord_is_not_offered_and_does_nothing`
+`verified-by: bravebot_tui::history::the_project_scope_holds_across_the_walk_and_clearing_puts_it_back`
+`verified-by: bravebot_tui::history::withdrawing_the_last_prompt_of_this_project_puts_the_scope_back_on_everywhere`
+`verified-by: bravebot_tui::render::the_border_names_all_three_scopes_and_the_one_the_chord_moves_to`
 `verified-by: bravebot_tui::app::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
 `verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`

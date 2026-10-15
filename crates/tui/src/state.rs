@@ -2058,6 +2058,7 @@ impl Session {
     /// site rather than a side effect of constructing a session.
     pub fn in_workspace(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.workspace = root.into();
+        self.history.set_project(self.project());
         self
     }
 
@@ -2074,6 +2075,7 @@ impl Session {
     /// names that name nothing, or worse, name a different file of the same name.
     pub fn now_in_workspace(&mut self, root: impl Into<std::path::PathBuf>) {
         self.workspace = root.into();
+        self.history.set_project(self.project());
     }
 
     /// Start under the mode a `/resume` carried over, which is the one the person last chose.
@@ -2202,6 +2204,7 @@ impl Session {
     pub fn with_stored_history(mut self) -> Self {
         self.history =
             crate::history::History::from_entries(bravebot_session::store::load_history());
+        self.history.set_project(self.project());
         self.persist = true;
         self
     }
@@ -5520,18 +5523,10 @@ impl Session {
         }
     }
 
-    /// The scope chord on a sent prompt in this session's scope: walk every stored prompt, staying
-    /// on the one on screen.
-    pub fn widen_history(&mut self) {
-        if let Some(prompt) = self.history.widen() {
-            self.set_input(prompt);
-        }
-    }
-
-    /// The scope chord on a sent prompt in the wide scope, where this session has sent one: walk
-    /// this session's prompts only.
-    pub fn narrow_history(&mut self) {
-        if let Some(prompt) = self.history.narrow() {
+    /// The scope chord on a sent prompt: walk the next scope that holds a prompt, staying on the
+    /// one on screen where it is in that scope.
+    pub fn cycle_history_scope(&mut self) {
+        if let Some(prompt) = self.history.cycle() {
             self.set_input(prompt);
         }
     }
@@ -8124,7 +8119,7 @@ impl Session {
     /// Empty when nothing is open, so a caller need not ask twice.
     pub fn history_matches(&self) -> Vec<&bravebot_session::store::Entry> {
         match &self.history_search {
-            Some(search) => search.matching(self.history.entries(), self.project().as_deref()),
+            Some(search) => search.matching(&self.history),
             None => Vec::new(),
         }
     }
@@ -8166,10 +8161,11 @@ impl Session {
         }
     }
 
-    /// Swap between every prompt and the ones sent from this workspace.
+    /// Move the search to the next of everywhere, this project and this session that holds a
+    /// prompt.
     pub fn scope_history_search(&mut self) {
         if let Some(search) = &mut self.history_search {
-            search.scope();
+            search.cycle(&self.history);
         }
     }
 
@@ -14571,7 +14567,7 @@ mod tests {
             bravebot_session::store::Entry::sent("mine before", None),
             bravebot_session::store::Entry::sent("somebody else's", None),
         ]);
-        assert!(!s.history.can_narrow());
+        assert_eq!(s.history.next_scope(), None);
         s.replay(
             &conversation,
             "a title",
@@ -14585,8 +14581,8 @@ mod tests {
         );
         s.recall_older();
         assert_eq!(s.input, "somebody else's");
-        assert!(s.history.can_narrow());
-        s.narrow_history();
+        assert_eq!(s.history.next_scope(), Some(crate::history::Scope::Session));
+        s.cycle_history_scope();
         assert_eq!(s.input, "mine before");
         s.recall_older();
         assert_eq!(

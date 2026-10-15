@@ -1346,9 +1346,10 @@ picker-service-bedrock = Bedrock, votre compte AWS
 history-search-title = Rechercher un message
 history-scope-everywhere = partout
 history-scope-here = ce projet
+history-scope-session = cette session
 history-search-placeholder = Filtrer l'historique…
 history-search-keys =
-    ↑↓ pour se déplacer  ·  Entrée pour utiliser  ·  { $scope } pour la portée  ·  Échap pour annuler
+    ↑↓ pour se déplacer  ·  Entrée pour utiliser  ·  { $scope } pour changer la portée  ·  Échap pour annuler
 history-search-nothing-matches = aucune correspondance
 history-search-more-lines =
     { $count ->
@@ -1362,9 +1363,11 @@ history-age-days = il y a { $count } j
 history-age-months = il y a { $count } mois
 input-history-position = { $scope } { $index }/{ $total }
 input-history-this-session = Cette session
+input-history-this-project = Ce projet
 input-history-all = Tout
 input-history-widen = { $chord } tous les prompts
 input-history-narrow = { $chord } cette session
+input-history-project = { $chord } prompts du projet
 input-history-search = { $chord } pour rechercher
 input-history-scope = { $chord } ce projet
 resume-heading = Reprendre une session

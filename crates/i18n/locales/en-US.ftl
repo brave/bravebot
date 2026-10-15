@@ -1541,8 +1541,9 @@ picker-service-bedrock = Bedrock, your AWS account
 history-search-title = Search prompts
 history-scope-everywhere = everywhere
 history-scope-here = this project
+history-scope-session = this session
 history-search-placeholder = Filter history…
-history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to scope  ·  Esc to cancel
+history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to cycle the scope  ·  Esc to cancel
 history-search-nothing-matches = nothing matches that
 history-search-more-lines =
     { $count ->
@@ -1560,9 +1561,11 @@ history-age-months = { $count }mo ago
 # in the box, of how many.
 input-history-position = { $scope } { $index }/{ $total }
 input-history-this-session = This session
+input-history-this-project = This project
 input-history-all = All
 input-history-widen = { $chord } all prompts
 input-history-narrow = { $chord } this session
+input-history-project = { $chord } project prompts
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
