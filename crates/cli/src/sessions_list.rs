@@ -66,20 +66,22 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `--json` and `--limit <n>`, in either order. A limit of zero, a limit that is not a number and
-/// any other word are refused rather than guessed at.
+/// `--json` and `--limit <n>`, in either order. A limit of zero, a limit that is not a number, a
+/// repeated flag and any other word are refused rather than guessed at.
 fn read(words: &[String]) -> Option<Request> {
     let mut request = Request {
         as_json: false,
         limit: ROWS,
     };
+    let mut limit_given = false;
     let mut rest = words.iter();
     while let Some(word) = rest.next() {
         match word.as_str() {
             "--json" if !request.as_json => request.as_json = true,
-            "--limit" => {
+            "--limit" if !limit_given => {
                 let count: usize = rest.next()?.parse().ok()?;
                 request.limit = (count > 0).then_some(count)?;
+                limit_given = true;
             }
             _ => return None,
         }
@@ -195,6 +197,7 @@ mod tests {
             "--limit 0",
             "--limit two",
             "--limit -1",
+            "--limit 5 --limit 6",
             "--json --json",
             "--all",
             "list",
@@ -221,6 +224,46 @@ mod tests {
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
             ["here", "also-here"]
+        );
+    }
+
+    /// `directory` is a `String`, so a directory whose name is not UTF-8 can only be recorded as
+    /// the lossy rendering `Path::display` gives it, the same text an ordinary, validly-named
+    /// directory could be called. Comparing on that rendering is still the strongest comparison
+    /// available on top of it, and this is its edge: the exact bytes of a directory that is not
+    /// UTF-8 match nothing, since no `String` holds them, and the valid name its rendering spells
+    /// matches whatever was recorded under either one. `/w/one` and `/w/two` above pass under a
+    /// byte comparison and a lossy one alike, so they could not have caught `here` doing the lossy
+    /// one; a name that is not UTF-8 beside the name its own rendering spells can.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let not_utf8 = PathBuf::from(OsStr::from_bytes(b"/w/\xff"));
+        let rendering = not_utf8.to_string_lossy().into_owned();
+        assert_ne!(
+            rendering.as_bytes(),
+            not_utf8.as_os_str().as_bytes(),
+            "the fixture is not actually lossy"
+        );
+        let spelled = PathBuf::from(&rendering);
+        let listed = [session("recorded-as-the-rendering", &rendering)];
+
+        assert!(
+            here(&listed, &not_utf8).is_empty(),
+            "a directory that is not UTF-8 was matched by its own exact bytes, which nothing \
+             recorded under it can hold"
+        );
+        assert_eq!(
+            here(&listed, &spelled)
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            ["recorded-as-the-rendering"],
+            "the ordinary, validly-named directory the rendering spells was not matched by its \
+             own exact name"
         );
     }
 

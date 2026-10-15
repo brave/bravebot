@@ -1689,9 +1689,18 @@ interactive and `sessions search` needs text to find. Filtering on the recorded 
 two directories sharing a store from showing each other's sessions, which the picker does not do
 today.
 
+**Known cost.** The path inside a record is itself a lossy rendering of the directory it was
+written in, the same `Path::display` text an ordinary, validly-named directory could be called
+([SESSION-28](sessions.md#SESSION-28)). A directory whose name is not valid UTF-8 is told from one
+with that rendering as its real name only up to the rendering: the first's own exact bytes match no
+record, since no record can hold them, and the second's exact name matches whatever either one
+wrote. Telling the two apart would need a record to hold the exact bytes of a directory that is not
+UTF-8, which nothing here does yet.
+
 `verified-by: bravebot_cli::sessions_list::the_words_say_how_many_rows_and_whether_they_are_json`
 `verified-by: bravebot_cli::sessions_list::a_muddled_request_is_refused_rather_than_guessed_at`
 `verified-by: bravebot_cli::sessions_list::a_session_recorded_in_another_directory_sharing_the_store_is_not_listed`
+`verified-by: bravebot_cli::sessions_list::a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering`
 `verified-by: bravebot_cli::sessions_list::a_manifest_run_is_listed_and_says_it_cannot_be_continued`
 `verified-by: bravebot_cli::sessions_list::a_row_says_the_front_end_that_wrote_it_and_the_branch_it_was_on`
 `verified-by: bravebot_cli::sessions_list::a_title_reaches_a_row_with_nothing_a_terminal_would_act_on`
