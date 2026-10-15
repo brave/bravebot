@@ -944,37 +944,12 @@ pub fn definition_named(
 ///
 /// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
 /// paste asks for and nothing else.
+///
+/// The steps are [`paste_into_box`]'s, the ones [`handle_paste`] takes after it drops a wiped
+/// handoff, which only a prompt at rest can hold. Mid-turn is when the delegate view is open, since
+/// a delegate only runs inside a turn, so a paste while watching reaches this handler.
 pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
-    // The line is the scroller's to leave alone, and the delegate view's, the picker's and the
-    // prompt search's: a paste is not a key, so it arrives from the terminal whatever mode is open
-    // and the guard that holds the box still for a keystroke never sees it. Mid-turn is when the
-    // view is open, since a delegate only runs inside a turn, so this is the path a paste while
-    // watching actually takes. Nothing is said about it either way: the scroller and the view
-    // have the whole screen but their footer, and a sentence drawn nowhere is no answer.
-    if session.scrolling()
-        || session.watching().is_some()
-        || session.picking().is_some()
-        || session.searching_history()
-    {
-        return Action::None;
-    }
-    // A picture the terminal could not carry arrives as a paste of nothing, mid-turn exactly as at
-    // rest, and the answer is the same one: go and read the clipboard. Before the drop check, for
-    // the reason the idle path says it before anything looks at the text, since an empty paste is
-    // no more a drop than it is a prompt.
-    //
-    // Without this arm the empty paste reached `paste_text`, which writes nothing and says
-    // nothing, so a screenshot pasted while the turn it was about was running went nowhere and
-    // the key that would have carried it was never named.
-    if text.is_empty() {
-        let chord = session.bindings().paste_name();
-        session.note_once(t!(paste_arrived_empty, chord = chord));
-        return Action::Paste;
-    }
-    if !session.drop_files(text) {
-        session.paste_text(text);
-    }
-    Action::Redraw
+    paste_into_box(session, text)
 }
 
 /// Carry out what a key or a paste answered with while a turn is running.
@@ -1058,11 +1033,19 @@ fn pump_terminal(
 /// picture does not need telling every time they use the other one.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     session.drop_a_wiped_handoff();
+    paste_into_box(session, text)
+}
+
+/// The steps a paste takes at rest and mid-turn alike, kept in one place so the two cannot disagree
+/// about them.
+fn paste_into_box(session: &mut Session, text: &str) -> Action {
     // The line is the scroller's to leave alone, and the delegate view's, the picker's and the
     // prompt search's: a paste is not a key, so it arrives from the terminal whatever mode is open
-    // and the guard that holds the box still for a keystroke never sees it. Before the empty case
-    // as much as the rest, because that one answers with the clipboard read that would put a
-    // picture in a box nobody can see, and spends a hint said once a session.
+    // and the guard that holds the box still for a keystroke never sees it. Nothing is said about
+    // it either way: the scroller and the view have the whole screen but their footer, and a
+    // sentence drawn nowhere is no answer. Before the empty case as much as the rest, because that
+    // one spends a hint said once a session and answers with the clipboard read that would put a
+    // picture in a box nobody can see.
     if session.scrolling()
         || session.watching().is_some()
         || session.picking().is_some()
@@ -1070,9 +1053,10 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     {
         return Action::None;
     }
-    // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since
-    // the terminal hands over text and there is none. Said before anything else looks at the
-    // text, because an empty paste is no more a drop than it is a prompt.
+    // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since the
+    // terminal hands over text and there is none. Said before anything else looks at the text,
+    // because an empty paste is no more a drop than it is a prompt, and left to `paste_text` it
+    // would write nothing and say nothing, so the key that carries a picture would never be named.
     if text.is_empty() {
         let chord = session.bindings().paste_name();
         session.note_once(t!(paste_arrived_empty, chord = chord));
@@ -15049,6 +15033,26 @@ mod tests {
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("and another".to_string())
+        );
+    }
+
+    /// A paste into a box the brief was wiped out of is a new line, as a typed character is. A flag
+    /// that outlived the brief would make the pasted prompt start a session nobody asked for. The
+    /// handoff is ended before a paste as it is before a key.
+    #[test]
+    fn a_prompt_pasted_after_the_brief_was_wiped_out_is_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        session.propose_handoff("the brief");
+        for _ in 0.."the brief".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        assert!(session.input().is_empty());
+
+        handle_paste(&mut session, "something else");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("something else".to_string())
         );
     }
 
