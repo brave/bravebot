@@ -158,19 +158,17 @@ pub enum Action {
 
 /// The scope chord as the prompt history's switch, and the answer to the key if it was that.
 ///
-/// One key toggles: it narrows to this session's prompts from the wide walk, and widens back to
-/// every stored prompt from the narrow one. Only where the history can use it (INPUT-40): on a sent
-/// prompt, and for narrowing only where this session has sent one. Anywhere else the chord is not
+/// One key cycles: every stored prompt, this project's, this session's, and back, skipping a scope
+/// that holds nothing. Only where the history can use it (INPUT-40): on a sent prompt, and where
+/// another scope holds a prompt. Anywhere else the chord is not
 /// a switch, so the key is what `edit_line` makes of it, and when that is nothing it is swallowed
 /// rather than typed.
 fn change_history_scope(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if !session.bindings().is_scope(&key) {
         return None;
     }
-    if session.history.can_widen() {
-        session.widen_history();
-    } else if session.history.can_narrow() {
-        session.narrow_history();
+    if session.history.next_scope().is_some() {
+        session.cycle_history_scope();
     } else if !edit_line(session, key) {
         return Some(Action::None);
     }

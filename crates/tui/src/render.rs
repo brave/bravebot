@@ -5639,7 +5639,7 @@ mod tests {
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        session.narrow_history();
+        session.cycle_history_scope();
         let position = t!(
             input_history_position,
             scope = t!(input_history_this_session),
@@ -5685,12 +5685,51 @@ mod tests {
             "{wide}"
         );
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(narrow.contains("This session 1/1"), "{narrow}");
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
             "{narrow}"
+        );
+    }
+
+    /// All, This project and This session each name themselves in the border with the position,
+    /// and the chord names the scope it moves to next.
+    #[test]
+    fn the_border_names_all_three_scopes_and_the_one_the_chord_moves_to() {
+        let mut session = Session::new("none").in_workspace("/work/here");
+        session.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("elsewhere", Some("/work/elsewhere".to_string())),
+            bravebot_session::store::Entry::sent("here", Some("/work/here".to_string())),
+        ]);
+        session.history.set_project(Some("/work/here".to_string()));
+        session.type_char('x');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+
+        let all = rendered_at(&session, 140, 12);
+        assert!(all.contains("All 3/3"), "{all}");
+        assert!(
+            all.contains(&t!(input_history_project, chord = "ctrl-n")),
+            "{all}"
+        );
+
+        session.cycle_history_scope();
+        let project = rendered_at(&session, 140, 12);
+        assert!(project.contains("This project 2/2"), "{project}");
+        assert!(
+            project.contains(&t!(input_history_narrow, chord = "ctrl-n")),
+            "{project}"
+        );
+
+        session.cycle_history_scope();
+        let this_session = rendered_at(&session, 140, 12);
+        assert!(this_session.contains("This session 1/1"), "{this_session}");
+        assert!(
+            this_session.contains(&t!(input_history_widen, chord = "ctrl-n")),
+            "{this_session}"
         );
     }
 
@@ -5718,7 +5757,7 @@ mod tests {
         );
         assert!(!wide.contains("ctrl-n"), "{wide}");
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "alt-n")),

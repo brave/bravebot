@@ -13284,7 +13284,7 @@ mod tests {
     #[test]
     fn a_moved_chord_is_read_inside_the_search_it_opened() {
         let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
-        let mut session = Session::new("none");
+        let mut session = Session::new("none").in_workspace("/work/here");
         let mut moved = std::collections::BTreeMap::new();
         moved.insert("history".to_string(), "alt-r".to_string());
         moved.insert("stash".to_string(), "alt-s".to_string());
@@ -13299,12 +13299,28 @@ mod tests {
 
         handle_key(&mut session, alt('s'));
         let search = session.history_search().expect("the search closed");
-        assert!(search.here(), "the chord did not narrow the scope");
+        assert_eq!(
+            search.scope(),
+            crate::history::Scope::Project,
+            "the chord did not narrow the scope"
+        );
         assert_eq!(search.needle(), "", "the chord was typed into the needle");
 
         handle_key(&mut session, alt('s'));
         let search = session.history_search().expect("the search closed");
-        assert!(!search.here(), "one more press did not widen it again");
+        assert_eq!(
+            search.scope(),
+            crate::history::Scope::Session,
+            "one more press did not move on to this session"
+        );
+
+        handle_key(&mut session, alt('s'));
+        let search = session.history_search().expect("the search closed");
+        assert_eq!(
+            search.scope(),
+            crate::history::Scope::All,
+            "one more press did not come back to everywhere"
+        );
 
         // The chords they were moved off of do nothing in here, rather than narrowing the list to
         // prompts holding an `s` or an `r`.
@@ -22453,7 +22469,11 @@ mod tests {
 
         assert_eq!(handle_key(&mut session, ctrl('s')), Action::Redraw);
         let search = session.history_search().expect("the search did not open");
-        assert!(search.here(), "the search opened over every workspace");
+        assert_eq!(
+            search.scope(),
+            crate::history::Scope::Project,
+            "the search opened over every workspace"
+        );
         assert_eq!(
             search.needle(),
             "",
