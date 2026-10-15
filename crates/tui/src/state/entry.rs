@@ -308,10 +308,13 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub fn user(text: impl Into<String>) -> Self {
+    /// An entry of one speaker with every other field empty.
+    ///
+    /// The one place the full field list is written, so each constructor sets only what it adds.
+    fn blank(speaker: Speaker, text: String) -> Self {
         Self {
-            speaker: Speaker::User,
-            text: text.into(),
+            speaker,
+            text,
             trail: Vec::new(),
             todos: Vec::new(),
             landing: None,
@@ -325,20 +328,14 @@ impl Entry {
         }
     }
 
+    pub fn user(text: impl Into<String>) -> Self {
+        Self::blank(Speaker::User, text.into())
+    }
+
     pub fn assistant(text: impl Into<String>, trail: Vec<TrailLine>) -> Self {
         Self {
-            speaker: Speaker::Assistant,
-            text: text.into(),
             trail,
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
+            ..Self::blank(Speaker::Assistant, text.into())
         }
     }
 
@@ -358,56 +355,25 @@ impl Entry {
     }
 
     pub fn system(text: impl Into<String>) -> Self {
+        Self::blank(Speaker::System, text.into())
+    }
+
+    /// The block a delegate's work is drawn under.
+    pub fn delegate(delegate: Delegate) -> Self {
         Self {
-            speaker: Speaker::System,
-            text: text.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
+            delegate: Some(delegate),
+            ..Self::blank(Speaker::Delegate, String::new())
         }
     }
 
     /// A command the user ran in shell mode, echoed as they typed it.
     pub fn shell(line: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Shell,
-            text: line.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
+        Self::blank(Speaker::Shell, line.into())
     }
 
     /// What such a command printed.
     pub fn output(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Output,
-            text: text.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
+        Self::blank(Speaker::Output, text.into())
     }
 
     /// One tool call, as it stands.
@@ -415,19 +381,10 @@ impl Entry {
     /// Made while the call is still running and replaced when it finishes, which is what puts
     /// a slow call on the screen while it is slow rather than only once it is over.
     pub fn tool(activity: Activity) -> Self {
+        let line = activity.line();
         Self {
-            speaker: Speaker::Tool,
-            text: activity.line(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
             activity: Some(activity),
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
+            ..Self::blank(Speaker::Tool, line)
         }
     }
 
@@ -439,18 +396,8 @@ impl Entry {
     /// succeeded. The line alone is what is known, and the interface draws it as such.
     pub fn recalled_tool(line: impl Into<String>, why: impl Into<String>) -> Self {
         Self {
-            speaker: Speaker::Tool,
-            text: line.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
             why: why.into(),
+            ..Self::blank(Speaker::Tool, line.into())
         }
     }
 

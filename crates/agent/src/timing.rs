@@ -77,6 +77,15 @@ impl Timing {
         self.tools_ms += other.tools_ms;
         self.stalled_ms += other.stalled_ms;
     }
+
+    /// Add another turn's inference, tool and stalled figures, leaving `wall_ms` alone.
+    ///
+    /// For a caller that keeps its own wall clock, which is better than the worker's.
+    pub fn add_measured(&mut self, other: Timing) {
+        self.inference_ms += other.inference_ms;
+        self.tools_ms += other.tools_ms;
+        self.stalled_ms += other.stalled_ms;
+    }
 }
 
 /// Durations as the turn loop accumulates them, before they become a [`Timing`].
@@ -283,6 +292,32 @@ mod tests {
         assert_eq!(total.tools_ms, 15);
         assert_eq!(total.stalled_ms, 25);
         assert_eq!(total.overhead_ms(), 20);
+    }
+
+    /// A caller with a better wall clock of its own adds the three measured parts and keeps its figure.
+    #[test]
+    fn add_measured_leaves_the_wall_clock_alone() {
+        let mut total = Timing {
+            wall_ms: 7,
+            inference_ms: 1,
+            tools_ms: 2,
+            stalled_ms: 3,
+        };
+        total.add_measured(Timing {
+            wall_ms: 999_999,
+            inference_ms: 10,
+            tools_ms: 20,
+            stalled_ms: 30,
+        });
+        assert_eq!(
+            total,
+            Timing {
+                wall_ms: 7,
+                inference_ms: 11,
+                tools_ms: 22,
+                stalled_ms: 33,
+            }
+        );
     }
 
     /// Rounded once at the end rather than per round, or a turn of many short rounds comes back
