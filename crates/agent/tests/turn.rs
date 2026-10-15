@@ -18913,6 +18913,71 @@ fn the_read_output_description_says_who_answers_for_the_session() {
     }
 }
 
+/// RUN-14: the description is rebuilt for each request, so a mode the person changes while the turn
+/// runs shows in the next request, and still says who answers once. The first request is built under
+/// Ask and the second after the confirmer switched to Bypass over the write's prompt.
+#[test]
+fn the_read_output_description_follows_a_mode_changed_between_requests() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let scratch = Scratch::new("ro-desc-mode-change");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(Ask);
+    let task = Task::new("write it").with_permission_mode(live.clone());
+    let mut recording = RecordingConfirmer::approving_while_the_mode_changes(&live, Bypass);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let descriptions: Vec<String> = (0..2)
+        .map(|_| {
+            let request: serde_json::Value =
+                serde_json::from_str(&received.recv().expect("request body")).expect("json");
+            request["tools"]
+                .as_array()
+                .expect("tools offered")
+                .iter()
+                .find(|tool| tool["function"]["name"] == "read_output")
+                .expect("read_output offered")["function"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        descriptions[0].contains("The user sees the output and decides"),
+        "the first request, built under Ask, did not say a person decides: {}",
+        descriptions[0]
+    );
+    assert!(
+        descriptions[1].contains("The output comes back to you as text you can read.")
+            && !descriptions[1].contains("the user sees")
+            && !descriptions[1].contains("The user sees"),
+        "the second request, built after the switch to Bypass, kept the Ask wording: {}",
+        descriptions[1]
+    );
+    for description in &descriptions {
+        assert_eq!(
+            description.matches("text you can read").count(),
+            1,
+            "who answers was stated more than once: {description}"
+        );
+    }
+}
+
 /// RUN-14: where permissions are bypassed and auto-vetting is on, nobody is shown the output and a
 /// run the mode approved vouches for nothing, so the advice describes neither a user deciding nor
 /// a vouch. A check's word answers there, so `read_output` is not a sure yes either, and the advice
