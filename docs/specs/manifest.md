@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/one_shot.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs

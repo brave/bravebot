@@ -2,10 +2,9 @@
 //! that build each of its sections.
 
 use crate::exit::{Ending, fail};
-use crate::{
-    auth, current_workspace, how_to_configure_a_model, import, managed_refusal, mcp,
-    model_for_this_run, named, progress, sandbox_refusal, unattended_trust_with,
-};
+use crate::model::{how_to_configure_a_model, managed_refusal, model_for_this_run};
+use crate::workspace::{confinement_name, current_workspace, unattended_trust_with};
+use crate::{auth, import, mcp, progress, sandbox_refusal};
 use bravebot_agent::Workspace;
 use bravebot_config::{Config, Managed};
 use bravebot_i18n::t;
@@ -1777,7 +1776,7 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
     match found {
         Ok(caps) => Confinement {
             lines: [
-                t!(doctor_confinement, level = named(caps.level)).to_string(),
+                t!(doctor_confinement, level = confinement_name(caps.level)).to_string(),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
                     t!(doctor_network_denial),

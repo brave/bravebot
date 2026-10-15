@@ -9,10 +9,13 @@ mod completion;
 mod continued;
 mod doctor;
 mod exit;
+mod finish;
 mod host;
 mod import;
 mod json;
 mod mcp;
+mod model;
+mod one_shot;
 mod permissions_check;
 mod plain;
 mod progress;
@@ -24,23 +27,33 @@ mod shell_init;
 #[cfg(unix)]
 mod supervisor;
 mod update;
+mod usage;
+mod workspace;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
-use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+use crate::finish::{
+    Finished, ending_of_a_turn, failure_of_a_turn, print_trace, refusals, refused_with_the_usage,
+    report, say_notices, say_the_result, say_what_a_stopped_manifest_produced,
+    stopped_before_the_turn, what_ran,
 };
+use crate::model::{
+    model_asked_for, model_for_this_run, model_not_served, nothing_serves, resolve_advisor,
+};
+use crate::one_shot::OneShot;
+use crate::usage::print_help;
+use crate::workspace::{
+    confinement_name, current_workspace, definition_for_a_run, open_directories,
+    rules_for_a_one_shot_run, scratch_for_this_run, unattended_trust,
+};
+use bravebot_agent::Mode;
 use bravebot_agent::turn::{self, SystemPrompts, Task};
-use bravebot_agent::{Mode, Workspace};
 use bravebot_config::{Config, Managed};
-use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
-use bravebot_core::event::{Event, RecordingSink, Role};
 use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::Resumable;
-use std::io::{BufRead, IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -993,235 +1006,6 @@ fn take_sandbox_filesystem(
     }
     *args = kept;
     Ok(lists)
-}
-
-fn print_help() {
-    /// Wide enough for the longest invocation below, so a translated description starts in the
-    /// same column as every other one rather than wherever hand-counted spaces left it.
-    const FORM: usize = 39;
-    /// The same, for the key column and the option column.
-    const KEY: usize = 22;
-    /// Wide enough for `--dangerously-skip-permissions` and a gap. A narrower column would leave
-    /// that one flag touching its own description, since the padding below cannot go negative.
-    const OPTION: usize = 32;
-
-    println!("{}", t!(cli_tagline, version = VERSION));
-    println!();
-    println!("{}", t!(cli_usage_heading));
-    for (form, description) in [
-        ("bravebot", t!(cli_usage_interactive)),
-        ("bravebot -i \"<prompt>\"", t!(cli_usage_interactive_prompt)),
-        ("bravebot --plain", t!(cli_usage_plain)),
-        ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
-        ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),
-        ("bravebot --resume [id]", t!(cli_usage_resume)),
-        ("bravebot --from-pr <number|url>", t!(cli_usage_from_pr)),
-        ("bravebot --continue", t!(cli_usage_continue)),
-        (
-            "bravebot -p \"<task>\" --resume <id>",
-            t!(cli_usage_resume_task),
-        ),
-        (
-            "bravebot -p \"<task>\" --continue",
-            t!(cli_usage_continue_task),
-        ),
-        ("bravebot --fork <id>", t!(cli_usage_fork)),
-        ("bravebot doctor", t!(cli_usage_doctor)),
-        (
-            "bravebot doctor --sandbox-check",
-            t!(cli_usage_doctor_sandbox),
-        ),
-        (
-            "bravebot doctor --push-identity [<host>/<owner>]",
-            t!(cli_usage_doctor_push_identity),
-        ),
-        ("bravebot bug-report", t!(cli_usage_bug_report)),
-        ("bravebot update", t!(cli_usage_update)),
-        ("bravebot sessions [--json]", t!(cli_usage_sessions)),
-        ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
-        (
-            "bravebot sessions import <tool>",
-            t!(cli_usage_sessions_import),
-        ),
-        ("bravebot --bg <prompt>", t!(cli_usage_bg)),
-        ("bravebot attach <id>", t!(cli_usage_attach)),
-        ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),
-        ("bravebot auth login [way]", t!(cli_usage_auth_login)),
-        ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
-        ("bravebot auth status [way]", t!(cli_usage_auth_status)),
-        ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
-        ("bravebot import-providers", t!(cli_usage_import_providers)),
-        ("bravebot mcp <command>", t!(cli_usage_mcp)),
-        (
-            "bravebot permissions check <call>",
-            t!(cli_usage_permissions),
-        ),
-        (
-            "bravebot completion <bash|zsh|fish>",
-            t!(cli_usage_completion),
-        ),
-        (
-            "bravebot shell-init <bash|zsh|fish>",
-            t!(cli_usage_shell_init),
-        ),
-    ] {
-        println!("  {form:<FORM$}{description}");
-    }
-    println!();
-
-    println!("{}", t!(cli_keys_heading));
-    for (keys, description) in [
-        ("Enter", t!(cli_key_send)),
-        ("Ctrl-T", t!(cli_key_audit)),
-        ("Up/Down", t!(cli_key_history)),
-        ("Ctrl-R", t!(cli_key_history_search)),
-        ("Wheel, PageUp/Down", t!(cli_key_scroll)),
-        ("Home/End", t!(cli_key_jump)),
-        ("Esc", t!(cli_key_cancel)),
-        ("Ctrl-C", t!(cli_key_leave)),
-    ] {
-        println!("  {keys:<KEY$}{description}");
-    }
-    println!();
-
-    // Listed from the commands themselves, so one renamed or added cannot leave this advertising a
-    // word that no longer works. The interface offers the same list when a slash is typed.
-    println!("{}", t!(cli_commands_heading));
-    for command in bravebot_tui::app::commands() {
-        let hint = command.typed_hint();
-        let word = if hint.is_empty() {
-            command.name.to_string()
-        } else {
-            format!("{} {hint}", command.name)
-        };
-        println!("  {word:<20}  {}", command.description);
-    }
-    // Not a command, but typed in the same place and worth finding here.
-    println!("  {:<20}  {}", "@<path>", t!(cli_name_a_file));
-    println!();
-
-    println!("{}", t!(cli_options_heading));
-    for (flags, description) in [
-        ("--file <path>", t!(cli_option_file)),
-        ("--session-ref <id>", t!(cli_option_session_ref)),
-        ("--add-dir <path>", t!(cli_option_add_dir)),
-        ("--trust-workspace", t!(cli_option_trust_workspace)),
-        ("--settings <path>", t!(cli_option_settings)),
-        ("--run-network <open|closed>", t!(cli_option_run_network)),
-        ("--sandbox <mode>", t!(cli_option_sandbox)),
-        (
-            "--sandbox-allow-read <path>",
-            t!(cli_option_sandbox_allow_read),
-        ),
-        (
-            "--sandbox-deny-read <path>",
-            t!(cli_option_sandbox_deny_read),
-        ),
-        (
-            "--sandbox-allow-write <path>",
-            t!(cli_option_sandbox_allow_write),
-        ),
-        (
-            "--sandbox-deny-write <path>",
-            t!(cli_option_sandbox_deny_write),
-        ),
-        ("--log-level <error|info|debug>", t!(cli_option_log_level)),
-        ("--agent <name>", t!(cli_option_agent)),
-        ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
-        (
-            "--append-system-prompt <prompt>",
-            t!(cli_option_append_system_prompt),
-        ),
-        ("--mode <mode>", t!(cli_option_mode)),
-        ("--model <name>", t!(cli_option_model)),
-        ("--advisor <name>", t!(cli_option_advisor)),
-        ("--tools <a,b,c>", t!(cli_option_tools)),
-        ("--no-shell", t!(cli_option_no_shell)),
-        ("--effort <level>", t!(cli_option_effort)),
-        ("-p, --print", t!(cli_option_print)),
-        ("-i, --interactive <prompt>", t!(cli_option_interactive)),
-        ("--trace", t!(cli_option_trace)),
-        ("--json", t!(cli_option_json)),
-        ("--json-stream", t!(cli_option_json_stream)),
-        ("--output-schema <path>", t!(cli_option_output_schema)),
-        ("--incognito", t!(cli_option_incognito)),
-        ("--safe", t!(cli_option_safe)),
-        ("--locked", t!(cli_option_locked)),
-        ("--vet", t!(cli_option_vet)),
-        (
-            "--dangerously-skip-permissions",
-            t!(cli_option_dangerously_skip_permissions),
-        ),
-        ("-h, --help", t!(cli_option_help)),
-        ("-V, --version", t!(cli_option_version)),
-    ] {
-        println!("  {flags:<OPTION$}{description}");
-    }
-}
-
-/// What to say to somebody whose configuration names no service that can serve a turn.
-///
-/// Three routes, each a line, in the order they are worth taking today. The two that reach a
-/// service directly lead; importing a Leo Premium subscription is last and says why, since those
-/// models are reached through Brave's AI gateway and it has open problems of its own. It is still
-/// the shortest route for somebody who already subscribes, which is why it is offered at all.
-///
-/// `a_service_is_configured` replaces all three with one line. That person set a service up and
-/// left the model this build baked in, which a settings block copied out of another tool does by
-/// design, so what they need is the key that names one of their own models.
-///
-/// `refused` is what was wrong with a stored subscription, where something was. It leads, because
-/// it changes what the person should do: a batch that could not be read is one import away.
-///
-/// Built as a string rather than printed, so the ending that carries it leads the block with its
-/// identifier the way it does every other failure, and so `doctor` can say the same thing. It says it too: a report reading "configuration OK" about a machine where a
-/// session refuses to start is the first thing somebody in that position goes and looks at.
-///
-/// Nothing here names `doctor` itself, for that reason. A line telling somebody to run the
-/// command they are reading the output of is a line that has to be edited out of one of the two
-/// places it appears, which is how the two come to say different things.
-///
-/// `looked` is what Claude Code and opencode hold, where nobody was asked about it: what was left
-/// behind comes before the routes, so a person whose setup was looked at is told so (IMPORT-4), and
-/// a source holding something importable names the command that asks (IMPORT-8).
-fn how_to_configure_a_model(
-    refused: Option<&str>,
-    a_service_is_configured: bool,
-    looked: &import::Looked,
-) -> String {
-    let mut lines = vec![t!(onboarding_no_model).to_string()];
-    if let Some(problem) = refused {
-        lines.push(t!(onboarding_subscription_unusable, problem = problem));
-    }
-    lines.push(String::new());
-    if !looked.left().is_empty() {
-        lines.extend(looked.left().iter().cloned());
-        lines.push(String::new());
-    }
-    if let Some(command) = looked.command() {
-        lines.push(command);
-        lines.push(String::new());
-    }
-
-    // One line or three routes, never both. Somebody who has a service set up and only the wrong
-    // model in force is one settings key away, and three ways to set up a service is three things
-    // to read past on the way to the one that applies.
-    if a_service_is_configured {
-        lines.push(t!(onboarding_name_a_configured_model).to_string());
-    } else {
-        lines.push(t!(onboarding_pick_one).to_string());
-        for route in [
-            t!(onboarding_bedrock),
-            t!(onboarding_openrouter),
-            t!(onboarding_leo),
-        ] {
-            lines.push(format!("  - {route}"));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push(t!(onboarding_where_to_read).to_string());
-    lines.join("\n")
 }
 
 /// Take `--incognito` out of the arguments, reporting whether it was there.
@@ -2397,350 +2181,6 @@ fn wants_json(args: &[String]) -> bool {
         .any(|arg| arg == "--json" || arg == "--json-stream")
 }
 
-/// Stop before the turn: the identifier and the message on stderr, and a result object on stdout
-/// where one was asked for.
-fn stopped_before_the_turn(
-    as_json: bool,
-    ending: Ending,
-    message: impl std::fmt::Display,
-) -> ExitCode {
-    let message = message.to_string();
-    let stopped = fail(ending, &message);
-    if as_json {
-        say_the_result(&what_ran(
-            ending,
-            &message,
-            Default::default(),
-            &[],
-            &[],
-            &[],
-        ));
-    }
-    stopped
-}
-
-/// A command line refused before it named a command, where the usage is the rest of the answer.
-///
-/// The table is what a person mistyping a flag needs, and it is written with `println!`, so it
-/// lands on the stream CLI-12 promises holds the result object and nothing else. A run that asked
-/// for an object therefore gets the object in its place: the two cannot share stdout, and prose a
-/// caller has to tell apart from a result is the surface the flag exists to replace. The complaint
-/// itself is on stderr either way, so nothing is lost to the person reading.
-fn refused_with_the_usage(as_json: bool, message: impl std::fmt::Display) -> ExitCode {
-    let refused = stopped_before_the_turn(as_json, Ending::Argument, message);
-    if !as_json {
-        print_help();
-    }
-    refused
-}
-
-/// Put a result object on stdout.
-///
-/// A failed write is dropped, as it is for the reply: a closed stdout is a caller that stopped
-/// reading, and a run that has already finished should not die reporting what it did.
-fn say_the_result(result: &str) {
-    let _ = writeln!(std::io::stdout().lock(), "{result}");
-}
-
-/// How a turn that ran ended.
-///
-/// A turn something was refused in did not do what it was asked, and neither did one answered by
-/// a model other than the one the command line named. Both are invisible to a script reading the
-/// reply, which is what makes the status the only thing that can carry them.
-fn ending_of_a_turn(clean: bool, named_on_the_command_line: bool, not_served: bool) -> Ending {
-    if !clean {
-        return Ending::Refused;
-    }
-    if named_on_the_command_line && not_served {
-        return Ending::Failed;
-    }
-    Ending::Done
-}
-
-/// The sentence a result object explains a finished turn's failure with, if it has one.
-///
-/// The same words the run said on stderr, so the two surfaces do not disagree about why a turn
-/// that produced a reply is still a failure.
-fn failure_of_a_turn(ending: Ending, not_served: Option<&str>) -> Option<&str> {
-    match ending {
-        Ending::Done => None,
-        Ending::Refused => Some(t!(cli_something_was_refused)),
-        _ => not_served,
-    }
-}
-
-/// Every refusal the trail holds, as a result object lists them.
-fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
-    sink.blocked()
-        .filter_map(|event| match event {
-            Event::GateBlocked {
-                gate,
-                reason,
-                principle,
-                ..
-            } => Some(json::Refusal {
-                gate,
-                principle: principle.name(),
-                reason: reason.clone(),
-            }),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The result object for a run with no reply to report.
-///
-/// Written even where nothing ran at all, because the alternative is a caller having to tell an
-/// empty stdout from a result, which is the prose surface again with an extra step. A run that
-/// failed part way through still says what it had done by then: the calls are what a caller needs
-/// to know which of them to undo, and the notices are what it was told on the way, there being no
-/// outcome left to carry them (HOOK-7).
-fn what_ran(
-    ending: Ending,
-    message: &str,
-    spent: bravebot_agent::Spent,
-    calls: &[json::Call],
-    refusals: &[json::Refusal],
-    notices: &[String],
-) -> String {
-    json::render(&json::Report {
-        ending,
-        message: Some(message),
-        reply: "",
-        model: "",
-        agent: None,
-        session: None,
-        steps: 0,
-        tokens: json::Tokens {
-            total: spent.tokens,
-            output: spent.output_tokens,
-            context: spent.context_tokens,
-            cache_read: spent.cached.read_tokens,
-            cache_written: spent.cached.written_tokens,
-        },
-        calls,
-        refusals,
-        notices,
-        structured: None,
-    })
-}
-
-/// The rules a one-shot run works under.
-///
-/// Nobody is watching one, so the allow list is left out: an allow rule answers a prompt in
-/// advance, and where there is nobody to ask it would instead be a line in a settings file letting
-/// the run write, execute or fetch unwatched, beside the flag that is meant to be the only way
-/// that happens. The deny and ask lists carry over, and both still decide something here.
-///
-/// With the flag, the person answered every one of those prompts themselves when they typed it, so
-/// their file is read whole.
-fn rules_for_a_one_shot_run(
-    settings: &bravebot_config::Settings,
-    profile: Option<&Path>,
-    workspace: &Path,
-    skip_permissions: bool,
-) -> (
-    bravebot_core::permissions::Permissions,
-    Vec<bravebot_core::permissions::Rejected>,
-) {
-    match skip_permissions {
-        true => bravebot_agent::permissions::from_settings(settings, profile, workspace),
-        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile, workspace),
-    }
-}
-
-/// Open every directory the command line named, or say which one could not be opened.
-///
-/// Reachability and nothing else. `/add-dir` grants a second thing, recording that the person
-/// vouched for the directory, and this deliberately does not: a run nobody is watching holds an
-/// empty trust map, the directory it was started in included, so a rule trusting a sibling
-/// checkout would leave the tree the run was pointed at more trusted than the one it works in.
-/// Reads there are on the same footing as reads of the project's own files.
-///
-/// `~` is left to the shell, which expands it before this ever sees the path. A path that is not
-/// absolute, does not exist, is not a directory, or lies inside the working one is refused by the
-/// workspace, and the refusal names which.
-///
-/// Returns what the person is to be told about the ones that opened: a directory holding the
-/// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
-/// watching to find that out.
-fn open_directories(
-    workspace: &mut Workspace,
-    directories: &[String],
-) -> Result<Vec<String>, String> {
-    let mut notices = Vec::new();
-    for directory in directories {
-        let added = workspace.add_directory(directory).map_err(|problem| {
-            t!(
-                session_directory_not_added,
-                directory = directory,
-                problem = problem.to_string()
-            )
-        })?;
-        if workspace.ends_checkouts(&added) {
-            notices.push(t!(
-                cli_directory_ends_checkouts,
-                directory = added.display().to_string()
-            ));
-        }
-    }
-    Ok(notices)
-}
-
-/// The model the definition `--agent` named will ask for, where it names one the command line did
-/// not outrank, matched as the run's first turn will match it.
-///
-/// Resolved with the trust a run hands its turn, which vouches for no directory, so a checkout's
-/// definitions are counted but not read. The count goes into the refusal because a name missing
-/// from an untrusted project and a name missing everywhere need different fixes.
-fn definition_for_a_run(
-    config: &Config,
-    workspace: &Workspace,
-    permissions: &bravebot_core::permissions::Permissions,
-    name: &str,
-    model_named: bool,
-) -> Result<Option<String>, bravebot_tui::app::Unusable> {
-    let trust = bravebot_agent::workspace::trust_store(workspace.root());
-    let definitions = bravebot_agent::agents::resolved(
-        workspace,
-        bravebot_agent::home::directory().as_deref(),
-        trust.clone(),
-        permissions.clone(),
-        &mut RecordingSink::new(),
-    );
-    if definitions.get(name).is_none() {
-        let names = definitions.names().join(", ");
-        return Err(bravebot_tui::app::Unusable::Missing(
-            match bravebot_agent::agents::not_vouched_for(workspace, &trust) {
-                0 => t!(cli_agent_no_such_definition, name = name, names = names),
-                count => t!(
-                    cli_agent_no_such_definition_unread,
-                    name = name,
-                    names = names,
-                    count = count
-                ),
-            }
-            .to_string(),
-        ));
-    }
-    // Nothing asks for the definition's model when the command line named one, so its sign-in
-    // does not matter.
-    if model_named {
-        return Ok(None);
-    }
-    bravebot_tui::app::definition_named(config, &definitions, name).map(|addressed| addressed.model)
-}
-
-/// How to configure a service, where nothing configured serves `model`, or `None` where something
-/// does.
-///
-/// A model the machine-level layer refuses answers here too, and says something else: there is no
-/// service to configure, so what it names is the file that refused and which of its lists did
-/// (BACKEND-48).
-fn nothing_serves(config: &Config, model: &str) -> Option<String> {
-    match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), model) {
-        bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
-            a_service_is_configured,
-        } => Some(how_to_configure_a_model(
-            subscription.as_deref(),
-            a_service_is_configured,
-            &import::looked(a_service_is_configured),
-        )),
-        bravebot_agent::backend::Serving::Refused { file, why } => {
-            Some(managed_refusal(model, &file, why))
-        }
-        bravebot_agent::backend::Serving::Configured => None,
-    }
-}
-
-/// The model `--advisor` names, resolved like `--model`, or what to say where nothing could ask it.
-fn resolve_advisor(config: &Config, name: &str) -> Result<String, String> {
-    let advisor = config.model_named(name);
-    match nothing_serves(config, &advisor) {
-        Some(how) => Err(how),
-        None => Ok(advisor),
-    }
-}
-
-/// What a start or a run says where the machine-level layer refuses `model` (BACKEND-48).
-///
-/// Here rather than at each site because four of them say it: a one-shot run, the report, the start
-/// that opens an interactive session, and that same start again once an import has written a model.
-/// The model is named as well as the file, since a tier word resolves to a name the person reading
-/// this wrote nowhere.
-pub(crate) fn managed_refusal(
-    model: &str,
-    file: &Path,
-    why: bravebot_config::ModelRefusal,
-) -> String {
-    t!(
-        managed_model_refused,
-        model = model,
-        reason = bravebot_agent::backend::refusal_reason(file, why)
-    )
-    .to_string()
-}
-
-/// The model a run asks for: the one the command line named, else the one a session would read.
-///
-/// A run started from a script resolves a model the way a session opening in the same directory
-/// does, so a script reaches the model somebody already chose without an interactive step, and
-/// neither surface has a model the other cannot ask for. Below both is the configured model,
-/// which is what an absent record, or one a checkout outranks, leaves in force.
-///
-/// The command line outranks the record because it names a model for one run and nothing else,
-/// which is the only way a script can pin one against a choice made elsewhere.
-fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<String> {
-    named.or(stored)
-}
-
-/// The model this run or session will ask a service for.
-///
-/// The same three sources the task below is built from, in the same order: a name given on the
-/// command line, the one a session recorded where no checkout's settings outrank it and nothing
-/// sets it aside, and the configured default. `named` is the raw argument, resolved against the
-/// configuration here for the reason the task resolves it, since a tier word names a model only
-/// the configuration knows.
-///
-/// A function because the question is asked before the task exists, and because an answer that
-/// differed from the task's would refuse a run over a model it was never going to request.
-fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
-    model_asked_for(
-        named.map(|name| config.model_named(name)),
-        bravebot_agent::backend::pick(
-            config,
-            bravebot_session::store::model(
-                bravebot_session::store::load_model(),
-                &bravebot_config::Settings::load(),
-            ),
-        )
-        .into_model(),
-    )
-    .unwrap_or_else(|| config.default_model.clone())
-}
-
-/// The complaint a run has when one model was asked for and another answered, if it has one.
-///
-/// The endpoint substitutes rather than refusing, so the reported name is the only trace there is.
-/// About the model in force whatever named it: the flag, a remembered choice and the settings key
-/// all pin a model somebody expects to be answered by.
-///
-/// Nothing where the name asks for whichever model the server picks rather than for a particular
-/// one, because resolving to a model is what that name is for. Nothing where the backend does not
-/// report the name it was asked for either, where a reply that says something else is the
-/// indirection working rather than a different model answering.
-fn model_not_served(asked: &str, comparable: bool, served: &str) -> Option<String> {
-    if !comparable || asked == bravebot_config::DEFAULT_MODEL || asked == served {
-        return None;
-    }
-    Some(t!(
-        session_model_substituted,
-        asked = asked,
-        served = served
-    ))
-}
-
 /// What a pipe may carry before it is refused.
 ///
 /// Matches the cap other agents document, and exists because the alternative is a `bravebot -p` that a
@@ -2783,317 +2223,6 @@ fn piped_input(source: impl Read, is_tty: bool) -> Result<Option<String>, String
     // Lossy because the bytes are never decided from: they go into a slot and the planner is shown
     // a reference, so a replacement character changes nothing that matters.
     Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
-}
-
-/// What a one-shot run answers its questions with: [`bravebot_agent::Unattended`], except that a
-/// plan is put to whoever typed the command.
-///
-/// Every other question is refused, as CLI-1 has it. Those are due in the middle of a run, over a
-/// path or a program nobody undertook to watch for, and there is nothing about typing a command that
-/// says somebody will still be there. A plan is asked at one known moment instead: once, before the
-/// first step, while the command that raised it has printed nothing but its own progress. The person
-/// who typed it is the person reading that, so there is somebody to ask.
-///
-/// Generic over both ends, as [`piped_input`] is over its source, so a test answers without a
-/// terminal.
-struct OneShot<R: Read, W: Write> {
-    /// Where the answer is read from, and only ever after the question was written.
-    ///
-    /// Buffered here rather than taken buffered, because the whole confirmer travels to the thread
-    /// the turn runs on and a held stdin lock cannot.
-    input: std::io::BufReader<R>,
-    /// Where the plan and the question go. stderr in a real run, which is what keeps stdout the
-    /// reply alone (CLI-5).
-    output: W,
-    /// Whether there is anybody to ask.
-    ///
-    /// Both ends being a terminal, not stdin alone. A plan written into a redirected stderr is a
-    /// plan nobody read, and running a program nobody was shown is the one thing this question
-    /// cannot mean.
-    attended: bool,
-    /// Every question but the plan. Delegated rather than restated so there is one account of what
-    /// a one-shot refuses, and adding a question here cannot quietly start approving it.
-    refusing: bravebot_agent::Unattended,
-}
-
-impl<R: Read, W: Write> OneShot<R, W> {
-    fn new(input: R, output: W, attended: bool) -> Self {
-        Self {
-            input: std::io::BufReader::new(input),
-            output,
-            attended,
-            refusing: bravebot_agent::Unattended,
-        }
-    }
-
-    /// Write the question out, then read the answer back.
-    ///
-    /// The steps are not printed here. The run narrates the frozen plan a line per step immediately
-    /// before asking, from the same renderer this request was built with, so on a terminal they are
-    /// the lines directly above the question and are still on screen while it is answered. Printing
-    /// them again would put the same list twice under two different headings, which reads as two
-    /// plans rather than one. The panel a session draws does repeat them, and has to: it covers the
-    /// transcript that showed them.
-    fn put_the_plan(&mut self, request: &ManifestRequest) -> std::io::Result<Decision> {
-        writeln!(self.output, "{}", t!(plan_title))?;
-        writeln!(
-            self.output,
-            "{} {}  {}",
-            t!(plan_verb),
-            t!(plan_steps, count = request.steps.len()),
-            t!(plan_goal, task = &request.task)
-        )?;
-        writeln!(self.output)?;
-        for sentence in [
-            t!(plan_explained),
-            t!(plan_not_its_writes),
-            t!(plan_nothing_yet),
-        ] {
-            writeln!(self.output, "{sentence}")?;
-        }
-        write!(self.output, "{} ", t!(plan_answer))?;
-        self.output.flush()?;
-
-        // A closed stdin reads nothing, which is nobody answering, which is a no. So is any other
-        // line: the affirmative is the only answer that runs a program, and a person who typed
-        // something else did not type that.
-        let mut answer = String::new();
-        self.input.read_line(&mut answer)?;
-        Ok(match answer.trim().to_lowercase() == t!(line_answer_yes) {
-            true => Decision::Approve,
-            false => Decision::Reject,
-        })
-    }
-}
-
-impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
-    /// The one question this confirmer may answer yes to, and only where somebody is there.
-    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
-        if !self.attended {
-            return self.refusing.confirm_manifest(request);
-        }
-        // A question that could not be written is a plan nobody saw, so it is declined rather than
-        // taken as unanswered and waved through.
-        self.put_the_plan(request).unwrap_or(Decision::Reject)
-    }
-
-    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
-        self.refusing.confirm_write(request)
-    }
-
-    fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        self.refusing.confirm_run(request)
-    }
-
-    fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
-        self.refusing.confirm_read_output(request)
-    }
-
-    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
-        self.refusing.confirm_vetted_read(request)
-    }
-
-    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        self.refusing.confirm_fetch(request)
-    }
-
-    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
-        self.refusing.confirm_server(request)
-    }
-
-    fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
-        self.refusing.confirm_vouch(request)
-    }
-
-    fn confirm_exposing_read(
-        &mut self,
-        request: &bravebot_agent::confirm::ExposureRequest,
-    ) -> Decision {
-        self.refusing.confirm_exposing_read(request)
-    }
-
-    fn confirm_tool_list(
-        &mut self,
-        request: &bravebot_agent::confirm::ToolListRequest,
-    ) -> bravebot_agent::confirm::Decision {
-        self.refusing.confirm_tool_list(request)
-    }
-
-    fn confirm_mcp_call(
-        &mut self,
-        request: &bravebot_agent::confirm::McpCallRequest,
-    ) -> bravebot_agent::confirm::CallDecision {
-        self.refusing.confirm_mcp_call(request)
-    }
-
-    fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
-        self.refusing.confirm_path(request)
-    }
-
-    fn confirm_host(&mut self, request: &bravebot_agent::confirm::HostRequest) -> Decision {
-        self.refusing.confirm_host(request)
-    }
-
-    fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
-        self.refusing.confirm_move(request)
-    }
-
-    /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
-    /// be reported to the planner as the person's own words.
-    fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        self.refusing.ask_user(asking)
-    }
-
-    /// Nothing. Nobody is typing between steps: the only line this reads is an answer to a question
-    /// it just asked.
-    fn interjection(&mut self) -> Option<String> {
-        self.refusing.interjection()
-    }
-}
-
-/// What a finished turn has to say, before anything decides where it goes.
-struct Finished<'a> {
-    /// What goes on stdout: the released reply, or the result object `--json` asked for in its
-    /// place.
-    reply: &'a str,
-    /// The driver's own words about what loaded and what did not, never anything read out of a
-    /// file.
-    notices: &'a [String],
-    /// What a traced manifest run planned, when there was one. On stderr with the trail,
-    /// never on stdout: a pipe of the reply must not pick up the plan.
-    attempt: Option<&'a str>,
-    /// The trail and the model behind it, when `--trace` asked for them.
-    trail: Option<(&'a RecordingSink, &'a str)>,
-    /// Whether no gate refused anything during the turn.
-    clean: bool,
-    /// How the turn ended, which is what the substitution complaint's identifier is read from: it
-    /// is a failure only where the command line named the model.
-    ending: Ending,
-    /// What to say where one model was asked for and another one answered.
-    not_served: Option<&'a str>,
-}
-
-/// Write a finished turn: the reply to `reply`, every other word to `beside`.
-///
-/// Which stream each part lands on is the whole of what this decides, so it takes both rather
-/// than reaching for stdout and stderr itself: a run's output is then something a test can read
-/// back. A notice or an audit trail sharing the reply's stream would corrupt whatever the reply
-/// was piped into.
-fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
-    say_notices(beside, run.notices);
-    if let Some(complaint) = run.not_served {
-        // Said with the identifier of the status it is the reason for (CLI-6), and plainly where
-        // the run did not fail over it.
-        let said = if run.ending == Ending::Failed {
-            Ending::Failed.told(complaint)
-        } else {
-            complaint.to_string()
-        };
-        let _ = writeln!(beside, "{said}");
-    }
-    let _ = writeln!(reply, "{}", run.reply);
-    if let Some(attempt) = run.attempt {
-        let _ = writeln!(beside);
-        let _ = write!(beside, "{attempt}");
-    }
-    if let Some((sink, model)) = run.trail {
-        let _ = writeln!(beside);
-        print_trace(beside, sink);
-        let _ = writeln!(beside, "{}", t!(cli_model_used, model = model));
-    }
-    if !run.clean {
-        let _ = writeln!(beside);
-        let _ = writeln!(
-            beside,
-            "{}",
-            Ending::Refused.told(t!(cli_something_was_refused))
-        );
-    }
-}
-
-/// Say what the turn said about itself as it ran: which standing instructions and skills loaded,
-/// and what a hook did that went wrong.
-///
-/// One function for all three surfaces that print these, so a turn that ended in a failure and one
-/// that answered cannot come to word the same sentence differently. Never on the reply's stream:
-/// these are the driver's own words and a pipe reading the reply must not pick them up.
-fn say_notices(beside: &mut impl Write, notices: &[String]) {
-    for notice in notices {
-        let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
-    }
-}
-
-/// What a manifest run that stopped leaves for a person to read (MANIFEST-3): the plan or the
-/// document that would not become one, and the steps that ran. Only the audit trail waits on
-/// `--trace`; the attempt is printed either way, since a failed plan with no plan to look at is a
-/// one-line complaint about a document nobody can see.
-fn say_what_a_stopped_manifest_produced(
-    output: &mut impl Write,
-    attempt: &bravebot_agent::manifest::Attempt,
-    trail: Option<&RecordingSink>,
-) {
-    let report = attempt.describe();
-    if !report.is_empty() {
-        let _ = writeln!(output);
-        let _ = write!(output, "{report}");
-    }
-    if let Some(trail) = trail {
-        let _ = writeln!(output);
-        print_trace(output, trail);
-    }
-}
-
-/// Print the audit trail: what was checked, allowed, and refused.
-///
-/// A failed write is dropped, as it is for progress. The trail describes a turn that has already
-/// happened, so a closed stderr means nobody is reading it, not that the run should die holding a
-/// reply it has already produced.
-fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
-    macro_rules! trace {
-        ($($arg:tt)*) => {
-            { let _ = writeln!(output, $($arg)*); }
-        };
-    }
-
-    trace!("audit trail");
-    for (delegate, event) in sink.recorded() {
-        // Which run took the decision, in front of what it decided. A turn and the delegates it
-        // spawned record into this one trail, and two delegates of the same kind decide alike.
-        let run = match delegate {
-            Some(delegate) => format!("{delegate} "),
-            None => String::new(),
-        };
-        match event {
-            Event::GatePassed { gate, detail } => trace!("  ok      {run}{gate}: {detail}"),
-            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {run}{gate}: {reason}"),
-            Event::Observed { capability, label } => {
-                trace!("  observe {run}{capability} produced {label}")
-            }
-            Event::SlotWritten { slot, label } => trace!("  slot    {run}{slot} at {label}"),
-            Event::SlotDeferred {
-                slot,
-                label,
-                origin,
-            } => trace!("  defer   {run}{slot} holds {origin}, unread, at {label}"),
-            Event::Declassified { slot, from, to, .. } => {
-                trace!("  release {run}{slot} {from} -> {to}")
-            }
-            Event::ActionField {
-                tool,
-                field,
-                role,
-                label,
-                allowed,
-            } => {
-                let mark = if *allowed { "ok     " } else { "BLOCK  " };
-                let role = match role {
-                    Role::Routing => "routing",
-                    Role::Content => "content",
-                };
-                trace!("  {mark} {run}{tool}.{field} [{role}] {label}");
-            }
-        }
-    }
 }
 
 fn resume_named(
@@ -3247,12 +2376,12 @@ fn interactive(
             Ok(sandbox) => {
                 let capabilities = sandbox.capabilities();
                 (
-                    named(capabilities.level),
+                    confinement_name(capabilities.level),
                     !capabilities.governs_sockets_with_a_path,
                 )
             }
             Err(_) => (
-                named(bravebot_sandbox::policy::ConfinementLevel::None),
+                confinement_name(bravebot_sandbox::policy::ConfinementLevel::None),
                 false,
             ),
         };
@@ -3338,122 +2467,6 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
     format!("{heading}\nbravebot --resume {}", left.id)
 }
 
-/// What to call the confinement that was achieved.
-///
-/// Named here rather than by `bravebot_sandbox`, whose Display is a diagnostic and whose whole
-/// point is to hold no words meant for a person: it depends on nothing, and a catalog is a
-/// dependency. So it reports which of the three it got and this says it in the reader's language.
-fn named(level: bravebot_sandbox::policy::ConfinementLevel) -> String {
-    use bravebot_sandbox::policy::ConfinementLevel;
-    match level {
-        ConfinementLevel::Kernel => t!(confinement_kernel),
-        ConfinementLevel::Partial => t!(confinement_partial),
-        ConfinementLevel::None => t!(confinement_none),
-    }
-    .to_string()
-}
-
-/// The directory this run writes what is not part of the project into, made and reachable.
-///
-/// Nothing on a machine that cannot give it one, which is not a reason to refuse to run: a full or
-/// read-only temporary directory leaves a turn with nowhere to put an intermediate file and nothing
-/// else. On stderr, beside every other line this run has to say about itself, because a turn told
-/// there is nowhere to write leaves nothing else to read it off.
-fn scratch_for_this_run(workspace: &mut Workspace) -> Option<bravebot_agent::SessionScratch> {
-    let scratch = match bravebot_agent::SessionScratch::create() {
-        Ok(scratch) => Some(scratch),
-        Err(problem) => {
-            eprintln!(
-                "{}",
-                t!(
-                    cli_notice,
-                    notice = t!(session_scratch_unavailable, problem = problem.to_string())
-                )
-            );
-            None
-        }
-    };
-    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
-    bravebot_session::sessions::sweep_unlisted_checkouts(workspace);
-    scratch
-}
-
-/// The workspace is the current directory: file arguments resolve relative to it, and
-/// confinement keeps reads inside it.
-///
-/// The search caps come in from the settings here rather than being read inside the workspace,
-/// because a workspace is built by every test in the tree and one that read the settings would
-/// answer differently on a machine whose owner had configured them.
-///
-/// Whether the file tools are held to that directory comes in the same way and from the same place
-/// (PERM-16). The managed file is read beside the settings layers, being another layer and one that
-/// may ask for this: the strictest thing any of them said is what holds (PERM-18).
-fn current_workspace(
-    settings: &bravebot_config::Settings,
-    managed: &Managed,
-) -> Result<Workspace, String> {
-    let caps = settings.search();
-    let inside = settings
-        .narrowing()
-        .strictest(managed.narrowing())
-        .keeps_reads_in_the_workspace();
-    std::env::current_dir()
-        .map_err(|e| e.to_string())
-        .and_then(|dir| Workspace::new(dir).map_err(|e| e.to_string()))
-        .map(|workspace| workspace.with_search_caps(caps.files, caps.time))
-        .map(|workspace| workspace.with_reads_kept_inside(inside))
-        .map(|workspace| {
-            workspace.with_references(settings.references(), settings.references_unread())
-        })
-}
-
-/// The trust map a one-shot run opens with (TRUST-23, TRUST-26).
-///
-/// What a yes to the startup question writes where the person typed `--trust-workspace`, or where
-/// they kept an answer that settles a session here (TRUST-23): one about this directory or the
-/// root of the git worktree around it. Both are their own gesture, so neither is a guess made in
-/// their name (CLI-1). Anything else is the empty map. Nothing is written, and a kept answer is
-/// said on stderr, since a run nobody watches is where it would otherwise go unnoticed.
-fn unattended_trust(root: &Path, flagged: bool) -> bravebot_core::TrustStore {
-    let (trust, notice) = unattended_trust_with(
-        bravebot_agent::home::directory().as_deref(),
-        bravebot_agent::home::profile().as_deref(),
-        root,
-        flagged,
-    );
-    if let Some(notice) = notice {
-        eprintln!("{}", t!(cli_notice, notice = notice));
-    }
-    trust
-}
-
-/// [`unattended_trust`] with the state directory and the home given, and the notice returned.
-fn unattended_trust_with(
-    home: Option<&Path>,
-    profile: Option<&Path>,
-    root: &Path,
-    flagged: bool,
-) -> (bravebot_core::TrustStore, Option<String>) {
-    if flagged {
-        return (
-            bravebot_tui::trust_prompt::trusting_the_workspace(root),
-            None,
-        );
-    }
-    match bravebot_agent::trusted::honoured(home, profile, root) {
-        Some(bravebot_agent::trusted::Honoured { store, kept }) => (
-            bravebot_tui::trust_prompt::trusting_the_workspace(root),
-            Some(t!(
-                cli_trusting_kept,
-                directory = kept.root.display().to_string(),
-                when = bravebot_session::sessions::how_long_ago(kept.at),
-                path = store.path().display().to_string()
-            )),
-        ),
-        None => (bravebot_agent::workspace::trust_store(root), None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3464,8 +2477,14 @@ mod tests {
         report_confinement, sandbox_filesystem_lines, sandbox_mode_line, state_directory,
         what_outlives_revoking, what_tier_it_stands_at, what_would_end, why_it_dropped,
     };
+    use crate::workspace::unattended_trust_with;
+    use bravebot_agent::Workspace;
+    use bravebot_agent::confirm::{
+        Confirmer, Decision, ManifestRequest, VouchRequest, WriteRequest,
+    };
     use bravebot_core::capability::Capability;
     use bravebot_core::event::Sink;
+    use bravebot_core::event::{Event, RecordingSink, Role};
     use bravebot_core::label::Label;
     use bravebot_core::slot::SlotId;
     use bravebot_net::Transport;
@@ -3477,6 +2496,7 @@ mod tests {
     use bravebot_sandbox::policy::ConfinementLevel;
     use bravebot_session::store::Effort;
     use bravebot_tui::app::AskedFor;
+    use std::io::Write;
     use std::path::PathBuf;
 
     /// The two facts about the network nothing else in the report carries. A machine behind a
@@ -3758,7 +2778,7 @@ mod tests {
         ] {
             let line = opening(level);
             assert!(
-                line.contains(&named(level)),
+                line.contains(&confinement_name(level)),
                 "the level in force is not in the line that reports it: {line}"
             );
         }

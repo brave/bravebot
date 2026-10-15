@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
 documented-by: none (proposed with a first slice; the site page follows when the repository half is built)
 ---
