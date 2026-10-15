@@ -156,6 +156,10 @@ pub enum Action {
     /// is why the argument is carried unparsed: a number that is not one is answered with a line
     /// in the transcript, and the transcript is the loop's.
     Rewind(String),
+    /// List the hunks the last turn wrote, or put one back. Needs the workspace, the trust map and
+    /// the audit, which the loop owns, and carries the argument unparsed for the same reason as
+    /// `Rewind`.
+    Hunks(String),
     Quit,
 }
 

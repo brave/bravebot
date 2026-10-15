@@ -392,6 +392,18 @@ back every row from the first down to the one chosen. A number past what the ses
 rewinds nothing and says how far back it does go, rather than going as far as it can: reading a tree
 two turns younger than you believe it is would be worse than a refusal.
 
+### Putting back one hunk
+
+`/hunks` lists the hunks the last turn wrote, numbered from one across its files, and `/hunks 2` puts
+hunk 2 back as it stood before the turn while every other line of the file stays as it is. The list
+is drawn again afterwards, since the numbers below the hunk have moved, and `/undo` still puts the
+whole turn back.
+
+It is for the case where most of a turn is right and one change is not. A file you have edited since
+is protected: the file is compared with what the turn kept, and a hunk that has moved or changed is
+refused rather than written over. Only a file the session trusts is compared, so any other is named
+and left to `/undo`. The [command reference](../reference/commands.md#hunks-number) has the rest.
+
 ### What will not go back
 
 - **Changes outside file tools.** Commands, hooks, scratch writes, language servers and desktop

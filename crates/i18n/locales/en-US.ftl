@@ -2580,6 +2580,7 @@ command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
+command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
 command-exit = Leave
 
 
@@ -2685,6 +2686,60 @@ session-rewind-goes-no-further =
     { $kept ->
         [one] this session can go back one turn, no further
        *[other] this session can go back { $kept } turns, no further
+    }
+# Drawn after a line of a hunk that has no terminator, which only a file's final line can lack.
+diff-no-final-newline = [no newline at end of file]
+# What /hunks says. A hunk is a run of changed lines in a file the last turn wrote.
+session-hunks-heading = turn { $turn } wrote these hunks. /hunks <number> puts one back, and leaves the rest of the file
+session-hunks-wrote-nothing = turn { $turn } wrote no files, so there are no hunks to put back
+# One hunk: the line it starts at in the file now, and how many lines it added and removed.
+session-hunk-row = from line { $line }: { $added }, { $removed }
+# A hunk that only removes lines has none of its own in the file now, so the line before it places it.
+session-hunk-row-after = after line { $line }: { $removed }
+session-hunk-row-at-start = at the start of the file: { $removed }
+session-hunk-added =
+    { $count ->
+        [one] added 1 line
+       *[other] added { $count } lines
+    }
+session-hunk-removed =
+    { $count ->
+        [one] removed 1 line
+       *[other] removed { $count } lines
+    }
+# A file the last turn wrote that has no hunks to list, and why.
+session-hunks-left-row = { $path }: { $why }
+session-hunks-left-created = the turn created it, so a hunk cannot be taken out of it. /undo removes it, with the rest of the turn
+session-hunks-left-not-kept = what it held before the turn was not kept, so it will not go back
+session-hunks-left-untrusted =
+    its contents are not vouched for, so they are not compared. Only /undo puts it back, with the rest of the turn
+session-hunks-left-not-text = it is not text
+session-hunks-left-too-different = so much of it changed that its hunks cannot be lined up
+session-hunks-left-outside = it does not resolve inside the project now, so it is not read
+session-hunks-left-unreadable = it is gone, is not a file, or is larger than a rewind keeps
+session-hunks-left-as-it-was = it holds what it held before the turn
+session-hunk-put-back = put back hunk { $number } of { $path } as it stood before turn { $turn }
+session-hunk-not-put-back = hunk { $number } of { $path } was not put back: { $why }
+session-hunk-changed =
+    { $path } no longer holds hunk { $number } as it was listed, so nothing was written. /hunks lists
+    what it holds now
+session-hunk-failed =
+    writing { $path } failed, so it may hold part of the change and is not vouched for: { $problem }
+session-hunks-unavailable = /hunks could not begin: { $problem }
+session-hunks-needs-a-number = /hunks takes the number of a hunk it listed, as in /hunks 2
+session-hunks-more =
+    { $count ->
+        [one] 1 more hunk is not listed. /undo puts it back, with the rest of the turn
+       *[other] { $count } more hunks are not listed. /undo puts them back, with the rest of the turn
+    }
+session-hunks-uncovered = the list may be missing changes. Not fully covered: { $causes }.
+session-hunks-list-first = list the hunks with /hunks first, then put one back by its number
+session-hunks-turn-moved =
+    the session has had another turn since that list. /hunks lists the hunks of the last one
+session-hunk-no-such =
+    { $hunks ->
+        [one] there is no hunk { $number }; the last list had 1 hunk
+       *[other] there is no hunk { $number }; the last list had { $hunks } hunks
     }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }

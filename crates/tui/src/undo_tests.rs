@@ -1448,3 +1448,669 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
         }
     }
 }
+
+/// A project whose last turn wrote `foo.rs` as `edited` over `original`, with the rewind point that
+/// turn opened and the map it ended with.
+struct Wrote {
+    workspace: Workspace,
+    session: Session,
+    conversation: Conversation,
+    stored: sessions::Handle,
+    trust: TrustStore,
+    programs: TrustedPrograms,
+}
+
+const ORIGINAL: &str = "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\nindia\njuliet\n";
+/// `bravo` replaced by one line, and `india` by two.
+const EDITED: &str =
+    "alpha\nBRAVO\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\nINDIA\nINDIA TOO\njuliet\n";
+
+fn a_turn_wrote_foo(name: &str) -> Wrote {
+    let root = scratch_dir(&format!("hunks-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    let mut programs = TrustedPrograms::new();
+    let mut conversation = Conversation::new();
+    let mut session = Session::new("test");
+    let stored = sessions::Handle::begin(
+        workspace.root(),
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    session.rewind.open(
+        rewind_point(&session, &conversation, &trust, &programs, &stored),
+        "edit foo.rs".into(),
+    );
+    std::fs::write(workspace.root().join("foo.rs"), ORIGINAL).unwrap();
+    session.rewind.bind_coverage(&workspace);
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::tool("write_file", json!({"path":"foo.rs","contents":EDITED})),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let outcome = turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &Task::new("edit foo.rs"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut Trail::new(),
+        trust.clone(),
+        programs.clone(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    server.join().unwrap();
+    session.rewind.keep_backups(workspace.take_backups());
+    trust = outcome.trust;
+    programs = outcome.programs;
+    assert_eq!(
+        std::fs::read_to_string(workspace.root().join("foo.rs")).unwrap(),
+        EDITED
+    );
+    Wrote {
+        workspace,
+        session,
+        conversation,
+        stored,
+        trust,
+        programs,
+    }
+}
+
+/// A session whose last turn is said to have turned `before` into `after` in `foo.rs`, with the
+/// rewind point and backup that says so and no turn run to make it.
+fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
+    let root = scratch_dir(&format!("hunks-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    let programs = TrustedPrograms::new();
+    let conversation = Conversation::new();
+    let mut session = Session::new("test");
+    let stored = sessions::Handle::begin(
+        workspace.root(),
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    session.rewind.open(
+        rewind_point(&session, &conversation, &trust, &programs, &stored),
+        "edit foo.rs".into(),
+    );
+    let path = workspace.root().join("foo.rs");
+    std::fs::write(&path, after).unwrap();
+    session
+        .rewind
+        .keep_backups(vec![bravebot_agent::workspace::Backup {
+            path,
+            was: bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
+            captured_trust: Integrity::Trusted,
+        }]);
+    Wrote {
+        workspace,
+        session,
+        conversation,
+        stored,
+        trust,
+        programs,
+    }
+}
+
+impl Wrote {
+    fn list(&mut self) {
+        crate::hunks_command::list(
+            &mut self.session,
+            &self.workspace,
+            &self.trust,
+            &mut Trail::new(),
+        );
+    }
+
+    fn put_back(&mut self, number: usize) {
+        self.put_back_stopping(number, &mut None);
+    }
+
+    fn put_back_stopping(
+        &mut self,
+        number: usize,
+        servers: &mut Option<bravebot_agent::lsp::LanguageServers>,
+    ) {
+        crate::hunks_command::put_back(
+            &mut self.session,
+            number,
+            &self.workspace,
+            &mut self.trust,
+            servers,
+            None,
+            &mut Trail::new(),
+        );
+    }
+
+    /// Carry out `/hunks` as the event loop does, with what it keeps of the session.
+    fn hunks(&mut self, argument: &str) {
+        carry_out_hunks(
+            &mut self.session,
+            &self.conversation,
+            &mut self.stored,
+            &self.workspace,
+            &mut self.trust,
+            &self.programs,
+            &mut None,
+            argument,
+        );
+    }
+
+    fn undo(&mut self) {
+        rewind(
+            &mut self.session,
+            &mut self.conversation,
+            &mut self.trust,
+            &mut self.programs,
+            &mut self.stored,
+            &self.workspace,
+            &mut None,
+            1,
+        );
+    }
+
+    fn foo(&self) -> String {
+        std::fs::read_to_string(self.workspace.root().join("foo.rs")).unwrap()
+    }
+
+    /// Everything the transcript says, one entry to a line.
+    fn said(&self) -> String {
+        self.session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The hunks the transcript holds, as their rows are drawn.
+    fn rows(&self) -> Vec<&bravebot_agent::report::Activity> {
+        self.session
+            .transcript
+            .iter()
+            .filter_map(|entry| entry.activity.as_ref())
+            .filter(|activity| activity.verb == "Hunk")
+            .collect()
+    }
+}
+
+impl Drop for Wrote {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.workspace.root());
+    }
+}
+
+/// The list is what a number is read beside, so each row says which hunk it is, where it is in the
+/// file now, and shows the lines it replaced and the lines that replaced them.
+#[test]
+fn the_hunks_of_the_last_turn_are_listed_with_their_lines() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("list");
+
+    wrote.list();
+
+    let rows = wrote.rows();
+    assert_eq!(rows.len(), 2, "{}", wrote.said());
+    assert_eq!(rows[0].line(), "Hunk(1 foo.rs)");
+    assert_eq!(rows[1].line(), "Hunk(2 foo.rs)");
+    assert_eq!(
+        rows[0].note.as_deref(),
+        Some("from line 2: added 1 line, removed 1 line")
+    );
+    assert_eq!(
+        rows[1].note.as_deref(),
+        Some("from line 9: added 2 lines, removed 1 line")
+    );
+    use bravebot_agent::diff::Change;
+    assert!(rows[0].changes.contains(&Change::Removed("bravo".into())));
+    assert!(rows[0].changes.contains(&Change::Added("BRAVO".into())));
+    assert!(rows[1].changes.contains(&Change::Removed("india".into())));
+    assert!(rows[1].changes.contains(&Change::Added("INDIA TOO".into())));
+    assert!(!rows[0].untrusted && !rows[1].untrusted);
+    assert_eq!(wrote.foo(), EDITED, "listing wrote to the file");
+}
+
+/// Only the named hunk goes back, the file keeps the other as the turn wrote it, the map is as it
+/// was, and the turn can still be rewound whole afterwards.
+#[test]
+fn a_hunk_is_put_back_by_its_number_and_the_turn_can_still_be_undone() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("put-back");
+    let trust = wrote.trust.clone();
+    wrote.list();
+
+    wrote.put_back(2);
+
+    assert_eq!(
+        wrote.foo(),
+        "alpha\nBRAVO\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\nindia\njuliet\n"
+    );
+    assert!(
+        wrote
+            .said()
+            .contains("put back hunk 2 of foo.rs as it stood before turn 1"),
+        "{}",
+        wrote.said()
+    );
+    assert_eq!(wrote.trust, trust);
+    let rows = wrote.rows();
+    assert_eq!(
+        rows.len(),
+        3,
+        "the list was not drawn again: two rows, then one"
+    );
+    assert_eq!(rows[2].line(), "Hunk(1 foo.rs)");
+
+    wrote.undo();
+
+    assert_eq!(wrote.foo(), ORIGINAL);
+}
+
+/// Once a hunk goes back the numbers below it move, so the list is drawn again and an old number is
+/// not applied to what now stands under it.
+#[test]
+fn a_number_from_before_the_list_was_redrawn_names_no_other_hunk() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("renumbered");
+    wrote.list();
+    wrote.put_back(1);
+    let after_the_first = wrote.foo();
+
+    wrote.put_back(2);
+
+    assert_eq!(wrote.foo(), after_the_first, "hunk 2 no longer exists");
+    assert!(
+        wrote
+            .said()
+            .contains("there is no hunk 2; the last list had 1 hunk"),
+        "{}",
+        wrote.said()
+    );
+}
+
+#[test]
+fn a_number_with_no_list_to_read_it_beside_writes_nothing() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("no-list");
+
+    wrote.put_back(1);
+
+    assert_eq!(wrote.foo(), EDITED);
+    assert!(wrote.said().contains("list the hunks with /hunks first"));
+}
+
+/// A list read before another turn describes the turn before, and the number is not applied to the
+/// turn that is the last one now. The later turn here wrote the same file the same way, so the
+/// hunk is there to be found and only the turn it was listed for refuses it.
+#[test]
+fn a_list_from_before_another_turn_is_not_applied_to_it() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("another-turn");
+    wrote.list();
+    let backups = wrote.session.rewind.points()[0].backups.clone();
+    let mut point = rewind_point(
+        &wrote.session,
+        &wrote.conversation,
+        &wrote.trust,
+        &wrote.programs,
+        &wrote.stored,
+    );
+    point.turns += 1;
+    wrote.session.rewind.open(point, "a later turn".into());
+    wrote.session.rewind.keep_backups(backups);
+
+    wrote.put_back(1);
+
+    assert_eq!(wrote.foo(), EDITED);
+    assert!(wrote.said().contains("another turn since that list"));
+}
+
+/// A turn undone and run again numbers the same, and the session cleared starts over, so neither
+/// leaves a list a number could be read beside. The turn run again here makes the same edit, so
+/// the hunk is there to be found.
+#[test]
+fn a_list_does_not_outlive_the_undo_or_the_clearing_of_its_turn() {
+    if !in_isolated_profile() {
+        return;
+    }
+    for ending in ["undo", "clear"] {
+        let mut wrote = a_turn_wrote_foo(&format!("outlived-{ending}"));
+        let backups = wrote.session.rewind.points()[0].backups.clone();
+        wrote.list();
+        match ending {
+            "undo" => wrote.undo(),
+            _ => wrote.session.clear(),
+        }
+        let point = rewind_point(
+            &wrote.session,
+            &wrote.conversation,
+            &wrote.trust,
+            &wrote.programs,
+            &wrote.stored,
+        );
+        wrote.session.rewind.open(point, "edit foo.rs again".into());
+        std::fs::write(wrote.workspace.root().join("foo.rs"), EDITED).unwrap();
+        wrote.session.rewind.keep_backups(backups);
+
+        wrote.put_back(1);
+
+        assert_eq!(wrote.foo(), EDITED, "{ending}");
+        assert!(
+            wrote.said().contains("list the hunks with /hunks first"),
+            "{ending}: {}",
+            wrote.said()
+        );
+    }
+}
+
+/// The hunk is found again in the file as it is now. A line added above it moves it, and the lines
+/// the list showed are not written over the person's edit.
+#[test]
+fn a_file_edited_since_the_list_is_not_written_over() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("edited-since");
+    wrote.list();
+    let edited = format!("a line the person added\n{EDITED}");
+    std::fs::write(wrote.workspace.root().join("foo.rs"), &edited).unwrap();
+
+    wrote.put_back(2);
+
+    assert_eq!(wrote.foo(), edited);
+    assert!(
+        wrote
+            .said()
+            .contains("foo.rs no longer holds hunk 2 as it was listed"),
+        "{}",
+        wrote.said()
+    );
+}
+
+/// Comparing a file is deciding from its content, so a file the map does not vouch for is named as
+/// one hunks are not listed for, and its lines are not drawn: nothing was told whether they are
+/// worth showing. A sentinel in the file never reaches the transcript.
+#[test]
+fn a_file_the_map_does_not_vouch_for_is_named_and_its_lines_are_not_drawn() {
+    if !in_isolated_profile() {
+        return;
+    }
+    const SECRET: &str = "UNVOUCHED_HUNK_LINE_55102";
+    let mut wrote = a_turn_wrote_foo("unvouched");
+    let edited = EDITED.replace("INDIA TOO", SECRET);
+    std::fs::write(wrote.workspace.root().join("foo.rs"), &edited).unwrap();
+    wrote.trust.distrust("foo.rs");
+
+    wrote.list();
+    wrote.put_back(1);
+
+    assert_eq!(wrote.rows().len(), 0);
+    assert!(
+        wrote
+            .said()
+            .contains("foo.rs: its contents are not vouched for"),
+        "{}",
+        wrote.said()
+    );
+    assert!(!wrote.said().contains(SECRET));
+    assert_eq!(wrote.foo(), edited);
+}
+
+#[test]
+fn a_session_with_no_turn_has_no_hunks() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut session = Session::new("test");
+    let root = scratch_dir("hunks-no-turn");
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+
+    crate::hunks_command::list(
+        &mut session,
+        &workspace,
+        &TrustStore::new(workspace.root()),
+        &mut Trail::new(),
+    );
+
+    assert_eq!(session.transcript.len(), 1);
+    assert!(session.transcript[0].text.contains("nothing left to undo"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A list is for the turn it was read beside. A prompt sent after it starts a turn whose point is
+/// not that one, and a number typed then is read beside a list of its own.
+#[test]
+fn a_list_does_not_outlive_the_prompt_that_follows_it() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("prompt-follows");
+    wrote.list();
+    wrote.session.paste("go on");
+    wrote.session.submit().unwrap();
+
+    wrote.put_back(1);
+
+    assert_eq!(wrote.foo(), EDITED);
+    assert!(wrote.said().contains("list the hunks with /hunks first"));
+}
+
+/// The list holds the changes the file tools made. A command the turn ran may have changed other
+/// files, and a list that did not say so would read as everything the turn did.
+#[test]
+fn a_list_says_when_the_turn_changed_more_than_it_can_list() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("uncovered");
+    wrote
+        .workspace
+        .mark_rewind_gap(bravebot_agent::rewind::CoverageGap::Command);
+
+    wrote.list();
+
+    assert_eq!(wrote.rows().len(), 2);
+    assert!(
+        wrote
+            .said()
+            .contains("the list may be missing changes. Not fully covered: commands."),
+        "{}",
+        wrote.said()
+    );
+}
+
+/// A file reformatted line by line has hundreds of hunks. The list stops at its limit and says how
+/// many it left out, with the way to put the file back whole.
+#[test]
+fn a_list_longer_than_its_limit_says_how_many_hunks_it_left_out() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let limit = bravebot_agent::hunks::MAX_LISTED;
+    let before: String = (0..limit + 30)
+        .map(|n| format!("line {n}\nkeep\n"))
+        .collect();
+    let after: String = (0..limit + 30)
+        .map(|n| format!("LINE {n}\nkeep\n"))
+        .collect();
+    let mut wrote = a_point_over("many", &before, &after);
+
+    wrote.list();
+
+    assert_eq!(wrote.rows().len(), limit);
+    assert!(
+        wrote.said().contains(
+            "30 more hunks are not listed. /undo puts them back, with the rest of the turn"
+        ),
+        "{}",
+        wrote.said()
+    );
+}
+
+/// A carriage return ends every line of a CRLF file, so a mark on each row says nothing and buries
+/// the change. The rows draw the lines without it.
+#[test]
+fn a_crlf_file_is_listed_without_a_mark_on_every_row() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over("crlf", "one\r\ntwo\r\nthree\r\n", "one\r\nTWO\r\nthree\r\n");
+
+    wrote.list();
+
+    let rows = wrote.rows();
+    assert_eq!(rows.len(), 1, "{}", wrote.said());
+    use bravebot_agent::diff::Change;
+    assert_eq!(
+        rows[0].changes,
+        [
+            Change::Kept("one".into()),
+            Change::Removed("two".into()),
+            Change::Added("TWO".into()),
+            Change::Kept("three".into()),
+        ]
+    );
+}
+
+/// A write that fails leaves its path distrusted, and the record has to say so or a resume trusts
+/// a half-written file again. Run as the event loop runs it, with a file the write cannot open.
+#[cfg(unix)]
+#[test]
+fn a_distrust_left_by_a_failed_write_reaches_the_saved_record() {
+    use std::os::unix::fs::PermissionsExt;
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("saved");
+    wrote.session.turns = 1;
+    wrote.hunks("");
+    let path = wrote.workspace.root().join("foo.rs");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        // The write would succeed for a process that ignores permissions, such as root.
+        return;
+    }
+
+    wrote.hunks("1");
+
+    assert!(
+        wrote.said().contains("writing foo.rs failed"),
+        "{}",
+        wrote.said()
+    );
+    let key = bravebot_agent::workspace::key_of(&path);
+    assert_eq!(wrote.trust.integrity_of(&key), Some(Integrity::Untrusted));
+    let saved = sessions::load(wrote.workspace.root(), wrote.stored.id()).unwrap();
+    assert_eq!(
+        saved.trust_map(wrote.workspace.root()),
+        Some(wrote.trust.clone())
+    );
+}
+
+/// A command that passed no gate has nothing to add to the trail, and a session with no turn has
+/// no audit file for it to start.
+#[test]
+fn a_hunks_command_that_passes_no_gate_leaves_no_audit_file() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_point_over("no-audit", "a\n", "b\n");
+    wrote.session.rewind.close();
+
+    for argument in ["", "abc", "1"] {
+        wrote.hunks(argument);
+    }
+
+    let audit = sessions::project_directory(wrote.workspace.root())
+        .map(|dir| dir.join(format!("{}.audit.jsonl", wrote.stored.id())))
+        .expect("an audit path");
+    assert!(!audit.exists(), "an empty audit file was started");
+}
+
+/// A restoration stops the session's language servers before it writes, so the write a hunk makes
+/// does the same. A hunk refused, before or after it is looked for in the file, writes nothing and
+/// leaves them running.
+#[test]
+fn a_hunk_put_back_stops_the_language_servers_and_a_refused_one_does_not() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("servers");
+    wrote.list();
+    let mut running = Some(bravebot_agent::lsp::LanguageServers::new(
+        wrote.workspace.root(),
+        None,
+    ));
+
+    wrote.put_back_stopping(7, &mut running);
+    assert!(running.is_some(), "a number with no hunk stopped them");
+
+    let edited = format!("a line the person added\n{EDITED}");
+    std::fs::write(wrote.workspace.root().join("foo.rs"), &edited).unwrap();
+    wrote.put_back_stopping(2, &mut running);
+    assert!(
+        wrote.said().contains("no longer holds hunk 2"),
+        "{}",
+        wrote.said()
+    );
+    assert!(
+        running.is_some(),
+        "a hunk the file no longer held stopped them"
+    );
+
+    std::fs::write(wrote.workspace.root().join("foo.rs"), EDITED).unwrap();
+    wrote.list();
+    wrote.put_back_stopping(1, &mut running);
+    assert!(running.is_none(), "{}", wrote.said());
+}
+
+/// A hunk that only removes lines has none of its own in the file now, so the line before it
+/// places it, and a removal at the start says so.
+#[test]
+fn a_hunk_that_only_removes_lines_is_placed_by_the_line_before_it() {
+    if !in_isolated_profile() {
+        return;
+    }
+    for (before, after, said) in [
+        ("a\nb\nc\nd\n", "a\nb\nd\n", "after line 2: removed 1 line"),
+        (
+            "x\na\nb\n",
+            "a\nb\n",
+            "at the start of the file: removed 1 line",
+        ),
+    ] {
+        let mut wrote = a_point_over("removal", before, after);
+
+        wrote.list();
+
+        let rows = wrote.rows();
+        assert_eq!(rows.len(), 1, "{}", wrote.said());
+        assert_eq!(rows[0].note.as_deref(), Some(said));
+    }
+}

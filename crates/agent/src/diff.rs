@@ -11,6 +11,7 @@
 //! [LABEL-6](../../../docs/specs/labels.md#LABEL-6) refuses. `Policy::render_pair_in_place` is
 //! what hands the two sides over, and what comes back out is labelled by the taint of both.
 
+use bravebot_i18n::t;
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -101,11 +102,94 @@ const SEARCH_STEPS_PER_LINE: usize = 16;
 /// grows with the square of this.
 const MAX_EDITS: usize = 1000;
 
+/// One run of changed lines, and the lines either side that put it in place.
+///
+/// Counted in lines of the two texts, so a hunk can be taken out of the text after and the lines it
+/// replaced in the text before put in their place ([`put_back`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hunk {
+    /// The lines of the text before the run replaces, as a zero-based half-open range.
+    pub before: Range<usize>,
+    /// The lines of the text after the run is, in the same terms.
+    pub after: Range<usize>,
+    /// The run with up to the requested number of unchanged lines either side, each line whole with
+    /// the terminator it ends in. Two hunks are the same hunk when their ranges and these lines
+    /// are, which is why they are not the lines as drawn ([`Hunk::drawn`]).
+    pub changes: Vec<Change>,
+}
+
+impl Hunk {
+    /// The run as it is drawn, line by line, without the terminators.
+    ///
+    /// A line removed that reads the same as a line added keeps the carriage return it ends in, and
+    /// says so when it has no terminator, since the way it ends is all that differs between them.
+    /// Every other line is drawn bare, so a CRLF file is not marked on every row.
+    pub fn drawn(&self) -> Vec<Change> {
+        let bare = |line: &str| {
+            line.strip_suffix("\r\n")
+                .or_else(|| line.strip_suffix('\n'))
+                .unwrap_or(line)
+                .to_string()
+        };
+        let texts_of = |added: bool| -> std::collections::HashSet<String> {
+            self.changes
+                .iter()
+                .filter_map(|change| match change {
+                    Change::Removed(line) if !added => Some(bare(line)),
+                    Change::Added(line) if added => Some(bare(line)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (removed, added) = (texts_of(false), texts_of(true));
+        let shown = |line: &str, other_side: &std::collections::HashSet<String>| {
+            if !other_side.contains(&bare(line)) {
+                return bare(line);
+            }
+            match line.strip_suffix('\n') {
+                Some(text) => text.to_string(),
+                None => format!("{line} {}", t!(diff_no_final_newline)),
+            }
+        };
+        self.changes
+            .iter()
+            .map(|change| match change {
+                Change::Kept(line) => Change::Kept(bare(line)),
+                Change::Added(line) => Change::Added(shown(line, &removed)),
+                Change::Removed(line) => Change::Removed(shown(line, &added)),
+                Change::Elided(count) => Change::Elided(*count),
+            })
+            .collect()
+    }
+}
+
 impl Diff {
     /// Diff `before` against `after`, by line.
     pub fn compute(before: &str, after: &str) -> Self {
-        let old: Vec<&str> = before.lines().collect();
-        let new: Vec<&str> = after.lines().collect();
+        Self::of_lines(
+            before,
+            after,
+            before.lines().collect(),
+            after.lines().collect(),
+        )
+    }
+
+    /// Diff `before` against `after`, by line with its terminator.
+    ///
+    /// Two lines that differ only in their terminator are different lines here, which
+    /// [`Diff::compute`] counts as the same: a hunk that is put back has to bring back the bytes it
+    /// replaced, a final line that had no terminator included. The lines of the changes carry
+    /// their terminators.
+    pub fn compute_terminated(before: &str, after: &str) -> Self {
+        Self::of_lines(
+            before,
+            after,
+            before.split_inclusive('\n').collect(),
+            after.split_inclusive('\n').collect(),
+        )
+    }
+
+    fn of_lines(before: &str, after: &str, old: Vec<&str>, new: Vec<&str>) -> Self {
         let before_ending = LineEnding::of(before);
         let after_ending = LineEnding::of(after);
 
@@ -234,6 +318,65 @@ impl Diff {
             .min(self.changes.len().saturating_sub(1));
         (low..=high).any(|i| !matches!(self.changes[i], Change::Kept(_)))
     }
+
+    /// Each run of changed lines, with up to `context` unchanged lines either side, in the order
+    /// the text has them.
+    ///
+    /// `None` where the diff is not exact, since the stretch it could not line up has no hunks to
+    /// name. The lines of each hunk's changes are whole, terminators included, and its ranges count
+    /// the lines the diff was made over, so only a diff made by [`Diff::compute_terminated`] has
+    /// ranges [`put_back`] can use. [`Hunk::drawn`] is how they are drawn.
+    pub fn hunks(&self, context: usize) -> Option<Vec<Hunk>> {
+        if !self.is_exact() {
+            return None;
+        }
+        let kept = |at: usize| matches!(self.changes[at], Change::Kept(_));
+        let mut hunks = Vec::new();
+        let (mut before, mut after) = (0usize, 0usize);
+        let mut at = 0;
+        while at < self.changes.len() {
+            if kept(at) {
+                before += 1;
+                after += 1;
+                at += 1;
+                continue;
+            }
+            let (first, first_before, first_after) = (at, before, after);
+            while at < self.changes.len() && !kept(at) {
+                match self.changes[at] {
+                    Change::Removed(_) => before += 1,
+                    Change::Added(_) => after += 1,
+                    Change::Kept(_) | Change::Elided(_) => {}
+                }
+                at += 1;
+            }
+            let leading = (1..=context.min(first))
+                .take_while(|back| kept(first - back))
+                .count();
+            let trailing = (0..context)
+                .take_while(|ahead| at + ahead < self.changes.len() && kept(at + ahead))
+                .count();
+            hunks.push(Hunk {
+                before: first_before..before,
+                after: first_after..after,
+                changes: self.changes[first - leading..at + trailing].to_vec(),
+            });
+        }
+        Some(hunks)
+    }
+}
+
+/// `after` with the lines `hunk` replaced in `before` put where the hunk is.
+///
+/// Every line is taken whole, terminator included, from the text it belongs to, so the result is
+/// `after` outside the hunk and `before` inside it, byte for byte. `None` where the hunk's ranges
+/// lie outside either text, which is a hunk made over other texts.
+pub fn put_back(before: &str, after: &str, hunk: &Hunk) -> Option<String> {
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
+    let replaced = old.get(hunk.before.clone())?;
+    let (ahead, behind) = (new.get(..hunk.after.start)?, new.get(hunk.after.end..)?);
+    Some([ahead, replaced, behind].concat().concat())
 }
 
 /// What [`align`] has made of the runs it was given.
@@ -1250,5 +1393,208 @@ mod tests {
         let diff = Diff::compute("x\nx\nx\n", "x\nx\nx\nx\n");
         assert_eq!(added(&diff), vec!["x"]);
         assert!(removed(&diff).is_empty());
+    }
+
+    fn hunks_of(before: &str, after: &str) -> Vec<Hunk> {
+        Diff::compute_terminated(before, after)
+            .hunks(1)
+            .expect("an exact diff has hunks")
+    }
+
+    /// Two edits far apart are two runs, and each names the lines it replaces on both sides, which
+    /// is what lets one be taken out of the text after and the other left.
+    #[test]
+    fn hunks_name_the_lines_each_run_replaces_on_both_sides() {
+        let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let after = "a\nB\nB2\nc\nd\ne\nf\nh\n";
+
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(
+            hunks
+                .iter()
+                .map(|h| (h.before.clone(), h.after.clone()))
+                .collect::<Vec<_>>(),
+            [(1..2, 1..3), (6..7, 7..7)]
+        );
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("B".into()),
+                Change::Added("B2".into()),
+                Change::Kept("c".into()),
+            ]
+        );
+        assert_eq!(
+            hunks[1].drawn(),
+            [
+                Change::Kept("f".into()),
+                Change::Removed("g".into()),
+                Change::Kept("h".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn identical_texts_have_no_hunks() {
+        assert_eq!(hunks_of("a\nb\n", "a\nb\n"), []);
+    }
+
+    /// The context of a hunk stops at the run before it, so another hunk's lines are never drawn
+    /// as this one's unchanged lines.
+    #[test]
+    fn the_context_of_a_hunk_does_not_reach_into_another() {
+        let hunks = Diff::compute_terminated("a\nb\nc\nd\ne\n", "a\nB\nc\nD\ne\n")
+            .hunks(5)
+            .expect("an exact diff has hunks");
+
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(
+            hunks[1].drawn(),
+            [
+                Change::Kept("c".into()),
+                Change::Removed("d".into()),
+                Change::Added("D".into()),
+                Change::Kept("e".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inexact_diff_has_no_hunks() {
+        let (before, after) = dissimilar_stretches();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute_terminated(&before, &after);
+
+        assert!(!diff.is_exact());
+        assert_eq!(diff.hunks(3), None);
+    }
+
+    /// Putting one hunk back leaves the other exactly as the text after has it, and putting each
+    /// back in turn arrives at the text before.
+    #[test]
+    fn putting_a_hunk_back_leaves_the_other_hunks_as_they_are() {
+        let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let after = "a\nB\nB2\nc\nd\ne\nf\nh\n";
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(
+            put_back(before, after, &hunks[0]).as_deref(),
+            Some("a\nb\nc\nd\ne\nf\nh\n")
+        );
+        assert_eq!(
+            put_back(before, after, &hunks[1]).as_deref(),
+            Some("a\nB\nB2\nc\nd\ne\nf\ng\nh\n")
+        );
+        let once = put_back(before, after, &hunks[1]).unwrap();
+        let again = hunks_of(before, &once);
+        assert_eq!(again.len(), 1);
+        assert_eq!(put_back(before, &once, &again[0]).as_deref(), Some(before));
+    }
+
+    /// A file whose last line has no terminator comes back without one, and a file that gained one
+    /// loses it again. Lines compared without their terminators would call both "no change".
+    #[test]
+    fn a_final_line_without_a_terminator_is_put_back_without_one() {
+        let (before, after) = ("a\nb", "a\nb\nc\n");
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+
+        let (before, after) = ("a\nb\n", "a\nb");
+        let hunks = hunks_of(before, after);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+    }
+
+    /// A carriage return belongs to the line it ends, so a file turned from LF to CRLF is a change
+    /// to every line and putting it back restores the bytes, not the lines read without them.
+    #[test]
+    fn a_hunk_of_changed_terminators_is_put_back_byte_for_byte() {
+        let (before, after) = ("a\nb\nc\n", "a\r\nb\r\nc\r\n");
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].changes.len(), 6);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+        assert!(Diff::compute(before, after).hunks(1).unwrap().is_empty());
+    }
+
+    /// A hunk that changes only how lines end is drawn so the two sides differ: the carriage return
+    /// stays on its line and a final line with no terminator says so. Without them the hunk reads as
+    /// a removal and an addition of the same text, and a person cannot tell what putting it back
+    /// would change.
+    #[test]
+    fn a_hunk_that_changes_only_how_lines_end_is_drawn_with_the_difference_visible() {
+        let crlf = hunks_of("a\nb\n", "a\r\nb\r\n");
+        assert_eq!(
+            crlf[0].drawn(),
+            [
+                Change::Removed("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("a\r".into()),
+                Change::Added("b\r".into()),
+            ]
+        );
+
+        let no_newline = hunks_of("a\nb", "a\nb\n");
+        assert_eq!(
+            no_newline[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b [no newline at end of file]".into()),
+                Change::Added("b".into()),
+            ]
+        );
+    }
+
+    /// A file turned from CRLF to LF with one line edited is a hunk of the whole file. The lines
+    /// whose ending is all that changed show it, and the line that was edited does not.
+    #[test]
+    fn only_the_lines_whose_ending_is_the_change_show_it() {
+        let hunks = hunks_of("a\r\nb\r\nc\r\n", "a\nB\nc\n");
+
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Removed("a\r".into()),
+                Change::Removed("b".into()),
+                Change::Removed("c\r".into()),
+                Change::Added("a".into()),
+                Change::Added("B".into()),
+                Change::Added("c".into()),
+            ]
+        );
+    }
+
+    /// In a CRLF file the carriage return ends every line, so a mark on each of them says nothing.
+    /// It shows only where the way lines end is what changed.
+    #[test]
+    fn a_hunk_of_a_crlf_file_is_drawn_without_a_mark_on_any_row() {
+        let hunks = hunks_of("a\r\nb\r\nc\r\n", "a\r\nB\r\nc\r\n");
+
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("B".into()),
+                Change::Kept("c".into()),
+            ]
+        );
+        assert!(hunks[0].changes.contains(&Change::Added("B\r\n".into())));
+    }
+
+    /// A hunk made over other texts names lines these do not have, and is refused rather than
+    /// applied to whatever lines are there.
+    #[test]
+    fn a_hunk_from_other_texts_is_not_put_back() {
+        let hunks = hunks_of("a\nb\nc\nd\n", "a\nb\nc\nD\nE\nF\n");
+
+        assert_eq!(put_back("a\n", "a\n", &hunks[0]), None);
     }
 }
