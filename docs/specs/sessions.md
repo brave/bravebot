@@ -1197,11 +1197,12 @@ second copy a no-op without a field in the record that every earlier build would
 The resume picker narrows its list by what a session's record says as well as by its title, branch
 and links ([SESSION-3](#SESSION-3)). The words searched are the ones a resumed transcript draws: the
 prompts a person typed, the planner's replies, and the line announcing each call the planner made,
-which names the path, command, address or pattern it was about. A tool result, a file a prompt
-attached, a note the agent composed and a reference the quarantine holds are not drawn, so they are
-not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one the transcript draws,
-so a command the transcript hides is not searchable either. The trail holds no words and is not
-read.
+which names the path, command, address or pattern it was about. A note a person typed on the
+session ([SESSION-36](#SESSION-36)) is searched too, and is shown on a row the same way. A tool
+result, a file a prompt attached, a note the agent composed and a reference the quarantine holds are
+not drawn, so they are not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one
+the transcript draws, so a command the transcript hides is not searchable either. The trail holds no
+words and is not read.
 
 A record is searched only when it was written by this program's terminal or desktop front end, or
 by a build that did not yet record one. An imported session ([SESSION-32](#SESSION-32)) holds
@@ -1251,6 +1252,11 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::a_shown_match_is_cut_around_the_words_and_no_wider_than_a_row`
 `verified-by: bravebot_session::search::a_since_word_is_a_window_and_leaves_the_rest_as_the_phrase`
 `verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
+`verified-by: bravebot_session::search::a_note_a_person_typed_is_found_and_a_record_without_notes_is_unchanged`
+`verified-by: bravebot_session::search::a_session_found_by_a_note_and_by_a_prompt_shows_the_prompt_line`
+`verified-by: bravebot_session::search::a_note_is_cleaned_like_any_other_line_before_it_is_compared_or_shown`
+`verified-by: bravebot_session::search::a_note_in_an_imported_session_is_not_searched`
+`verified-by: bravebot_session::search::an_entry_built_before_notes_were_searched_is_rebuilt_to_include_them`
 `verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
 `verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
 `verified-by: bravebot_session::search::a_session_saved_before_the_index_is_found_and_indexed`
@@ -1407,3 +1413,53 @@ A process that owns its sessions, and must keep them apart from the ones a termi
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
 `verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
 `verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`
+
+<a id="SESSION-36"></a>
+### SESSION-36: a note a person types is kept in the record apart from the conversation
+
+`/note <text>` adds a note to the session. It can be typed while a turn runs. The note belongs to the
+turn the session is on: the running turn, or the last finished one when none runs. It is written to
+the record at once, as an entry of its own with the turn, the author and the text. The author is
+`person`: the only way to add a note is the person typing the command, and nothing a tool, a file or
+a model produced is written as one. Text with nothing in it is not a note and records nothing;
+`/note` with nothing after it lists the notes the session holds instead, one line each with its turn,
+and adds none. A session that writes no record, as an incognito one does, holds the note in the
+session only, and says that it reached no record rather than saying it was kept.
+
+A note is not part of the conversation. It is not a prompt, is not queued, is not offered to the
+turn in flight, and is not in the snapshot a resume restores, so adding one changes nothing the
+planner is given. A resume, a continuation save and a fork keep the notes of the session. A record
+written before notes were kept reads as having none. The resume search ([SESSION-33](#SESSION-33))
+finds a session by the text of its notes.
+
+The session-review skill reads the notes of a session it reviews and shows them to its analyzer and
+verifier as data from the person. The analyzer checks a note against the audit trail and the code
+like any other claim and reports it only when the cause is in bravebot. Nothing in a note is run or
+followed as an instruction, and an issue filed from a review carries none of its text. A session is
+reviewed again when it has more notes than the last review considered.
+
+**Why.** A person watching a session sees things the record does not show: the wrong file was
+edited, the answer was slow, the plan was misread. Saying so where the session is, at the turn it
+happened on, is cheaper and more exact than reconstructing it at review time.
+
+**Why not into the conversation.** The text is free-form from a person and may quote anything. In
+the conversation it would be read by the planner as part of the task, which is not what it is for,
+and it would change what a later turn does. Kept apart, it is read only by a review that treats it
+as data.
+
+`verified-by: bravebot_session::sessions::a_note_is_written_at_once_with_its_turn_and_its_author`
+`verified-by: bravebot_session::sessions::empty_text_is_not_a_note`
+`verified-by: bravebot_session::sessions::a_note_typed_before_the_first_save_is_written_with_it`
+`verified-by: bravebot_session::sessions::a_note_leaves_the_conversation_as_it_was`
+`verified-by: bravebot_session::sessions::a_resumed_session_keeps_its_notes_through_a_continuation_save`
+`verified-by: bravebot_session::sessions::a_whole_record_save_writes_the_notes_the_handle_holds`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_notes`
+`verified-by: bravebot_session::sessions::a_record_from_before_notes_reads_as_having_none`
+`verified-by: bravebot_tui::app::the_note_command_carries_the_whole_note`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
+`verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`
+`verified-by: bravebot_tui::app::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
+`verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
+`verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
+`verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker)`

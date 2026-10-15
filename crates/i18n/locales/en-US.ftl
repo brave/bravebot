@@ -2551,6 +2551,7 @@ command-reach = Remember a directory or credential for a command, or list and re
 command-sandbox = Show the sandbox mode, or change it from the next turn
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-note = Note something on this session's record, without putting it in the conversation
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-handoff = Start a new session from a brief you can edit, written for the next goal
 command-resume = Pick up another session of this directory, by id or from a list
@@ -2605,6 +2606,10 @@ session-resumed = resumed session: { $title }
 session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
+session-note-added = noted on turn { $turn }, in the record only: the planner is not given it
+session-note-needs-text = /note needs the note, as in /note the wrong file was edited here
+session-note-not-recorded = not noted: this session writes no record, so a note would be kept nowhere
+session-note-listed = turn { $turn }: { $text }
 # What /issue and /pr say back. A refused value is not repeated, since it may hold a control
 # character.
 session-issue-is = this session is for { $url }. /issue clear removes it

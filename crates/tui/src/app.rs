@@ -238,6 +238,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::Rename(name) => {
             session.answer_while_working(|session| rename_session(session, beside.stored, &name));
         }
+        Action::Note(text) => {
+            session.answer_while_working(|session| note_session(session, beside.stored, &text));
+        }
         Action::Link(kind, argument) => {
             session.answer_while_working(|session| {
                 link_session(session, beside.stored, kind, &argument);
@@ -499,6 +502,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    if let Some(text) = argument_to(line, NOTE_COMMAND) {
+        return Action::Note(text.to_string());
     }
     if let Some(name) = argument_to(line, BRANCH_COMMAND) {
         return Action::Branch(name.to_string());
@@ -2529,6 +2535,7 @@ fn event_loop(
             Action::ChooseEditing => choose_editing(terminal, held.session),
             Action::AddDirectory(directory) => held.add_directory_command(&directory),
             Action::CloseDirectory(directory) => held.close_directory_command(&directory),
+            Action::Note(text) => note_session(held.session, held.stored, &text),
             Action::ChangeDirectory(directory) => {
                 if let Some(ended) = held.change_directory_command(terminal, &directory) {
                     return Ok(ended);
@@ -3094,6 +3101,7 @@ fn fetch_gateway_models(
             .map_err(|error| error.to_string())
     })
 }
+
 /// Where a session's opening trust map came from, which is what it says about it.
 #[derive(Debug, Clone, Copy)]
 enum Whence {
@@ -19045,6 +19053,7 @@ mod tests {
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 MODEL_COMMAND,
+                NOTE_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
@@ -19674,6 +19683,227 @@ mod tests {
             1,
             "a rename that renamed nothing gave up the running turn's point"
         );
+    }
+
+    /// The note is the point of this one, so it must arrive with the action, spaces and all.
+    #[test]
+    fn the_note_command_carries_the_whole_note() {
+        let mut session = Session::new("none");
+        for c in "/note the wrong file was edited".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Note("the wrong file was edited".to_string())
+        );
+        assert!(session.input().is_empty(), "the command stayed on the line");
+        assert!(
+            session.transcript.is_empty(),
+            "the command was sent as a prompt"
+        );
+    }
+
+    /// A sentence mentioning it is a thing to say to the planner.
+    #[test]
+    fn a_prompt_containing_the_note_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /note do".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /note do".to_string())
+        );
+    }
+
+    /// A note typed while a turn runs is kept on that turn in the record (SESSION-36). It is not
+    /// queued and not handed to the running turn, so the planner is given nothing, and it gives up
+    /// no rewind point because no point holds a note.
+    #[test]
+    fn a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        session.rewind.open(a_point_before(0), "first".to_string());
+        let reaching = session.interjections();
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/note the wrong file was edited",
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].turn, 1, "the note is not on the running turn");
+        assert_eq!(notes[0].text, "the wrong file was edited");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_note_added, turn = 1)]
+        );
+        assert!(session.queued.is_empty(), "the note waited as a prompt");
+        assert!(
+            reaching.take().is_none(),
+            "the running turn was handed the note"
+        );
+        assert_eq!(
+            session.rewind.points().len(),
+            1,
+            "a note gave up the running turn's point"
+        );
+    }
+
+    /// `/note` with nothing after it records nothing and says what it needs.
+    #[test]
+    fn a_note_with_no_text_mid_turn_records_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            NOTE_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert!(stored.notes().is_empty());
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_note_needs_text)]
+        );
+    }
+
+    /// SESSION-36: a note typed at an idle prompt, which reaches `note_session` from the event loop
+    /// and not through `typed_during_a_turn`, belongs to the last turn that finished.
+    #[test]
+    fn a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        note_session(&mut session, &mut stored, "it should have asked first");
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(
+            notes[0].turn, 2,
+            "the note is not on the last finished turn"
+        );
+        assert_eq!(notes[0].text, "it should have asked first");
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some(t!(session_note_added, turn = 2).as_str())
+        );
+    }
+
+    /// SESSION-36: where no record can be written, the transcript says the note reached none and
+    /// does not say it was added, so the person is not told a note was kept that no record holds.
+    #[test]
+    fn a_note_where_no_record_can_be_written_is_not_reported_as_added() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::testutil::scratch_dir("bravebot-app-note-unwritable");
+        let mut session = Session::new("none");
+        session.turns = 1;
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let directory = bravebot_session::sessions::project_directory(&root).expect("dir");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.parent().expect("parent")).expect("make the parent");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        note_session(&mut session, &mut stored, "lost");
+
+        std::fs::remove_file(&directory).expect("unblock the directory");
+        let said: Vec<_> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(said, vec![t!(session_note_not_recorded).to_string()]);
+    }
+
+    /// SESSION-36: `/note` with nothing after it brings the session's notes up, one line each with
+    /// its turn, and a control character in one is not drawn as one.
+    #[test]
+    fn a_note_with_no_text_lists_the_notes_the_session_holds() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        note_session(&mut session, &mut stored, "first\u{1b}[31m");
+        session.turns = 3;
+        note_session(&mut session, &mut stored, "second");
+        let before = session.transcript.len();
+
+        note_session(&mut session, &mut stored, "");
+
+        let listed: Vec<_> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(listed.len(), 2, "one line per note");
+        assert!(
+            listed[0]
+                .starts_with(&t!(session_note_listed, turn = 2, text = "first").to_string()[..8])
+        );
+        assert!(listed[0].contains("first") && !listed[0].contains('\u{1b}'));
+        assert_eq!(
+            listed[1],
+            t!(session_note_listed, turn = 3, text = "second")
+        );
+        assert_eq!(stored.notes().len(), 2, "listing added a note");
     }
 
     /// Ctrl-Enter on `/rename` stops nothing, as on any command carried out as it is typed: the

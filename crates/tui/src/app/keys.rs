@@ -108,6 +108,9 @@ pub enum Action {
     HandOver(String),
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Add a note to the session record, kept beside the conversation (SESSION-36). Needs the
+    /// session record, which the loop owns.
+    Note(String),
     /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
     /// conversation and the session record, which the loop owns.
     Branch(String),

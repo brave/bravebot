@@ -21,6 +21,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
+| `/note` | `<note>` | Note something on this session's record, without putting it in the conversation |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[tokens \| credits \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
@@ -864,6 +865,16 @@ refused. Typed while a turn runs with nothing waiting, it is carried out at once
 for the turn to end. Renaming leaves `/undo` nothing to go back to, including the turn running when
 you renamed.
 
+## `/note <note>`
+
+Adds a note to the session record, on the turn the session is on: the running turn, or the last one
+that finished. The record is rewritten at once, and the note is kept with the turn number and the
+fact that you typed it. It is not part of the conversation: it is not a prompt, nothing waiting
+moves, and nothing a turn sends to the model includes it. `/undo` is not affected. A resume, a
+`/branch` and a continued session keep the notes. `/note` with nothing after it lists the notes the session holds, one line each with its turn. Where the session writes no record, as an incognito one does, it says the note reached none. Typed while a turn runs
+with nothing waiting, it is carried out at once. `/session-review` reads the notes of a session it
+reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-on-a-session).
+
 ## `/issue` and `/pr`
 
 `/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
@@ -1149,7 +1160,7 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the

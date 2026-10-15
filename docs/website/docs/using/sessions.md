@@ -37,8 +37,9 @@ bravebot -c                # the same
 The list is sorted on what each record says it was last written, not by id.
 
 Typing narrows the list by title, branch and linked issue or pull request, and by what was said in
-the session: the prompts you typed, the model's replies, and the paths and commands its calls
-named. A session found that way shows the first matching line under its title. Add `since:7d`
+the session: the prompts you typed, the model's replies, the paths and commands its calls named,
+and the [notes](#noting-something-on-a-session) you added. A session found that way shows the first
+matching line under its title. Add `since:7d`
 (`h` for hours, `d` for days, `w` for weeks) to keep only sessions written within that long. Tool
 results, files you attached and [imported sessions](#importing-sessions-from-claude-code) are not
 searched. The records are read when you type the first character, so a long list pauses once.
@@ -238,6 +239,27 @@ with `✦`, and while an approval or a question is waiting for you it starts wit
 that needs an answer can be found without opening each one. At the box there is no marker. A terminal that cannot save a title is
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
+
+## Noting something on a session
+
+```
+/note it edited the wrong config file
+```
+
+`/note` adds a note to the session while it runs, on the turn the session is on. It is written to the
+record at once, with the turn number and the fact that you typed it, in a place of its own. It is not
+part of the conversation: the model is never given it, so it changes nothing about the work. Typed
+while a turn runs with nothing waiting, it is carried out at once. A resume, a `/branch` and a
+continued session keep the notes, and a record from before notes existed has none. The resume list
+and `bravebot sessions search` find a session by the words of its notes.
+`/note` on its own lists the notes the session holds, one line each with its turn. A session that writes
+no record, as an incognito one does, says a note reached none.
+
+A note is for whoever reviews the session later. `/session-review` reads the notes of the sessions it
+reviews and treats each as a lead from you: it checks the note against the session's audit trail and
+the code, and reports it only when the cause is in bravebot. Nothing in a note is run or followed as
+an instruction, and a filed issue carries none of its words. A session with a new note is reviewed
+again for that note.
 
 ## Telling sessions apart
 

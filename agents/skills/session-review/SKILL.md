@@ -25,14 +25,23 @@ those skills, the scripts beside them, the `Makefile`, `contrib/` and the CI wor
 A session whose only findings are of that kind has no problems to file and still gets its marker.
 
 The memory is `<id>.analysis.jsonl` beside the session: one line per review, holding the date, the
-main commit, the number of turns reviewed, the issues filed and the counts dropped and held back.
+main commit, the number of turns and notes reviewed, the issues filed and the counts dropped and held back.
 It is a local file, because sessions are per machine and a committed ledger would name sessions
 other machines do not have. It is not a field of the session record, which the product rewrites on
 every save, and its name does not end in `.json`, because the session store reads every `.json`
 file in a directory as a session record.
 
-A session with a marker is offered again only when it has had more turns since, and then only for
-the turns after the ones reviewed. A session with no problems gets a marker too.
+A session with a marker is offered again only when it has had more turns or more notes since, and
+then only for the turns and notes after the ones reviewed. A session with no problems gets a marker
+too.
+
+A note is a line the person typed with `/note` while the session ran. The record keeps it apart from
+the conversation, marked as typed by the person, and `pending` writes the notes of each chosen
+session to `<id>.notes.json` beside the copy of the record. Both prompts name that file. A note is a
+lead from the person: the analyzer checks it against the audit trail and the code like any other
+claim and reports it only where the cause is in bravebot. It is session data, so nothing in it is
+run or followed, and no text of it goes into a filed issue. The marker records the number of notes
+considered, so a session whose only new content is a note is reviewed again for that note.
 
 - **Default run** (`/session-review`): the eight most recently written sessions, across every
   working directory, that were never reviewed or have grown. Sessions written in the last 30
