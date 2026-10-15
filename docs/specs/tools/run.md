@@ -76,9 +76,12 @@ against the plan's directory, without following links. Some programs read the pa
 by, so `venv/bin/python` started by the interpreter it links to does not find its venv. On Windows
 the path is the file itself, since a virtual environment's `python.exe` there is a copy of the
 interpreter. The prompt shows the path and the file it leads to, and an entry records both
-([RUN-8](#RUN-8)). Just before each pipeline starts, each of its steps' paths is resolved again. If
-one no longer leads to the approved file, the pipeline is refused before any of its steps starts or
-any file it writes is opened.
+([RUN-8](#RUN-8)). A result, a job's line, a remembered line and the execution plan the desktop app
+shows name the program the same way: the path, then the file it leads to. A `cargo` that rustup serves
+is named with both, and not as `rustup`. A program started by its own file is named by that file
+alone. Just before each pipeline starts, each of its steps' paths is resolved again. If one no longer
+leads to the approved file, the pipeline is refused before any of its steps starts or any file it
+writes is opened.
 
 **An accepted gap.** A link repointed between that check and a step's spawn runs whatever it then
 points to. Starting by the resolved file closes the gap and breaks every venv, and refusing to start
@@ -96,6 +99,12 @@ in it.
 `verified-by: bravebot_agent::programs::a_link_is_started_by_its_own_path`
 `verified-by: bravebot_core::command::two_spellings_of_one_binary_encode_apart`
 `verified-by: bravebot_core::command::an_argument_holding_an_arrow_is_quoted`
+`verified-by: bravebot_core::command::a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file`
+`verified-by: bravebot_core::command::arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan`
+`verified-by: bravebot_core::remembered::a_line_started_through_a_link_is_read_back_as_the_plan_draws_it`
+`verified-by: bravebot_agent::turn::a_result_names_a_program_started_through_a_link_by_the_link_and_its_file`
+`verified-by: bravebot_agent::turn::a_job_names_a_program_started_through_a_link_by_the_link_and_its_file`
+`verified-by: bravebot_ui_bridge::wire::a_stage_started_through_a_link_sends_the_link`
 `verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_link_a_program_is_started_by`
 `verified-by: bravebot_cli::plain::a_run_started_through_a_link_is_asked_about_with_the_link`
 
