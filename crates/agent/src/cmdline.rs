@@ -269,7 +269,7 @@ impl fmt::Display for Reason {
                 "process substitution names a file descriptor nobody named. Use a pipe, or a file",
             ),
             Self::Variable => f.write_str(
-                "the value is not in the line, so the plan would not be in the line. Write the value out",
+                "the value is not in the line, so the plan would not be in the line. Write the value out, or put a literal `$` in single quotes or write it as `\\$`",
             ),
             Self::Arithmetic => {
                 f.write_str("arithmetic is a language, and a language needs an interpreter")
@@ -836,7 +836,13 @@ impl<'a> Scan<'a> {
                             }
                             // Expansion inside double quotes is still expansion, so the same
                             // refusal applies as outside them.
-                            Some('$') => return Err(self.dollar()),
+                            Some('$') if self.opens_expansion(true) => {
+                                return Err(self.dollar());
+                            }
+                            Some('$') => {
+                                text.push('$');
+                                self.bump();
+                            }
                             Some('`') => return Err(self.backtick()),
                             Some('\\') => {
                                 self.bump();
@@ -881,7 +887,11 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
-                '$' => return Err(self.dollar()),
+                '$' if self.opens_expansion(false) => return Err(self.dollar()),
+                '$' => {
+                    text.push('$');
+                    self.bump();
+                }
                 '`' => return Err(self.backtick()),
                 '!' => {
                     self.bump();
@@ -950,6 +960,25 @@ impl<'a> Scan<'a> {
             pieces.push(Piece::Text(String::new()));
         }
         Ok(pieces)
+    }
+
+    /// Whether the `$` at the cursor begins an expansion, as a POSIX shell reads it.
+    ///
+    /// A `$` followed by anything else, or by nothing, is an ordinary character and nothing is
+    /// computed, so `grep -E "x$"` passes the anchor through. `$'…'` and `$"…"` are quoting forms
+    /// outside double quotes, so they stay refused there; inside double quotes the quote after a
+    /// `$` is just text (or the end of the string).
+    fn opens_expansion(&self, in_double_quotes: bool) -> bool {
+        match self.ahead(1) {
+            Some(c)
+                if c.is_alphanumeric()
+                    || matches!(c, '_' | '{' | '(' | '@' | '*' | '#' | '?' | '-' | '$' | '!') =>
+            {
+                true
+            }
+            Some('\'' | '"') => !in_double_quotes,
+            _ => false,
+        }
     }
 
     /// A refusal for the `$` at the cursor, naming what it opened.
@@ -2465,6 +2494,54 @@ mod tests {
     fn a_variable_is_refused() {
         assert_eq!(refused("ls $HOME").reason, Reason::Variable);
         assert_eq!(refused("ls ${HOME}").reason, Reason::Variable);
+    }
+
+    /// A `$` that names nothing is an ordinary character, as in a POSIX shell, so a regex end
+    /// anchor in a double-quoted pattern reaches the program. Refusing it sent the planner to
+    /// retry without the anchor, which selects different lines.
+    #[test]
+    fn a_dollar_that_names_nothing_is_an_ordinary_character() {
+        assert_eq!(argv(r#"grep -E "x$" f"#), ["grep", "-E", "x$", "f"]);
+        assert_eq!(argv(r#"grep -E "x$|^$" f"#), ["grep", "-E", "x$|^$", "f"]);
+        assert_eq!(argv(r#"grep -E "FAILED$""#), ["grep", "-E", "FAILED$"]);
+        assert_eq!(argv(r#"grep -E "a$ b" f"#), ["grep", "-E", "a$ b", "f"]);
+        assert_eq!(argv("grep x$ f"), ["grep", "x$", "f"]);
+        assert_eq!(argv("echo $"), ["echo", "$"]);
+    }
+
+    /// What follows a `$` still decides: a name, a brace, a parenthesis, a special parameter, or
+    /// outside double quotes a quote, each stays refused, in or out of quotes.
+    #[test]
+    fn a_dollar_that_opens_an_expansion_is_still_refused() {
+        for line in [
+            r#"echo "$HOME""#,
+            r#"echo "a$_b""#,
+            r#"echo "$1""#,
+            r#"echo "$?""#,
+            r#"echo "$@""#,
+            r#"echo "${HOME}""#,
+            r#"echo "$$""#,
+            "echo $'a'",
+            r#"echo $"a""#,
+            "echo $?",
+        ] {
+            assert_eq!(refused(line).reason, Reason::Variable, "{line}");
+        }
+        assert_eq!(
+            refused(r#"echo "$(ls)""#).reason,
+            Reason::CommandSubstitution
+        );
+        assert_eq!(refused(r#"echo "$((1))""#).reason, Reason::Arithmetic);
+    }
+
+    /// The refusals that remain say how to write a literal `$`, since the planner cannot guess it.
+    #[test]
+    fn the_variable_refusal_names_the_quoting_that_works() {
+        let said = Reason::Variable.to_string();
+        assert!(
+            said.contains("single quotes") && said.contains("\\$"),
+            "{said}"
+        );
     }
 
     #[test]

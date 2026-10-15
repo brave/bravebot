@@ -931,6 +931,9 @@ fn table(
              outright for the same reason, since a pattern there stands for whichever file it \
              matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
              of them, so '$HOME' is six characters and reaches the program as one argument. A \
+             `$` followed by no name, brace or parenthesis, as the end anchor in `grep -E \"x$\"`, is \
+             an ordinary character. \
+             A \
              pattern the program should match itself is quoted for the same reason, so write \
              `find . -name '*.md'`: unquoted, `*.md` is replaced by the files it matches here, \
              and passed as written only when none matches. A pattern after the = of an option, as in `grep -r x . --include=*.md`, \
