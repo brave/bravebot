@@ -157,6 +157,12 @@ pub(crate) const UNDO_COMMAND: &str = "/undo";
 /// (CMD-2), and a command that takes a number cannot also do that.
 pub(crate) const REWIND_COMMAND: &str = "/rewind";
 
+/// The line that lists the hunks the last turn wrote, and puts one of them back by its number.
+///
+/// A word of its own rather than an argument to `/rewind`, which goes back whole turns and is read
+/// as a count of them (SESSION-21).
+pub(crate) const HUNKS_COMMAND: &str = "/hunks";
+
 /// The line that plans one task in full before anything is read, taking the task as its argument.
 ///
 /// Not a mode the session holds. A session is several turns over one conversation and this is one
@@ -248,7 +254,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 45] {
+pub fn commands() -> [Command; 46] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -512,6 +518,12 @@ pub fn commands() -> [Command; 45] {
             name: REWIND_COMMAND,
             argument: "[turns]",
             description: t!(command_rewind),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: HUNKS_COMMAND,
+            argument: "[number]",
+            description: t!(command_hunks),
             mid_turn: MidTurn::Waits,
         },
         Command {

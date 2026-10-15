@@ -6,3 +6,33 @@
 # translation is useful from its first line, and what it still lacks is visible in a diff.
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
+
+fr:command-hunks
+fr:diff-no-final-newline
+fr:session-hunk-added
+fr:session-hunk-changed
+fr:session-hunk-failed
+fr:session-hunk-no-such
+fr:session-hunk-not-put-back
+fr:session-hunk-put-back
+fr:session-hunk-removed
+fr:session-hunk-row
+fr:session-hunk-row-after
+fr:session-hunk-row-at-start
+fr:session-hunks-heading
+fr:session-hunks-left-as-it-was
+fr:session-hunks-left-created
+fr:session-hunks-left-not-kept
+fr:session-hunks-left-not-text
+fr:session-hunks-left-outside
+fr:session-hunks-left-row
+fr:session-hunks-left-too-different
+fr:session-hunks-left-unreadable
+fr:session-hunks-left-untrusted
+fr:session-hunks-list-first
+fr:session-hunks-more
+fr:session-hunks-needs-a-number
+fr:session-hunks-turn-moved
+fr:session-hunks-unavailable
+fr:session-hunks-uncovered
+fr:session-hunks-wrote-nothing

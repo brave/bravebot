@@ -485,6 +485,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(turns) = argument_to(line, REWIND_COMMAND) {
         return Action::Rewind(turns.to_string());
     }
+    if let Some(number) = argument_to(line, HUNKS_COMMAND) {
+        return Action::Hunks(number.to_string());
+    }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
         // No directory is opened by a relative name, so `close` and `close <path>` never name one
         // that `/add-dir` alone could have opened.
@@ -1722,19 +1725,9 @@ fn save_compacted(
     workspace: &Workspace,
     events: &[Stamped],
 ) {
-    if session.turns == 0 && stored.resumable().is_none() {
-        return;
+    if save_record(session, conversation, stored, trust, programs, workspace) {
+        stored.append_audit(session.turns, events);
     }
-    let title = stored.title().to_string();
-    with_standing(
-        session,
-        conversation,
-        trust,
-        programs,
-        workspace,
-        |standing| stored.save(&title, standing),
-    );
-    stored.append_audit(session.turns, events);
 }
 
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
@@ -1763,6 +1756,8 @@ fn rewind(
         }
         return;
     };
+    // The turns a list described are gone, and a turn run again in their place numbers the same.
+    session.hunks_listed = None;
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     // Read off the point before anything is removed. The display prompts of the rewound turns go
@@ -1836,23 +1831,99 @@ fn rewind(
         session.note(t!(session_rewound_partly, turn = turn, paths = paths));
     }
     if !gaps.is_empty() {
-        use bravebot_agent::rewind::CoverageGap;
-        let causes = gaps
-            .iter()
-            .map(|gap| match gap {
-                CoverageGap::Command => t!(session_rewind_cause_command),
-                CoverageGap::Hook => t!(session_rewind_cause_hook),
-                CoverageGap::Scratch => t!(session_rewind_cause_scratch),
-                CoverageGap::LanguageServer => t!(session_rewind_cause_server),
-                CoverageGap::Desktop => t!(session_rewind_cause_desktop),
-                CoverageGap::Checkout => t!(session_rewind_cause_checkout),
-                CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
-                CoverageGap::Unknown => t!(session_rewind_cause_unknown),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        session.note(t!(session_rewind_uncovered, causes = causes));
+        session.note(t!(
+            session_rewind_uncovered,
+            causes = coverage_causes(&gaps)
+        ));
     }
+}
+
+/// Carry out `/hunks`: list the hunks of the last turn, or put one back, and keep the audit and
+/// the record.
+///
+/// A write that failed leaves its path distrusted, and a record that kept the map as the last turn
+/// ended would trust a half-written file again on a resume, so the record is written again when
+/// the map changed. Nothing is appended to the audit when no gate was passed, and nothing is saved
+/// where there is no record to keep, as with closing a directory.
+#[allow(clippy::too_many_arguments)]
+fn carry_out_hunks(
+    session: &mut Session,
+    conversation: &Conversation,
+    stored: &mut bravebot_session::sessions::Handle,
+    workspace: &Workspace,
+    trust: &mut TrustStore,
+    programs: &TrustedPrograms,
+    servers: &mut Option<LanguageServers>,
+    argument: &str,
+) {
+    let trust_before = trust.clone();
+    let mut trail = Trail::new();
+    match crate::hunks_command::parse(argument) {
+        crate::hunks_command::Asked::List => {
+            crate::hunks_command::list(session, workspace, trust, &mut trail)
+        }
+        crate::hunks_command::Asked::PutBack(number) => crate::hunks_command::put_back(
+            session,
+            number,
+            workspace,
+            trust,
+            servers,
+            bravebot_agent::home::directory().as_deref(),
+            &mut trail,
+        ),
+        crate::hunks_command::Asked::Unreadable => session.note(t!(session_hunks_needs_a_number)),
+    }
+    if !trail.events().is_empty() {
+        stored.append_audit(session.turns, trail.events());
+    }
+    if *trust != trust_before {
+        save_record(session, conversation, stored, trust, programs, workspace);
+    }
+}
+
+/// Write the session's record now, if there is one to write: nothing where no turn has been had and
+/// nothing is on disk, so a session opened and abandoned leaves none. Whether it did is the answer.
+fn save_record(
+    session: &Session,
+    conversation: &Conversation,
+    stored: &mut bravebot_session::sessions::Handle,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+) -> bool {
+    if session.turns == 0 && stored.resumable().is_none() {
+        return false;
+    }
+    let title = stored.title().to_string();
+    with_standing(
+        session,
+        conversation,
+        trust,
+        programs,
+        workspace,
+        |standing| stored.save(&title, standing),
+    );
+    true
+}
+
+/// What a rewind point does not account for, worded and joined.
+pub(crate) fn coverage_causes(
+    gaps: &std::collections::BTreeSet<bravebot_agent::rewind::CoverageGap>,
+) -> String {
+    use bravebot_agent::rewind::CoverageGap;
+    gaps.iter()
+        .map(|gap| match gap {
+            CoverageGap::Command => t!(session_rewind_cause_command),
+            CoverageGap::Hook => t!(session_rewind_cause_hook),
+            CoverageGap::Scratch => t!(session_rewind_cause_scratch),
+            CoverageGap::LanguageServer => t!(session_rewind_cause_server),
+            CoverageGap::Desktop => t!(session_rewind_cause_desktop),
+            CoverageGap::Checkout => t!(session_rewind_cause_checkout),
+            CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
+            CoverageGap::Unknown => t!(session_rewind_cause_unknown),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What the idle loop does with one event it has read.
@@ -2518,6 +2589,7 @@ fn event_loop(
             Action::Export(path) => held.export(path.as_deref()),
             Action::Undo => held.rewind_steps(1),
             Action::Rewind(turns) => held.rewind_command(&turns),
+            Action::Hunks(argument) => held.hunks_command(&argument),
             Action::Show => show_transcript(terminal, held.session)?,
             Action::ChooseModel => choose_model(terminal, held.session, config),
             Action::ChooseTheme => choose_theme(terminal, held.session),
@@ -25637,6 +25709,38 @@ mod tests {
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("/rewinding the tape".to_string())
+        );
+    }
+
+    /// The bare word is the list of hunks, and a number after it names one, so the argument is
+    /// carried as it was typed and read where the transcript is.
+    #[test]
+    fn the_hunks_command_carries_the_number_it_was_given() {
+        for (typed, carried) in [("/hunks", ""), ("/hunks 2", "2"), ("/hunks two", "two")] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Hunks(carried.to_string()),
+                "{typed}"
+            );
+        }
+    }
+
+    /// `/hunksaw the plank` is a longer word, so it is a prompt, as CMD-2 has it.
+    #[test]
+    fn a_longer_word_starting_with_hunks_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/hunksaw the plank".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/hunksaw the plank".to_string())
         );
     }
 

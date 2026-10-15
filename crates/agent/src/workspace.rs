@@ -3297,23 +3297,7 @@ impl Workspace {
     /// the state asked for is the state that is there. A path whose contents were not kept is
     /// refused without being touched, since what it held is not here to write.
     pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
-        let escapes = || WorkspaceError::Escapes {
-            path: path.display().to_string(),
-            remedy: Remedy::Nothing,
-        };
-        let reached = match was {
-            Before::Nothing => path.parent(),
-            Before::Bytes(_) | Before::NotKept => Some(path),
-        };
-        let lands = reached.and_then(destination).ok_or_else(escapes)?;
-        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
-            self.is_opened(&lands)
-        } else {
-            lands.starts_with(&self.root)
-        };
-        if !confined {
-            return Err(escapes());
-        }
+        self.confine_put_back(path, matches!(was, Before::Nothing))?;
         let failed = |detail: String| WorkspaceError::Io {
             path: path.display().to_string(),
             detail,
@@ -3326,6 +3310,61 @@ impl Workspace {
             },
             Before::NotKept => Err(failed("what it held was not kept".to_string())),
         }
+    }
+
+    /// Refuse a path a rewind may not reach, which is the same question whether it writes the path
+    /// or only reads it to put part of it back. `removal` is where the name is unlinked rather than
+    /// what it points at, so it is the directory holding the name that is asked.
+    fn confine_put_back(&self, path: &Path, removal: bool) -> Result<(), WorkspaceError> {
+        let escapes = || WorkspaceError::Escapes {
+            path: path.display().to_string(),
+            remedy: Remedy::Nothing,
+        };
+        let reached = if removal { path.parent() } else { Some(path) };
+        let lands = reached.and_then(destination).ok_or_else(escapes)?;
+        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
+            self.is_opened(&lands)
+        } else {
+            lands.starts_with(&self.root)
+        };
+        if confined { Ok(()) } else { Err(escapes()) }
+    }
+
+    /// What a path holds now, read where [`Workspace::put_back`] would write it.
+    ///
+    /// Refused as a write would be, so a file that has since become a link out of the project is
+    /// not read to decide what to put back into it. Only a file, and only one within what a rewind
+    /// keeps: a pipe would be waited on, and a file past the budget has no earlier text to be
+    /// compared with.
+    pub(crate) fn read_back(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+        use std::io::Read as _;
+        self.confine_put_back(path, false)?;
+        let failed = |detail: String| WorkspaceError::Io {
+            path: path.display().to_string(),
+            detail,
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // Opened without waiting for a writer, and asked what it is once it is open, so a pipe put
+        // there since a look at the path is refused and not waited on.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+        }
+        let file = options.open(path).map_err(|e| failed(e.to_string()))?;
+        let found = file.metadata().map_err(|e| failed(e.to_string()))?;
+        if !found.is_file() || found.len() > MAX_REWIND_BYTES as u64 {
+            return Err(failed("not a file within the rewind budget".to_string()));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_REWIND_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| failed(e.to_string()))?;
+        if bytes.len() > MAX_REWIND_BYTES {
+            return Err(failed("not a file within the rewind budget".to_string()));
+        }
+        Ok(bytes)
     }
 }
 
@@ -5668,7 +5707,7 @@ impl Workspace {
     /// map holds a key under and the one a rule is matched against. A name on a drive letter keeps
     /// the root the host gave it, which is the name a person reads and types, and a turn's policy
     /// keys it as it asks the map ([`bravebot_core::policy::Policy::with_backslash_separates`]).
-    pub(crate) fn relative_display(&self, path: &Path) -> String {
+    pub fn relative_display(&self, path: &Path) -> String {
         self.displayed(path, BACKSLASH_SEPARATES)
     }
 

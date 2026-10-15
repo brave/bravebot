@@ -994,6 +994,8 @@ pub struct Session {
     waiting_on: Option<bravebot_agent::report::DelegateId>,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
+    /// What the last `/hunks` listed, so a number typed after it names the hunk it was read beside.
+    pub hunks_listed: Option<crate::hunks_command::Listed>,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
     ///
     /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
@@ -1405,6 +1407,7 @@ impl Session {
             standing: None,
             standing_by_setting: false,
             rewind: Default::default(),
+            hunks_listed: None,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
@@ -1690,6 +1693,7 @@ impl Session {
         self.answers.clear();
         self.turn_places.clear();
         self.unplaced_todos.clear();
+        self.hunks_listed = None;
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -4102,6 +4106,9 @@ impl Session {
             turns: self.turns,
             transcript_len: self.transcript.len(),
         };
+        // A list of hunks describes the turn before this one, and a number typed after this turn
+        // must be read beside a list of its own.
+        self.hunks_listed = None;
         self.prompt_at = None;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;

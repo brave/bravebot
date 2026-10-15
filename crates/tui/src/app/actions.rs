@@ -20,12 +20,12 @@ use ratatui::backend::CrosstermBackend;
 
 use super::{
     Answers, BACKGROUND_LOSES, Beginning, Changed, Continued, Ended, RunSettings, Suggesting,
-    Switch, Wrote, add_directory, branch_session, change_directory, clear_session, close_directory,
-    compact_animated, goal_check_animated, handed_to_the_background, handoff_answered,
-    handoff_refusal, left_behind, list_rewind_points, next_after_a_turn, opened_scratch,
-    opening_trust, record_to_resume, removal_trail, remove_checkout, rewind, rewind_point,
-    run_command, run_turn_animated, save_compacted, status_report, suggest_next, switch_session,
-    with_standing,
+    Switch, Wrote, add_directory, branch_session, carry_out_hunks, change_directory, clear_session,
+    close_directory, compact_animated, goal_check_animated, handed_to_the_background,
+    handoff_answered, handoff_refusal, left_behind, list_rewind_points, next_after_a_turn,
+    opened_scratch, opening_trust, record_to_resume, removal_trail, remove_checkout, rewind,
+    rewind_point, run_command, run_turn_animated, save_compacted, status_report, suggest_next,
+    switch_session, with_standing,
 };
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
@@ -155,6 +155,27 @@ impl Held<'_> {
                 _ => self.session.note(t!(session_rewind_needs_a_number)),
             }
         }
+    }
+
+    /// Carry out `/hunks`: list the hunks of the last turn, or put one back, and keep the audit and
+    /// the record.
+    ///
+    /// A write that failed leaves its path distrusted, and a record that kept the map as the last
+    /// turn ended would trust a half-written file again on a resume, so the record is written again
+    /// when the map changed. Nothing is appended to the audit when no gate was passed, and nothing
+    /// is saved where there is no record to keep, as with closing a directory.
+    pub(super) fn hunks_command(&mut self, argument: &str) {
+        let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
+        carry_out_hunks(
+            self.session,
+            self.conversation,
+            self.stored,
+            self.workspace,
+            trust,
+            programs,
+            language_servers,
+            argument,
+        );
     }
 
     pub(super) fn add_directory_command(&mut self, directory: &str) {
