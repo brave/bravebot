@@ -2779,6 +2779,32 @@ mod tests {
                 Some("uv tool run"),
                 unpinned("server"),
             ),
+            (
+                &["npm", "exec", "server@latest"][..],
+                Some("npm exec"),
+                unpinned("server@latest"),
+            ),
+            (&["yarn", "dlx", "server@2.0.0"][..], Some("yarn dlx"), None),
+            (
+                &["yarn", "dlx", "server"][..],
+                Some("yarn dlx"),
+                unpinned("server"),
+            ),
+            (
+                &["npx", "-p", "server@latest", "serve"][..],
+                Some("npx"),
+                unpinned("server@latest"),
+            ),
+            (
+                &["uvx", "--spec", "tool>=1", "serve"][..],
+                Some("uvx"),
+                unpinned("tool>=1"),
+            ),
+            (
+                &["uvx", "--spec", "tool==1.0.0", "serve"][..],
+                Some("uvx"),
+                None,
+            ),
             (&["pipx", "install", "server"][..], None, None),
             (&["weather-mcp", "--stdio"][..], None, None),
             (&["node", "server.js"][..], None, None),
