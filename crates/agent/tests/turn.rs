@@ -21195,6 +21195,137 @@ fn a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line() 
     }
 }
 
+/// A home whose git signs with ssh and names a public key that exists, so that a step which signs
+/// is lent it.
+fn a_home_that_signs_with_ssh(name: &str) -> PathPlaces {
+    let places = PathPlaces::new(name);
+    std::fs::write(places.home.join(".ssh/work.pub"), "ssh-ed25519 AAAA work\n").unwrap();
+    std::fs::write(
+        places.home.join(".gitconfig"),
+        "[gpg]\n\tformat = ssh\n[user]\n\tsigningkey = ~/.ssh/work.pub\n",
+    )
+    .unwrap();
+    places
+}
+
+/// The sandbox mode, whether the front end can put a line with no sandbox to a person, and whether
+/// the session would then point a failed signing step at `'unconfined': true`. The first row
+/// accepts the argument. Each of the other two declines for one cause alone, so an implementation
+/// that reads only the mode, or only the front end, passes the row that declines on the cause it
+/// reads and fails the other.
+const SIGNING_POINTS_AT_UNCONFINED: [(bravebot_sandbox::SandboxMode, bool, bool); 3] = [
+    (bravebot_sandbox::SandboxMode::WorkspaceWrite, true, true),
+    (bravebot_sandbox::SandboxMode::WorkspaceWrite, false, false),
+    (bravebot_sandbox::SandboxMode::Strict, true, false),
+];
+
+fn git_is_installed() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// SANDBOX-16, SANDBOX-29: a foreground step that signs and fails is told what `No private key
+/// found` means, and is pointed at `'unconfined': true` only where the session would accept that
+/// argument and the front end can ask about it. The sentence is fixed text chosen by the scope the
+/// step carries, so the commit here fails because its directory is not a repository and is told all
+/// the same. The regression it rejects is the foreground caller of `run` deciding the offer in a
+/// way of its own: a planner sent to an argument its mode or its window turns down, or never sent
+/// to one it would accept.
+#[test]
+fn a_failed_signing_step_names_the_unconfined_line_only_where_it_is_accepted() {
+    if cannot_confine_here() || !git_is_installed() {
+        return;
+    }
+    let places = a_home_that_signs_with_ssh("signing-foreground");
+    for (mode, front_end_asks, pointed) in SIGNING_POINTS_AT_UNCONFINED {
+        if mode == bravebot_sandbox::SandboxMode::Strict && strict_cannot_run_here() {
+            continue;
+        }
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(front_end_asks);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let turn = path_turn(
+            &format!("signing-foreground-{}-{front_end_asks}", mode.name()),
+            &places,
+            &[running("git commit -m x")],
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(true);
+        let said = message_from(&turn.results[0], "Result of run");
+        let context = format!("{} (front end asks: {front_end_asks}): {said}", mode.name());
+        assert!(said.contains("exited"), "{context}");
+        assert!(said.contains("No private key found"), "{context}");
+        assert!(said.contains("`ssh-add`"), "{context}");
+        assert_eq!(said.contains("'unconfined': true"), pointed, "{context}");
+    }
+}
+
+/// SANDBOX-16, SANDBOX-29: a background job that signs and fails is told the same, from its own
+/// account of how it ended, which a later round of the turn carries and the foreground result does
+/// not. The regression it rejects is the job caller of `run` keeping the profile it always built, so
+/// that a failure seen only as a job never names the argument that would get past it.
+#[test]
+fn a_failed_signing_job_names_the_unconfined_line_only_where_it_is_accepted() {
+    if cannot_confine_here() || !git_is_installed() {
+        return;
+    }
+    let places = a_home_that_signs_with_ssh("signing-job");
+    for (mode, front_end_asks, pointed) in SIGNING_POINTS_AT_UNCONFINED {
+        if mode == bravebot_sandbox::SandboxMode::Strict && strict_cannot_run_here() {
+            continue;
+        }
+        let scratch = Scratch::new(&format!("signing-job-{}-{front_end_asks}", mode.name()));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+            "run",
+            r#"{"command":"git commit -m x","background":true}"#,
+        ));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it and get on with something else")
+                .with_profile(Some(places.home.clone()))
+                .with_confined_runs(true)
+                .asking_about_unconfined(front_end_asks)
+                .with_sandbox_mode(mode),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        let told = bodies
+            .iter()
+            .find(|body| body.contains(JOB_1_FINISHED))
+            .expect("the turn was never told the job ended");
+        let account = message_from(told, JOB_1_FINISHED);
+        let context = format!(
+            "{} (front end asks: {front_end_asks}): {account}",
+            mode.name()
+        );
+        assert!(account.contains("It failed: step 1 exited"), "{context}");
+        assert!(account.contains("No private key found"), "{context}");
+        assert!(account.contains("`ssh-add`"), "{context}");
+        assert_eq!(account.contains("'unconfined': true"), pointed, "{context}");
+    }
+}
+
 /// SANDBOX-28, SANDBOX-29: a path that cannot be lent says why, so the planner does not try the
 /// directory above, then the file, then another tool; and a request to write points at the line
 /// that can make the write. A request to read has no such line. The regression it rejects is the
