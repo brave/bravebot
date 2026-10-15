@@ -20,6 +20,10 @@ comment. <pr> is a number or a pull request URL, several of them separated by co
 parallel, each in a process of its own, and each one's output is printed as soon as it finishes. Several
 that wait share one wait, so they take no longer than one. It works from the main clone or from any
 worktree.
+
+A branch already checked out in another worktree is used there and a `reused:` line says where. Each
+step that works in the worktree refuses a locked one, which something else may be using, unless given
+--use-locked, which takes one pull request.
 """
 
 import argparse
@@ -42,6 +46,7 @@ except ImportError:
 
 REVIEWER = "netzenbot-reviewer"
 SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
+TREE_STEPS = ("start", "continue", "check", "push")
 
 
 def _load_shared():
@@ -189,7 +194,6 @@ def stop_reason(text):
 
 def report(pr, said=""):
     tree = pr.tree
-    print(f"worktree {tree}")
     state = rebase_dir(tree)
     if state is None:
         if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
@@ -234,6 +238,7 @@ def report(pr, said=""):
 
 
 def start(pr):
+    pr_worktree.announce(pr)
     git("worktree", "prune", cwd=pr.here)
     fetch(pr.here, pr.base_remote, pr.base)
     fetch(pr.here, pr.head_remote, pr.head)
@@ -273,6 +278,7 @@ def start(pr):
 
 
 def resume(pr):
+    pr_worktree.announce(pr)
     tree = pr.tree
     if rebase_dir(tree) is None:
         return report(pr)
@@ -515,6 +521,9 @@ def main():
         "--wait-seconds", type=int, metavar="N",
         help=f"how long --wait may take, counted from when the script started (default {WAIT_SECONDS})",
     )
+    parser.add_argument(
+        "--use-locked", action="store_true", help="work in a locked worktree the branch is already checked out in"
+    )
     args = parser.parse_args()
     if args.target and args.step != "check":
         parser.error("only check takes make targets")
@@ -522,12 +531,16 @@ def main():
         parser.error("only ci can wait")
     if args.wait_seconds is not None and not args.wait:
         parser.error("--wait-seconds needs --wait")
+    if args.use_locked and args.step not in TREE_STEPS:
+        parser.error(f"only {', '.join(TREE_STEPS[:-1])} and {TREE_STEPS[-1]} work in a worktree")
     seconds = WAIT_SECONDS if args.wait_seconds is None else args.wait_seconds
     until = time.monotonic() + seconds if args.wait else None
     here = Path(git("rev-parse", "--show-toplevel", cwd=None))
     numbers = pr_numbers(args.prs, here)
     if not numbers:
         sys.exit(0)
+    if args.use_locked and len(numbers) > 1:
+        parser.error("--use-locked takes the one pull request whose locked worktree the person agreed to")
     if len(numbers) > 1:
         flags = [f for t in args.target for f in ("--target", t)]
         if until is not None:
@@ -546,7 +559,11 @@ def main():
     try:
         if args.step == "start":
             shared.acquire(here)
-        sys.exit(steps[args.step](lookup(numbers[0], create=args.step == "start")))
+        pr = lookup(numbers[0], create=args.step == "start")
+        if args.step in TREE_STEPS:
+            words = [args.step, str(pr.number)] + [f for t in args.target for f in ("--target", t)]
+            pr_worktree.refuse_locked(pr, SCRIPT, words, args.use_locked)
+        sys.exit(steps[args.step](pr))
     finally:
         shared.release()
 

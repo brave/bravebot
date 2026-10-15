@@ -675,6 +675,110 @@ def test_the_command_each_pull_request_runs_carries_the_step_and_its_flags():
     assert Path(command[1]).name == "pr-fix.py", command
 
 
+def test_a_branch_already_checked_out_elsewhere_is_used_there_and_every_report_says_so():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and "  a.txt:1-5" in out, out
+        assert f"worktree {elsewhere}" in out, out
+        assert f"reused: feature is already checked out in {elsewhere} (outside the main clone" in out, out
+        assert not (root / "bravebot" / ".worktrees").exists(), "the standard place is not made as well"
+
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = quietly(pr_fix.resume, pr())
+        assert code == 0 and "push 9" in out and "reused: feature" in out, out
+
+
+def test_a_reused_worktree_with_uncommitted_changes_says_it_was_reused_when_start_refuses_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        (elsewhere / "a.txt").write_text("the person's own edit\n")
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1 and f"{elsewhere} has uncommitted changes" in out, out
+        assert "reused: feature is already checked out in" in out, out
+
+
+@contextlib.contextmanager
+def in_a_git_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        git("init", "-q", cwd=tmp)
+        with contextlib.chdir(tmp):
+            yield
+
+
+def run_main(pr, *argv):
+    with in_a_git_directory(), mock.patch.object(pr_fix, "lookup", lambda number, create: pr):
+        with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
+            return quietly(pr_fix.main)
+
+
+def test_no_step_works_in_a_locked_worktree_until_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone, elsewhere = root / "bravebot", root / "elsewhere"
+        helpers.the_forks_feature_in(clone, elsewhere, lock="build running")
+        head, base = git("rev-parse", "HEAD", cwd=elsewhere), git("rev-parse", "upstream/main", cwd=clone)
+
+        for step in ("start", "continue", "check", "push"):
+            code, out = run_main(pr(), step, "9")
+            assert code == 1 and "build running" in out, (step, out)
+            assert f"{pr_fix.SCRIPT} {step} 9 --use-locked" in out, (step, out)
+            assert "a.txt" not in out, "no conflict was reached"
+        assert git("rev-parse", "HEAD", cwd=elsewhere) == head and pr_fix.rebase_dir(elsewhere) is None
+        assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+
+        code, out = run_main(pr(), "check", "9", "--target", "check-spec")
+        assert code == 1 and f"{pr_fix.SCRIPT} check 9 --target check-spec --use-locked" in out, "the targets are kept"
+
+        code, out = run_main(pr(), "start", "9", "--use-locked")
+        assert code == 1 and "  a.txt:1-5" in out and "locked: build running" in out, out
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = run_main(pr(), "continue", "9")
+        assert code == 1 and "--use-locked" in out, "a yes given to one step is not given to the next"
+        code, out = run_main(pr(), "continue", "9", "--use-locked")
+        assert code == 0 and "push 9" in out, out
+
+
+def test_the_steps_that_only_read_the_pull_request_run_in_a_locked_worktree_without_asking():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        helpers.the_forks_feature_in(root / "bravebot", root / "elsewhere", lock="build running")
+        fakes = {name: (lambda *args: 0) for name in ("ci", "comments", "review")}
+        with mock.patch.multiple(pr_fix, **fakes):
+            for step in fakes:
+                assert run_main(pr(), step, "9")[0] == 0, step
+
+
+def test_a_session_run_from_a_locked_worktree_is_not_stopped_by_its_lock():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere, lock="build running")
+        code, out = run_main(pr(elsewhere), "start", "9")
+        assert code == 1 and "  a.txt:1-5" in out and "--use-locked" not in out, out
+        assert "(the checkout this was run from; locked: build running)" in out, out
+
+
+def test_use_locked_is_refused_where_it_cannot_apply():
+    with in_a_git_directory():
+        for argv, said in (
+            (["ci", "9", "--use-locked"], "only start, continue, check and push work in a worktree"),
+            (["start", "12,13", "--use-locked"], "takes the one pull request"),
+        ):
+            with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
+                code, out = quietly(pr_fix.main)
+            assert code == 2 and said in out, (argv, out)
+
+
 def test_the_lock_is_outside_git_and_the_same_from_every_worktree_of_a_clone():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()

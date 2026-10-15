@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("rebase", HERE / "rebase.py")
@@ -197,6 +198,69 @@ def test_a_worktree_deleted_by_hand_after_the_rebase_finished_is_checked_out_aga
         code, out = quietly(rebase.start, pr())
         assert code == 0 and "push 9" in out, out
         assert tree.is_dir()
+
+
+def test_a_branch_already_checked_out_elsewhere_is_rebased_there_and_every_report_says_so():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and "  a.txt:1-5" in out, out
+        assert f"worktree {elsewhere}" in out, out
+        assert f"reused: feature is already checked out in {elsewhere} (outside the main clone" in out, out
+        assert not (root / "bravebot" / ".worktrees").exists(), "the standard place is not made as well"
+
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = quietly(rebase.resume, pr())
+        assert code == 0 and "push 9" in out and "reused: feature" in out, out
+
+
+def test_a_reused_worktree_with_uncommitted_changes_says_it_was_reused_when_start_refuses_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        (elsewhere / "a.txt").write_text("the person's own edit\n")
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and f"{elsewhere} has uncommitted changes" in out, out
+        assert "reused: feature is already checked out in" in out, out
+
+
+def run_main(pr, *argv):
+    with mock.patch.object(rebase, "lookup", lambda number, create: pr):
+        with mock.patch.object(sys, "argv", ["rebase.py", *argv]):
+            return quietly(rebase.main)
+
+
+def test_no_step_works_in_a_locked_worktree_until_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone, elsewhere = root / "bravebot", root / "elsewhere"
+        helpers.the_forks_feature_in(clone, elsewhere, lock="build running")
+        head, base = git("rev-parse", "HEAD", cwd=elsewhere), git("rev-parse", "upstream/main", cwd=clone)
+
+        for step in ("start", "continue", "check", "push"):
+            code, out = run_main(pr(), step, "9")
+            assert code == 1 and "build running" in out, (step, out)
+            assert f"{rebase.SCRIPT} {step} 9 --use-locked" in out, (step, out)
+            assert "a.txt" not in out, "no conflict was reached"
+        assert git("rev-parse", "HEAD", cwd=elsewhere) == head and rebase.rebase_dir(elsewhere) is None
+        assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+
+        code, out = run_main(pr(), "check", "9", "check-spec")
+        assert code == 1 and f"{rebase.SCRIPT} check 9 check-spec --use-locked" in out, "the targets asked for are kept"
+
+        code, out = run_main(pr(), "start", "9", "--use-locked")
+        assert code == 1 and "  a.txt:1-5" in out and "locked: build running" in out, out
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = run_main(pr(), "continue", "9")
+        assert code == 1 and "--use-locked" in out, "a yes given to one step is not given to the next"
+        code, out = run_main(pr(), "continue", "9", "--use-locked")
+        assert code == 0 and "push 9" in out, out
 
 
 def main():
