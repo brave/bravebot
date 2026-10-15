@@ -4736,7 +4736,7 @@ pub(crate) fn materialise<S: Sink>(
                 });
             // Recorded here rather than where it is worded, which is inside the policy's read.
             if let Some(remedy) = escaped {
-                policy.refuse_outside_workspace(tool, &slot.to_string(), remedy.offered());
+                record_confinement_refusal(policy, tool, &slot.to_string(), remedy);
             }
             read.map_err(|denial| format!("refused: {denial}"))?;
             if let Some(media) = picture {
@@ -4944,9 +4944,25 @@ fn workspace_failure<S: Sink>(
     named: &str,
 ) -> String {
     if let crate::workspace::WorkspaceError::Escapes { remedy, .. } = e {
-        policy.refuse_outside_workspace(&format!("{tool}.{field}"), named, remedy.offered());
+        record_confinement_refusal(policy, &format!("{tool}.{field}"), named, *remedy);
     }
     e.describe(named)
+}
+
+/// Put the refusal of a path the workspace's confinement turned away into the trail, worded as the
+/// planner was told it: a path inside the workspace is not recorded as one that leaves it.
+fn record_confinement_refusal<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    call: &str,
+    named: &str,
+    remedy: crate::workspace::Remedy,
+) {
+    match remedy {
+        crate::workspace::Remedy::Inside => {
+            policy.refuse_path_inside_workspace(call, named, remedy.offered());
+        }
+        _ => policy.refuse_outside_workspace(call, named, remedy.offered()),
+    }
 }
 
 /// [`workspace_failure`] for a file tool, which adds what the planner can do itself where a
@@ -5905,8 +5921,13 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         }
         Err(e) => {
             // A write that leaves the workspace can still be made by a line the person approves
-            // with no sandbox, which the planner has no other way to learn of (SANDBOX-29).
+            // with no sandbox, which the planner has no other way to learn of (SANDBOX-29). A
+            // path inside the workspace does not leave it, and its relative spelling is the way.
             let way_out = match e {
+                crate::workspace::WorkspaceError::Escapes {
+                    remedy: crate::workspace::Remedy::Inside,
+                    ..
+                } => "",
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
                 }
@@ -17521,8 +17542,18 @@ mod tests {
         /// What the planner was told, the trail's confinement refusals, and whether the turn
         /// would end as clean, for one call to `run`.
         fn run_once(name: &str, arguments: &Value) -> (String, Vec<String>, bool) {
+            run_once_in(name, |_| arguments.clone())
+        }
+
+        /// [`run_once`] with the arguments built from the workspace's root, for a call that names
+        /// a place by the path the root is at.
+        fn run_once_in(
+            name: &str,
+            arguments: impl FnOnce(&std::path::Path) -> Value,
+        ) -> (String, Vec<String>, bool) {
             let scratch = Scratch::new(name);
             let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let arguments = arguments(workspace.root());
             let mut routing = Routing::new();
             routing.insert_trusted("task", "run a command");
             let mut sink = RecordingSink::new();
@@ -17540,7 +17571,7 @@ mod tests {
                     tools,
                     &mut crate::confirm::Unattended,
                     &mut crate::report::IgnoreReports,
-                    arguments,
+                    &arguments,
                 )
             });
             assert!(!produced.ran_a_program, "a refused call ran a program");
@@ -17579,6 +17610,34 @@ mod tests {
                      directory itself, which holds the working directory and so ends checkouts"
                 ],
                 "the refused directory was not recorded as the planner named it"
+            );
+            assert!(!clean, "a turn whose run was refused would end as clean");
+        }
+
+        #[test]
+        fn a_directory_inside_the_workspace_is_refused_as_inside_it() {
+            let (told, refused, clean) = run_once_in("run-directory-inside", |root| {
+                std::fs::create_dir(root.join("sub")).expect("a directory to name");
+                json!({"command": "echo hi", "directory": root.join("sub").display().to_string()})
+            });
+
+            assert!(
+                told.starts_with("refused:")
+                    && told.contains("is inside the workspace")
+                    && told.contains("relative to the workspace root")
+                    && !told.contains("outside the workspace"),
+                "the call was not refused as a path inside the workspace: {told}"
+            );
+            let [recorded] = refused.as_slice() else {
+                panic!("expected one refusal in the trail: {refused:?}");
+            };
+            assert!(
+                recorded.starts_with("run.directory: '")
+                    && recorded.ends_with(
+                        "' is inside the workspace but not named relative to its root; remedy \
+                         offered: name it relative to the workspace root"
+                    ),
+                "the refused directory was not recorded as the planner was told: {recorded}"
             );
             assert!(!clean, "a turn whose run was refused would end as clean");
         }

@@ -6799,7 +6799,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let value = proposed.clone().declassify(&proof);
         // The label is all this decides. Whether the path stays inside the workspace is settled
         // when it resolves, after this line is written, and a refusal there is recorded by
-        // `refuse_outside_workspace`.
+        // `refuse_outside_workspace` or `refuse_path_inside_workspace`.
         self.allow(
             "promote",
             format!("{tool}.{field} proposed by the model, public and non-destructive"),
@@ -6815,10 +6815,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// argument, as `read_file.path`. `named` is the name the planner was told, `ref:N` for a
     /// reference, and `offered` is what the person was told they can do about it.
     pub fn refuse_outside_workspace(&mut self, call: &str, named: &str, offered: &str) {
+        self.refuse_confined_path(call, named, "resolves outside the workspace", offered);
+    }
+
+    /// Record that a path inside the workspace was refused for not being named relative to its
+    /// root (TRUST-10), so the planner was told to name it that way. The arguments are those of
+    /// [`Policy::refuse_outside_workspace`], whose record this is where the path does not leave.
+    pub fn refuse_path_inside_workspace(&mut self, call: &str, named: &str, offered: &str) {
+        self.refuse_confined_path(
+            call,
+            named,
+            "is inside the workspace but not named relative to its root",
+            offered,
+        );
+    }
+
+    fn refuse_confined_path(&mut self, call: &str, named: &str, finding: &str, offered: &str) {
         let _ = self.deny(
             "confine",
             Principle::Confinement,
-            format!("{call}: '{named}' resolves outside the workspace; remedy offered: {offered}"),
+            format!("{call}: '{named}' {finding}; remedy offered: {offered}"),
         );
     }
 

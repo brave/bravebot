@@ -2729,6 +2729,10 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::Inside,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Open,
         },
         WorkspaceError::Escapes {
@@ -3381,7 +3385,8 @@ fn a_refusal_outside_the_workspace_says_what_the_person_can_do() {
 }
 
 /// A directory inside the root cannot be opened, and a `..` that comes back into the root reaches
-/// no file that the path without it does not, so a refusal of either offers nothing.
+/// no file that the path without it does not, so a refusal of either names no directory to open,
+/// no drop and no absolute spelling.
 #[test]
 fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
     let scratch = Scratch::new("refusal-no-remedy");
@@ -3407,6 +3412,175 @@ fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
         assert!(
             !told.contains("add-dir") && !told.contains("drop") && !told.contains("absolute"),
             "{typed}: a remedy that does not reach the file was offered: {told}"
+        );
+    }
+}
+
+/// A task that names the working directory in full leads the planner to spell its files that way.
+/// The path is inside the workspace and the relative spelling reaches it, so the refusal says that:
+/// a sentence that the path resolves outside the workspace is untrue, and a planner given no
+/// spelling repeats the call or goes to another tool for the same file.
+///
+/// Every spelling that lands inside the root gets the sentence, whichever call made it, so the
+/// rows are the root itself, a directory, a file, a name nothing is at yet, a `.` segment, a
+/// doubled separator and a link to the root. The relative spelling of each reaches the file.
+#[test]
+fn an_absolute_path_inside_the_workspace_is_refused_by_saying_it_is_inside() {
+    let scratch = Scratch::new("refusal-inside");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    refuse_each_as_inside(
+        &workspace,
+        &mut policy,
+        &[
+            format!("{root}/main.rs"),
+            format!("{root}/./main.rs"),
+            format!("{root}//main.rs"),
+        ],
+        &[root.clone(), format!("{root}/sub")],
+    );
+    #[cfg(unix)]
+    {
+        let holder = Scratch::new("refusal-inside-holder");
+        let link = holder.path.join("to-root");
+        std::os::unix::fs::symlink(workspace.root(), &link).unwrap();
+        refuse_each_as_inside(
+            &workspace,
+            &mut policy,
+            &[format!("{}/main.rs", link.display())],
+            &[format!("{}/sub", link.display())],
+        );
+    }
+
+    let fresh = format!("{root}/sub/fresh.txt");
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(fresh.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("a write by the full name is refused");
+    assert_told_it_is_inside(&error, &fresh);
+    assert!(
+        !scratch.path.join("sub/fresh.txt").exists(),
+        "the refused write landed"
+    );
+
+    for relative in ["main.rs", "./main.rs"] {
+        workspace
+            .read(&mut policy, &Labelled::trusted(relative.to_string()))
+            .unwrap_or_else(|error| panic!("{relative} was refused: {error:?}"));
+    }
+    for relative in [".", "sub"] {
+        workspace
+            .list(
+                &mut policy,
+                &Labelled::trusted(relative.to_string()),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{relative} was refused: {error:?}"));
+    }
+}
+
+fn refuse_each_as_inside<S: bravebot_core::event::Sink>(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, S>,
+    reads: &[String],
+    listings: &[String],
+) {
+    for typed in reads {
+        let error = workspace
+            .read(policy, &Labelled::trusted(typed.clone()))
+            .expect_err("a read by the full name is refused");
+        assert_told_it_is_inside(&error, typed);
+    }
+    for typed in listings {
+        let error = workspace
+            .list(policy, &Labelled::trusted(typed.clone()), None, None)
+            .expect_err("a listing by the full name is refused");
+        assert_told_it_is_inside(&error, typed);
+    }
+}
+
+/// The refusal says the path is inside the workspace and names the spelling that is taken, and
+/// offers nothing that only a path outside could use.
+fn assert_told_it_is_inside(error: &WorkspaceError, typed: &str) {
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            }
+        ),
+        "{typed}: {error:?}"
+    );
+    let told = error.describe(typed);
+    for said in ["inside the workspace", "relative to the workspace root"] {
+        assert!(told.contains(said), "{typed}: {said} was not said: {told}");
+    }
+    // The name the caller typed is echoed in the sentence, and a directory's name may hold a word.
+    let sentence = told.replace(typed, "");
+    for untrue in ["outside", "add-dir", "drop"] {
+        assert!(
+            !sentence.contains(untrue),
+            "{typed}: {untrue} was said of a path inside the workspace: {told}"
+        );
+    }
+}
+
+/// A path that does leave the workspace is still told it leaves it, and the sentence for a path
+/// inside is not given to a name because it starts with the root. The landing of a name decides
+/// which sentence it gets.
+#[cfg(unix)]
+#[test]
+fn a_path_that_leaves_the_workspace_is_still_refused_as_leaving_it() {
+    let scratch = Scratch::new("refusal-still-outside");
+    let elsewhere = outside("refusal-still-outside");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    for typed in [
+        // Spelled from the top, not under the root.
+        elsewhere.path.join("todo.txt").display().to_string(),
+        // Spelled under the root, landing outside it through a link.
+        format!("{root}/escape-dir/todo.txt"),
+        // Spelled relative, landing outside it through a link.
+        "escape-dir/todo.txt".to_string(),
+    ] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.clone()))
+            .expect_err("a path that lands outside the workspace is refused");
+        let told = error.describe(&typed);
+        assert!(
+            told.contains("resolves outside the workspace"),
+            "{typed}: not told it leaves the workspace: {told}"
+        );
+        assert!(
+            !told.contains("inside the workspace"),
+            "{typed}: told a path outside the workspace that it is inside: {told}"
         );
     }
 }

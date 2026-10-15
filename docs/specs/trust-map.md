@@ -636,10 +636,19 @@ session would accept that request and the front end can ask about it. A path tha
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
 path work: a climb that lands inside the root, off the top of the file system or on a name that is
-not UTF-8, one a link carries out, and an absolute path that lands inside the root, where no
-directory can be opened.
+not UTF-8, and one a link carries out.
 A climb that lands inside the root stays refused even where a directory holding the root is open,
 since the relative spelling reaches the file.
+
+An absolute path that lands inside the root and in no opened directory is refused too, since a
+relative path means the project. It does not leave the workspace, and the refusal does not say it
+does. It says the path is inside the workspace and that a path there is named relative to the
+workspace root, without the workspace's own directory in front or as `.` for the root itself. It
+names no directory to open and no file to drop, because the relative spelling reaches the file, and
+a call that writes is not pointed at a `run` line with no sandbox
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of the path decides this, so a link to the
+root, a `.` segment and a doubled separator are told they are inside, and a name under the root that
+a link carries out is told it leaves.
 
 `request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
@@ -674,6 +683,10 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
+`verified-by: bravebot_agent::workspace::an_absolute_path_inside_the_workspace_is_refused_by_saying_it_is_inside`
+`verified-by: bravebot_agent::workspace::a_path_that_leaves_the_workspace_is_still_refused_as_leaving_it`
+`verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
+`verified-by: bravebot_agent::turn::a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
 `verified-by: bravebot_agent::workspace::a_directory_the_planner_names_is_offered_as_itself`
