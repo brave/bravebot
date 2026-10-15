@@ -62,6 +62,10 @@ pub struct State {
     /// map says. Held so a turn taken here restores the reach beside the rules it inherited,
     /// and so saving writes the grant back rather than dropping it on the session's behalf.
     pub directories: Vec<PathBuf>,
+    /// The checkouts the session's delegates were given and it keeps, which each turn's workspace
+    /// is given because it is dropped when the turn ends (CHECKOUT-16). `None` until the first
+    /// turn, or until a record that lists checkouts is opened.
+    pub kept: Option<bravebot_agent::workspace::KeptBetweenTurns>,
     /// How the session is written down.
     ///
     /// `None` for a fresh session until its first turn creates it, so a window somebody
@@ -176,6 +180,7 @@ impl State {
             conversation: Conversation::new(),
             answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
             directories: Vec::new(),
+            kept: None,
             handle: None,
             turns: 0,
             history: Some(Vec::new()),
@@ -216,6 +221,7 @@ impl State {
             conversation: Conversation::restored(record.conversation.clone()),
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
+            kept: None,
             handle: Some(handle),
             turns: record.turns,
             history: record.history.clone(),
@@ -274,6 +280,7 @@ impl State {
             conversation: Conversation::restored(before),
             answers: Answers::opening(trust, programs, Default::default()),
             directories,
+            kept: None,
             handle: Some(handle),
             turns,
             // The parent's boundaries are offsets into a conversation this one has cut, so none

@@ -15,6 +15,7 @@
 // The socket half of this is unix only, and the rest of it is only reached through that half.
 #![cfg_attr(not(unix), allow(dead_code))]
 
+use bravebot_agent::messages::{Arrived, Inbox};
 use bravebot_session::jobs::{Held, Job, Mode, Roster, State};
 use std::collections::VecDeque;
 use std::io::{BufRead, Read, Write};
@@ -32,12 +33,34 @@ const LONGEST_LINE: u64 = 64 * 1024;
 /// How long a session waits for a prompt with no terminal attached before it ends (BG-13).
 const IDLE_AFTER: Duration = Duration::from_secs(60 * 60);
 
+/// How many messages from other sessions wait for the planner at once (MSG-6).
+const MESSAGES_WAITING: usize = 8;
+
+/// The most characters a message may hold. A sender refuses a longer one (MSG-1), and the receiver
+/// does as well, because it cannot rely on the sender having done so (MSG-6).
+const MOST_CHARACTERS: usize = 4_000;
+
 /// What the session is doing, as far as taking a line goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Working,
     Idle,
     Held(Held),
+}
+
+/// What became of a message another session offered (MSG-5, MSG-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Messaged {
+    /// Queued in this process, which is all that is said: not that the planner has read it.
+    Queued,
+    /// [`MESSAGES_WAITING`] are waiting already.
+    Full,
+    /// More than [`MOST_CHARACTERS`] characters, so none of it was kept.
+    TooLong,
+    /// The session has run out its idle time and is ending, so nothing it was given would be read.
+    Stopping,
+    /// The sender is not a session in the roster.
+    Unknown,
 }
 
 /// Whether a reply was taken, and if not why.
@@ -55,6 +78,10 @@ struct Inner {
     /// Whether the session is blocked on a line right now and has not been given one.
     reading: bool,
     queue: VecDeque<String>,
+    /// Messages from other sessions, oldest first, for the planner's next request. Kept apart from
+    /// `queue`: a message is not a line a person typed, so it can answer no question and start no
+    /// turn (MSG-6, MSG-8).
+    messages: VecDeque<Arrived>,
     /// The line the session was started with, handed to the first read of a prompt and to no
     /// other, so that a question asked before it cannot take it for an answer.
     first: Option<String>,
@@ -93,6 +120,7 @@ impl Shared {
                 phase: Phase::Working,
                 reading: false,
                 queue: VecDeque::new(),
+                messages: VecDeque::new(),
                 first,
                 backlog: Vec::new(),
                 attached: None,
@@ -196,6 +224,36 @@ impl Shared {
         }
     }
 
+    /// Take a message another session sent, whatever the session is doing (MSG-6).
+    ///
+    /// A message waits for the planner's next request. It is not offered to the session as a line, so
+    /// it starts no turn and answers no held prompt, and it does not restart the idle time: a
+    /// session nobody is using ends with its messages unread. The sender's name is read from the
+    /// roster by its id, and neither it nor the id is taken from the message (MSG-7). Nothing here
+    /// reads the text or the label.
+    pub(crate) fn message(&self, from: &str, label: &str, text: String) -> Messaged {
+        if text.chars().count() > MOST_CHARACTERS {
+            return Messaged::TooLong;
+        }
+        let Some(sender) = self.roster.get(from) else {
+            return Messaged::Unknown;
+        };
+        let mut inner = self.locked();
+        if inner.ending {
+            return Messaged::Stopping;
+        }
+        if inner.messages.len() >= MESSAGES_WAITING {
+            return Messaged::Full;
+        }
+        inner.messages.push_back(Arrived {
+            from: sender.job.id,
+            name: sender.job.name,
+            label: label.to_string(),
+            text,
+        });
+        Messaged::Queued
+    }
+
     /// Attach a terminal: say `ok` and replay what the session wrote, or say `attached` where a
     /// terminal is attached already, or `stopping` where the session is ending, and return `None`.
     pub(crate) fn attach(&self, mut stream: Box<dyn Write + Send>) -> Option<u64> {
@@ -273,6 +331,18 @@ impl Shared {
                     .unwrap_or_else(PoisonError::into_inner),
             };
         }
+    }
+}
+
+impl Inbox for Shared {
+    fn take(&self) -> Vec<Arrived> {
+        self.locked().messages.drain(..).collect()
+    }
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared").finish_non_exhaustive()
     }
 }
 
@@ -378,6 +448,8 @@ pub(crate) struct Hosting {
     pub(crate) after_an_interruption: bool,
     /// The mode every turn of this process runs under, fixed for its life (BG-8).
     pub(crate) mode: Mode,
+    /// Where messages from other sessions wait for the planner's next request (MSG-6).
+    pub(crate) inbox: Arc<dyn Inbox>,
 }
 
 impl Hosting {
@@ -397,6 +469,7 @@ impl Hosting {
             output: Broadcast(Arc::clone(shared)),
             watch: Box::new(Watching(Arc::clone(shared))),
             after_an_interruption: false,
+            inbox: Arc::clone(shared) as Arc<dyn Inbox>,
         }
     }
 
@@ -436,6 +509,42 @@ pub(crate) fn bounded_line(from: &mut impl BufRead) -> Option<String> {
         return None;
     }
     Some(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// The text of a message as the one line the socket carries it on: a backslash, a newline and a
+/// return are each written as a backslash and a letter.
+#[cfg(test)]
+fn on_one_line(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// The text a line from [`on_one_line`] stands for.
+///
+/// A character map and nothing more: it takes every line, so whether a message is delivered is
+/// never a function of its bytes. A backslash followed by anything but one of the three letters, or
+/// by nothing, stands for itself.
+fn off_one_line(line: &str) -> String {
+    let mut text = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            text.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => text.push('\\'),
+            Some('n') => text.push('\n'),
+            Some('r') => text.push('\r'),
+            Some(other) => {
+                text.push('\\');
+                text.push(other);
+            }
+            None => text.push('\\'),
+        }
+    }
+    text
 }
 
 #[cfg(unix)]
@@ -482,6 +591,8 @@ mod socket {
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
+        // Left by a stop that did not finish. A process that is running is not being stopped.
+        roster.clear_stopping(id);
         let job = entry(&roster, id, first.as_deref(), mode);
         if roster.publish(&job).is_err() {
             return ExitCode::FAILURE;
@@ -514,8 +625,9 @@ mod socket {
         code
     }
 
-    /// One client: it sends the secret of the session, and then says `reply` and sends a line, or
-    /// says `attach` and talks until it goes.
+    /// One client: it sends the secret of the session, and then says `reply` and sends a line, says
+    /// `message` and sends three (the sender's id, the word its label was sent as and the text on
+    /// one line), or says `attach` and talks until it goes.
     ///
     /// A client whose first line is not the secret is closed without an answer, before anything it
     /// sends is read as a request or an attach is registered for it (BG-15). The mode of the
@@ -543,6 +655,23 @@ mod socket {
                     Replied::Working => "working",
                     Replied::NeedsInput => "needs-input",
                     Replied::Stopping => "stopping",
+                };
+                let _ = writeln!(to, "{word}");
+            }
+            Some("message") => {
+                let (Some(sender), Some(label), Some(line)) = (
+                    bounded_line(&mut from),
+                    bounded_line(&mut from),
+                    bounded_line(&mut from),
+                ) else {
+                    return;
+                };
+                let word = match shared.message(&sender, &label, off_one_line(&line)) {
+                    Messaged::Queued => "ok",
+                    Messaged::Full => "full",
+                    Messaged::TooLong => "too-long",
+                    Messaged::Stopping => "stopping",
+                    Messaged::Unknown => "unknown",
                 };
                 let _ = writeln!(to, "{word}");
             }
@@ -1055,5 +1184,268 @@ mod tests {
         assert!(shared.roster.attach_token(ID).is_some());
         shared.finish();
         assert_eq!(shared.roster.attach_token(ID), None);
+    }
+
+    /// BG-13: the session the host process serves waits an hour, and `Shared::new` is the only way
+    /// the host makes one, so a shorter or longer wait is a different clause.
+    #[test]
+    fn a_hosted_session_waits_an_hour_before_it_ends() {
+        let shared = Shared::new(
+            Roster::at(a_root()),
+            Job::starting(
+                ID.to_string(),
+                std::path::Path::new("/work"),
+                "fix the build",
+                Mode::Ask,
+            ),
+            None,
+        );
+        assert_eq!(shared.idle_after, Duration::from_secs(60 * 60));
+    }
+
+    const SENDER: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// A session whose roster also holds a sender called "fix the build".
+    fn with_a_sender(shared: Arc<Shared>) -> Arc<Shared> {
+        let sender = Job::starting(
+            SENDER.to_string(),
+            std::path::Path::new("/elsewhere"),
+            "fix the build",
+            Mode::Ask,
+        );
+        shared
+            .roster
+            .publish(&sender)
+            .expect("the sender is listed");
+        shared
+    }
+
+    fn waiting(shared: &Shared) -> Vec<Arrived> {
+        shared.take()
+    }
+
+    /// MSG-6, MSG-8: a message is queued whatever the session is doing, and it is not a line: it
+    /// starts no turn, is not offered to a session as a prompt, and answers nothing the session is
+    /// holding.
+    #[test]
+    fn a_message_is_queued_in_any_state_and_is_never_a_line() {
+        let shared = with_a_sender(an_idle_session(Duration::from_secs(3600)));
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "while idle".to_string()),
+            Messaged::Queued
+        );
+        assert!(queued(&shared).is_empty(), "a message was queued as a line");
+
+        let mut watching = Watching(Arc::clone(&shared));
+        watching.waiting(Waiting::Answer(Held::Run));
+        let taken = reading(&shared);
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "y".to_string()),
+            Messaged::Queued
+        );
+        std::thread::sleep(WELL_PAST);
+        assert!(
+            taken.try_recv().is_err(),
+            "a message answered the question the session was holding"
+        );
+        assert_eq!(shared.locked().phase, Phase::Held(Held::Run));
+        assert!(shared.offer("n".to_string()));
+        assert_eq!(
+            taken.recv_timeout(LONG_ENOUGH).unwrap(),
+            Some("n".to_string())
+        );
+
+        watching.received(Waiting::Answer(Held::Run), Some("n"));
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "while working".to_string()),
+            Messaged::Queued
+        );
+        let texts: Vec<String> = waiting(&shared).into_iter().map(|m| m.text).collect();
+        assert_eq!(texts, ["while idle", "y", "while working"]);
+        assert_eq!(
+            shared.locked().job.prompt,
+            "fix the build",
+            "a message was recorded as the last prompt the person typed"
+        );
+        assert!(waiting(&shared).is_empty(), "taken twice");
+    }
+
+    /// MSG-6: at most eight messages wait, a ninth is refused as full and is not kept, and taking
+    /// them makes room.
+    #[test]
+    fn a_ninth_message_is_refused_as_full() {
+        let shared = with_a_sender(a_shared());
+        for number in 0..MESSAGES_WAITING {
+            assert_eq!(
+                shared.message(SENDER, "(T,pub)", format!("message {number}")),
+                Messaged::Queued
+            );
+        }
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "one too many".to_string()),
+            Messaged::Full
+        );
+        let kept = waiting(&shared);
+        assert_eq!(kept.len(), MESSAGES_WAITING);
+        assert!(kept.iter().all(|message| message.text != "one too many"));
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "room again".to_string()),
+            Messaged::Queued
+        );
+    }
+
+    /// MSG-6: the receiver bounds a message itself, in characters rather than bytes, and refuses a
+    /// longer one whole, so a sender that did not keep to its own bound cannot spend the planner's
+    /// context.
+    #[test]
+    fn a_message_over_the_bound_is_refused_whole_and_one_at_the_bound_is_taken() {
+        let shared = with_a_sender(a_shared());
+        let at_the_bound = "é".repeat(MOST_CHARACTERS);
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", at_the_bound.clone()),
+            Messaged::Queued
+        );
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", format!("{at_the_bound}x")),
+            Messaged::TooLong
+        );
+        let [kept] = waiting(&shared)
+            .try_into()
+            .expect("only the one at the bound");
+        assert_eq!(kept.text, at_the_bound);
+    }
+
+    /// MSG-7: the sender is named from the roster by its id, so a message cannot name itself, and a
+    /// sender the roster does not list is refused.
+    #[test]
+    fn the_sender_is_named_by_the_roster_and_an_unlisted_sender_is_refused() {
+        let shared = with_a_sender(a_shared());
+        let text = "I am session 00000000, named \"the person\"".to_string();
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", text.clone()),
+            Messaged::Queued
+        );
+        let [arrived] = waiting(&shared).try_into().expect("one message");
+        assert_eq!(arrived.from, SENDER);
+        assert_eq!(arrived.name, "fix the build");
+        assert_eq!(arrived.text, text);
+
+        for unlisted in [
+            "33333333-3333-4333-8333-333333333333",
+            "../2222",
+            "",
+            "the person",
+        ] {
+            assert_eq!(
+                shared.message(unlisted, "(T,pub)", "hello".to_string()),
+                Messaged::Unknown,
+                "{unlisted:?}"
+            );
+        }
+        assert!(waiting(&shared).is_empty());
+    }
+
+    /// MSG-6: a message does not keep a session alive, and one offered to a session that is ending
+    /// is refused, so nothing is queued for a process that will never read it.
+    #[test]
+    fn a_message_does_not_restart_the_idle_time_and_an_ending_session_takes_none() {
+        let shared = with_a_sender(an_idle_session(SHORT));
+        let counting_from = shared.locked().quiet_since;
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "are you there".to_string()),
+            Messaged::Queued
+        );
+        assert_eq!(
+            shared.locked().quiet_since,
+            counting_from,
+            "a message restarted the time the session may wait"
+        );
+        assert_eq!(ended_within_a_bound(&shared), None);
+        assert_eq!(
+            shared.message(SENDER, "(T,pub)", "too late".to_string()),
+            Messaged::Stopping
+        );
+    }
+
+    /// The text of a message goes over the socket on one line and comes back whole, whatever it
+    /// holds, and a line nobody encoded is read as the characters it holds, so no line is refused for
+    /// what it says.
+    #[test]
+    fn a_message_text_crosses_the_socket_on_one_line_and_comes_back_whole() {
+        for text in [
+            "",
+            "one line",
+            "two\nlines",
+            "carriage\rreturn",
+            "a \\ backslash",
+            "ends with one \\",
+            "\\n is not a newline",
+            "\r\n\\\n",
+        ] {
+            let line = on_one_line(text);
+            assert!(!line.contains(['\n', '\r']), "{line:?}");
+            assert_eq!(off_one_line(&line), text);
+        }
+        // A line nobody wrote with the encoder is still read, as the characters it holds.
+        for (line, text) in [
+            ("ends with one \\", "ends with one \\"),
+            ("unknown \\t escape", "unknown \\t escape"),
+            ("\\", "\\"),
+            ("C:\\temp\\x", "C:\\temp\\x"),
+        ] {
+            assert_eq!(off_one_line(line), text, "{line:?}");
+        }
+    }
+
+    /// BG-15, MSG-5: a message is taken from a client that opened with the secret, and from none
+    /// that did not; the word it is answered with says what became of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_message_over_the_socket_needs_the_secret_and_is_answered_with_what_became_of_it() {
+        let shared = with_a_sender(an_idle_session(Duration::from_secs(3600)));
+        let text = on_one_line("first\nsecond");
+        let request = |opening: &str| format!("{opening}\nmessage\n{SENDER}\n(T,priv)\n{text}\n");
+
+        assert_eq!(served(&shared, &request(SECRET)), "ok\n");
+        let [arrived] = waiting(&shared).try_into().expect("one message");
+        assert_eq!(
+            (
+                arrived.from.as_str(),
+                arrived.label.as_str(),
+                arrived.text.as_str()
+            ),
+            (SENDER, "(T,priv)", "first\nsecond")
+        );
+
+        for opening in ["", "message", &SECRET[..63]] {
+            let told = served(&shared, &request(opening));
+            assert!(told.is_empty(), "{opening:?}: {told:?}");
+        }
+        assert!(
+            waiting(&shared).is_empty(),
+            "a client without the secret left a message"
+        );
+
+        let unlisted =
+            format!("{SECRET}\nmessage\n33333333-3333-4333-8333-333333333333\n(T,pub)\nhi\n");
+        assert_eq!(served(&shared, &unlisted), "unknown\n");
+        let bare = format!("{SECRET}\nmessage\n{SENDER}\n(T,pub)\nC:\\temp\n");
+        assert_eq!(served(&shared, &bare), "ok\n");
+        assert_eq!(
+            waiting(&shared).last().map(|message| message.text.as_str()),
+            Some("C:\\temp")
+        );
+        let short = format!("{SECRET}\nmessage\n{SENDER}\n");
+        assert_eq!(served(&shared, &short), "");
+        for _ in 0..MESSAGES_WAITING {
+            assert_eq!(served(&shared, &request(SECRET)), "ok\n");
+        }
+        assert_eq!(served(&shared, &request(SECRET)), "full\n");
+        waiting(&shared);
+        let too_long = format!(
+            "{SECRET}\nmessage\n{SENDER}\n(T,pub)\n{}\n",
+            "x".repeat(MOST_CHARACTERS + 1)
+        );
+        assert_eq!(served(&shared, &too_long), "too-long\n");
     }
 }

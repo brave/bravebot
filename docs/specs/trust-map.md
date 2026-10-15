@@ -4,6 +4,7 @@ title: The trust map
 status: normative
 governs:
   - crates/core/src/trust.rs
+  - crates/core/src/canonical.rs
   - crates/core/src/spelling.rs
   - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
@@ -68,7 +69,8 @@ the answer decorative.
 
 Rules are keyed by path prefix and matched by whole segments. Both polarities are expressible, so
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
-spellings of a path are one rule, and a later decision replaces an earlier one.
+spellings of a path are one rule, except the names the table below lists as not handled, and a
+later decision replaces an earlier one.
 Undo may also record an undecided boundary, overriding a broader rule without granting trust or
 recording a refusal. Reads there stay quarantined and writes still require a decision. This boundary
 also overrides scratch-directory fallback trust.
@@ -108,6 +110,61 @@ that spelling and leaves a lower rule about another in force, since a name that 
 not always the same file: NTFS holds `claß.md` and `class.md` apart, and a directory added from a
 case-sensitive volume holds `Docs` and `docs` apart.
 
+**Normalization.** Whether two spellings that differ only in Unicode form are one path is also a
+fact about the volume. APFS stores a name as it was created and opens it under any canonically
+equivalent form, so `cafe` with a combining acute accent and `caf` with the precomposed letter name
+one file there, and a volume without that holds them apart. Unlike case, the volume cannot be asked
+without creating a file, because the working directory's own name rarely holds a character that has
+two forms. So the map does not ask, and treats the two kinds of rule differently. A rule that
+withholds trust, a distrust or an undecided boundary, is about every spelling canonically
+equivalent to the one it was written about, and the weakest rule among them decides each spelling
+as it does for case variants, in the order untrusted, undecided, trusted. A trust is about the
+spelling it was written about, with case folded where the volume folds it, and does not reach an
+equivalent one. A refusal that reaches too far costs a question, and a trust that did would vouch
+for a file nobody was asked about. Both follow from the round trip [TRUST-4](#TRUST-4) closes:
+bytes written as untrusted under one spelling are not read back as trusted under another, and the
+map cannot tell which spellings the volume opens as one file. Equivalence is Unicode's canonical
+equivalence, so a full-width letter or a ligature is not the letter it looks like. Closing a
+directory withdraws its trust from every equivalent spelling for the same reason. Names are compared
+in Normalization Form D, with the data carried in the kernel as tables because the crate takes no
+dependency ([CRED-18](credential-protection.md#CRED-18)); a test compares the tables with the
+`unicode-normalization` crate over every code point.
+
+**Every way a file has two names.** A rule is read under the name a call used, so each name a
+volume or a path gives one file is a row here, with what the map and the writer reservation
+(TRUST-4) do with it and what a deny rule ([permissions.md](permissions.md)) does with it, in a
+read and in a write. A row that is not handled names the issue that tracks it. A map cell marked
+Known cost is accepted until this spec changes. Any other cell that is not handled, and any
+deny-rule cell that is not covered, is a defect. A change that fixes a spelling edits its row, and
+a spelling with no row gets one in the same commit as its test.
+
+The rows a volume can make without a person opening another directory are `ALIASES` in
+`crates/agent/test-support/aliases.rs`. Four tests ask each consumer about every row, skip a row
+the volume holds apart, and fail on a row listed as unhandled once it is handled. The other rows are
+pinned by the test the last column names.
+
+| Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
+|---|---|---|---|---|
+| `.` segment | `src/./a.md` for `src/a.md` | one rule | covered | `bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted` |
+| Doubled or trailing separator | `src//a.md`, a rule about `src/` | one rule | covered | `bravebot_core::trust::equivalent_path_spellings_are_the_same_rule` |
+| `..`, `~` and absolute spellings | `src/../a.md`, `~/n/a.md`, `/work/src/a.md` | refused unless a directory a person opened holds the file, then one rule under that directory's name (TRUST-10, TRUST-18) | covered | `bravebot_agent::workspace::a_leading_tilde_and_the_home_it_stands_for_give_the_same_trust_key` |
+| Drive letter, `\` and `\\?\` prefix | `C:\work\a.md` | one key where the host separates with `\` (TRUST-18) | covered | `bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates` |
+| Letter case | `SRC/a.md` | one rule where the volume folds case | covered, in either case the file is stored in | `bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted` |
+| Long s | `ſrc/a.md` | one rule where the volume folds case | covered | `bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as` |
+| NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered when the rule spells the form the file is stored in, otherwise not covered | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, #2337 |
+| Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
+| Hard link | a second entry for the file | not handled (Known cost) | not covered | #2328, #2327 |
+| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | not covered | #2328, #2327 |
+| 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
+| Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
+| Trailing dot or space | `.env.` | refused on Windows | refused | same |
+
+The three Windows rows are refused where a path is resolved and where a redirection target is
+opened, before any key is made, so the map is not asked about those names. Path resolution passes
+the host's own answer, so only a Windows host takes the refusing branch there; the predicate is
+tested on every host with the answer supplied. A short name for a directory a person opened is
+accepted, since it names that one directory.
+
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
 
@@ -140,6 +197,19 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
 `verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
+`verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
+`verified-by: bravebot_core::trust::a_refusal_recorded_about_one_form_of_a_name_decides_the_other`
+`verified-by: bravebot_core::trust::a_trust_does_not_reach_a_canonically_equivalent_spelling`
+`verified-by: bravebot_core::trust::the_weakest_of_two_equivalent_spellings_decides_every_form`
+`verified-by: bravebot_core::trust::canonical_equivalence_does_not_merge_names_that_only_look_alike`
+`verified-by: bravebot_core::canonical::every_character_decomposes_as_the_unicode_normalization_crate_decomposes_it`
+`verified-by: bravebot_core::canonical::strings_of_letters_and_marks_decompose_as_the_unicode_normalization_crate_decomposes_them`
+`verified-by: bravebot_core::canonical::names_unicode_makes_one_name_decompose_to_one_string`
+`verified-by: bravebot_core::canonical::names_that_differ_by_more_than_their_form_decompose_to_different_strings`
+`verified-by: bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
 `verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`
 `verified-by: bravebot_core::trust::a_rule_outside_the_working_directory_decides_nothing_inside_it`
@@ -187,7 +257,10 @@ remain available. A later complete trusted replacement can trust the path again.
 
 Byte capture and label lookup share a boundary with effect entry and successful publication.
 No reader can capture replacement bytes under an earlier grant. This covers context files,
-attachments, deferred references and searches as well as direct reads. Collection never merges
+attachments, deferred references and searches as well as direct reads. A capture that only reads
+holds the boundary shared with other such captures, and every capture that enters or completes an
+effect holds it exclusive, so listings and searches overlap ([TURN-10](turns.md#TURN-10)) and an
+effect still waits for every reader and is waited for by every reader. Collection never merges
 a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
 same authority after turn-owned children finish, including on failure or cancellation, and save
 its current file decisions rather than substituting the map from before the turn. Manifest runs
@@ -199,7 +272,10 @@ vouching. A changed path cannot spend the old approval. Changes to another path 
 that approval. A backup records the trust of its bytes at capture under the same boundary. On a
 volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer an
 active path refuses and for the revision an approval is checked against, so a run line redirecting
-to one file under two such spellings is refused as a second writer to it.
+to one file under two such spellings is refused as a second writer to it. Canonically equivalent
+spellings are one path here on every volume, because refusing a writer and invalidating an approval
+only narrow. On a volume that holds two such names apart, a second writer to the other name may be
+refused, and on one that does not, no second writer to the one file is let in.
 
 `verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
 `verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
@@ -212,8 +288,18 @@ to one file under two such spellings is refused as a second writer to it.
 `verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
 `verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
 `verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
+`verified-by: bravebot_core::file_authority::readers_hold_the_boundary_at_the_same_time`
+`verified-by: bravebot_core::file_authority::an_effect_cannot_enter_while_a_reader_holds_the_boundary`
+`verified-by: bravebot_core::file_authority::a_reader_cannot_capture_while_an_effect_holds_the_boundary`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap`
+`verified-by: bravebot_core::file_authority::an_untrusted_write_through_an_equivalent_spelling_is_read_untrusted_under_both`
+`verified-by: bravebot_core::file_authority::a_second_writer_through_an_equivalent_spelling_is_refused_while_the_first_is_open`
+`verified-by: bravebot_core::file_authority::a_decision_through_an_equivalent_spelling_moves_the_revision_of_the_path`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_equivalent_spellings_is_refused_as_a_second_writer`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
@@ -450,11 +536,12 @@ it has moved or gone, is said so rather than passed over.
 
 `/add-dir close ~/notes` closes that one directory and takes both halves back together: a file that
 only it reached is refused again, and the trusted rule at its own path is removed, under every
-spelling the volume reads as that path. Where a broader rule would then trust the directory, an
-undecided boundary takes the rule's place, since the rule removed may have been written over a
-distrust. A distrusted or undecided rule there stays, and so does every rule beneath it, so closing
-never raises what a path answers as. Another directory stays open, a directory opened beneath it
-included, and a name that is not open is refused. The name is matched as it is spelled and then as
+spelling the volume reads as that path and every canonically equivalent one (TRUST-2). Where a
+broader rule would then trust the directory, an undecided boundary takes the rule's place, since
+the rule removed may have been written over a distrust. A distrusted or undecided rule there stays,
+and so does every rule beneath it, so closing never raises what a path answers as. Another
+directory stays open, a directory opened beneath it included, and a name that is not open is
+refused. The name is matched as it is spelled and then as
 it resolves now, through what still exists of it, so a link put there since cannot redirect the
 close and a directory that has gone closes under any name that reached it. The session record is
 written again at once wherever one is on disk, so a resume does not reopen it.
@@ -489,6 +576,7 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_core::trust::withdrawing_trust_keeps_every_rule_that_lowers_a_path`
 `verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
+`verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_canonically_equivalent_spelling`
 `verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
@@ -532,10 +620,14 @@ refused whether or not there is anything at the other end of it.
 
 An absolute path refused for landing outside the root and every opened directory is refused with
 what the person can do about it: open the directory it is in with `/add-dir` or `--add-dir`, after
-which the same path reaches the file. A call that reads the file is also told it can be dropped on
-the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or searches is not,
-since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
-workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
+which the same path reaches the file. Where the path names a directory, that directory is the one to
+open, and the refusal says so instead of naming the directory it is in. A name nothing is at yet is
+offered through the directory it is in, as a file is. A call that reads the file is also told it can
+be dropped on the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, lists or
+searches is not, since a drop only ever reads. A read that names a directory is offered the
+directory to open and no drop, since a directory cannot be dropped ([DROP-5](dropping.md#DROP-5)).
+Naming the file with `@` is not offered, since a name cannot leave the workspace either
+([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
 `run`. For a call that writes, the refusal names the one route that ends in a prompt: a `run` line
 that redirects into the file, started with `unconfined: true`, which the person is asked to
@@ -544,16 +636,27 @@ session would accept that request and the front end can ask about it. A path tha
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
 path work: a climb that lands inside the root, off the top of the file system or on a name that is
-not UTF-8, one a link carries out, and an absolute path that lands inside the root, where no
-directory can be opened.
+not UTF-8, and one a link carries out.
 A climb that lands inside the root stays refused even where a directory holding the root is open,
 since the relative spelling reaches the file.
+
+An absolute path that lands inside the root and in no opened directory is refused too, since a
+relative path means the project. It does not leave the workspace, and the refusal does not say it
+does. It says the path is inside the workspace and that a path there is named relative to the
+workspace root, without the workspace's own directory in front or as `.` for the root itself. It
+names no directory to open and no file to drop, because the relative spelling reaches the file, and
+a call that writes is not pointed at a `run` line with no sandbox
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of the path decides this, so a link to the
+root, a `.` segment and a doubled separator are told they are inside, and a name under the root that
+a link carries out is told it leaves.
 
 `request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
 them, with the trust that comes with it ([TRUST-9](#TRUST-9)). In bypass mode, where nobody is there
 to run `/add-dir`, the grant of a `request_path` opens the directory as `/add-dir` would, and the
-refusal is not reached for it.
+refusal is not reached for it. Where the session grants a `request_path` unasked, the refusal says
+so and names the call, and elsewhere it names `/add-dir` alone
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)).
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
@@ -580,8 +683,16 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
+`verified-by: bravebot_agent::workspace::an_absolute_path_inside_the_workspace_is_refused_by_saying_it_is_inside`
+`verified-by: bravebot_agent::workspace::a_path_that_leaves_the_workspace_is_still_refused_as_leaving_it`
+`verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
+`verified-by: bravebot_agent::turn::a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
+`verified-by: bravebot_agent::workspace::a_directory_the_planner_names_is_offered_as_itself`
+`verified-by: bravebot_agent::workspace::a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in`
+`verified-by: bravebot_agent::workspace::a_read_naming_a_directory_outside_the_workspace_is_not_told_to_drop_it`
+`verified-by: bravebot_agent::turn::a_sibling_directory_named_to_a_listing_or_a_search_is_offered_as_itself`
 `verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open`
 `verified-by: bravebot_agent::workspace::a_path_climbing_into_a_directory_that_is_not_open_is_refused`
 `verified-by: bravebot_agent::workspace::a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere`
@@ -1488,9 +1599,22 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   resolves a path to where it lands, but the record is written and read under the name the
   operation used below the open directory that name reaches. A symlink under that directory
   therefore gives one file two spellings and two rules: content written as untrusted through one is
-  read back as trusted under the other, which is the round trip TRUST-4 exists to close. Keying the
-  record on the destination instead is what closes it, and that is a change to every rule the map
-  holds rather than to confinement.
+  read back as trusted under the other, which is the round trip TRUST-4 exists to close. So does a
+  hard link, and so does a second path to a tree that canonicalisation does not join, such as a
+  macOS firmlink or a Linux bind mount, once a person has opened both. Keying the record on the
+  destination instead is what closes it, and that is a change to every rule the map holds rather
+  than to confinement. Rules can name paths that do not exist yet and directory prefixes, which
+  have no identity to key on.
+- **A refusal reaches a name the volume may hold apart, and a vouch does not lift it.** The round
+  trip TRUST-4 closes requires that a file marked untrusted under one spelling is not read back as
+  trusted under another, so a refusal is about every canonically equivalent spelling of its name
+  (TRUST-2), because the volume cannot be asked whether it opens them as one file. Where it holds
+  them apart, such as a Linux filesystem without `casefold`, refusing `cafe` with a combining
+  accent also refuses the precomposed name, which is a second file there, and the person is asked
+  about it. Trusting that second name does not help, whether by a vouch or by a trusted write that
+  completes: the weakest rule among equivalent spellings decides each, as it does for case
+  variants, so the refusal stays in force until a vouch replaces it under the spelling it was
+  written about.
 - **A share has no key, so a directory on one cannot be opened by name.** Every rule is keyed
   under a `/`-spelled name (TRUST-18). A drive letter has one and a share and a device path do not,
   so `/add-dir` and `/cd` refuse a resolved path on either: admitting one would key its rule under a

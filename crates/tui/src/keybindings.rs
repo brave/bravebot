@@ -194,6 +194,7 @@ pub struct Keybindings {
     pub paste: KeyChord,
     pub panel: KeyChord,
     pub scope: KeyChord,
+    pub undo: KeyChord,
 }
 
 impl Default for Keybindings {
@@ -209,14 +210,42 @@ impl Default for Keybindings {
             paste: KeyChord::ctrl('v'),
             panel: KeyChord::ctrl('x'),
             scope: KeyChord::ctrl('n'),
+            undo: Keybindings::UNDO,
         }
     }
 }
 
+/// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
+///
+/// Which one arrives is the terminal's choice and not the person's. A terminal that has not been
+/// asked to disambiguate sends the bare byte, and the reader turns 0x1c to 0x1f into `4` to `7`
+/// held with Ctrl, so the press arrives as Ctrl-`7`. One that reports the key itself sends `_`,
+/// with Shift where it reports that `_` is Shift and hyphen. Ctrl-`/` is here because it is the
+/// same byte on the terminals that send a byte at all, so the key that undoes on those must undo
+/// on a terminal that names the key as well.
+const UNDO_SPELLINGS: [KeyChord; 4] = [
+    KeyChord::new(KeyCode::Char('7'), KeyModifiers::CONTROL),
+    KeyChord::new(
+        KeyCode::Char('_'),
+        KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+    ),
+    KeyChord::new(KeyCode::Char('/'), KeyModifiers::CONTROL),
+    KeyChord::new(
+        KeyCode::Char('/'),
+        KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+    ),
+];
+
 impl Keybindings {
+    /// What the undo step answers unless a settings file moves it.
+    ///
+    /// Ctrl-_ rather than Ctrl-Z, which suspends the process on a terminal that has not had job
+    /// control turned off, and which this program does not take.
+    pub const UNDO: KeyChord = KeyChord::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
+
     /// Every action by the name a settings file calls it, in one list so that resolving one chord
-    /// can see the nine it has to differ from.
-    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 10] {
+    /// can see the ten it has to differ from.
+    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 11] {
         [
             ("background", &mut self.background),
             ("editor", &mut self.editor),
@@ -227,6 +256,7 @@ impl Keybindings {
             ("scroller", &mut self.scroller),
             ("stash", &mut self.stash),
             ("trail", &mut self.trail),
+            ("undo", &mut self.undo),
             ("watch", &mut self.watch),
         ]
     }
@@ -243,8 +273,8 @@ impl Keybindings {
     pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
         let mut active = Self::default();
         let mut slots = active.slots();
-        let defaults: [KeyChord; 10] = std::array::from_fn(|i| *slots[i].1);
-        let mut asked: [Option<KeyChord>; 10] = std::array::from_fn(|i| {
+        let defaults: [KeyChord; 11] = std::array::from_fn(|i| *slots[i].1);
+        let mut asked: [Option<KeyChord>; 11] = std::array::from_fn(|i| {
             configured
                 .get(slots[i].0)
                 .and_then(|spelling| KeyChord::parse(spelling))
@@ -255,7 +285,7 @@ impl Keybindings {
         // given, so this settles rather than deciding once. Every round drops at least one request
         // or is the last, and with no requests left the defaults are what stand, which differ.
         loop {
-            let standing: [KeyChord; 10] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
+            let standing: [KeyChord; 11] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
             let contested =
                 |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
             let mut given_up = false;
@@ -316,6 +346,44 @@ impl Keybindings {
         self.scope.matches(key)
     }
 
+    /// Whether `chord` is what some other action currently answers to, whether that is still its
+    /// default or a settings file moved it there.
+    fn chord_taken_by_another_action(&self, chord: KeyChord) -> bool {
+        [
+            self.background,
+            self.editor,
+            self.history,
+            self.panel,
+            self.paste,
+            self.scope,
+            self.scroller,
+            self.stash,
+            self.trail,
+            self.watch,
+        ]
+        .contains(&chord)
+    }
+
+    /// Whether this press asks for the last edit back, in any spelling the default arrives in.
+    ///
+    /// The alternatives are read only while the action stands on its default, since they are facts
+    /// about how a terminal reports Ctrl-_ and say nothing about a chord a person moved it to. A
+    /// chord a settings file named is matched as every other configured chord is.
+    ///
+    /// An alternative is skipped where a settings file moved another action onto that exact chord:
+    /// `from_map` resolves contests among the ten movable chords, but these four are not among
+    /// them, so nothing there stops a person asking for `ctrl-/` on `trail` and finding undo answer
+    /// it instead.
+    pub fn is_undo(&self, key: &KeyEvent) -> bool {
+        if self.undo.matches(key) {
+            return true;
+        }
+        self.undo == Self::UNDO
+            && UNDO_SPELLINGS
+                .iter()
+                .any(|chord| chord.matches(key) && !self.chord_taken_by_another_action(*chord))
+    }
+
     pub fn background_name(&self) -> String {
         self.background.display()
     }
@@ -356,7 +424,11 @@ impl Keybindings {
         self.scope.display()
     }
 
-    /// Whether any of the ten configurable actions answers this key event.
+    pub fn undo_name(&self) -> String {
+        self.undo.display()
+    }
+
+    /// Whether any of the eleven configurable actions answers this key event.
     pub fn claims(&self, key: &KeyEvent) -> bool {
         self.is_background(key)
             || self.is_stash(key)
@@ -368,6 +440,7 @@ impl Keybindings {
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
+            || self.is_undo(key)
     }
 }
 
@@ -608,5 +681,102 @@ mod tests {
 
         assert_eq!(bindings.stash, KeyChord::alt('s'));
         assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
+    }
+
+    /// The undo chord is Ctrl-_ rather than Ctrl-Z, which suspends the process on a terminal that
+    /// has not had job control turned off, and a person whose terminal already uses it can move
+    /// it, with the old chord going dead.
+    #[test]
+    fn the_undo_chord_is_ctrl_underscore_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.undo, KeyChord::ctrl('_'));
+        assert_eq!(defaults.undo_name(), "ctrl-_");
+
+        let mut map = BTreeMap::new();
+        map.insert("undo".to_string(), "alt-u".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.undo_name(), "alt-u");
+        let moved = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
+        assert!(bindings.is_undo(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_undo(&vacated) && !bindings.claims(&vacated));
+    }
+
+    /// Every spelling a terminal sends for Ctrl-_ answers while undo stands on its default: the
+    /// bare byte as Ctrl-7, and the key reported by name in either of its two cases.
+    #[test]
+    fn every_spelling_a_terminal_sends_for_ctrl_underscore_answers_the_default() {
+        let bindings = Keybindings::default();
+        for alternate in [
+            KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL),
+            KeyEvent::new(
+                KeyCode::Char('_'),
+                KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+            ),
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL),
+            KeyEvent::new(
+                KeyCode::Char('/'),
+                KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),
+            ),
+        ] {
+            assert!(bindings.is_undo(&alternate), "{alternate:?} did not answer");
+        }
+
+        // Once the action is moved, the alternatives go with the default they were facts about,
+        // not with the chord a person chose instead.
+        let mut map = BTreeMap::new();
+        map.insert("undo".to_string(), "alt-u".to_string());
+        let moved = Keybindings::from_map(&map);
+        assert!(!moved.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
+    }
+
+    /// A settings file moving another action onto one of the alternate spellings takes it: that
+    /// action stands on the chord, and undo gives it up rather than answering a press meant for
+    /// the action a person asked for. `from_map` does not see these four chords at all, since they
+    /// are not among the eleven it resolves, so skipping one has to be undo's own to do.
+    #[test]
+    fn an_alternate_spelling_given_to_another_action_no_longer_answers_undo() {
+        let mut map = BTreeMap::new();
+        map.insert("trail".to_string(), "ctrl-/".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.trail, KeyChord::ctrl('/'));
+
+        let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        assert!(
+            bindings.is_trail(&pressed),
+            "trail did not answer the chord it was moved to"
+        );
+        assert!(
+            !bindings.is_undo(&pressed),
+            "undo answered a chord moved to another action"
+        );
+
+        // Undo still answers on its own default, and on the alternates nothing else was moved to.
+        assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL)));
+        assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL)));
+    }
+
+    /// A block written before undo existed could put another action on `ctrl-_` and keep it,
+    /// since nothing else answered that chord. `undo`'s own default now does, so loading that
+    /// block contests the request the same way two actions asking for one chord always have
+    /// (INPUT-32): neither has more right than the other, and the request gives it up. The chord
+    /// that moved is `trail`'s, by name rather than by position, so the same holds whichever of
+    /// the ten is the one an old block put there.
+    #[test]
+    fn a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up() {
+        let mut map = BTreeMap::new();
+        map.insert("trail".to_string(), "ctrl-_".to_string());
+        let bindings = Keybindings::from_map(&map);
+
+        assert_eq!(
+            bindings.trail,
+            KeyChord::ctrl('t'),
+            "trail did not fall back to its own default"
+        );
+        assert_eq!(
+            bindings.undo,
+            Keybindings::UNDO,
+            "undo did not keep the default the request contested"
+        );
     }
 }

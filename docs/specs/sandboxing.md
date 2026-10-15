@@ -947,6 +947,14 @@ directory, a session with nobody to ask included: it adds no row, since a choice
 key ssh could offer, which the remote scope already reads, and it only changes which of them ssh
 offers first.
 
+A line whose `run` call asks for `ssh-key` ([SANDBOX-26](#SANDBOX-26)) is asked about the key again
+for an owner a choice was made for at an earlier prompt, whether that choice was a key or ssh's own
+order, on the same terms: the owner is the one every such stage names, and the answer replaces the
+earlier choice. It changes nothing for an owner an entry names, which decides over any choice and
+is changed in the settings, nor for a stage with a `NAME=value` in front of it, which carries no
+scope. The request lends no path, adds no row and names no key, so the planner chooses nothing: it
+only has the person asked.
+
 `bravebot doctor --push-identity [<host>/<owner>]` asks which account each key pushes as. It takes
 every public key a stage with the remote scope could be offered, the ones at ssh's default names and
 the ones an `IdentityFile` line of the person's ssh configuration names, and runs `ssh -T -i <key>
@@ -1011,6 +1019,12 @@ to carry it, always says, whether or not the person's git signs with ssh, that t
 directory, and that a `user.signingkey` set in a repository's own configuration is not read. The text is fixed: it holds no value from any
 configuration and does not change with the repository, so that a signature which fails with "Couldn't
 load public key" is traced to the setting by the planner without reading anything it was not lent.
+It also says that a step that signs never reads a private key and signs through the person's ssh
+agent, that a signature failing with "No private key found" means the configured key was lent but
+the agent does not hold it, and that the person solves it by loading the key with `ssh-add`. Where
+the session would accept `'unconfined': true` for the line (the condition under which a refused
+write names it, [SANDBOX-29](#SANDBOX-29)) it adds that the one commit line may be run with it, the
+person being asked to approve it; otherwise it names no such argument.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -1602,7 +1616,8 @@ line is said once. It then says that where GitHub refused a push for permission 
 belong to an account that cannot write to the repository, and where it refused the login no key
 offered is registered, that a retry offers the same key, and that only the person chooses the key:
 at the run prompt of the terminal interface, where ssh could offer more than one key and none was
-chosen for the owner, or with the entry shape and the file it goes in. It says that in the terminal
+chosen for the owner, or, for one already chosen, where the planner's retry names `ssh-key` in
+`scopes`, or with the entry shape and the file it goes in. It says that in the terminal
 interface `/reach keys` lists the keys chosen at a prompt and `/reach keys remove <number>` forgets
 one, so that the next prompt asks again, and that in either case the planner asks the person rather
 than retrying. The text names no host, owner, address or key path and reads nothing a
@@ -2281,8 +2296,9 @@ Under `onUnlisted: ask`, the hosts a foreground run was refused for want of an e
 person once that run has stopped. Nothing waits on the answer: the program was refused already, and
 a yes lets the lines that follow reach the hosts, so the person runs it again. The question names
 each host on a row of its own, up to eight at a time, and says that a yes holds until the session
-ends and writes nothing to disk. A yes adds the hosts to the allowed set of every stage from the
-next line on, which starts another proxy because the list is another list. A host the denied list
+ends and writes nothing to disk. `/clear`, `/branch` and `/resume` begin another session in the same
+process, and a host answered before, a no included, is asked about again. A yes adds the hosts to the allowed set of every stage
+from the next line on, which starts another proxy because the list is another list. A host the denied list
 names stays refused, and a granted name is held to the addresses it resolves to as a listed one
 is. A no is kept for the session, so the same host is not asked about again. The hosts asked about
 are those the proxy refused as not listed and that are host names or addresses; a host refused for
@@ -2329,6 +2345,7 @@ says nothing about them.
 `verified-by: bravebot_agent::confine::a_stage_under_a_host_list_cannot_connect_around_the_proxy`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it`
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
+`verified-by: bravebot_agent::workspace::a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
 `verified-by: bravebot_sandbox::hosts::a_denied_entry_wins_over_an_allowed_one_in_either_order`
 `verified-by: bravebot_sandbox::hosts::an_empty_list_refuses_every_host`
@@ -2569,12 +2586,15 @@ because the path it names is the one the person was protecting.
 ### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle` and `loopback`. It is
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `loopback` and `ssh-key`. It is
 for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
 that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
 that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
 bind one or a build through `sccache`. `loopback` is the loopback grant and nothing else: it reads
-no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. Every other name is
+no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. `ssh-key` is a
+request for the person to choose again which ssh key a push offers its owner, for the line whose
+push was refused for permission ([SANDBOX-16](#SANDBOX-16)): it lends nothing, reads no path, and
+only has the run prompt number the keys for an owner already chosen. It is never remembered. Every other name is
 the scope or toolchain list of the same name, with the rows, the egress under a closed network
 ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
 (`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
@@ -2594,14 +2614,15 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
   `off`, which has no profile to add to, with no profile directory, and in a workspace the person
-  has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records the refusal under `sandbox`,
+  naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
 - The trail records the names and the stage each was added to under `requested_scopes`, built from
   menu words and stage numbers and nothing the plan chose. The desktop sends the names as
-  `requestedScopes`, since it draws no confinement, and offers no standing answer for such a line.
+  `requestedScopes`, beside the confinement it draws, and offers no standing answer for such a line.
 - A delegate's `run` has the same argument, the same refusals and the same question.
 
 **Why.** Scopes follow the operation an argv names, so a script that shells out to `gh` reaches
@@ -2614,6 +2635,8 @@ for a different line.
 `verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
 `verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
 `verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
+`verified-by: bravebot_agent::confine::a_request_for_ssh_key_asks_again_for_an_owner_already_chosen_and_for_no_entry`
+`verified-by: bravebot_agent::turn::a_request_for_ssh_key_asks_again_and_the_new_answer_replaces_the_old_choice`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
@@ -2655,7 +2678,7 @@ person reads, and a session that asks for nothing is not asked about it.
   starts with an option has no operation to key on, so the line is offered neither key. The keys are
   unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
   the closed scope table rather than from what was drawn.
-- A toolchain list and loopback are never remembered, whether asked for alone or beside a scope,
+- A toolchain list, loopback and `ssh-key` are never remembered as reach, whether asked for alone or beside a scope,
   and nor is the `signing` scope, which `/reach` has no name for. The prompt says so.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
@@ -2709,7 +2732,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   refuses the request, and one narrower than a granted path takes its part of the grant back, since
   the person's rows are applied after the session's.
 - **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
-  file is written; the grant is held by the session and gone with it. Asking again for a path
+  file is written; the grant is held by the session and gone with it. `/clear`, `/branch` and
+  `/resume` begin another session in the same process, and a run started after one is asked again
+  for a path granted before it. Asking again for a path
   already held is asked like the first request, and a yes only ever widens the grant held: a read
   answered beside a write held leaves the write. The person may end a grant with
   `/reach paths remove <number>`.
@@ -2780,6 +2805,8 @@ the whole of what is held back.
 `verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended`
 `verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
+`verified-by: bravebot_agent::workspace::a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it`
+`verified-by: bravebot_agent::confine::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
@@ -2838,7 +2865,9 @@ none to add to.
   managed `run.network` of `closed`, for the reason the managed file floors `off` there
   ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
-  The sentence does not suggest the argument: the planner learns it from the `run` description.
+  The sentence does not suggest the argument: the planner learns it from the `run` description. The
+  trail records the refusal under `sandbox`, naming `unconfined` and each cause that held
+  ([TRACE-1](trace.md#TRACE-1)).
 - **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
 - **A redirection may leave the workspace.** `printf 'howdy\n' > ../hello.txt` writes the file when
   the person approves the line. The confinement that keeps a redirection's destination inside the

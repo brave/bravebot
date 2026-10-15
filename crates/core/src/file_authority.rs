@@ -3,16 +3,21 @@
 //! Capture holds the short access lock across reading bytes and assigning their label.
 //! An entered effect publishes distrust before releasing that lock. Long effects keep a
 //! path reservation, so unrelated captures proceed while that path remains quarantined.
+//!
+//! The lock is shared by captures that only read and exclusive for everything that enters or
+//! completes an effect. Readers exclude effects and are excluded by them; they do not exclude
+//! each other, because a reader changes no decision.
 
 use crate::label::Integrity;
 use crate::trust::TrustStore;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug)]
 struct State {
     trust: TrustStore,
-    // Both keyed by `slot`, so every spelling the map reads as one path is one entry.
+    // Both keyed by `slot`, so every spelling the map reads as one path, and every canonically
+    // equivalent spelling of it, is one entry.
     active: BTreeSet<String>,
     revision: u64,
     // One latest revision per distinct path for outstanding preview approvals.
@@ -20,13 +25,15 @@ struct State {
 }
 
 impl State {
-    /// What `key` is reserved and revised under: the key with case folded where the map reads two
-    /// spellings differing only in case as one path (TRUST-4).
+    /// What `key` is reserved and revised under: the key in the form its canonically equivalent
+    /// spellings share, with case folded where the map reads two spellings differing only in case
+    /// as one path (TRUST-4).
+    ///
+    /// Equivalent spellings share a slot whatever the volume does with them, because the slot only
+    /// refuses a second writer and stales an approval. Reaching a file the volume holds apart costs
+    /// a refusal of a write that could have gone ahead, never a write that should have been refused.
     fn slot(&self, key: &str) -> String {
-        match self.trust.folds_case() {
-            true => crate::trust::fold_case(key),
-            false => key.to_string(),
-        }
+        crate::trust::canonical_form(key, self.trust.folds_case()).into_owned()
     }
 
     /// Look up only whole-segment ancestors, including the special root rules.
@@ -59,7 +66,7 @@ impl State {
 
 #[derive(Debug)]
 struct Shared {
-    access: Mutex<()>,
+    access: RwLock<()>,
     state: Mutex<State>,
 }
 
@@ -77,7 +84,7 @@ impl FileAuthority {
     pub fn new(trust: TrustStore) -> Self {
         Self {
             shared: Arc::new(Shared {
-                access: Mutex::new(()),
+                access: RwLock::new(()),
                 state: Mutex::new(State {
                     trust,
                     active: BTreeSet::new(),
@@ -175,7 +182,24 @@ impl FileAuthority {
             _guard: self
                 .shared
                 .access
-                .lock()
+                .write()
+                .unwrap_or_else(|error| error.into_inner()),
+        }
+    }
+
+    /// Order a capture that only reads against every effect, and against nothing else that reads.
+    ///
+    /// Bytes and their label are still taken within one boundary no effect can enter, so no reader
+    /// captures replacement bytes under an earlier grant. What it gives up is the exclusion between
+    /// readers, which protected nothing: a read publishes no decision and reserves no path, and the
+    /// handle it returns cannot enter an effect. Never keep this guard across a prompt, model
+    /// request or process wait.
+    pub fn capture_shared(&self) -> SharedCapture<'_> {
+        SharedCapture {
+            _guard: self
+                .shared
+                .access
+                .read()
                 .unwrap_or_else(|error| error.into_inner()),
         }
     }
@@ -219,7 +243,8 @@ impl FileAuthority {
     /// one key, so a caller comparing the names it was handed would enter a second effect on a path
     /// it is already writing and be refused by its own reservation. Two spellings differing only in
     /// case on a volume that folds are two keys and one reservation, so a second effect through the
-    /// other spelling is refused.
+    /// other spelling is refused. So are two spellings that are canonically equivalent, on any
+    /// volume.
     pub fn key(&self, path: &str) -> String {
         self.state().trust.key(&self.spelled(path))
     }
@@ -303,7 +328,14 @@ impl FileAuthority {
 /// A capture boundary held against effect entry and successful publication.
 pub struct FileCapture<'a> {
     authority: &'a FileAuthority,
-    _guard: MutexGuard<'a, ()>,
+    _guard: RwLockWriteGuard<'a, ()>,
+}
+
+/// A capture boundary shared with other readers and held against every effect.
+///
+/// Carries no way to enter an effect, so holding one cannot change a decision.
+pub struct SharedCapture<'a> {
+    _guard: RwLockReadGuard<'a, ()>,
 }
 
 impl FileCapture<'_> {
@@ -552,6 +584,99 @@ mod tests {
         }
     }
 
+    /// Untrusted bytes written through one form of a name are read as untrusted under every
+    /// canonically equivalent form, whichever form an earlier trusted write used, on a volume that
+    /// folds case and on one that does not. The map is not told whether the volume opens a file
+    /// under both, so the refusal reaches both.
+    #[test]
+    fn an_untrusted_write_through_an_equivalent_spelling_is_read_untrusted_under_both() {
+        for folds in [false, true] {
+            for (trusted, untrusted) in [
+                ("docs/cafe\u{301}.md", "docs/caf\u{e9}.md"),
+                ("docs/caf\u{e9}.md", "docs/cafe\u{301}.md"),
+            ] {
+                let mut trust = TrustStore::new("/ws").folding_case(folds);
+                trust.trust(".");
+                let authority = FileAuthority::new(trust);
+
+                let effect = authority.capture().begin(trusted).unwrap();
+                effect.complete(Integrity::Trusted);
+                let effect = authority.capture().begin(untrusted).unwrap();
+                effect.complete(Integrity::Untrusted);
+
+                for spelling in [trusted, untrusted] {
+                    assert_eq!(
+                        authority.integrity_of(spelling),
+                        Some(Integrity::Untrusted),
+                        "folds case {folds}: {spelling} read as trusted after untrusted bytes were written as {untrusted}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A writer through another form of a name being written is refused as a second writer to it,
+    /// on every volume: the reservation only refuses, so a volume that holds the two forms apart
+    /// loses a write that could have gone ahead and a volume that does not never takes two writers
+    /// to one file. A name that differs by more than its form takes a writer of its own.
+    #[test]
+    fn a_second_writer_through_an_equivalent_spelling_is_refused_while_the_first_is_open() {
+        for folds in [false, true] {
+            let authority = FileAuthority::new(TrustStore::new("/ws").folding_case(folds));
+
+            let first = authority.capture().begin("docs/cafe\u{301}.md").unwrap();
+            let second = authority.capture().begin("docs/caf\u{e9}.md");
+            assert!(
+                second.is_none(),
+                "folds case {folds}: a second writer through the precomposed form was let in"
+            );
+            drop(second);
+            for other in ["docs/cafe.md", "docs/cafe\u{300}.md", "docs/caf\u{e8}.md"] {
+                assert!(
+                    authority.capture().begin(other).is_some(),
+                    "folds case {folds}: {other} was refused as a writer to the name written"
+                );
+            }
+            first.complete(Integrity::Trusted);
+            assert!(authority.capture().begin("docs/caf\u{e9}.md").is_some());
+        }
+    }
+
+    /// A decision made through one form of a name moves the revision of the path under every
+    /// canonically equivalent form, so an approval given for the path does not outlive it, and
+    /// moves nothing for a name that only looks alike.
+    #[test]
+    fn a_decision_through_an_equivalent_spelling_moves_the_revision_of_the_path() {
+        for folds in [false, true] {
+            let mut trust = TrustStore::new("/ws").folding_case(folds);
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+
+            let approved_at = authority.revision_of("docs/caf\u{e9}.md");
+            let alike_approved_at = authority.revision_of("docs/cafe.md");
+            let effect = authority.capture().begin("docs/cafe\u{301}.md").unwrap();
+            effect.complete(Integrity::Trusted);
+            assert_ne!(
+                authority.revision_of("docs/caf\u{e9}.md"),
+                approved_at,
+                "folds case {folds}: a write to the decomposed form left an approval for the precomposed one standing"
+            );
+            assert_eq!(
+                authority.revision_of("docs/cafe.md"),
+                alike_approved_at,
+                "folds case {folds}: a write to docs/cafe\u{301}.md moved the revision of docs/cafe.md"
+            );
+
+            let approved_at = authority.revision_of("docs/caf\u{e9}.md");
+            authority.publish("DOCS/cafe\u{301}.md", Integrity::Untrusted);
+            assert_eq!(
+                authority.revision_of("docs/caf\u{e9}.md") != approved_at,
+                folds,
+                "folds case {folds}: a decision about DOCS/cafe\u{301}.md"
+            );
+        }
+    }
+
     /// Making the copy moves no revision, since nothing beneath the checkout has been read.
     #[test]
     fn copying_a_subtree_moves_no_revision() {
@@ -562,5 +687,76 @@ mod tests {
         assert_eq!(authority.revision(), before);
         assert!(!authority.withdraw_beneath("/state/c1"));
         assert_eq!(authority.revision(), before);
+    }
+
+    /// Readers hold the boundary together. A second reader that waited for the first would make
+    /// the reads of a round take turns again.
+    #[test]
+    fn readers_hold_the_boundary_at_the_same_time() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let first = authority.capture_shared();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _second = authority.capture_shared();
+                sent.send(()).unwrap();
+            });
+            let arrived = received.recv_timeout(std::time::Duration::from_secs(5));
+            drop(first);
+            assert!(arrived.is_ok(), "a second reader waited for the first");
+        });
+    }
+
+    /// A reader keeps an effect from entering until it is done, so no reader captures replacement
+    /// bytes under an earlier grant. A shared capture that took no lock lets the effect in at once.
+    #[test]
+    fn an_effect_cannot_enter_while_a_reader_holds_the_boundary() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let reader = authority.capture_shared();
+        let (entered, noticed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let effect = authority.capture().begin("src/a.rs").expect("a free path");
+                entered.send(()).unwrap();
+                effect.complete(Integrity::Trusted);
+            });
+            let early = noticed.recv_timeout(std::time::Duration::from_millis(300));
+            drop(reader);
+            let late = noticed.recv_timeout(std::time::Duration::from_secs(5));
+            assert!(
+                early.is_err(),
+                "an effect entered while a reader held the boundary"
+            );
+            assert!(
+                late.is_ok(),
+                "the effect never entered once the reader was done"
+            );
+        });
+    }
+
+    /// An effect entering keeps a reader out until it has published its distrust, so the reader
+    /// reads the path under the decision the effect made.
+    #[test]
+    fn a_reader_cannot_capture_while_an_effect_holds_the_boundary() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let entering = authority.capture();
+        let (captured, noticed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _reader = authority.capture_shared();
+                captured.send(()).unwrap();
+            });
+            let early = noticed.recv_timeout(std::time::Duration::from_millis(300));
+            drop(entering);
+            let late = noticed.recv_timeout(std::time::Duration::from_secs(5));
+            assert!(
+                early.is_err(),
+                "a reader captured while an effect held the boundary"
+            );
+            assert!(
+                late.is_ok(),
+                "the reader never captured once the effect was done"
+            );
+        });
     }
 }

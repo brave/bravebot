@@ -54,6 +54,7 @@ permissions-check-allow = allow
 permissions-check-none = no rule matches, so the ordinary gates decide
 permissions-check-rule = rule
 permissions-check-file = file
+permissions-check-reason = reason
 permissions-check-granted = granted at the question for this workspace, written in { $path }
 permissions-check-not-in-force = not in force: { $rule } in { $path } would allow this once it is granted at the question
 cli-usage-sessions = List the sessions that keep running after the terminal closes
@@ -807,6 +808,12 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# The heading over a message another session sent, where it reaches the planner of this one. The
+# sender is named by the start of its id and by its name as the list of background sessions shows
+# them, and the label is the one the message was given on arrival, which is the sender's word only
+# where it was a label.
+session-message-heading = message from session { $from } ({ $name }) · { $label }
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
@@ -1312,7 +1319,6 @@ mcp-tools-offered =
        *[other] { $alias } offers { $count } tools
     }
 mcp-tools-none = { $alias } lists no tool it can offer
-mcp-tools-changed = this is not the list you said yes to before: the tools it offers have changed
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
     shown here. Every call is still put to you. Say no if a description gives instructions.
@@ -1334,9 +1340,6 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
-mcp-tools-not-recorded =
-    the tools { $alias } offers are approved for this session only, since the answer could not be
-    recorded: { $error }
 
 ## One call to a tool of an MCP server
 
@@ -1544,8 +1547,9 @@ picker-service-bedrock = Bedrock, your AWS account
 history-search-title = Search prompts
 history-scope-everywhere = everywhere
 history-scope-here = this project
+history-scope-session = this session
 history-search-placeholder = Filter history…
-history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to scope  ·  Esc to cancel
+history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to cycle the scope  ·  Esc to cancel
 history-search-nothing-matches = nothing matches that
 history-search-more-lines =
     { $count ->
@@ -1563,9 +1567,11 @@ history-age-months = { $count }mo ago
 # in the box, of how many.
 input-history-position = { $scope } { $index }/{ $total }
 input-history-this-session = This session
+input-history-this-project = This project
 input-history-all = All
 input-history-widen = { $chord } all prompts
 input-history-narrow = { $chord } this session
+input-history-project = { $chord } project prompts
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
@@ -1690,6 +1696,7 @@ run-confined-machine-git = it can read this machine except the places that hold 
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine
+run-carries-ssh-key = the planner asked that you choose again which ssh key { $program } offers first, where more than one could be offered, and nothing more is lent
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
@@ -1719,7 +1726,7 @@ reach-lifetime-session-in = for this session in { $workspace }
 reach-lifetime-always-in = always in { $workspace }
 reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
 reach-removed = forgotten: { $command } no longer also { $access } { $entry }
-reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, a directory above it, ~/.ssh, or a credential location such as ~/.aws or ~/.gnupg.
 reach-refused-write = a credential scope is read only. Only a directory can be written.
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
@@ -2951,9 +2958,6 @@ goal-spent =
     the goal has sent the work back { $rounds } times without being met, and has stopped rather
     than carrying on
 goal-failed = the goal could not be checked ({ $problem }), so it is cleared
-goal-uninterruptible =
-    the check already in flight is one request and cannot be stopped part way, but nothing
-    more will be sent
 goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
@@ -3139,7 +3143,7 @@ command-reported-a-failure = the command reported a failure
 
 ## Shortening a long conversation
 
-compact-uninterruptible = summarising cannot be interrupted; it takes one request
+compact-stopped = summarising was stopped; the conversation is as it was
 compact-ended-unexpectedly = the summary ended unexpectedly
 compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
@@ -3151,7 +3155,7 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 ## Asking something beside the work
 
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
-btw-uninterruptible = the question cannot be interrupted; it takes one request
+btw-stopped = the question was stopped
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
 
@@ -3160,6 +3164,7 @@ handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record
 handoff-ready = the brief is in the box. Edit it, then Enter starts a new session from it, or Esc drops it. The file decisions and permissions given here do not carry over
 handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
 handoff-failed = the brief could not be written: { $problem }
+handoff-stopped = the brief was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are
@@ -3279,7 +3284,6 @@ verb-unknown = Tool
 landed-in-the-planner = read into the planner's context
 landed-quarantined = not in the planner's context; only an isolated processor can be sent to read it
 landed-reserved = read by nothing: only its name is known
-reach-not-the-planner = not in the planner's context; a processor can be sent to read it
 reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.

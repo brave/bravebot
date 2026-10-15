@@ -36,7 +36,7 @@ pub const DEFAULT_COUNT: usize = 20;
 pub const MAX_COUNT: usize = 200;
 
 /// A blob larger than this is described rather than shown or diffed. Reading one means holding
-/// it, twice for a diff, and a line diff over it is quadratic in the part that changed.
+/// it, twice for a diff, and a line diff over it stops at a fixed number of steps.
 const MAX_BLOB: u64 = 1 << 20;
 
 /// Lines one answer carries before it is cut.
@@ -2423,9 +2423,20 @@ impl Repository {
         out.text.line(&format!("--- {before}"));
         out.text.line(&format!("+++ {after}"));
         let diff = Diff::compute(&escaped(&a), &escaped(&b));
-        if !diff.is_exact() {
+        if let Some((a_stuck, b_stuck)) = diff.unaligned_lines() {
+            let (a_lines, b_lines) = diff.differing_lines();
             out.text.line(&format!(
-                "(too different to diff line by line: {} lines removed, {} added)",
+                "(too different to diff line by line: the sides differ between lines {}-{} of a \
+                 and lines {}-{} of b, and the lines that could not be matched up lie within lines \
+                 {}-{} of a and lines {}-{} of b; removing at most {} lines and adding at most {})",
+                a_lines.start + 1,
+                a_lines.end,
+                b_lines.start + 1,
+                b_lines.end,
+                a_stuck.start + 1,
+                a_stuck.end,
+                b_stuck.start + 1,
+                b_stuck.end,
                 diff.removed(),
                 diff.added()
             ));
@@ -4939,6 +4950,89 @@ mod tests {
         let diff = repo.text(Query::Diff, "HEAD~1..HEAD");
         assert!(
             diff.ends_with("@@ -1 +1 @@\n-caf\\xe9\n+caf\\xe8\n"),
+            "{diff}"
+        );
+    }
+
+    /// Two small edits far apart in a long file are two small hunks, as `git diff` prints them,
+    /// and not a notice that the sides are too different. The lines between them are the same.
+    #[test]
+    fn edits_far_apart_in_a_long_file_are_two_hunks() {
+        let repo = Repo::new("far-apart");
+        let lines = |extra: bool| -> String {
+            let mut text = String::new();
+            for n in 1..=5000 {
+                if extra && n == 5 {
+                    text.push_str("inserted early\n");
+                }
+                if extra && n == 4995 {
+                    text.push_str("inserted late\n");
+                }
+                text.push_str(&format!("line {n}\n"));
+            }
+            text
+        };
+        let (before, after) = (repo.blob(&lines(false)), repo.blob(&lines(true)));
+        let first = repo.commit(repo.tree(&[("100644", "long", before)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "long", after)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+
+        let diff = repo.text(Query::Diff, "HEAD~1..HEAD");
+
+        let (_, hunks) = diff.split_once("+++ b/long\n").expect(&diff);
+        assert_eq!(
+            hunks,
+            "@@ -2,6 +2,7 @@\n line 2\n line 3\n line 4\n+inserted early\n line 5\n line 6\n \
+             line 7\n@@ -4992,6 +4993,7 @@\n line 4992\n line 4993\n line 4994\n+inserted late\n \
+             line 4995\n line 4996\n line 4997\n"
+        );
+    }
+
+    /// Where a stretch has no line to be lined up by, the notice says between which lines the
+    /// sides differ and that the counts are limits, rather than counting the lines between the
+    /// first change and the last as removed and added.
+    #[test]
+    fn a_stretch_that_cannot_be_lined_up_is_named_by_its_lines() {
+        let repo = Repo::new("unalignable");
+        let lines = |changed: bool| -> String {
+            let mut text = String::new();
+            for n in 1..=4000 {
+                let line = match (changed, n) {
+                    (true, 11) => "changed early".to_owned(),
+                    (true, 3991) => "changed late".to_owned(),
+                    (false, 1001..=3000) => ["p", "q"][n % 2].to_owned(),
+                    (true, 1001..=3000) => ["r", "s"][n % 2].to_owned(),
+                    _ => format!("line {n}"),
+                };
+                text.push_str(&line);
+                text.push('\n');
+            }
+            text
+        };
+        let (before, after) = (repo.blob(&lines(false)), repo.blob(&lines(true)));
+        let first = repo.commit(repo.tree(&[("100644", "long", before)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "long", after)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+
+        let diff = repo.text(Query::Diff, "HEAD~1..HEAD");
+
+        assert!(
+            diff.ends_with(
+                "+++ b/long\n(too different to diff line by line: the sides differ between lines \
+                 11-3991 of a and lines 11-3991 of b, and the lines that could not be matched up \
+                 lie within lines 1001-3000 of a and lines 1001-3000 of b; removing at most 2002 \
+                 lines and adding at most 2002)\n"
+            ),
             "{diff}"
         );
     }

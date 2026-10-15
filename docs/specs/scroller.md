@@ -10,6 +10,7 @@ governs:
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/render/export.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/scroller.rs
   - crates/tui/src/editor.rs
   - crates/config/src/settings.rs
 documented-by: docs/website/docs/using/transcript.md

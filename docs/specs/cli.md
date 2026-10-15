@@ -1535,7 +1535,9 @@ decides it as its file spelled it, and the file that wrote it. The family is `Re
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
 URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
 [PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
-no rule matches, the line says so and no rule is named, since the ordinary gates decide.
+no rule matches, the line says so and no rule is named, since the ordinary gates decide. A further
+`reason:` line follows where the deciding rule carries one, which is only where the person's own
+home settings file wrote the rule as an object with a `reason` ([PERM-1](permissions.md#PERM-1)).
 
 It reads the rules and nothing else: nothing is opened, fetched or started, no server is
 contacted, and no file is written. The words are typed by the person and matched on routing alone
@@ -1564,6 +1566,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
+`verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
 
 <a id="CLI-31"></a>
 ### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn

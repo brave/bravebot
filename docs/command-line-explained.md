@@ -266,10 +266,10 @@ with `'…'`, `"…"` and `\`; redirection with `>`, `>>`, `<`, `2>`, `2>>`, `2>
 `NAME=literal cmd`.
 
 **Refused**: `$(...)` and backticks, `$VAR` and `${...}`, `$((...))`, `<(...)` and `>(...)`,
-heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, `eval`, `source`, `.`, `exec`, `trap`,
-`if`, `while`, `for`, `case`, `function`, a descriptor duplication other than `2>&1`, a numbered
-redirection other than `2>`, a `~` naming somebody else's home, an assignment whose value is not
-literal, and a newline.
+heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, a `(` or `)` written onto the end of an
+argument, `eval`, `source`, `.`, `exec`, `trap`, `if`, `while`, `for`, `case`, `function`, a
+descriptor duplication other than `2>&1`, a numbered redirection other than `2>`, a `~` naming
+somebody else's home, an assignment whose value is not literal, and a newline.
 
 The pattern: **anything whose value isn't visible in the line is refused.** Quoting settles every
 one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are

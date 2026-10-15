@@ -44,11 +44,15 @@ pub enum Requested {
     /// Listening on, and connecting to, a port of this machine's own loopback interface. It
     /// reaches no other host and no file.
     Loopback,
+    /// The person choosing again which ssh key a push offers its owner. It lends nothing and adds
+    /// no row: the run prompt numbers the keys ssh could offer even for an owner already chosen
+    /// at an earlier prompt, and the answer is the person's.
+    SshKey,
 }
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 12] = [
+    pub const MENU: [&'static str; 13] = [
         "remote",
         "signing",
         "aws",
@@ -61,15 +65,19 @@ impl Requested {
         "maven",
         "gradle",
         Self::LOOPBACK,
+        Self::SSH_KEY,
     ];
 
     const LOOPBACK: &'static str = "loopback";
+
+    const SSH_KEY: &'static str = "ssh-key";
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
         match word {
             "signing" => Some(Self::Scope(Scope::Signing)),
             Self::LOOPBACK => Some(Self::Loopback),
+            Self::SSH_KEY => Some(Self::SshKey),
             _ => Scope::named(word)
                 .map(Self::Scope)
                 .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
@@ -82,6 +90,7 @@ impl Requested {
             Self::Scope(scope) => scope.name(),
             Self::Toolchain(toolchain) => toolchain.name(),
             Self::Loopback => Self::LOOPBACK,
+            Self::SshKey => Self::SSH_KEY,
         }
     }
 }
@@ -331,10 +340,14 @@ pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String
 ///
 /// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
 /// `~/.ssh` or `~/.bravebot` or inside either, not `~/.config`, `~/.cache` or `~/Library` whole,
-/// and a link judged by where it leads. It must also be a directory that exists, since a grant of a path nothing is at
-/// reads as a grant of whatever is created there later.
+/// and a link judged by where it leads. It is also refused where it is, or lies inside, a credential
+/// location of the base's table (`~/.aws`, `~/.gnupg`, a browser profile), as `--add-dir` refuses
+/// it. It must also be a directory that exists, since a grant of a path nothing is at reads as a
+/// grant of whatever is created there later.
 pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
-    judged(named, true, home).filter(|path| path.is_dir())
+    judged(named, true, home)
+        .filter(|path| path.is_dir())
+        .filter(|path| !crate::rules::inside_a_credential_location(path, home))
 }
 
 /// `named` as the sandbox will be told it, or `None` where it is refused.
@@ -922,7 +935,8 @@ mod tests {
     #[test]
     fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
         for word in [
-            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh",
+            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh", "Ssh-key",
+            "ssh_key",
         ] {
             assert_eq!(Requested::named(word), None, "{word:?} named a request");
         }
@@ -951,7 +965,8 @@ mod tests {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
         assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
-        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1);
+        assert_eq!(Requested::named("ssh-key"), Some(Requested::SshKey));
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";
@@ -2048,6 +2063,32 @@ mod tests {
             assert_eq!(judged_directory(&spelled, &home), None, "{spelled:?}");
         }
         assert!(judged_directory(&home.join(".bravebotx"), &home).is_some());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A remembered directory is refused at every credential location of the base's table and
+    /// inside one, as `--add-dir` refuses it, typed or reached by a link; a neighbour that only
+    /// shares a prefix is not. The regression it rejects: a judgement that names `~/.ssh` and
+    /// `~/.bravebot` alone, which lets `/reach ~/.aws write` lift the base's refusal.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_at_or_inside_a_credential_location_is_refused() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("directory-credential-locations");
+        let _ = std::fs::remove_dir_all(&home);
+        for row in every_credential_directory() {
+            let at = home.join(row);
+            let inner = at.join("inner");
+            std::fs::create_dir_all(&inner).unwrap();
+            let beside = home.join(format!("{row}x"));
+            std::fs::create_dir_all(&beside).unwrap();
+            let link = home.join(format!("link-to-{}", row.replace('/', "-")));
+            symlink(&at, &link).unwrap();
+            for spelled in [&at, &inner, &link] {
+                assert_eq!(judged_directory(spelled, &home), None, "{spelled:?}");
+            }
+            assert!(judged_directory(&beside, &home).is_some(), "{beside:?}");
+        }
         std::fs::remove_dir_all(&home).unwrap();
     }
 

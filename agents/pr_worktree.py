@@ -6,6 +6,7 @@ Each script loads this module by path and binds the names it uses, so a fix made
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
@@ -27,6 +28,8 @@ MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
 SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
 LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
 PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
+REASON_WIDTH = 120
+REBASE_STATES = ("rebase-merge", "rebase-apply")
 
 
 def die(message):
@@ -34,10 +37,25 @@ def die(message):
     sys.exit(1)
 
 
+def printed(done):
+    """A finished command's stderr, then its stdout with a JSON error object cut to `message` and `errors`."""
+    # gh api states the reason in that JSON and only a one-line status on stderr; a partial GraphQL response also carries `data`.
+    out = done.stdout.strip()
+    try:
+        body = json.loads(out)
+    except (ValueError, RecursionError):
+        body = None
+    if isinstance(body, dict):
+        reason = {key: body[key] for key in ("message", "errors") if body.get(key)}
+        if reason:
+            out = json.dumps(reason)
+    return "\n".join(part for part in (done.stderr.strip(), out) if part)
+
+
 def run(*args, cwd=None, check=True, env=None):
     done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=env)
     if check and done.returncode:
-        die(f"{' '.join(map(str, args))} failed:\n{(done.stderr or done.stdout).strip()}")
+        die(f"{' '.join(map(str, args))} failed:\n{printed(done)}")
     return done
 
 
@@ -109,19 +127,109 @@ def marker_ranges(text):
     return ranges
 
 
-def worktrees(here):
-    """{branch: path} for every worktree on a branch, and the main worktree's path.
+def rebasing(tree):
+    """The branch a rebase in `tree` is rewriting, which `git worktree list` does not name while it runs."""
+    done = run("git", "rev-parse", "--absolute-git-dir", cwd=tree, check=False)
+    if done.returncode:
+        return None
+    for name in REBASE_STATES:
+        head = Path(done.stdout.strip(), name, "head-name")
+        if head.is_file():
+            ref = head.read_text(encoding="utf-8", errors="replace").strip()
+            return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None
+    return None
 
+
+def worktrees(here):
+    """({branch: checkout}, main) for every worktree on a branch, and the main worktree's path.
+
+    A checkout has the worktree's `path`, whether it is `locked`, and the `reason` given for the lock.
+    A worktree in the middle of a rebase is listed as detached and still holds the branch it is rewriting.
     A worktree whose directory was deleted is still listed until pruned; it holds nothing.
     """
-    found, path, main = {}, None, None
-    for line in git("worktree", "list", "--porcelain", cwd=here).splitlines():
-        if line.startswith("worktree "):
-            path = Path(line[len("worktree "):])
-            main = main or path
-        elif line.startswith("branch refs/heads/") and path.exists():
-            found[line[len("branch refs/heads/"):]] = path
+    found, main = {}, None
+    for record in git("worktree", "list", "--porcelain", cwd=here).split("\n\n"):
+        path = branch = None
+        detached = locked = False
+        reason = ""
+        for line in record.splitlines():
+            if line.startswith("worktree "):
+                path = Path(line[len("worktree "):])
+            elif line.startswith("branch refs/heads/"):
+                branch = line[len("branch refs/heads/"):]
+            elif line == "detached":
+                detached = True
+            elif line == "locked" or line.startswith("locked "):
+                locked, reason = True, line[len("locked "):]
+        main = main or path
+        if path is None or not path.exists():
+            continue
+        branch = branch or (rebasing(path) if detached else None)
+        if branch:
+            found[branch] = SimpleNamespace(path=path, locked=locked, reason=reason)
     return found, main
+
+
+def lock_reason(held):
+    """The reason a worktree was locked with, on one line and no longer than a short sentence."""
+    shown = "".join(one if one.isprintable() else "?" for one in held.reason)
+    if not shown:
+        return "no reason given"
+    return shown if len(shown) <= REASON_WIDTH else shown[:REASON_WIDTH] + "..."
+
+
+def same_place(one, other):
+    return os.path.realpath(one) == os.path.realpath(other)
+
+
+def reuse_note(pr):
+    """One line for a branch already checked out where a new worktree would not go, else an empty string."""
+    standard = worktree_path(pr.main, pr.number)
+    if not pr.checked_out or same_place(pr.tree, standard):
+        return ""
+    tree, main, here = (Path(os.path.realpath(one)) for one in (pr.tree, pr.main, pr.here))
+    facts = []
+    if tree == main:
+        facts.append("the main clone itself")
+    elif tree == here:
+        facts.append("the checkout this was run from")
+    elif not any(tree.is_relative_to(root) for root in (main, here)):
+        facts.append(f"outside the main clone {pr.main}, so the file tools refuse it until it is opened")
+    if pr.held.locked:
+        facts.append(f"locked: {lock_reason(pr.held)}")
+    where = f" ({'; '.join(facts)})" if facts else ""
+    note = f"reused: {pr.branch} is already checked out in {pr.tree}{where}, so it is used rather than a new worktree"
+    if tree not in (main, here):
+        quoted = shlex.quote(str(pr.tree))
+        unlock = f"git worktree unlock {quoted}; " if pr.held.locked else ""
+        note += f". For a new one at {standard}, the person removes it: {unlock}git worktree remove {quoted}"
+    return note
+
+
+def announce(pr):
+    """Say which worktree a step works in, and where it is when the script did not choose the place."""
+    print(f"worktree {pr.tree}", flush=True)
+    note = reuse_note(pr)
+    if note:
+        print(note, flush=True)
+
+
+def refuse_locked(pr, script, words, allowed):
+    """Stop a step that would work in a locked worktree, which something else may be using, unless the person agreed.
+
+    `words` are the step's arguments as given, so the command offered for running it again is the same step.
+    A session started in the worktree chose it, so the lock does not stand between it and the step.
+    """
+    if not pr.checked_out or not pr.held.locked or allowed or same_place(pr.tree, pr.here):
+        return
+    quoted = shlex.quote(str(pr.tree))
+    die(
+        f"{pr.tree} is locked ({lock_reason(pr.held)}), so something else may be using it, and no worktree "
+        f"was touched. Ask the person, unless they have already agreed for this pull request: to work in it "
+        f"anyway, run `{script} {shlex.join([*words, '--use-locked'])}`; to use "
+        f"{worktree_path(pr.main, pr.number)} instead, they unlock and remove it themselves: "
+        f"git worktree unlock {quoted}; git worktree remove {quoted}"
+    )
 
 
 def pull(number, view, here, remotes, create, script):
@@ -146,6 +254,7 @@ def pull(number, view, here, remotes, create, script):
     base, head = view["baseRefName"], view["headRefName"]
     branch = local_branch(head, base, number)
     checked_out, main = worktrees(here)
+    held = checked_out.get(branch)
     return SimpleNamespace(
         number=number,
         url=view["url"],
@@ -159,8 +268,10 @@ def pull(number, view, here, remotes, create, script):
         head_remote=head_remote,
         onto=f"{base_remote}/{base}",
         tip=f"{head_remote}/{head}",
-        tree=checked_out.get(branch) or worktree_path(main, number),
-        checked_out=branch in checked_out,
+        main=main,
+        held=held,
+        tree=held.path if held else worktree_path(main, number),
+        checked_out=held is not None,
     )
 
 
@@ -181,7 +292,7 @@ def rev(ref, cwd):
 
 
 def rebase_dir(tree):
-    for name in ("rebase-merge", "rebase-apply"):
+    for name in REBASE_STATES:
         path = Path(tree, git("rev-parse", "--git-path", name, cwd=tree))
         if path.is_dir():
             return path

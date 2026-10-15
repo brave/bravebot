@@ -1781,6 +1781,64 @@ mod tests {
         assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
     }
 
+    /// IMPORT-3: opencode reads an `openai` entry naming no SDK, and bravebot reaches the same host
+    /// through its chat-completions route. The entry arrives naming the variable opencode reads the
+    /// key from, since this program reads only what an entry names.
+    #[test]
+    fn an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint() {
+        let home = Scratch::new("import-openai");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"openai": {"name": "OpenAI"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["openai"]);
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        assert_eq!(openai.variables(), ["OPENAI_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, which this program does not send, so an
+    /// entry naming it is left even though the host it would reach is one this program knows.
+    #[test]
+    fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
+        let home = Scratch::new("import-openai-sdk");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("openai", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: `opencode auth login` keeps an OpenAI key in `auth.json` and writes no config
+    /// entry. The endpoint is compiled in, so the key is a gateway rather than a `NoEndpoint`.
+    #[test]
+    fn an_auth_json_key_for_openai_is_a_provider() {
+        let home = Scratch::new("import-openai-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"openai": {"type": "api", "key": "a-held-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        match &openai.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-held-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(openai.fallback(), Some("OPENAI_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
     /// IMPORT-3: an entry for another SDK would be kept by `Provider::all` and then sent requests in
     /// a protocol it does not speak.
     #[test]

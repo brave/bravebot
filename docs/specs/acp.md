@@ -52,6 +52,7 @@ declared in a person's own directory and asked about before it starts.
 
 `verified-by: bravebot_ui_bridge::acp::what_an_editor_attaches_is_carried_as_a_paste_and_a_drop_are`
 `verified-by: bravebot_ui_bridge::acp::a_block_that_could_only_be_carried_as_words_is_refused`
+`verified-by: bravebot_ui_bridge::acp::a_list_of_servers_in_a_new_session_is_not_started`
 
 <a id="ACP-3"></a>
 ### ACP-3: a question is put as a permission request, and only a selected approval approves
@@ -125,6 +126,7 @@ directory before they reach the editor ([MODE-2](permission-modes.md#MODE-2)).
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_says_when_a_yes_cannot_be_kept`
 `verified-by: bravebot_ui_bridge::acp::a_session_stopped_at_the_trust_question_can_still_take_a_prompt`
 `verified-by: bravebot_ui_bridge::acp::a_question_of_the_planners_is_not_put_to_the_editor_as_a_permission`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_is_of_kind_other_and_a_standing_answer_to_it_is_not_kept`
 
 <a id="ACP-6"></a>
 ### ACP-6: the standard output holds protocol messages and nothing a model said as one

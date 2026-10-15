@@ -795,6 +795,80 @@ fn the_trust_question_says_when_a_yes_cannot_be_kept() {
     );
 }
 
+/// A list of servers in `session/new` is accepted and not acted on: nothing it names is started,
+/// even by a session that goes on to run a turn.
+#[test]
+fn a_list_of_servers_in_a_new_session_is_not_started() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("listed-servers");
+    let marker = project.join("server-started");
+    let (config, _requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let id = editor.request(
+        "session/new",
+        json!({"cwd": project, "mcpServers": [{
+            "name": "listed",
+            "command": "/bin/sh",
+            "args": ["-c", format!("touch {}", marker.display())],
+            "env": [],
+        }]}),
+    );
+    let made = editor.response(id);
+    let session = made["result"]["sessionId"]
+        .as_str()
+        .expect("a list of servers refused the session")
+        .to_string();
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("reject-once"));
+    let done = editor.response(prompt);
+    server.join().unwrap();
+    assert_eq!(done["result"]["stopReason"], "end_turn");
+    assert!(!marker.exists(), "a listed server was started");
+}
+
+/// The trust question goes to the editor as a permission request of kind `other` that offers a
+/// single yes and a single no, and a standing answer to it is not kept: a later session in a
+/// directory where a yes cannot be recorded is asked again.
+#[test]
+fn the_trust_question_is_of_kind_other_and_a_standing_answer_to_it_is_not_kept() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let home = bravebot_agent::home::profile().expect("a profile");
+    std::fs::create_dir_all(&home).unwrap();
+    let (config, _requests, _server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &home);
+    let session = editor.session(&home);
+    let prompt = editor.prompt(&session, text("one"));
+    let asked = editor.answer_next(selected("allow-always"));
+    editor.response(prompt);
+    assert_eq!(asked["params"]["toolCall"]["kind"], "other");
+    let offered: Vec<(&str, &str)> = asked["params"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| {
+            (
+                option["optionId"].as_str().unwrap(),
+                option["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        offered,
+        [("allow-once", "allow_once"), ("reject-once", "reject_once")]
+    );
+
+    let later = Editor::on(&config.endpoint, &home).session_and_prompt(&home, "two");
+    assert_eq!(
+        later.questions, 1,
+        "a standing answer settled a later session"
+    );
+}
+
 /// A question the planner puts is not a permission, and an editor is never asked it as one. The
 /// turn goes on as it does where nobody could be asked, and the editor is asked nothing about it.
 #[test]

@@ -13,6 +13,7 @@
 //! presses Enter themselves, which is what makes it theirs: a history file can be edited, on a
 //! shared machine by somebody else, so a stored line is content until a keystroke adopts it.
 
+use crate::history::{History, Scope};
 use crate::state::Session;
 use crate::theme;
 use crate::wrap::{self, display_width};
@@ -50,8 +51,8 @@ pub struct Search {
     /// Counted from the newest rather than as an index, because the newest is where the list is
     /// read from and typing changes how many matches there are below it.
     up: usize,
-    /// Whether the list is narrowed to the workspace this session is running in.
-    here: bool,
+    /// Which prompts the list offers.
+    scope: Scope,
 }
 
 impl Search {
@@ -63,7 +64,7 @@ impl Search {
         Self {
             needle: needle.into(),
             up: 0,
-            here: false,
+            scope: Scope::All,
         }
     }
 
@@ -71,9 +72,9 @@ impl Search {
         &self.needle
     }
 
-    /// Whether the list is narrowed to this workspace.
-    pub fn here(&self) -> bool {
-        self.here
+    /// Which prompts the list offers.
+    pub fn scope(&self) -> Scope {
+        self.scope
     }
 
     /// Add a character, and go back to the newest match.
@@ -102,37 +103,39 @@ impl Search {
         self.up = self.up.saturating_sub(1);
     }
 
-    /// Swap between every prompt and this workspace's, from the newest match either way.
-    pub fn scope(&mut self) {
-        self.here = !self.here;
-        self.up = 0;
+    /// Move to the next scope of everywhere, this project and this session that holds a prompt,
+    /// from the newest match. Nothing moves where no other scope holds one.
+    pub fn cycle(&mut self, history: &History) {
+        if let Some(scope) = history.following(self.scope) {
+            self.scope = scope;
+            self.up = 0;
+        }
     }
 
     /// Narrow to this workspace's prompts, whatever scope the search was on.
     ///
-    /// Set rather than swapped, so a search opened narrow is narrow however this one arrived at the
-    /// scope it is on.
+    /// Set rather than cycled, so a search opened on the project is on it however this one arrived
+    /// at the scope it is on.
     pub fn narrow(&mut self) {
-        self.here = true;
+        self.scope = Scope::Project;
         self.up = 0;
     }
 
     /// The prompts this search answers with, oldest first.
     ///
-    /// `project` is the workspace the session runs in, and is what the narrowed scope compares
-    /// against. An entry recorded before workspaces were kept belongs to none, so it is in the
-    /// wide list only.
-    pub fn matching<'a>(&self, entries: &'a [Entry], project: Option<&str>) -> Vec<&'a Entry> {
+    /// The history decides which entries each scope holds, which is the definition Up walks too.
+    pub fn matching<'a>(&self, history: &'a History) -> Vec<&'a Entry> {
         let terms: Vec<String> = self
             .needle
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
-        entries
+        history
+            .entries()
             .iter()
-            .filter(|entry| {
-                !self.here || entry.project.as_deref() == project.filter(|p| !p.is_empty())
-            })
+            .enumerate()
+            .filter(|(at, _)| history.contains(*at, self.scope))
+            .map(|(_, entry)| entry)
             .filter(|entry| {
                 let haystack = entry.prompt.to_lowercase();
                 terms.iter().all(|term| haystack.contains(term))
@@ -197,9 +200,10 @@ pub fn draw(frame: &mut Frame, area: Rect, session: &Session) {
             ),
             Span::styled("  ·  ", Style::default().fg(theme::muted())),
             Span::styled(
-                match search.here() {
-                    true => t!(history_scope_here),
-                    false => t!(history_scope_everywhere),
+                match search.scope() {
+                    Scope::All => t!(history_scope_everywhere),
+                    Scope::Project => t!(history_scope_here),
+                    Scope::Session => t!(history_scope_session),
                 },
                 Style::default().fg(theme::accent()),
             ),
@@ -445,6 +449,7 @@ mod tests {
     fn searching(entries: Vec<Entry>) -> Session {
         let mut session = Session::new("none").in_workspace(HERE);
         session.history = History::from_entries(entries);
+        session.history.set_project(Some(HERE.to_string()));
         assert!(session.open_history_search(), "the search did not open");
         session
     }
@@ -570,7 +575,8 @@ mod tests {
         let mut session = searching(vec![Entry::recalled("from an older history")]);
         assert_eq!(shown(&session), ["from an older history"]);
 
-        session.scope_history_search();
+        session.close_history_search();
+        session.open_history_search_here();
         assert!(shown(&session).is_empty());
     }
 
@@ -744,5 +750,94 @@ mod tests {
             "{}",
             rendered(&session)
         );
+    }
+
+    /// A session with prompts sent here and elsewhere, `commit that` from this process and
+    /// `run the tests` adopted from a resumed record.
+    fn mixed() -> Session {
+        let mut session = searching(sent());
+        session.history.adopt("run the tests");
+        session.history.push("an old one", None);
+        session.history.push("commit that", Some(HERE.to_string()));
+        session.close_history_search();
+        assert!(session.open_history_search());
+        session
+    }
+
+    /// Ctrl-S moves through everywhere, this project and this session in that order, and wraps.
+    #[test]
+    fn the_scope_cycles_everywhere_project_session_and_back() {
+        let mut session = mixed();
+        let scopes: Vec<Scope> = (0..4)
+            .map(|_| {
+                let scope = session.history_search().expect("open").scope();
+                session.scope_history_search();
+                scope
+            })
+            .collect();
+        assert_eq!(
+            scopes,
+            [Scope::All, Scope::Project, Scope::Session, Scope::All]
+        );
+    }
+
+    /// The session scope holds what this process sent and what a resumed record holds, and
+    /// nothing else.
+    #[test]
+    fn the_session_scope_holds_this_sessions_prompts_and_nothing_else() {
+        let mut session = mixed();
+        session.scope_history_search();
+        session.scope_history_search();
+        assert_eq!(
+            session.history_search().expect("open").scope(),
+            Scope::Session
+        );
+        assert_eq!(
+            shown(&session),
+            ["run the tests", "an old one", "commit that"]
+        );
+    }
+
+    /// A scope with nothing in it is skipped, and with one scope left the chord does nothing.
+    #[test]
+    fn an_empty_scope_is_skipped_and_one_scope_left_does_nothing() {
+        // Nothing sent by this session: everywhere, this project, back.
+        let mut session = searching(sent());
+        session.scope_history_search();
+        assert_eq!(
+            session.history_search().expect("open").scope(),
+            Scope::Project
+        );
+        session.scope_history_search();
+        assert_eq!(session.history_search().expect("open").scope(), Scope::All);
+
+        // Nothing from this workspace either: no other scope to go to.
+        let mut session = searching(vec![Entry::recalled("from an older history")]);
+        session.scope_history_search();
+        assert_eq!(session.history_search().expect("open").scope(), Scope::All);
+        assert_eq!(shown(&session), ["from an older history"]);
+    }
+
+    /// A search seen over a scope the cursor was moved in starts again from the newest match.
+    #[test]
+    fn changing_the_scope_puts_the_cursor_on_the_newest_match() {
+        let mut session = mixed();
+        session.history_search_older();
+        session.history_search_older();
+        session.scope_history_search();
+        assert_eq!(
+            session.history_match().expect("a prompt").prompt,
+            "commit that"
+        );
+    }
+
+    /// A person should not be left reading a list whose scope is not named on screen, and the
+    /// session scope is the one the panel title had no word for before.
+    #[test]
+    fn the_session_scope_is_named_on_the_panel() {
+        let mut session = mixed();
+        session.scope_history_search();
+        session.scope_history_search();
+        assert!(rendered(&session).contains(t!(history_scope_session)));
     }
 }

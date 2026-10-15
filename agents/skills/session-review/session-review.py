@@ -5,8 +5,7 @@
         [--workspace DIR] [SESSION-ID ...]
     python3 agents/skills/session-review/session-review.py verify --work-dir DIR
     python3 agents/skills/session-review/session-review.py draft --work-dir DIR
-    python3 agents/skills/session-review/session-review.py post --work-dir DIR [--dry-run]
-        [--assignee LOGIN] [--max N]
+    python3 agents/skills/session-review/session-review.py filed --work-dir DIR --id ID --issue N [--existing]
     python3 agents/skills/session-review/session-review.py record --work-dir DIR [--dry-run]
 
 Sessions are the records under ~/.bravebot/sessions, one directory per working directory. A session
@@ -15,8 +14,10 @@ offers a session again only when it has had more turns since. The marker is a lo
 sessions are per machine. Its name does not end in `.json`, because the session store reads every
 `.json` file in a directory as a session record.
 
-No model takes part in anything this script does. The issue drafting, the duplicate search and the
-posting are shared with the peer-advisories skill.
+No model takes part in anything this script does. The issue drafting and the `filed` command are
+shared with the peer-advisories skill. This script files nothing: each draft in DIR/drafts.json is
+handed to the `issue-poster` definition (agents/agents/issue-poster.md), and `filed` records the
+issue number it was given in DIR/filed.json, which `record` reads.
 """
 
 import argparse
@@ -42,8 +43,8 @@ def _load_peer():
     return module
 
 
-# Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the post
-# loop are peer-advisories.py, which this reuses rather than restating.
+# Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the `filed`
+# command are peer-advisories.py, which this reuses rather than restating.
 pa = _load_peer()
 Problem = pa.Problem
 one_line = pa.one_line
@@ -57,6 +58,7 @@ IMPORTED = "claude-code-"
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 KINDS = ("bug", "enhancement")
+SESSION_ANALYSIS = "session-analysis"
 PROBLEM_TEXT = ("title", "what_happens", "code_path", "reproduce", "fix", "evidence")
 VERIFY_VERDICTS = ("confirmed", "fixed", "known", "not-a-defect")
 
@@ -383,7 +385,7 @@ def scrub(text, manifest, session):
 
 
 def labels_for(fields):
-    labels = [fields["kind"]]
+    labels = [fields["kind"], SESSION_ANALYSIS]
     area = str(fields.get("area") or "").strip().removeprefix("area/")
     if area in pa.AREAS:
         labels.append(f"area/{area}")
@@ -444,10 +446,6 @@ def draft(args):
         print(f"  held   {problem['id']}  turn {problem['turn']}: {problem['title']}")
     print(f"{len(drafts)} drafted, {len(held)} held back as security concerns" + (f", {len(waiting)} undecided: {', '.join(waiting)}" if waiting else ""))
     return 0
-
-
-def post(args, poster=None):
-    return pa.post(args, poster)
 
 
 # Recording.
@@ -512,13 +510,7 @@ def main(argv=None):
     for name, text in (("verify", "write a verifier prompt per problem"), ("draft", "write an issue body per confirmed problem")):
         commands.add_parser(name, help=text).add_argument("--work-dir", required=True)
 
-    one = commands.add_parser("post", help="file the drafts the tracker does not hold")
-    one.add_argument("--work-dir", required=True)
-    one.add_argument("--repo", default=pa.REPO)
-    one.add_argument("--dry-run", action="store_true")
-    one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=pa.MAX_POSTS)
-    one.add_argument("--pace", type=float, default=10.0)
+    pa.add_filed_command(commands)
 
     one = commands.add_parser("record", help="mark the settled sessions as reviewed")
     one.add_argument("--work-dir", required=True)
@@ -529,7 +521,7 @@ def main(argv=None):
         if not SESSION_ID.fullmatch(name):
             parser.error(f"{name!r} is not a session id")
     try:
-        return {"pending": pending, "verify": verify, "draft": draft, "post": post, "record": record}[args.command](args)
+        return {"pending": pending, "verify": verify, "draft": draft, "filed": pa.filed, "record": record}[args.command](args)
     except Problem as problem:
         print(f"session-review: {problem}", file=sys.stderr)
         return 2

@@ -192,10 +192,10 @@ and the models to offer:
 }
 ```
 
-`openrouter` needs no endpoint written down, its own being compiled in. Any other gateway names one
-in `options.baseURL`, and a gateway naming no models at all is asked what it serves. The block is
-read in the shape another tool already reads, so one copied out of that tool's configuration works
-here unedited.
+`openrouter` and `openai` need no endpoint written down, their own being compiled in. Any other
+gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
+serves. The block is read in the shape another tool already reads, so one copied out of that tool's
+configuration works here unedited.
 
 ### A local Ollama, or another gateway that wants no key
 

@@ -2274,6 +2274,80 @@ fn a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_rost
     }
 }
 
+/// An OpenAI entry is pointed at the local server by a stated endpoint, which is the one way to
+/// reach anything but OpenAI from it.
+fn openai_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"openai": {{"env": ["OPENAI_API_KEY"], "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// What the listing at `/v1/models` is documented to hold for each model: an id, an object type, a
+/// creation time and an owner, and nothing saying what the model can do. Chat, embedding and
+/// speech models arrive in the same shape.
+const OPENAI_LISTING: &str = r#"{"object":"list","data":[
+    {"id":"a-chat-model","object":"model","created":1,"owned_by":"system"},
+    {"id":"an-embedding-model","object":"model","created":2,"owned_by":"system"},
+    {"id":"a-speech-model","object":"model","created":3,"owned_by":"openai-internal"}
+]}"#;
+
+/// The listing says nothing of what a model can do, so nothing here can tell a chat model from an
+/// embedding one, and a roster that dropped the rows it could not vouch for would drop all of them.
+/// Every row is offered, qualified so the pick names the service, and the key travels as a bearer
+/// token to the route the account question is asked at before the whole listing.
+#[test]
+fn an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(404),
+        Attempt::Json(OPENAI_LISTING.into()),
+    ]);
+    let provider = openai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let models = bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let mut keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "openai/a-chat-model",
+            "openai/a-speech-model",
+            "openai/an-embedding-model"
+        ]
+    );
+    let asked: Vec<_> = received.try_iter().collect();
+    let lines: Vec<&str> = asked.iter().map(|c| c.request_line.as_str()).collect();
+    assert_eq!(
+        lines,
+        ["GET /v1/models/user HTTP/1.1", "GET /v1/models HTTP/1.1"]
+    );
+    for captured in &asked {
+        assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+        assert_eq!(captured.header("x-goog-api-key"), None);
+    }
+}
+
 /// A Google Vertex entry is pointed at the local server by a stated endpoint, which is the one way
 /// to reach anything but Google from it.
 fn vertex_at(endpoint: &str) -> bravebot_config::provider::Provider {

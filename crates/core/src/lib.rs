@@ -17,6 +17,7 @@
 pub mod ambient;
 pub mod ask;
 pub mod cancel;
+mod canonical;
 pub mod capability;
 pub mod command;
 pub mod credentials;
@@ -56,7 +57,7 @@ pub use permissions::{Permissions, Ruling as PermissionRuling, Subject as Permis
 pub use policy::{Declassification, Denial, Policy, ReleasePlan, Routing};
 pub use processor::ProcessorSpec;
 pub use programs::TrustedPrograms;
-pub use pure::{Filter, is_pure_filter};
+pub use pure::Filter;
 pub use reference::{Presentation, Reference};
 pub use remembered::{Remembered, RememberedLine};
 pub use slot::{Measured, SlotError, SlotId, SlotReader, SlotStore, SlotWriter};

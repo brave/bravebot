@@ -325,9 +325,7 @@ fn command_when(session: &Session, command: &crate::command_table::Command) -> &
         }
         MidTurn::Runs => t!(command_when_now),
         MidTurn::Waits => t!(command_when_queued),
-        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
-            t!(command_when_either)
-        }
+        MidTurn::Changes | MidTurn::RunsUnlessItStarts => t!(command_when_either),
     }
 }
 
@@ -370,12 +368,12 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The ten the file can move are
-/// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 25] {
+) -> [(String, &'static str); 26] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -408,6 +406,7 @@ pub(super) fn shortcuts(
             bindings.scope_name(),
             "earlier prompts: this session or all",
         ),
+        (bindings.undo_name(), "undo the last edit"),
         ("drag".to_string(), "select, copy on release"),
     ]
 }

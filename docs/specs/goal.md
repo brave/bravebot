@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
 guards:
   - symbol: Session::start_goal
@@ -217,23 +218,27 @@ watching a goal go somewhere wrong stops that turn and says something else, whic
 steer work that keeps going, and a key that took the condition off along with the turn would leave
 them retyping it every time. The press that ends the goal is the one made with nothing running.
 
-**A check in flight is one request and does not stop, but the goal behind it does.** A verdict that
-arrives about a goal somebody has just taken off is not acted on and not reported: the session they
-would be told about is not the one they are in. Without this, the key pressed while the ninth round
-was being judged would leave the session, and the tenth round would go out regardless.
+**A check in flight is stopped with the goal behind it.** Either key takes the goal off and walks
+away from the request ([INPUT-4](terminal-input.md#INPUT-4)). A verdict that arrives about a goal
+somebody has just taken off is not acted on and not reported: the stop and the verdict can cross,
+and the session they would be told about is not the one they are in. A stop that took only the
+request would leave the goal armed, and the tenth round would go out after the key pressed while
+the ninth was being judged.
 
 A command the person typed while a turn ran waits in the queue and is carried out before the goal is
 judged, so a queued `/exit` or `/clear` ends the goal before another round is sent.
 
-A mode open over the session is nearer than the goal here as well. A scroller, a delegate's view or
-a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
+A mode open over the session is nearer than the goal here as well. A picker, a scroller, a delegate's
+view or a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
 and [terminal-input.md](terminal-input.md) have them do everywhere else, and the check is the
 likeliest place to meet one: nothing closes a view when a turn ends, so one opened during the turn
 just judged is still standing there.
 
 `verified-by: bravebot_tui::state::clearing_a_goal_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::app::interrupting_takes_the_goal_off_before_it_leaves`
-`verified-by: bravebot_tui::app::the_goal_check_takes_the_goal_off_before_ctrl_c_means_leaving`
+`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`

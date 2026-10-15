@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/completion.rs
   - crates/cli/src/main.rs
   - crates/ui-bridge/src/mentions.rs
   - crates/session/src/excerpt.rs
@@ -91,6 +92,7 @@ working directory or a directory opened for the session.
 `verified-by: bravebot_tui::references::a_reference_cannot_climb_out_of_the_workspace`
 `verified-by: bravebot_mentions::lib::a_reference_cannot_climb_out_of_the_workspace`
 `verified-by: bravebot_mentions::lib::dots_and_an_absolute_path_are_not_finished_names`
+`verified-by: bravebot_agent::turn::a_named_file_outside_the_workspace_is_refused_and_never_sent`
 
 <a id="NAME-6"></a>
 ### NAME-6: a directory names nothing, and neither does prose
@@ -166,9 +168,10 @@ itself names no file.
 the terminal would send a file nobody chose or drop one somebody did.
 
 `verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_the_terminals_list_of_the_project`
+`verified-by: bravebot_ui_bridge::mentions::an_entry_with_a_space_is_offered_escaped_over_the_whole_word`
 `verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
 `verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
-`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, its keys, Tab into a directory, Enter completing a half-typed name, the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
+`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, its keys, Tab into a directory, Enter completing a half-typed name, a directory holding a space completed to the escaped text and Enter completing a name already holding an escaped space (ui/scripts/mentions.test.mjs pins the splice), the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
 <a id="NAME-10"></a>
 ### NAME-10: `@session:<id>` adds the newest part of an earlier session to the message

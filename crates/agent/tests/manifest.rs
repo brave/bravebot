@@ -294,6 +294,75 @@ fn a_slot_no_step_reads_is_never_opened() {
     );
 }
 
+/// A slot only shown to the person has no file for the marker to protect, so a processor's
+/// unmarked answer stands as the answer, with no call to ask again.
+#[test]
+fn an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer() {
+    let scratch = Scratch::new("shown-only");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "summarise the readme", &mut sink).expect("runs");
+
+    assert_eq!(
+        outcome.reply_for_display(),
+        "A coding agent, said without the line."
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        3,
+        "shape, plan and one processor call"
+    );
+}
+
+/// A slot an answer shows and a write also reads is not only shown, so the marker rule holds for it:
+/// two unmarked answers fail the step, the file is never written, and nothing is shown.
+#[test]
+fn an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails() {
+    let scratch = Scratch::new("shown-and-written");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+            {"capability": "FILE_WRITE", "args": {"path": "summary.md", "from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+        says("Still without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = run(&config, &workspace, "summarise the readme", &mut sink)
+        .expect_err("an unmarked answer for a slot a write reads");
+    assert!(
+        failure.to_string().contains("no document"),
+        "got: {failure}"
+    );
+    assert!(!scratch.path.join("summary.md").exists());
+    assert_eq!(
+        received.try_iter().count(),
+        4,
+        "shape, plan and the two processor calls"
+    );
+}
+
 #[test]
 fn a_read_transform_answer_plan_runs_end_to_end() {
     let scratch = Scratch::new("end-to-end");
@@ -1055,6 +1124,7 @@ fn an_unmarked_transform_does_not_become_a_file() {
             {"capability": "FILE_WRITE", "args": {"path": "out.md", "from_slot": "loud"}},
         ])),
         says("this is an explanation, not a file"),
+        says("still an explanation, not a file"),
     ]);
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
@@ -1066,6 +1136,106 @@ fn an_unmarked_transform_does_not_become_a_file() {
     assert!(
         !scratch.path.join("out.md").exists(),
         "the remark was written as a file"
+    );
+}
+
+/// An empty processor reply is asked for once more, and the second, marked answer fills the slot.
+#[test]
+fn an_empty_processor_reply_is_asked_for_once_more() {
+    let scratch = Scratch::new("empty-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says(""),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+}
+
+/// The one further try is shared: an empty reply and then an unmarked one, or two empty ones, fail
+/// the step, and no third call is made.
+#[test]
+fn a_processor_gets_one_further_try_whatever_went_wrong() {
+    for (first, second) in [("", "an unmarked answer"), ("", "")] {
+        let scratch = Scratch::new("one-further-try");
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+                {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+                {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+            ])),
+            says(first),
+            says(second),
+            processor_reply("NEVER ASKED FOR"),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        assert!(
+            run(&config, &workspace, "shout in.md", &mut sink).is_err(),
+            "{first:?} then {second:?} filled the slot"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+            "raw text"
+        );
+        // Shape, plan, and the two processor calls.
+        assert_eq!(received.try_iter().count(), 4, "{first:?} then {second:?}");
+    }
+}
+
+/// A plan has no planner to ask again for the line, so the driver asks once more itself, and a
+/// second answer that marks its document fills the slot with that document and nothing else.
+#[test]
+fn an_unmarked_transform_is_asked_once_more_for_its_document() {
+    let scratch = Scratch::new("unmarked-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says("RAW TEXT, said without the line"),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+    let asked: Vec<String> = received.try_iter().collect();
+    let again = asked.last().expect("a second processor call");
+    assert!(
+        again.contains("marked no document") && again.contains("shout"),
+        "the second call is the plan's instruction and the fixed sentence: {again}"
+    );
+    assert!(
+        !again.contains("said without the line"),
+        "the first answer was fed back into the second call: {again}"
     );
 }
 
@@ -2113,6 +2283,55 @@ fn a_plan_whose_routing_field_is_not_text_is_refused() {
     let _ = received.recv();
     let _ = received.recv();
     assert!(received.try_recv().is_err(), "something asked the model");
+}
+
+/// A body the planner gave as a number or a list is refused as a plan. It used to pass validation
+/// and reach the driver as an empty string, so an approved `write notes.md` truncated the file.
+#[test]
+fn a_plan_whose_body_field_is_not_text_is_refused() {
+    let cases = [
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": 42}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": ["a"]}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "TRANSFORM", "args": {"reads": ["doc"], "instruction": 7, "out_slot": "out"}}),
+            "'instruction' must be text",
+        ),
+    ];
+    for (index, (step, message)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("body-shape-{index}"));
+        std::fs::write(scratch.path.join("notes.md"), "keep me").unwrap();
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                step,
+            ])),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        let failure = run(&config, &workspace, "write notes", &mut sink).expect_err("must refuse");
+        assert!(
+            failure.to_string().contains(message),
+            "unhelpful message: {failure}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+            "keep me"
+        );
+        let _ = received.recv();
+        let _ = received.recv();
+        assert!(received.try_recv().is_err(), "something asked the model");
+    }
 }
 
 /// A path leaving the workspace is refused at validation, so it never reaches a person to

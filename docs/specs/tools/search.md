@@ -147,6 +147,7 @@ planner proposed, so saying why it will not compile discloses nothing about the 
 `verified-by: bravebot_agent::regex::a_dangling_escape_is_reported`
 `verified-by: bravebot_agent::regex::a_backwards_range_is_reported`
 `verified-by: bravebot_agent::regex::a_group_form_the_engine_lacks_is_named_rather_than_blamed_on_a_repeat`
+`verified-by: bravebot_agent::workspace::a_pattern_that_will_not_compile_is_reported_when_no_file_is_opened`
 
 <a id="SEARCH-5"></a>
 ### SEARCH-5: an empty result says whether anything was searched
@@ -184,6 +185,7 @@ result decides only whether there was anything to advise about.
 `verified-by: bravebot_agent::workspace::an_include_may_use_a_brace_group`
 `verified-by: bravebot_agent::tools::a_glob_leaning_on_missing_syntax_is_named`
 `verified-by: bravebot_agent::tools::a_glob_the_matcher_can_read_is_left_alone`
+`verified-by: bravebot_agent::turn::an_empty_search_says_whether_the_glob_or_the_pattern_is_why`
 
 <a id="SEARCH-6"></a>
 ### SEARCH-6: case sensitivity is asked for, never inferred
@@ -215,6 +217,7 @@ clause asks of one; what it rules out is a search deciding for itself.
 `verified-by: bravebot_agent::regex::a_flag_carries_into_the_later_branches_of_its_group`
 `verified-by: bravebot_agent::regex::a_flag_can_turn_folding_off`
 `verified-by: bravebot_agent::regex::an_inline_flag_on_a_negated_class_widens_what_it_excludes`
+`verified-by: bravebot_agent::turn::the_search_tool_matches_case_exactly_unless_it_is_asked_not_to`
 
 <a id="SEARCH-7"></a>
 ### SEARCH-7: vendored and generated directories are not walked
@@ -238,6 +241,8 @@ ones no project uses for its own sources, so skipping them needs nobody's word f
 `verified-by: bravebot_agent::workspace::a_search_skips_vendored_dependencies`
 `verified-by: bravebot_agent::workspace::a_search_skips_a_linked_worktree_under_claude_worktrees`
 `verified-by: bravebot_agent::workspace::a_search_skips_a_linked_worktree_under_dot_worktrees`
+`verified-by: bravebot_agent::workspace::a_search_that_names_a_skipped_directory_reads_it`
+`verified-by: bravebot_agent::workspace::a_directory_called_worktrees_is_skipped_only_beneath_dot_claude`
 
 <a id="SEARCH-8"></a>
 ### SEARCH-8: a search stopped by the match cap says where to continue from
@@ -380,6 +385,7 @@ walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory
 `verified-by: bravebot_agent::workspace::a_search_of_a_link_to_a_denied_file_reads_nothing`
 `verified-by: bravebot_agent::workspace::a_search_cannot_name_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_search_may_name_one_file_as_its_target_through_the_tool`
+`verified-by: bravebot_agent::workspace::a_file_named_outright_is_searched_where_a_walk_from_above_would_skip_its_directory`
 
 <a id="SEARCH-12"></a>
 ### SEARCH-12: a search may return the files that match, or a count, instead of the lines
@@ -413,3 +419,4 @@ and not left to be inferred.
 `verified-by: bravebot_agent::turn::a_search_asks_for_files_or_a_count_through_the_tool`
 `verified-by: bravebot_agent::turn::a_search_output_off_the_list_is_refused`
 `verified-by: bravebot_agent::turn::a_quarantined_capped_files_result_still_says_it_is_incomplete`
+`verified-by: bravebot_agent::workspace::a_files_or_count_result_is_not_cut_by_an_offset_or_context`

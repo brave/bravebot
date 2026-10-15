@@ -15,6 +15,15 @@ directory rather than needing direnv wherever it is started. A build with nothin
 rather than producing a binary that only works in the tree it came from; to build one
 deliberately, set `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` and supply the variables at run time.
 
+A build that bravebot's `run` tool starts fails this way unless it sets
+`BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1`. `run` removes `SERVICES_KEY_AICHAT` and
+`BRAVE_SERVICES_KEY_ID` from the environment of every program it starts
+([RUN-12](../specs/tools/run.md#RUN-12)), so the build script reports both as not set whatever the
+shell holds. `BRAVE_AI_CHAT_ENDPOINT` is not removed, so it is reported only where the shell lacks it.
+Build from a terminal, or start the build with the override. The script's failure notes the removal,
+and the description of `run` tells the planner that a program reporting one of these unset says
+nothing about the shell.
+
 The environment still wins when set, which is how a released binary is pointed at a local
 backend without rebuilding it. One thing outranks it: a machine-level file an administrator
 deploys, which pins where a request goes for everybody on that machine and is what

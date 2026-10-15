@@ -767,6 +767,8 @@ mod tests {
             reference: "ref:1".to_string(),
             verdict,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -779,6 +781,8 @@ mod tests {
             verdict,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 
@@ -789,6 +793,8 @@ mod tests {
             truncated: false,
             verdict,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 

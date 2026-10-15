@@ -226,6 +226,9 @@ last row counts the rows left out above the ones shown apart from those below th
 `+15 earlier, +7 more`, `+3 more`).
 
 `verified-by: bravebot_tui::panel::the_plan_stays_after_the_turn_and_clear_empties_it`
+`verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
+`verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
+`verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
 `verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
 
 <a id="PANEL-11"></a>
@@ -324,3 +327,5 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::title::the_marker_leads_the_title_and_counts_toward_sixty_columns`
 `verified-by: bravebot_tui::title::no_state_is_written_when_the_title_is_turned_off`
 `verified-by: bravebot_tui::app::a_question_turns_the_title_to_waiting_and_other_messages_do_not`
+`verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
+`verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`

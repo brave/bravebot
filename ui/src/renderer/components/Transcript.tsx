@@ -1857,19 +1857,17 @@ function Card({
             <span className="origin" data-tooltip={shown.origin}>
               {shown.origin}
             </span>
+            {shown.reach === 'no_model' && <span className="reach">in no model’s context</span>}
             <span className="label">{shown.label}</span>
           </div>
           <pre className="preview">{shown.preview.join('\n')}</pre>
           <div className="quarantine-foot">
-            {shown.lines} line{shown.lines === 1 ? '' : 's'} total ·{' '}
-            {shown.reach === 'no_model'
-              ? 'in no model’s context'
-              : 'not in the planner’s context'}
-            <Collapse className="card-details" title="Details" isOpen={undefined}>
-              {shown.reach === 'no_model'
-                ? 'Nothing can be sent to read this. Only its line count and origin are known to the conversation.'
-                : 'A processor can be sent to read it in isolation. What it writes back is marked untrusted in turn.'}
-            </Collapse>
+            {shown.lines} line{shown.lines === 1 ? '' : 's'} total
+            {shown.reach === 'no_model' && (
+              <Collapse className="card-details" title="Details" isOpen={undefined}>
+                Nothing can be sent to read this. Only its line count and origin are known to the conversation.
+              </Collapse>
+            )}
           </div>
         </div>
       )
@@ -2000,6 +1998,19 @@ function Card({
             ))}
           </ol>
 
+          {/* Said every time, as the terminal says it: what the programs are held to, or that they
+              are held to nothing. Only `null` is "not sandboxed"; a bridge that sent no field says
+              nothing rather than claim it. */}
+          {request.confinement && (
+            <div className="permission-scope" data-test="confinement" data-deciding="all">
+              <p>{request.confinement.heading}</p>
+              {!!request.confinement.directories.length && <ul>{request.confinement.directories.map((directory) => <li key={directory}><code>{directory}</code></li>)}</ul>}
+              {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
+            </div>
+          )}
+          {request.confinement === null && !!request.notSandboxed && (
+            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+          )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
@@ -2246,9 +2257,11 @@ function Card({
           </ol>
 
           <p className="permission-scope" data-deciding="all">
-            These steps run in this order, and nothing re-plans once the run starts. Approving
-            the plan does not approve its writes: each write is still put to you when its step
-            is reached. This answer covers this plan only.
+            These steps run in this order, decided before anything was read. Nothing the run reads
+            can add a step, drop one, or send anything anywhere this plan does not already name.
+            Approving the plan does not approve its writes: each write is still put to you when its
+            step is reached. Nothing has been read or written yet, so declining leaves everything
+            as it is. This answer covers this plan only.
           </p>
 
           {!!entry.unheld?.length && (
@@ -2457,9 +2470,7 @@ function Card({
             <VettingVerdict vetting={request.vetting} />
           </div>
 
-          {request.changed && (
-            <p className="warn" data-deciding="all">This is not the list you approved before: the tools it offers have changed.</p>
-          )}
+          <VettingReason vetting={request.vetting} />
 
           <p className="permission-scope" data-deciding="all">
             The model will read each tool’s name, its arguments and what the server says about

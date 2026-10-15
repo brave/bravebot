@@ -1,10 +1,11 @@
 # Filing an issue
 
-A session files an issue through the [issue-poster](../../agents/agents/issue-poster.md) definition,
-which holds the procedure: search the backlog, apply the labels below, assign, post, and read the
-issue back. This page holds what the labels mean, and the definition links here rather than copying
-it. `make check-spec` fails when the definition writes a label this page does not describe, and when
-a skill that files an issue does not name it.
+The [issue-poster](../../agents/agents/issue-poster.md) definition is the only thing that files an
+issue from a session or a skill. It holds the procedure: search the backlog, apply the labels below,
+assign, post, and read the issue back. A skill hands each draft to it, and no script under
+`agents/skills` runs `gh issue create`. This page holds what the labels mean, and the definition
+links here rather than copying it. `make check-spec` fails when the definition writes a label this
+page does not describe, and when a file under `agents/skills` files an issue itself.
 
 ## The title
 
@@ -178,13 +179,13 @@ another coding agent's published advisory finds here, applies the same set, exce
 `security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
 
 Every issue the peer-advisories skill files also carries `release-blocking`, described in
-[the next section](#release-blocking-and-blocked). The skill refuses to post while that label does
+[the next section](#release-blocking-and-blocked). The poster refuses to post while that label does
 not exist.
 
 The [peer-features skill](../../agents/skills/peer-features/SKILL.md), which files what other
 coding agents document that bravebot lacks or could do measurably better, applies a kind, an `area`
 and no axis. A missing capability is `parity`. A change that makes an existing capability about 10%
-better than the best other tool is `enhancement` with `beyond-parity`. The skill refuses to post
+better than the best other tool is `enhancement` with `beyond-parity`. The poster refuses to post
 while `beyond-parity` does not exist, because a person creates labels:
 
 ```bash
@@ -193,10 +194,18 @@ gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
 ```
 
 The [session-review skill](../../agents/skills/session-review/SKILL.md), which files the problems
-bravebot gave a person in a recorded session, applies `bug` or `enhancement`, an `area` where one
-is clear, and no axis. It never files a problem that touches the guarantee: it prints that to the
-person running it. It uses the same duplicate search, pacing and label check as the
-peer-advisories skill, and an issue it files carries no text from the session.
+bravebot gave a person in a recorded session, applies `bug` or `enhancement`, `session-analysis`, an
+`area` where one is clear, and no axis. `session-analysis` marks an issue found by reading a recorded
+session, and `is:open label:session-analysis` lists them. It files defects in the product only, and
+leaves out defects in this repository's skills, scripts, `Makefile`, `contrib/` and CI workflows. It
+never files a problem that touches the guarantee: it prints that to the person running it. An issue
+it files carries no text from the session. The poster refuses to post while `session-analysis` does
+not exist, because a person creates labels:
+
+```bash
+gh label create session-analysis --repo brave/bravebot --color 8cad49 \
+  --description "Found by reading a recorded bravebot session"
+```
 
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
 duplication and files or functions past a length, applies the existing `refactor` label, or `bug`

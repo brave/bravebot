@@ -111,6 +111,41 @@ pub struct Chat<'a> {
 }
 
 impl<'a> Chat<'a> {
+    /// A chat on the configured default model, with no subscription and no stop.
+    ///
+    /// The other fields are added with [`Chat::on`], [`Chat::stoppable_by`] and
+    /// [`Chat::spending`]. This only gathers references and decides nothing.
+    pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
+        Self {
+            config,
+            egress,
+            subscription: None,
+            model: None,
+            cancel: None,
+        }
+    }
+
+    /// Runs the call on `model`, where the user chose one. `None` keeps the configured default.
+    #[must_use]
+    pub fn on(mut self, model: Option<&'a str>) -> Self {
+        self.model = model;
+        self
+    }
+
+    /// Lets the turn's stop end the call.
+    #[must_use]
+    pub fn stoppable_by(mut self, cancel: &'a bravebot_core::cancel::Cancel) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Spends the turn's subscription on the call, where the turn has one.
+    #[must_use]
+    pub fn spending<T: Subscription>(mut self, subscription: Option<&'a mut T>) -> Self {
+        self.subscription = subscription.map(|s| s as &mut dyn Subscription);
+        self
+    }
+
     /// The client for one call on `model`, carrying the turn's stop and its tier.
     pub(crate) fn backend(&mut self, model: &str) -> crate::backend::Backend<'_> {
         let mut client = crate::backend::Backend::select(self.config, self.egress, model);
@@ -131,7 +166,8 @@ pub struct Processed {
     /// `None` where the answer never said which part of it was a file. Nothing it wrote can be
     /// written anywhere in that case, which is the safe direction to fail in.
     pub document: Option<Labelled<String>>,
-    /// What it wanted to say about what it did. Goes to the person watching and no further.
+    /// What it wanted to say about what it did. Goes to the person watching and no further, and in a
+    /// manifest run stands as the answer for a slot only an answer reads.
     pub note: Option<Labelled<String>>,
     /// The model the server reported using, which may differ from the one asked for.
     pub model: String,
@@ -306,13 +342,9 @@ mod tests {
         let egress = Egress::new();
         let stop = Cancel::new();
         let mut subscription = TheTurns;
-        let mut chat = Chat {
-            config: &config,
-            egress: &egress,
-            subscription: Some(&mut subscription),
-            model: None,
-            cancel: Some(&stop),
-        };
+        let mut chat = Chat::new(&config, &egress)
+            .spending(Some(&mut subscription))
+            .stoppable_by(&stop);
 
         let Backend::Aichat {
             cancel,
@@ -339,13 +371,9 @@ mod tests {
         let config = brave_and_a_gateway();
         let egress = Egress::new();
         let stop = Cancel::new();
-        let mut chat = Chat {
-            config: &config,
-            egress: &egress,
-            subscription: None,
-            model: Some(DEFAULT_MODEL),
-            cancel: Some(&stop),
-        };
+        let mut chat = Chat::new(&config, &egress)
+            .on(Some(DEFAULT_MODEL))
+            .stoppable_by(&stop);
 
         assert!(matches!(
             chat.backend(GATEWAY_MODEL),

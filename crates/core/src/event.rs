@@ -190,6 +190,11 @@ impl RecordingSink {
         &self.events
     }
 
+    /// The events, in order, without the attribution beside them.
+    pub fn into_events(self) -> Vec<Event> {
+        self.events
+    }
+
     /// Every event, with the run whose gate took it where that was a delegate rather than the
     /// turn.
     pub fn recorded(&self) -> impl Iterator<Item = (Option<DelegateId>, &Event)> {

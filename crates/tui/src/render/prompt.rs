@@ -442,8 +442,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
 
     if let Some((index, total)) = session.history.position() {
         let scope_name = match session.history.scope() {
-            crate::history::Scope::Session => t!(input_history_this_session),
             crate::history::Scope::All => t!(input_history_all),
+            crate::history::Scope::Project => t!(input_history_this_project),
+            crate::history::Scope::Session => t!(input_history_this_session),
         };
         let position = format!(
             " {} ",
@@ -469,19 +470,12 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             input_history_search,
             chord = session.bindings().history_name()
         );
-        let switch = if session.history.can_narrow() {
-            Some(t!(
-                input_history_narrow,
-                chord = session.bindings().scope_name()
-            ))
-        } else if session.history.can_widen() {
-            Some(t!(
-                input_history_widen,
-                chord = session.bindings().scope_name()
-            ))
-        } else {
-            None
-        };
+        let chord = session.bindings().scope_name();
+        let switch = session.history.next_scope().map(|next| match next {
+            crate::history::Scope::All => t!(input_history_widen, chord = chord),
+            crate::history::Scope::Project => t!(input_history_project, chord = chord),
+            crate::history::Scope::Session => t!(input_history_narrow, chord = chord),
+        });
         let ways_in = switch
             .map(|switch| {
                 format!(

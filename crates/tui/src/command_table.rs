@@ -234,11 +234,10 @@ pub enum MidTurn {
     /// session keeps for itself or keeps for a later session, which the turn does not hold, but a
     /// line waiting ahead of it may replace that: `/clear` begins another session and `/cd` moves to
     /// another directory, and a change made first would land on the one being left.
+    ///
+    /// Where the bare word opens a picker, the picker is held as a mode of the session while the
+    /// turn runs, so the turn's own questions are still drawn over it.
     Changes,
-    /// As [`MidTurn::Changes`] where the line names what to set, and waiting where the bare word
-    /// would open a picker: a picker takes the terminal, and the turn's own questions are drawn
-    /// there.
-    RunsWhenNamed,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -273,25 +272,25 @@ pub fn commands() -> [Command; 45] {
             name: MODEL_COMMAND,
             argument: "",
             description: t!(command_model),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: THEME_COMMAND,
             argument: "[name]",
             description: t!(command_theme),
-            mid_turn: MidTurn::RunsWhenNamed,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: EFFORT_COMMAND,
             argument: "[level]",
             description: t!(command_effort),
-            mid_turn: MidTurn::RunsWhenNamed,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: CONFIG_COMMAND,
             argument: "",
             description: t!(command_config),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: ADD_DIR_COMMAND,
@@ -614,8 +613,7 @@ fn row_typed(line: &str) -> Option<Command> {
 ///
 /// Read off the table's column, and for the two words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work. For the two that set something,
-/// off whether the line names it: `/theme nord` sets a theme, and `/theme` alone opens a picker.
+/// a loop while the turn in flight is still the session's work.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
@@ -623,9 +621,6 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     match command.mid_turn {
         MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
-        MidTurn::RunsWhenNamed => {
-            argument_to(line, command.name).is_some_and(|named| !named.is_empty())
-        }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
             match command.name {
@@ -648,9 +643,7 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
 /// command that changes something waits behind any line at all, so it lands where it was typed:
 /// `/rename` ahead of a waiting `/clear` would name the session being left.
 pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
-    let changes = row_typed(line).is_some_and(|command| {
-        matches!(command.mid_turn, MidTurn::Changes | MidTurn::RunsWhenNamed)
-    });
+    let changes = row_typed(line).is_some_and(|command| command.mid_turn == MidTurn::Changes);
     (changes && !session.queued.is_empty())
         || session
             .commands_waiting()

@@ -51,7 +51,7 @@ use self::prompt::input_text_width;
 #[cfg(test)]
 use self::scroller::needle_that_fits;
 #[cfg(test)]
-use self::transcript::{lay_out, transcript_lines};
+use self::transcript::{counted, lay_out, transcript_lines};
 #[cfg(test)]
 use self::watching::padded;
 #[cfg(test)]
@@ -502,21 +502,18 @@ pub(crate) fn quarantined_rows(
     // The heading goes through [`marked_rows`] like the content does, because the origin is not
     // the renderer's text: it can be a filename read out of a quarantined listing. So it is
     // neutralised, and a long one continues on another marked row rather than outside the block.
-    let mut lines = marked_rows(
-        margin,
-        &[
-            Span::styled(
-                t!(
-                    quarantined_heading,
-                    origin = &shown.origin,
-                    label = &shown.label
-                ),
-                marked.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  {}", shown.reach.describe()), dim()),
-        ],
-        width,
-    );
+    let mut heading = vec![Span::styled(
+        t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        ),
+        marked.add_modifier(Modifier::BOLD),
+    )];
+    if let Some(note) = shown.reach.note() {
+        heading.push(Span::styled(format!("  {note}"), dim()));
+    }
+    let mut lines = marked_rows(margin, &heading, width);
 
     for line in &shown.preview {
         lines.extend(marked_rows(
@@ -658,10 +655,16 @@ fn diff_lines(
 /// worth jumping to are, are both answers about a paragraph wrapped at a particular width.
 pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     let columns = frame.area().width;
-    Laid {
+    let laid = Laid {
         columns,
         ..draw_frame(frame, session)
+    };
+    // Over whatever the frame holds, as it is at rest: the panel is a question about the session
+    // behind it, and a turn goes on being drawn there.
+    if let Some(picking) = session.picking() {
+        picking.draw(frame);
     }
+    laid
 }
 
 fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
@@ -1085,6 +1088,78 @@ mod tests {
                 rendered(&session).contains("has read this"),
                 "the view did not say the output reached the planner"
             );
+        }
+
+        /// One list holds asides, a delegate and a command, and the keys that step through it do
+        /// not ask what a row is. What changes as they step is the header and the footer, each
+        /// naming its own kind: a delegate by kind and number, a command as a command beside the
+        /// line that ran, an aside as an aside with whether the record keeps its answer.
+        #[test]
+        fn stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            ran(&mut session, "cargo test --workspace", true, &["ok"], 1);
+            asked(&mut session, "and the base case?", "it is a leaf", true);
+            asked(&mut session, "why recursive?", "because of nesting", false);
+            let delegate = format!("checker delegate {id}");
+            let screen = |session: &Session| {
+                let rows = rows_at(session, 90, 24);
+                let footer = rows.last().expect("a footer").trim_start().to_string();
+                (rows, footer)
+            };
+
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(rows[1].contains("on your screen only"), "{rows:?}");
+            assert!(
+                footer.starts_with("aside  ·  screen only  ·  2 of 4"),
+                "{footer}"
+            );
+
+            session.watch_previous();
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(
+                rows[1].contains("the answer, which the conversation has not read"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+
+            session.watch_next();
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains(&delegate), "{rows:?}");
+            assert!(rows[1].contains("run the build"), "{rows:?}");
+            assert!(
+                footer.starts_with(&format!("{delegate}  ·  working  ·  3 of 4")),
+                "{footer}"
+            );
+
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains("what this command printed"), "{rows:?}");
+            assert!(rows[0].contains("the model has read this"), "{rows:?}");
+            assert!(rows[1].contains("cargo test --workspace"), "{rows:?}");
+            assert!(
+                footer.starts_with("command  ·  the model has read this  ·  4 of 4"),
+                "{footer}"
+            );
+
+            for _ in 0..3 {
+                session.watch_previous();
+            }
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
         }
 
         /// Marked the way every other block the planner was kept from is marked, and marked
@@ -2318,48 +2393,60 @@ mod tests {
         /// scroller is open. It has to stay in proportion to the drawing the interface already does,
         /// since the alternative is a mode that gets slower the more there is to read back through.
         ///
-        /// A ratio rather than a wall clock, because what matters is that the pass is of the same
-        /// order as the one beside it and not that either takes a particular number of milliseconds.
+        /// Drawing wraps every line of the transcript once. The pass is in proportion to that when
+        /// it asks about each line once and wraps only the lines that do not fit on a row, since a
+        /// line that fits is answered from its width. The test counts exactly those two things.
+        /// Elapsed time includes the load on the machine during each pass, so a bound on the ratio
+        /// of two passes fails on a busy machine with code that did no more work.
         ///
-        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
-        /// something else on the machine only ever reads long, so one sample of each compares the
-        /// contention of one moment against that of another, and a loaded machine fails this on the
-        /// draw it happened to interrupt. Three passes because the load measured here stalled about
-        /// one sample in fifteen, and each pass costs laying the transcript out twice.
+        /// The rows measured are also held to the rows the drawing counts, since a pass that
+        /// answered without wrapping would pass the counts.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
 
-            let mut drawing = std::time::Duration::MAX;
-            let mut measuring = std::time::Duration::MAX;
-            let mut rows = 0;
-            let mut measured = 0;
+            let ((_, plain), idle) = counted::during(|| lay_out(&at_rest, 90, 24));
+            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+            assert_eq!(
+                idle,
+                counted::Work::default(),
+                "a line was measured with nobody asking"
+            );
 
-            for _ in 0..3 {
-                let started = std::time::Instant::now();
-                let (lines, plain) = lay_out(&at_rest, 90, 24);
-                // The wrap a frame at rest already pays for, and the one this is in proportion to.
-                // Laying the lines out is the cheaper half of drawing them, and measuring against it
-                // alone compares the new pass with something no frame has ever consisted of.
-                rows = Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .line_count(90);
-                drawing = drawing.min(started.elapsed());
-                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-
-                let started = std::time::Instant::now();
-                let (_, laid) = lay_out(&scrolling, 90, 24);
-                measuring = measuring.min(started.elapsed());
-                measured = laid.rows;
-            }
+            let ((lines, laid), work) = counted::during(|| lay_out(&scrolling, 90, 24));
+            let too_wide = lines.iter().filter(|line| line.width() > 90).count();
+            let rows = Paragraph::new(lines.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(90);
 
             assert!(rows > 2000, "the transcript is not long: {rows}");
-            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                measuring < drawing * 4,
-                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
+                laid.rows > 2000,
+                "the transcript is not long: {}",
+                laid.rows
+            );
+            assert!(
+                too_wide > 0,
+                "no line needs wrapping, so the count of wraps proves nothing"
+            );
+            assert_eq!(
+                usize::from(laid.rows),
+                rows,
+                "the rows measured are not the rows drawn"
+            );
+            assert_eq!(
+                work.asked,
+                lines.len(),
+                "{} lines were measured in a transcript of {}",
+                work.asked,
+                lines.len()
+            );
+            assert_eq!(
+                work.wrapped, too_wide,
+                "{} lines were wrapped to measure them, and {too_wide} do not fit on a row",
+                work.wrapped
             );
         }
 
@@ -3838,6 +3925,36 @@ mod tests {
                 all.contains("38 more lines"),
                 "what was left out was not said"
             );
+        }
+
+        /// Content kept from the planner is what every block holds, and the heading's `untrusted`
+        /// and the margin already say it, so a sentence on each block says nothing new. Content in
+        /// no model's context is the exception and still says so.
+        #[test]
+        fn a_block_states_its_reach_only_where_that_is_the_exception() {
+            let text = |shown: &Shown| -> String {
+                quarantined_lines(shown, 200)
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let mut shown = Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec!["first line".to_string()],
+                lines: 1,
+            };
+
+            let ordinary = text(&shown);
+            assert!(ordinary.contains("untrusted"), "{ordinary}");
+            assert!(!ordinary.contains("planner"), "{ordinary}");
+            assert!(!ordinary.contains("no model"), "{ordinary}");
+
+            shown.reach = bravebot_agent::report::Reach::NoModel;
+            let unread = text(&shown);
+            assert!(unread.contains("in no model's context"), "{unread}");
         }
 
         fn glimpse(lines: &[&str], total: usize, from_the_end: bool) -> Returned {
@@ -5371,7 +5488,7 @@ mod tests {
     }
 
     /// Rejects: a label taken from somewhere other than the command's own column of the table, or
-    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    /// one shared by every row, either of which tells a person `/compact` runs now when it waits.
     #[test]
     fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
         let mut session = Session::new("none");
@@ -5382,7 +5499,8 @@ mod tests {
         let output = rendered_at(&session, 120, 40);
 
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
-        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
         assert!(labelled(
             &row_for(&output, 120, "/theme [name]"),
             "now/queued"
@@ -5450,6 +5568,30 @@ mod tests {
         assert!(
             output.contains("no loop is running"),
             "the answer was not drawn: {output}"
+        );
+    }
+
+    /// A picker opened while a turn runs is drawn over the frame, with the turn still drawn behind
+    /// it, and only while it is open.
+    #[test]
+    fn a_picker_opened_mid_turn_is_drawn_over_the_turn() {
+        let mut session = Session::new("none");
+        for c in "refactor the parser".chars() {
+            session.type_char(c);
+        }
+        session.submit().expect("the prompt is sent");
+        let title = t!(effort_picker_title);
+        assert!(!rendered_at(&session, 120, 40).contains(title));
+
+        session.open_picking(crate::picking::Picking::Effort(
+            crate::effort_prompt::Picker::new(None),
+        ));
+
+        let output = rendered_at(&session, 120, 40);
+        assert!(output.contains(title), "the picker was not drawn: {output}");
+        assert!(
+            output.contains("refactor the parser"),
+            "the turn was not drawn behind it: {output}"
         );
     }
 
@@ -5600,7 +5742,7 @@ mod tests {
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        session.narrow_history();
+        session.cycle_history_scope();
         let position = t!(
             input_history_position,
             scope = t!(input_history_this_session),
@@ -5646,12 +5788,51 @@ mod tests {
             "{wide}"
         );
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(narrow.contains("This session 1/1"), "{narrow}");
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
             "{narrow}"
+        );
+    }
+
+    /// All, This project and This session each name themselves in the border with the position,
+    /// and the chord names the scope it moves to next.
+    #[test]
+    fn the_border_names_all_three_scopes_and_the_one_the_chord_moves_to() {
+        let mut session = Session::new("none").in_workspace("/work/here");
+        session.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("elsewhere", Some("/work/elsewhere".to_string())),
+            bravebot_session::store::Entry::sent("here", Some("/work/here".to_string())),
+        ]);
+        session.history.set_project(Some("/work/here".to_string()));
+        session.type_char('x');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+
+        let all = rendered_at(&session, 140, 12);
+        assert!(all.contains("All 3/3"), "{all}");
+        assert!(
+            all.contains(&t!(input_history_project, chord = "ctrl-n")),
+            "{all}"
+        );
+
+        session.cycle_history_scope();
+        let project = rendered_at(&session, 140, 12);
+        assert!(project.contains("This project 2/2"), "{project}");
+        assert!(
+            project.contains(&t!(input_history_narrow, chord = "ctrl-n")),
+            "{project}"
+        );
+
+        session.cycle_history_scope();
+        let this_session = rendered_at(&session, 140, 12);
+        assert!(this_session.contains("This session 1/1"), "{this_session}");
+        assert!(
+            this_session.contains(&t!(input_history_widen, chord = "ctrl-n")),
+            "{this_session}"
         );
     }
 
@@ -5679,7 +5860,7 @@ mod tests {
         );
         assert!(!wide.contains("ctrl-n"), "{wide}");
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "alt-n")),
@@ -7300,35 +7481,41 @@ mod tests {
     /// have drawn from the start: the hint row sits on the new bottom row and is fitted to the new
     /// width, nothing left from the old layout. Both directions, since a narrowing leaves a row too
     /// wide behind and a widening leaves one too short.
+    ///
+    /// The opening screen draws a face that blinks on the process clock, so the face is held still:
+    /// a blink between two draws would differ in the eye cells and say nothing about the layout.
     #[test]
     fn a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start() {
         let session = typed("a line in the box");
-        for (from, to) in [((100, 30), (40, 12)), ((40, 12), (100, 30))] {
-            let mut terminal = Terminal::new(TestBackend::new(from.0, from.1)).expect("terminal");
-            terminal
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("first draw succeeds");
-            terminal.backend_mut().resize(to.0, to.1);
-            terminal
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("draw after the resize succeeds");
+        crate::avatar::with_face_held(crate::avatar::Look::default(), || {
+            for (from, to) in [((100, 30), (40, 12)), ((40, 12), (100, 30))] {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(from.0, from.1)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("first draw succeeds");
+                terminal.backend_mut().resize(to.0, to.1);
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("draw after the resize succeeds");
 
-            let mut fresh = Terminal::new(TestBackend::new(to.0, to.1)).expect("terminal");
-            fresh
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("fresh draw succeeds");
-            assert_eq!(
-                terminal.backend().buffer(),
-                fresh.backend().buffer(),
-                "{from:?} to {to:?} left the old layout on the screen"
-            );
-        }
+                let mut fresh = Terminal::new(TestBackend::new(to.0, to.1)).expect("terminal");
+                fresh
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("fresh draw succeeds");
+                assert_eq!(
+                    terminal.backend().buffer(),
+                    fresh.backend().buffer(),
+                    "{from:?} to {to:?} left the old layout on the screen"
+                );
+            }
+        });
     }
 
     fn typed(text: &str) -> Session {

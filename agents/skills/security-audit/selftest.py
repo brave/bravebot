@@ -43,7 +43,6 @@ audit = load("security-audit")
 verifying = load("verify-findings")
 collect = load("collect-findings")
 drafts = load("draft-issues")
-posting = load("post-issues")
 
 FAILURES = []
 
@@ -2267,6 +2266,223 @@ def test_answers_registered():
         audit.mechanics.changed_files = was
 
 
+CHANGED = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGES_HEADER = "| Answer kept | " + " | ".join(CHANGED) + " |"
+NOT_REACHED = "not reached: the key holds nothing of it"
+TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+
+
+def changes_row(name, **said):
+    """One row of the table of changes, every cell a reason unless the caller says otherwise."""
+    cells = {change: NOT_REACHED for change in CHANGED}
+    cells.update(said)
+    return "| " + name + " | " + " | ".join(cells[change] for change in CHANGED) + " |"
+
+
+def changes_findings(
+    rows=None,
+    header=CHANGES_HEADER,
+    table=True,
+    cases=(("the trust map", "Moved"),),
+    registered=("one effect", "the trust map"),
+):
+    """Run the check on what changes do to an answer in a tree holding a register and its cases."""
+    if rows is None:
+        rows = (
+            changes_row(
+                "one effect",
+                **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"},
+            ),
+            changes_row(
+                "the trust map",
+                **{
+                    "Moved": f"asked again: a rule is a path made absolute `verified-by: {TABLE_TEST}`",
+                    "Subject replaced": "accepted: [costs.md](costs.md#known-costs)",
+                    "Other directory": "by design: a directory covers what is beneath it; asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+                },
+            ),
+        )
+    register = "".join(
+        f"| {name} | `y` | the directory | the path | the session | accepted: [costs.md](costs.md#known-costs) |\n"
+        for name in registered
+    )
+    second = (
+        f"\nWhat changes do.\n\n{header}\n|---|{'---|' * len(CHANGED)}\n"
+        + "".join(f"{row}\n" for row in rows)
+        if table
+        else ""
+    )
+    literals = "".join(
+        f'        Case {{\n            row: "{row}",\n            change: "{change}",\n            asked_again: f,\n        }},\n'
+        for row, change in cases
+    )
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": "---\nid: PROMPT\ntitle: Asking\nstatus: normative\n"
+            "governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n  - Answers::trust: the trust map\n---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + register + second + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": "---\nid: PLAIN\n---\n\n### Known costs\n\nNone.\n",
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+            "crates/agent/Cargo.toml": '[package]\nname = "bravebot-agent"\n',
+            "crates/agent/src/kept_answers.rs": "fn table() {\n    let cases = vec![\n" + literals + "    ];\n}\n"
+            "#[test]\nfn changing_the_world_under_a_yes_asks_again() {}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_changes_under_a_yes(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_changes_under_a_yes():
+    """A kept answer with nothing said of a moved checkout or a replaced file is how a yes covers more.
+
+    Each fixture is the clean table with one thing wrong, and the finding it expects is the one a
+    reader would otherwise find out by a person being asked nothing. The cells are read for the
+    leader and the reason because a cell holding a mark reads as decided when nobody decided it.
+    """
+    found = changes_findings()
+    check("a table with a reasoned cell for every answer and change is silent", found == [], str(kinds(found)))
+
+    good = {
+        "Other directory": "asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+    }
+    cases = [
+        ("a register with no second table", {"table": False}, ["changes-unreadable"]),
+        (
+            "a table whose columns are not the changes",
+            {"header": CHANGES_HEADER.replace("Moved", "Relocated")},
+            ["changes-unreadable"],
+        ),
+        (
+            "an answer in the register with no row in the table",
+            {"registered": ("one effect", "the trust map", "hosts answered")},
+            ["changes-row-missing"],
+        ),
+        (
+            "a row for an answer the register does not have",
+            {"registered": ("one effect",)},
+            ["changes-row-unknown"],
+        ),
+        (
+            "a row written twice",
+            {
+                "rows": (
+                    changes_row("one effect", **good),
+                    changes_row("one effect", **good),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-row-duplicate"],
+        ),
+        (
+            "a cell left empty",
+            {"rows": (changes_row("one effect", **{"Moved": ""}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell holding n/a",
+            {"rows": (changes_row("one effect", **{"Moved": "n/a"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell that opens with none of the four words",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "see the spec for this one"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a not reached with no reason",
+            {"rows": (changes_row("one effect", **{"Moved": "not reached: no"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell past the last column",
+            {
+                "rows": (
+                    changes_row("one effect", **good).replace(" |\n", " | more |\n") + " more |",
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "an asked again that cites no test",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "asked again: the key holds the root"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-unpinned"],
+        ),
+        (
+            "an asked again citing a test that does not exist",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_nothing`"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-test-missing"],
+        ),
+        (
+            "an accepted that links no Known cost",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "accepted: it is fine"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        (
+            "an accepted linking a spec that admits none",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "accepted: [plain.md](plain.md#known-costs)"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        ("a cell citing the table test with no case for it", {"cases": ()}, ["changes-case-missing"]),
+        (
+            "a case that no cell cites",
+            {"cases": (("the trust map", "Moved"), ("one effect", "Other directory"))},
+            ["changes-case-unlisted"],
+        ),
+    ]
+    for name, change, expected in cases:
+        found = changes_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    found = changes_findings(
+        rows=(
+            changes_row("one effect", **{"Moved": "by design: the move keeps it; asked again: a copy forgets it `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"}),
+            changes_row("the trust map", **{"Moved": f"asked again: the root moves `verified-by: {TABLE_TEST}`"}),
+        ),
+    )
+    check("a cell of two statements is read as two", found == [], str(kinds(found)))
+
+
 def test_the_stop_hook():
     """A task that ends with the register broken is sent back, and one that never went near it is not.
 
@@ -2299,6 +2515,7 @@ def test_the_stop_hook():
     specs = with_cwd(ROOT, audit.load_specs)
     for touched, wanted in [
         ("crates/agent/src/answers.rs", True),
+        ("crates/agent/src/kept_answers.rs", True),
         ("crates/ui-bridge/src/running.rs", True),
         ("crates/cli/src/plain.rs", True),
         ("crates/tui/src/app.rs", True),
@@ -2638,40 +2855,12 @@ def test_bodies_say_where_and_why():
     )
 
 
-def test_posting_skips_what_the_tracker_already_holds():
-    """Dedup, on the pair of findings that break the obvious way of doing it.
+def test_a_draft_key_is_one_its_title_keeps():
+    """The key the issue-poster definition searches the tracker for has to be in the title.
 
-    Two specs with unpinned clauses produce one sentence with one word changed. Comparing wording
-    alone calls the second a duplicate of the first, and the second never gets filed.
+    The summary names a path and the title shortens it to the file name, so a key taken from the
+    summary can match no title on the tracker, and a search for it reads as nothing like this being filed.
     """
-    tracker = []
-
-    def fake_gh(args, repo):
-        """`gh issue list --search`, near enough: every term has to be in the title.
-
-        Returning the whole tracker whatever was asked for would pass a query that finds nothing,
-        which is the way a duplicate actually got filed: the search looked for a key that no title
-        holds, found none, and read that as nothing like this being on the tracker.
-        """
-        if args[:2] != ["issue", "list"]:
-            raise AssertionError(f"a dedup check called gh {' '.join(args[:2])}")
-        query = args[args.index("--search") + 1]
-        terms = [one.lower() for one in query.split() if ":" not in one]
-        return json.dumps(
-            [one for one in tracker if all(term in one["title"].lower() for term in terms)]
-        )
-
-    posting.gh = fake_gh
-
-    check(
-        "a run is paced to one issue every ten seconds and change",
-        posting.PACE == 10.0 and posting.JITTER == (1.0, 5.0),
-        f"{posting.PACE}, {posting.JITTER}",
-    )
-
-    # The shape the enumerator writes, including the part that makes this hard: the summary names a
-    # path and the title shortens it to the file name, so the summary's own string is not in the
-    # title and a key taken from it matches nothing on the tracker.
     findings = [
         {
             "kind": "unpinned-guarantee",
@@ -2687,95 +2876,20 @@ def test_posting_skips_what_the_tracker_already_holds():
             "title": "nothing pins 2 clauses of `processors.md`, so a change that breaks one passes every check",
             "summary": "`docs/specs/processors.md` has 2 clauses at `verified-by: none`",
         },
-        # And the case with nothing to anchor to: everything this one names is a path its title does
-        # not keep, so the wording is the whole of what dedup has.
-        {
-            "kind": "exception-count-disagreement",
-            "impact": "low",
-            "area": "trust",
-            "title": "the review pass names fewer admitted exceptions than the spec, so an unnamed one reads as a violation",
-            "summary": "`docs/development/reviewing-for-the-rule.md` says 2 and `docs/specs/labels.md` names 3",
-        },
     ]
     out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
     written = with_cwd(ROOT, lambda: drafts.draft(findings, out))
     check(
         "a draft's key is one its own title keeps, where the finding names one at all",
-        all(one["key"].lower() in one["title"].lower() for one in written[:2]),
-        str([(one["key"], one["title"]) for one in written[:2]]),
+        all(one["key"].lower() in one["title"].lower() for one in written),
+        str([(one["key"], one["title"]) for one in written]),
     )
-
-    tracker = [{"number": 11, "state": "OPEN", "url": "u", "title": written[0]["title"]}]
+    report = drafts.report(written, out)
     check(
-        "a finding the tracker already holds is not filed again",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
+        "the report sends each draft to the issue-poster definition",
+        "agents/agents/issue-poster.md" in report and "post-issues" not in report,
+        report,
     )
-    check(
-        "a finding whose wording matches another spec's is still filed",
-        posting.already_filed("brave/bravebot", written[1]) is None,
-    )
-
-    tracker = [{"number": 12, "state": "CLOSED", "url": "u", "title": written[0]["title"]}]
-    check(
-        "an issue somebody read and closed is an answer, not a gap",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
-    )
-
-    tracker = [{"number": 13, "state": "OPEN", "url": "u", "title": written[2]["title"]}]
-    check(
-        "a finding with no key its title keeps is still recognised by its wording",
-        posting.already_filed("brave/bravebot", written[2]) is not None,
-        f"key {written[2]['key']!r} is not in {written[2]['title']!r}",
-    )
-
-    tracker = []
-    check(
-        "a finding nothing on the tracker names is filed",
-        posting.already_filed("brave/bravebot", written[0]) is None,
-    )
-
-
-def test_an_assignee_reaches_the_create():
-    """The login has to arrive at `gh issue create`, not just at the parser.
-
-    Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
-    through files every issue unassigned and still passes every other check here.
-    """
-    original = posting.helper.gh
-    calls = []
-
-    def fake_gh(args, repo=None):
-        calls.append(list(args))
-        return "https://github.com/brave/bravebot/issues/1"
-
-    posting.helper.gh = fake_gh
-    draft = {"title": "t", "body_file": "b", "labels": ["security"]}
-
-    posting.post("brave/bravebot", draft, "netzenbot")
-    passed = calls[-1]
-    check(
-        "the login a run was given is the one the create is passed",
-        "--assignee" in passed and passed[passed.index("--assignee") + 1] == "netzenbot",
-        str(passed),
-    )
-
-    posting.post("brave/bravebot", draft)
-    check(
-        "a run given no login names no assignee, so an unassigned issue stays the default",
-        "--assignee" not in calls[-1],
-        str(calls[-1]),
-    )
-
-    def refusing_gh(args, repo=None):
-        raise RuntimeError("Not Found")
-
-    posting.helper.gh = refusing_gh
-    check(
-        "a login the repository would refuse is caught before anything is posted",
-        not posting.assignable("brave/bravebot", "nobody"),
-    )
-
-    posting.helper.gh = original
 
 
 def test_a_run_writes_a_manifest_and_posts_nothing():
@@ -2843,6 +2957,7 @@ def main():
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
         test_answers_registered,
+        test_changes_under_a_yes,
         test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
@@ -2850,8 +2965,7 @@ def main():
         test_titles,
         test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
-        test_posting_skips_what_the_tracker_already_holds,
-        test_an_assignee_reaches_the_create,
+        test_a_draft_key_is_one_its_title_keeps,
         test_a_run_writes_a_manifest_and_posts_nothing,
         test_the_manifest_is_read_from_the_work_directory,
     ):

@@ -12,8 +12,30 @@ use bravebot_session::audit::TrailLine;
 use bravebot_session::sessions::{Aside, RewindPoint};
 use std::time::{Duration, Instant};
 
+mod accounts;
+mod completion;
+mod editing;
+mod entry;
+mod scroller;
+mod settings;
+mod standing;
 mod vi;
+mod watching;
+
+use editing::Kill;
+use entry::JOB_ROW_LINES;
 use vi::{Change, Inserting, Marked, TypedOver};
+
+#[cfg(test)]
+use accounts::apportion;
+#[cfg(test)]
+use entry::DELEGATE_KEPT;
+
+pub use accounts::Occupancy;
+pub use completion::Offered;
+pub use entry::{DELEGATE_SHOWN, Delegate, Entry, JobState, JobView, Output, Speaker, Watched};
+pub use scroller::{Laid, Scroller};
+pub use watching::Watching;
 
 /// How many newlines a paste carries before it is folded behind a marker.
 ///
@@ -68,471 +90,6 @@ fn lines_in(text: &str) -> usize {
         newlines
     } else {
         newlines + 1
-    }
-}
-
-/// Who produced a transcript entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Speaker {
-    /// The user's prompt. Trusted input.
-    User,
-    /// The assistant's reply. Untrusted model output, shown but never acted on.
-    Assistant,
-    /// A note from the program itself: an error, a refusal, a status.
-    System,
-    /// A failure reason shown in the transcript and included in exports.
-    Failure,
-    /// A deliberate stop shown in the transcript and included in exports.
-    Stopped,
-    /// A tool call the turn made. Shown as it happens, and kept afterwards.
-    Tool,
-    /// A command the user typed in shell mode. Trusted input, like their prompts.
-    Shell,
-    /// What such a command printed.
-    ///
-    /// Drawn plainly rather than styled: it is a terminal's output and the user is reading it as
-    /// one, so markdown would be a misreading and a marker on every line would be noise.
-    Output,
-    /// A delegate the turn started, with its own work drawn underneath it.
-    Delegate,
-}
-
-/// One delegate's work, drawn where the call that started it would have been.
-///
-/// A delegate is a second planner with a run of its own, and several are going at once, so its
-/// lines are kept together rather than interleaved with the turn's. The block where the call
-/// happened draws the last few of them; the rest are here for the mode that opens over it.
-///
-/// Nothing here reaches a model. The turn is told the report and nothing else, which is the point
-/// of delegating; these are the same lines going to a screen instead.
-#[derive(Debug, Clone)]
-pub struct Delegate {
-    /// Which one it is, as the driver numbered it.
-    pub id: bravebot_agent::report::DelegateId,
-    /// Which definition it is: the driver's own word where nothing was defined, and otherwise
-    /// the name a vouched file gave the kind of delegate this is.
-    pub kind: String,
-    /// What it was asked to do, as the planner wrote it.
-    pub task: String,
-    /// What it has done, oldest first, back as far as is kept.
-    pub lines: Vec<Entry>,
-    /// How many it has done in all, which is more than are kept once it has run long enough.
-    pub calls: usize,
-    /// What the turn was told when it finished. `None` while it is still working, which is what
-    /// tells a delegate that is running from one that answered.
-    pub note: Option<String>,
-    /// What it handed back, where it handed back anything. A delegate that could not finish
-    /// reported nothing.
-    ///
-    /// Held apart from the note because the two answer different questions: the note is the
-    /// driver's sentence about how the run ended, and this is the delegate's own about what it
-    /// found. Which shape it takes was settled by the gate that decided what the planner got.
-    pub reported: Option<Reported>,
-    /// Whether it ended by failing, so the line saying so can be coloured as such.
-    pub failed: bool,
-    /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
-    pub stop: bravebot_core::cancel::DelegateStop,
-}
-
-/// A command this session ran, and what it printed.
-///
-/// Kept whether or not the planner was allowed to read it. The person owns the directory and is
-/// entitled to read what their agent ran; what must not happen is those bytes reaching a model's
-/// context, and a screen is not a context.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Output {
-    /// The command, as the plan the person endorsed showed it.
-    pub command: String,
-    /// What it printed, as far back as is kept.
-    pub lines: Vec<String>,
-    /// How many lines there were altogether, so the view can say what it left out.
-    pub total: usize,
-    /// Whether the planner was allowed to read it.
-    pub read_by_the_planner: bool,
-    /// How the command ended, as the driver said it from the exit codes and the clock.
-    pub outcome: bravebot_agent::report::Outcome,
-    /// The background job this row is, where it is one (RUN-26).
-    ///
-    /// One row for the whole of a job's life, made when it starts, so it is the row a person finds
-    /// a running build at rather than one that appears the first time the planner looks.
-    pub job: Option<JobView>,
-}
-
-impl Output {
-    /// Whether the planner read what the row holds, or `None` for a job that has printed nothing
-    /// yet, where there is nothing it could have read or been kept from.
-    pub fn read(&self) -> Option<bool> {
-        (self.job.is_none() || self.total > 0).then_some(self.read_by_the_planner)
-    }
-}
-
-/// A background job, as the driver reported it (RUN-26).
-///
-/// Every field is the driver's or this end's own: a name the driver minted, the line the person
-/// endorsed, a clock reading taken here, and an outcome said from exit codes. None of it comes from
-/// a byte the job printed, so the hint line, `/status` and the row may decide from it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JobView {
-    /// The name the driver gave it, which is the one the planner reads it by.
-    pub name: String,
-    /// The delegate whose job it is, where it is not the turn's own: each delegate mints names of
-    /// its own, so `job:1` can be two jobs at once.
-    pub delegate: Option<bravebot_agent::report::DelegateId>,
-    /// When this end was told it started, so how long it has run is this end's clock and not a
-    /// figure the worker sent.
-    pub since: Instant,
-    /// How long the run had been waited for when the person moved it, where they did.
-    pub moved_after: Option<Duration>,
-    pub state: JobState,
-    /// The token `/jobs stop` sets, which the turn reads at its next step (RUN-27).
-    pub stop: bravebot_core::cancel::JobStop,
-}
-
-/// Where a background job is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobState {
-    Running,
-    /// The person asked to stop it and the turn has not reached its next step to do so.
-    Stopping,
-    /// It exited, or the planner or the person stopped it, and somebody was told how.
-    Ended,
-    /// Still running when its turn ended, and stopped with the turn.
-    EndedWithTurn,
-}
-
-impl JobView {
-    /// Whether its program may still be going, which a job being stopped still is.
-    pub fn is_running(&self) -> bool {
-        matches!(self.state, JobState::Running | JobState::Stopping)
-    }
-
-    /// Where it is, in the words the row's view and `/status` say it in.
-    ///
-    /// From the state and this end's clock. An ended job is left to the outcome beside it, which
-    /// says how it ended from its exit codes. A moved line counts from when it started, not from
-    /// the move, as the planner is told.
-    pub fn standing(&self, outcome: &bravebot_agent::report::Outcome) -> String {
-        match self.state {
-            JobState::Running => t!(
-                job_running,
-                ran_for = crate::loops::spell(
-                    self.since.elapsed() + self.moved_after.unwrap_or_default()
-                )
-            )
-            .to_string(),
-            JobState::Stopping => t!(job_stopping).to_string(),
-            JobState::Ended => outcome.summary(),
-            JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
-        }
-    }
-
-    /// The name, with the delegate's number where it is a delegate's job.
-    pub fn label(&self) -> String {
-        match self.delegate {
-            Some(delegate) => t!(
-                job_of_delegate,
-                name = self.name.clone(),
-                number = delegate.to_string()
-            )
-            .to_string(),
-            None => self.name.clone(),
-        }
-    }
-}
-
-/// How many of a job's lines its row keeps, the same as the driver keeps of one look.
-const JOB_ROW_LINES: usize = 2000;
-
-/// Something the delegate view can open.
-///
-/// One list rather than two, because a person pressing the key is asking to see work that is not
-/// in the transcript, and which kind of work it was is a property of the row rather than a reason
-/// for a second key.
-#[derive(Debug, Clone, Copy)]
-pub enum Watched<'a> {
-    /// A question asked beside the work, and its answer.
-    Aside(&'a Aside),
-    /// A delegate's own work.
-    Delegate(&'a Delegate),
-    /// What a command printed.
-    Output(&'a Output),
-}
-
-/// How many of a delegate's own lines the block where it started draws.
-///
-/// Enough to see that something is happening and roughly what, which is all the block is for.
-/// Somebody wanting more than that opens the delegate itself.
-pub const DELEGATE_SHOWN: usize = 3;
-
-/// How many of a delegate's own lines are kept for the screen.
-///
-/// A bound rather than the whole of it: a delegate that runs long enough produces an unbounded
-/// number of lines, and these are held in memory for a person who may never look. Far enough back
-/// to cover the work somebody opens a delegate to ask about.
-const DELEGATE_KEPT: usize = 400;
-
-impl Delegate {
-    /// Whether this one is still working.
-    pub fn is_running(&self) -> bool {
-        self.note.is_none()
-    }
-
-    /// Whether the person has asked it to stop and it has not yet finished doing so.
-    pub fn is_stopping(&self) -> bool {
-        self.is_running() && self.stop.is_requested()
-    }
-
-    /// The last few of its calls, which is what the block where it started draws.
-    ///
-    /// Its calls rather than the last of its lines, because the two are not the same sequence: a
-    /// preview released for the person to read is held among them and carries no call, so the
-    /// last three lines of a delegate that has made three calls can hold one of them. The rows
-    /// the block draws are calls, and so is the number it counts them against.
-    pub fn latest(&self) -> Vec<&Entry> {
-        let mut latest: Vec<&Entry> = self
-            .lines
-            .iter()
-            .rev()
-            .filter(|entry| entry.activity.is_some())
-            .take(DELEGATE_SHOWN)
-            .collect();
-        latest.reverse();
-        latest
-    }
-
-    /// Hold one more of its lines, dropping the oldest where there are already enough.
-    ///
-    /// The one way a line enters a delegate, so the bound holds however the line arrived. A
-    /// preview released for the person to read is not a call, but it is a line held in the same
-    /// memory, and a delegate releasing one per call passes the bound a preview at a time without
-    /// this.
-    fn hold(&mut self, entry: Entry) {
-        self.lines.push(entry);
-        if self.lines.len() > DELEGATE_KEPT {
-            self.lines.remove(0);
-        }
-    }
-
-    /// Hold one more of its lines, and count it against the calls it has made.
-    fn keep(&mut self, entry: Entry) {
-        self.calls += 1;
-        self.hold(entry);
-    }
-}
-
-/// One entry in the transcript.
-#[derive(Debug, Clone)]
-pub struct Entry {
-    pub speaker: Speaker,
-    pub text: String,
-    /// The audit trail recorded while producing this entry, shown when the trail is visible.
-    ///
-    /// Already in the words it is drawn in, because an entry replayed from a stored session has
-    /// no events behind it: what the audit file holds is a record of what a gate decided, not the
-    /// decision. See [`bravebot_session::audit::TrailLine`].
-    pub trail: Vec<TrailLine>,
-    /// The task list as it stood when this entry was made, if the turn kept one.
-    ///
-    /// Held on the entry rather than in one place so the scrollback shows what each turn did.
-    /// A live list belongs to the turn in flight and goes here when that turn ends.
-    pub todos: Vec<bravebot_core::todo::Row>,
-    /// The call this entry describes, for a [`Speaker::Tool`] entry.
-    ///
-    /// Carries the note and the hunks separately from `text` so the interface can style them
-    /// without parsing anything back out of a formatted line.
-    pub activity: Option<Activity>,
-    /// Where this call's result went: into the model's context, into a slot, or nowhere.
-    ///
-    /// The line says what was read; this says who can read it, which is the part a person
-    /// cannot work out from the outside and the part the whole design turns on.
-    pub landing: Option<Landing>,
-    /// Quarantined content this call produced, for the person watching.
-    ///
-    /// Kept apart from `text` because it is drawn apart: it is the one thing on the screen the
-    /// model was not allowed to read, and it is marked as such by the renderer rather than by
-    /// anything in the bytes, which could say whatever they liked.
-    pub shown: Option<Shown>,
-    /// A few lines of what this call handed the planner, drawn plainly because the planner read them.
-    pub returned: Option<Returned>,
-    /// Whether the person expanded this call past its glimpse or its twelve lines of change.
-    pub expanded: bool,
-    /// The delegate this entry stands for, for a [`Speaker::Delegate`] entry.
-    ///
-    /// Its own lines live here rather than in the transcript around it. Several delegates work at
-    /// once, so lines interleaved with the turn's could not be read in either direction: whose
-    /// each one was would be a guess from the words, and the words are prose a model wrote.
-    pub delegate: Option<Delegate>,
-    /// The definition a person addressed the turn this reply ends, for a [`Speaker::Assistant`]
-    /// entry.
-    ///
-    /// The name the driver matched against the set it resolved, never anything read out of the
-    /// reply: which definition answered is a fact the driver holds, and the reply is model output
-    /// that could claim to be any of them (ADDRESS-12).
-    pub answered_as: Option<String>,
-    /// Why the planner made the call, for a [`Speaker::Tool`] entry read back off disk.
-    ///
-    /// A live call carries its reason on its [`Activity`]; a recalled one has no activity, and
-    /// the reason is still what the person watching was shown beside it the first time round.
-    pub why: String,
-}
-
-impl Entry {
-    pub fn user(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::User,
-            text: text.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    pub fn assistant(text: impl Into<String>, trail: Vec<TrailLine>) -> Self {
-        Self {
-            speaker: Speaker::Assistant,
-            text: text.into(),
-            trail,
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    /// Why a turn failed, in words composed from what was known about the failure.
-    pub fn failure(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Failure,
-            ..Self::system(text)
-        }
-    }
-
-    pub fn stopped(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Stopped,
-            ..Self::system(text)
-        }
-    }
-
-    pub fn system(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::System,
-            text: text.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    /// A command the user ran in shell mode, echoed as they typed it.
-    pub fn shell(line: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Shell,
-            text: line.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    /// What such a command printed.
-    pub fn output(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Output,
-            text: text.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    /// One tool call, as it stands.
-    ///
-    /// Made while the call is still running and replaced when it finishes, which is what puts
-    /// a slow call on the screen while it is slow rather than only once it is over.
-    pub fn tool(activity: Activity) -> Self {
-        Self {
-            speaker: Speaker::Tool,
-            text: activity.line(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: Some(activity),
-            delegate: None,
-            answered_as: None,
-            why: String::new(),
-        }
-    }
-
-    /// One call read back out of a stored session.
-    ///
-    /// No [`Activity`], because a stored session records that the call happened and not what came
-    /// of it. Giving it one would mean choosing an outcome, and every choice available is a
-    /// claim the record does not support: `running` says it never finished, and `done` says it
-    /// succeeded. The line alone is what is known, and the interface draws it as such.
-    pub fn recalled_tool(line: impl Into<String>, why: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Tool,
-            text: line.into(),
-            trail: Vec::new(),
-            todos: Vec::new(),
-            landing: None,
-            shown: None,
-            returned: None,
-            expanded: false,
-            activity: None,
-            delegate: None,
-            answered_as: None,
-            why: why.into(),
-        }
-    }
-
-    /// Attach the task list the turn finished with.
-    pub fn with_todos(mut self, todos: Vec<bravebot_core::todo::Row>) -> Self {
-        self.todos = todos;
-        self
-    }
-
-    /// Say which definition answered, where a person addressed one.
-    pub fn answered_as(mut self, name: Option<String>) -> Self {
-        self.answered_as = name;
-        self
     }
 }
 
@@ -702,27 +259,6 @@ impl Finished {
     }
 }
 
-/// What a half-typed line could still become.
-///
-/// One kind at a time: a word opening with a slash is a command or a skill's name, and one opening
-/// with an `@` is a file reference, so the keys that walk the list never have to ask which of the
-/// two they are walking.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Offered {
-    /// Nothing is being typed towards, so the list is closed.
-    Nothing,
-    /// The commands first and then the skills, walked as one list. Commands only where the word is
-    /// the whole line, since anywhere else a command is a prompt.
-    Slash {
-        commands: Vec<crate::command_table::Command>,
-        skills: Vec<crate::skills::Skill>,
-    },
-    Files(Vec<bravebot_mentions::Entry>),
-    /// Every key and marker, listed under the box. Not a completion: there is nothing to choose,
-    /// which is why the keys that walk a list leave this one alone.
-    Shortcuts,
-}
-
 /// What a yank or a delete took, and whether it was whole lines.
 ///
 /// The distinction is what `p` needs: a yanked word goes back beside the caret, and a yanked line goes
@@ -732,18 +268,6 @@ pub enum Offered {
 pub struct Yanked {
     text: String,
     lines: bool,
-}
-
-/// A readline kill, as it left the line.
-#[derive(Debug, Clone)]
-struct Kill {
-    /// Whether it took text after the caret, which joins at the end of the kill buffer, rather than
-    /// before it, which joins at the start.
-    forward: bool,
-    /// All that the kills joined so far took.
-    text: String,
-    line: String,
-    caret: usize,
 }
 
 /// A binding vi spells with a letter, which the key handler answers as though the key had arrived.
@@ -936,40 +460,6 @@ pub struct PastedText {
 /// How many lines of results a session holds for the key that expands them.
 const SESSION_EXPANDABLE_LINES: usize = 20_000;
 
-/// What the last frame laid the transcript out to.
-///
-/// Written back after every draw, because none of it is knowable before one: the answers exist
-/// only once the paragraph has been wrapped at the width it is being shown at. A key pressed next
-/// is then answered against the frame the person is looking at, which is the one this describes.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Laid {
-    /// Columns the transcript was drawn in.
-    pub width: u16,
-    /// Columns the whole frame had, which is what decides whether the info panel fits.
-    pub columns: u16,
-    /// Rows it had room for.
-    pub height: u16,
-    /// Rows the whole of it came to.
-    pub rows: u16,
-    /// The row each prompt the person typed begins at, in the order they were typed.
-    ///
-    /// Empty unless the scroller is open, since working it out costs a wrap of every line and
-    /// nothing at rest asks the question.
-    pub prompts: Vec<u16>,
-    /// The row each search match is reached at, top to bottom.
-    ///
-    /// One entry per match rather than per row, so two hits on one row are two entries holding
-    /// that row. The view has one place to go for both of them, but they are two matches: the
-    /// footer counts them and `n` steps through each one.
-    ///
-    /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
-    /// width wraps is several rows of the screen and one entry here.
-    pub matches: Vec<u16>,
-    /// The first row, the last row and the transcript index of each call that has more to show
-    /// than it draws, top to bottom. Empty unless the scroller is open.
-    pub expandable: Vec<(u16, u16, usize)>,
-}
-
 /// What the info panel names the session by: its name, its directory, its branch and its links.
 ///
 /// The name is the session record's title, which is the person's first prompt or what they typed
@@ -984,35 +474,6 @@ pub struct Identity {
     pub pull_request: Option<String>,
     /// The id `--resume`, `--fork` and `/resume` take, once a record on disk answers to it.
     pub id: Option<String>,
-}
-
-/// The scroller, while it is open.
-///
-/// Holds what the mode itself is doing and nothing else. Where the view is looking stays in the
-/// field the wheel and the arrows move at rest, so opening the scroller and closing it again move
-/// nothing.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Scroller {
-    /// What a finished search is looking for. Empty until one has been run.
-    pub needle: String,
-    /// A search being typed, before Enter runs it or Escape abandons it.
-    pub typing: Option<String>,
-    /// Whether the key list is up.
-    pub help: bool,
-    /// Which match the view is on, counted from zero.
-    ///
-    /// Clamped where it is read. A list laid out afresh can be shorter than the one this indexed,
-    /// because a turn goes on writing underneath.
-    pub at: usize,
-    /// A count typed and waiting for the key it is for.
-    pub count: Option<u32>,
-    /// The request this scroller is showing in place of the transcript, when `/request` opened it.
-    ///
-    /// A copy of the value the turn sent, so what is read is that request and a turn going on
-    /// underneath cannot change it.
-    pub request: Option<Box<bravebot_agent::request_view::RequestView>>,
-    /// The view the transcript had when `/request` opened this, put back when it closes.
-    pub before: Option<(u16, Laid)>,
 }
 
 /// Where `needle` occurs in `text`, as character ranges, left to right and never overlapping.
@@ -1051,112 +512,6 @@ pub fn matched(text: &str, needle: &str) -> Vec<(usize, usize)> {
         }
     }
     found
-}
-
-/// The delegate view, while it is open.
-///
-/// Two levels rather than one, because a turn has one delegate or nine. The list is the way in
-/// where there are several, and one delegate's own lines are what somebody came to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Watching {
-    /// Which row this is about, by its place in the list: the delegates in the order they were
-    /// spawned, then the commands in the order they ran.
-    ///
-    /// A position rather than a name, because it is also where the highlight sits in the list, and
-    /// the two must not be able to disagree. What that costs is that a row arriving ahead of this
-    /// one moves it, so whatever inserts the row moves this with it: a position left where it was
-    /// is a different row from the one somebody opened.
-    pub at: usize,
-    /// Whether the list is what is on the screen, rather than the row at `at`.
-    pub listing: bool,
-    /// Whether the list's highlight is on the session rather than on one of the rows.
-    ///
-    /// Kept beside `at` rather than folded into it so that `at` stays the row somebody was last
-    /// reading: coming back into the list puts the highlight where they left it, and the way out
-    /// is a row rather than a position nothing else can name.
-    pub on_session: bool,
-}
-
-/// How the context currently stands in a session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Occupancy {
-    /// No request has been measured yet.
-    Unmeasured,
-    /// Compaction shortened the conversation and the next turn has not measured yet.
-    ///
-    /// `won_back` is what the compaction gave back, in tokens, and `budget` the budget it was
-    /// compacted at. The pair outlives a budget adopted later, because what a compaction won back
-    /// is a fact about the exchange it shortened rather than about the window in force now. Zero
-    /// where there is no figure to state.
-    Compacted { won_back: u64, budget: u64 },
-    /// Measured token count against the budget, and whether the budget was guessed.
-    Measured {
-        used: u64,
-        budget: u64,
-        guessed: bool,
-    },
-}
-
-/// The sections `/context` divides a request into, as indexes into the byte counts.
-const CONTEXT_SYSTEM: usize = 0;
-const CONTEXT_INSTRUCTIONS: usize = 1;
-const CONTEXT_SKILLS: usize = 2;
-const CONTEXT_TOOLS: usize = 3;
-const CONTEXT_TYPED: usize = 4;
-const CONTEXT_PLANNER: usize = 5;
-const CONTEXT_RESULTS: usize = 6;
-const CONTEXT_OTHER: usize = 7;
-
-/// Divide `total` in proportion to `weights`, in whole numbers that add up to exactly `total`.
-///
-/// Each part is rounded down and what is left over goes one apiece to the parts with the largest
-/// remainders, so the shares of a measured count always sum to it. All zeros where the weights
-/// are, since nothing says what the total is made of.
-pub(crate) fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
-    let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
-    if sum == 0 {
-        return vec![0; weights.len()];
-    }
-    let mut shares: Vec<u64> = weights
-        .iter()
-        .map(|weight| (u128::from(total) * u128::from(*weight) / sum) as u64)
-        .collect();
-    let mut left = total - shares.iter().sum::<u64>();
-    let mut by_remainder: Vec<usize> = (0..weights.len()).collect();
-    by_remainder.sort_by_key(|index| {
-        std::cmp::Reverse(u128::from(total) * u128::from(weights[*index]) % sum)
-    });
-    for index in by_remainder {
-        if left == 0 {
-            break;
-        }
-        shares[index] += 1;
-        left -= 1;
-    }
-    shares
-}
-
-impl Occupancy {
-    /// How full the context is, as a percentage, or `None` where nothing has been measured.
-    pub fn percent(&self) -> Option<u64> {
-        match *self {
-            Occupancy::Measured { used, budget, .. } if used > 0 && budget > 0 => {
-                Some((used.saturating_mul(100) / budget).min(100))
-            }
-            _ => None,
-        }
-    }
-
-    /// How much room a compaction won back, as a percentage of the budget, or `None` where there
-    /// is no figure to state.
-    pub fn won_back(&self) -> Option<u64> {
-        match *self {
-            Occupancy::Compacted { won_back, budget } if won_back > 0 && budget > 0 => {
-                Some((won_back.saturating_mul(100) / budget).min(100))
-            }
-            _ => None,
-        }
-    }
 }
 
 /// Where the turn in flight began: the counts from before it.
@@ -1341,6 +696,11 @@ pub struct Session {
     undo: std::collections::VecDeque<(String, usize)>,
     /// The INSERT session a change or an opening began, while it is open.
     inserting: Option<Inserting>,
+    /// Whether a run of typing in the ordinary box has already opened its step on [`Self::undo`],
+    /// so the next character typed shares it rather than opening one of its own. The ordinary box
+    /// has no mode to open a step at the way vi's INSERT does, so a run opens one at its first key
+    /// and this says whether that key has already come.
+    ordinary_run_open: bool,
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
@@ -1399,6 +759,17 @@ pub struct Session {
     /// `None` at rest, on the same footing as the scroller: a mode is what decides whether a
     /// letter typed is a letter in the box or one narrowing a list.
     history_search: Option<crate::history_search::Search>,
+    /// The picker `/config`, `/theme` or `/effort` opened while a turn was running, or that was
+    /// still open when it ended.
+    ///
+    /// A mode on the same footing as the search: while one is open it takes every key and is drawn
+    /// over the frame. At rest the same pickers are loops of their own and leave this `None`.
+    picking: Option<crate::picking::Picking>,
+    /// What the picker last closed on, until the loop that can carry it out has done so.
+    ///
+    /// The key handler only has the session, and what a pick changes may live elsewhere: the
+    /// saved theme, and for a later pick the configuration.
+    picked: Option<crate::picking::Picked>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
     /// How many lines of results are held for expansion across the session, so what a long
@@ -1597,6 +968,9 @@ pub struct Session {
     /// them decides nothing and needs no label. Cleared when a turn starts, so one turn's plan
     /// never appears beneath another's work.
     pub todos: Vec<bravebot_core::todo::Row>,
+    /// The last list the turn in flight reported that had rows, which an empty report leaves
+    /// standing. Cleared with `todos`.
+    reported: Vec<bravebot_core::todo::Row>,
     /// What the turn in flight is waiting on, when it is waiting on the model.
     ///
     /// Cleared between turns. `None` before the first request goes out, which is the only
@@ -1814,6 +1188,11 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// The model the turn in flight was begun with.
+    ///
+    /// `/model` is carried out while a turn runs and changes `model` for the turn after, so what the
+    /// turn is checked against when it ends has to be what it was sent with.
+    turn_model: Option<String>,
     /// The name the configuration gives each Bedrock model, by request name, for the panel to draw
     /// `model` by. Empty where no account is configured.
     model_labels: Vec<(String, String)>,
@@ -1933,6 +1312,7 @@ impl Session {
             last_change: None,
             undo: std::collections::VecDeque::new(),
             inserting: None,
+            ordinary_run_open: false,
             status: Status::Idle,
             show_trail: false,
             panel: false,
@@ -1949,6 +1329,8 @@ impl Session {
             asides: Vec::new(),
             held_view: None,
             history_search: None,
+            picking: None,
+            picked: None,
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
@@ -1995,6 +1377,7 @@ impl Session {
             written: 0,
             progress: Default::default(),
             todos: Vec::new(),
+            reported: Vec::new(),
             phase: None,
             checking: None,
             hook: None,
@@ -2029,6 +1412,7 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            turn_model: None,
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
@@ -2052,6 +1436,7 @@ impl Session {
     /// site rather than a side effect of constructing a session.
     pub fn in_workspace(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.workspace = root.into();
+        self.history.set_project(self.project());
         self
     }
 
@@ -2068,256 +1453,7 @@ impl Session {
     /// names that name nothing, or worse, name a different file of the same name.
     pub fn now_in_workspace(&mut self, root: impl Into<std::path::PathBuf>) {
         self.workspace = root.into();
-    }
-
-    /// Start under the mode a `/resume` carried over, which is the one the person last chose.
-    pub fn with_sandbox(mut self, sandbox: crate::sandbox_command::Sandboxed) -> Self {
-        self.sandbox = sandbox;
-        self
-    }
-
-    /// The value is the inverse of the backend's `governs_sockets_with_a_path`, and false with no
-    /// backend.
-    pub fn with_sockets_with_a_path_reachable(mut self, reachable: bool) -> Self {
-        self.sockets_with_a_path_reachable = reachable;
-        self
-    }
-
-    /// The sandbox mode the next turn's programs run under.
-    pub fn sandbox_mode(&self) -> bravebot_sandbox::SandboxMode {
-        self.sandbox.choice.mode
-    }
-
-    /// The mode and where it came from, which `/resume` hands to the session it starts so the
-    /// command's choice lasts as long as the process does.
-    pub fn sandbox(&self) -> &crate::sandbox_command::Sandboxed {
-        &self.sandbox
-    }
-
-    /// Move the mode for the rest of the process, from the next turn.
-    pub fn set_sandbox_mode(&mut self, mode: bravebot_sandbox::SandboxMode) {
-        self.sandbox = crate::sandbox_command::Sandboxed::typed(mode);
-    }
-
-    /// Say what the configuration allows, for the opening screen to draw.
-    ///
-    /// Takes the configuration rather than the words, so the line drawn at startup and the line
-    /// `/status` shows an hour later are one decision and not two. Given a string, this is a place
-    /// a caller could hand the opening screen any wording at all and no test would notice.
-    pub fn on_tier(mut self, config: &bravebot_config::Config) -> Self {
-        self.tier = crate::status::configured_tier(config).to_string();
-        self
-    }
-
-    /// Open the session in bypass, because `--dangerously-skip-permissions` asked for it.
-    ///
-    /// The rung is on the ladder either way, so this only chooses where the session starts and
-    /// records that it started there, which is what makes the line under the box name asking once
-    /// the key leaves bypass (MODE-5).
-    pub fn starting_in_bypass(mut self) -> Self {
-        self.began_in_bypass = true;
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Bypass);
-        self
-    }
-
-    /// Take bypass off the ladder, because a settings layer wrote `permissions.bypassUnreachable`.
-    ///
-    /// A session already in bypass is put back to asking, and the person is told, since the mode
-    /// was theirs and the line under the box would otherwise change without a reason. One-way: a
-    /// later `/cd` into a checkout that wrote nothing does not put the rung back (PERM-17).
-    pub fn make_bypass_unreachable(&mut self) {
-        self.bypass_reachable = false;
-        if self.permission_mode.get() == bravebot_agent::PermissionMode::Bypass {
-            self.permission_mode
-                .set(bravebot_agent::PermissionMode::Ask);
-            self.note(t!(session_bypass_made_unreachable));
-        }
-    }
-
-    /// How much this session asks before it acts.
-    pub fn permission_mode(&self) -> bravebot_agent::PermissionMode {
-        self.permission_mode.get()
-    }
-
-    /// A handle on the mode that a running turn reads, so a key pressed while it runs applies to it
-    /// (MODE-8). Hand this to a turn rather than the value [`Session::permission_mode`] returns.
-    pub fn live_permission_mode(&self) -> bravebot_agent::LiveMode {
-        self.permission_mode.clone()
-    }
-
-    /// Whether the session opened in bypass because the flag that skips permissions was given.
-    pub fn began_in_bypass(&self) -> bool {
-        self.began_in_bypass
-    }
-
-    /// Move to the next mode, and say nothing: the line under the box is the answer.
-    ///
-    /// A note in the transcript would be a running commentary on a key somebody is pressing to see
-    /// what the modes are, and the one place a mode has to be legible is while it is in force.
-    pub fn cycle_permission_mode(&mut self) {
-        self.permission_mode
-            .set(self.permission_mode.get().cycle(self.bypass_reachable));
-    }
-
-    /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
-    /// [`Session::cycle_permission_mode`] gives.
-    ///
-    /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
-    /// word reaches bypassing (MODE-5).
-    pub fn enter_plan_mode(&mut self) {
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Plan);
-    }
-
-    /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).
-    pub fn start_planned(
-        &mut self,
-        task: &str,
-        pasted: Vec<AttachedImage>,
-        attached: Vec<Attached>,
-    ) -> String {
-        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
-    }
-
-    /// Load history from disk and keep writing to it.
-    ///
-    /// Separate from [`Session::new`] so persistence is a deliberate choice at one call site
-    /// rather than a side effect of constructing a session.
-    ///
-    /// What comes back is not trusted: the file can be edited, so a recalled prompt goes into the
-    /// input box for the user to read and submit. That keystroke is what makes it trusted, exactly
-    /// as typing it would have been.
-    ///
-    /// Not the model or the effort level, which a settings file may also name and which are
-    /// therefore settled by [`Session::adopt_model`] and [`Session::adopt_effort`], the way the
-    /// style of editing is: reading the record here as well would put the rule that ranks the two
-    /// in two places.
-    pub fn with_stored_history(mut self) -> Self {
-        self.history =
-            crate::history::History::from_entries(bravebot_session::store::load_history());
-        self.persist = true;
-        self
-    }
-
-    /// The model to request, or `None` to use the configured default.
-    pub fn model(&self) -> Option<&str> {
-        self.model.as_deref()
-    }
-
-    /// Draw the models this configuration names by those names, as [`crate::status::model_label`]
-    /// gives them.
-    pub fn with_model_labels(mut self, config: &bravebot_config::Config) -> Self {
-        self.model_labels = crate::status::model_labels(config);
-        self
-    }
-
-    /// What to call the chosen model on screen: the name the configuration gave it, or the request
-    /// name where it gave none.
-    pub fn model_label(&self) -> Option<&str> {
-        let model = self.model.as_deref()?;
-        let named = self.model_labels.iter().find(|(id, _)| id == model);
-        Some(named.map_or(model, |(_, label)| label.as_str()))
-    }
-
-    /// Record the model the user picked, keeping it for later sessions.
-    ///
-    /// Written through to disk only for a session that persists, which is the same rule history
-    /// follows and for the same reason: a test must not rewrite the developer's own choice. A tier's
-    /// model is written as the tier word (BACKEND-47).
-    pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
-        let model = model.into();
-        if self.persist {
-            bravebot_session::store::save_model(config.name_to_record(&model));
-        }
-        self.model = Some(model);
-    }
-
-    /// Put `model` in force for this session, over every saved pick and file, and record nothing.
-    ///
-    /// The command line's own choice (CLI-31): it describes this start and no other, so unlike
-    /// [`Session::choose_model`] it does not rewrite the pick the next session opens on.
-    pub fn name_model(&mut self, model: String) {
-        self.model = Some(model);
-    }
-
-    /// The model `/advisor` named, resolved, or `None` where it named none.
-    pub fn advisor(&self) -> Option<&str> {
-        self.advisor.as_deref()
-    }
-
-    /// The session's spend limit, which each turn it starts is held to.
-    pub fn spend_limit(&self) -> &bravebot_agent::SpendLimit {
-        &self.spend_limit
-    }
-
-    /// Start the session under the limit the settings name, if they name one.
-    pub fn adopt_limit(&mut self, settings: &bravebot_config::Settings) {
-        self.spend_limit.set(settings.limit());
-    }
-
-    /// The output style `/style` chose, or `None` where it chose none.
-    pub fn style(&self) -> Option<&bravebot_agent::styles::Style> {
-        self.style.as_ref()
-    }
-
-    /// Open every later turn's system prompt with this style, or `None` to clear the pick.
-    pub fn choose_style(&mut self, style: Option<bravebot_agent::styles::Style>) {
-        self.style = style;
-    }
-
-    /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.
-    ///
-    /// Not recorded anywhere: a session that is resumed starts with the setting's advisor, if any.
-    pub fn choose_advisor(&mut self, model: Option<String>) {
-        self.advisor = model;
-    }
-
-    /// How hard to think, or `None` to leave the service its own default.
-    ///
-    /// What the person chose, which is not always what a request carries. For reporting the choice
-    /// and for opening the picker on it.
-    pub fn effort(&self) -> Option<Effort> {
-        self.effort
-    }
-
-    /// The level a turn will actually send, which is nothing where the model does not read one.
-    ///
-    /// Sending a level to a model whose roster row says it reads none is a field that is dropped at
-    /// the far end, so the choice is kept and the request is not given it.
-    pub fn effort_in_force(&self) -> Option<Effort> {
-        self.effort.filter(|_| self.model_reads_effort)
-    }
-
-    /// Whether the model in force reads a level at all.
-    ///
-    /// For saying so where it does not: a level reported as in force while the service discards it
-    /// is the interface telling somebody they bought something they did not.
-    pub fn model_reads_effort(&self) -> bool {
-        self.model_reads_effort
-    }
-
-    /// Record what the roster said about the model now in force.
-    pub fn note_model_reads_effort(&mut self, reads: bool) {
-        self.model_reads_effort = reads;
-    }
-
-    /// Record the level the user picked, keeping it for later sessions.
-    ///
-    /// `None` is a choice too: it puts the session back to sending no level at all, which is what
-    /// somebody who has never picked one is already doing. Written through to disk only for a
-    /// session that persists, the same rule the model follows and for the same reason.
-    pub fn choose_effort(&mut self, effort: Option<Effort>) {
-        if self.persist {
-            bravebot_session::store::save_effort(effort);
-        }
-        self.effort = effort;
-    }
-
-    /// Put `effort` in force for this session over every saved pick and file, and record nothing,
-    /// for the reason [`Session::name_model`] records no model.
-    pub fn name_effort(&mut self, effort: Effort) {
-        self.effort = Some(effort);
+        self.history.set_project(self.project());
     }
 
     /// How long the turn in flight has been running, or zero when idle.
@@ -2428,70 +1564,27 @@ impl Session {
     }
 
     /// Record the task list the turn just reported.
+    ///
+    /// A report with no rows empties the display but not the plan: the session record cannot tell
+    /// a turn that emptied its list from one that kept none, so the last list that had rows
+    /// stays what the panel shows ([PANEL-10](../../../docs/specs/info-panel.md#PANEL-10)).
     pub fn set_todos(&mut self, rows: Vec<bravebot_core::todo::Row>) {
+        if !rows.is_empty() {
+            self.reported = rows.clone();
+        }
         self.todos = rows;
     }
 
-    /// Take on what an earlier session spent.
-    ///
-    /// The counter answers "what has this cost me", and that answer does not become smaller
-    /// because the process restarted. Set rather than added to: this is a session being picked
-    /// up, not a second one being merged into it.
-    pub fn restore_spend(&mut self, tokens: u64, by_turn: std::collections::BTreeMap<usize, u64>) {
-        self.tokens = tokens;
-        self.spend = by_turn;
+    /// Hand over the plan the turn ended with, for the entry that closes it.
+    fn take_todos(&mut self) -> Vec<bravebot_core::todo::Row> {
+        self.todos.clear();
+        std::mem::take(&mut self.reported)
     }
 
-    /// Take on the model an earlier session's record says answered.
-    ///
-    /// Separate from [`Session::served`] because that records a request made in this process, with
-    /// the tier it ran on, and nothing has been asked yet.
-    pub fn restore_model(&mut self, model: Option<String>) {
-        self.recorded_model = model;
-    }
-
-    /// Take on what a record says about what answered and what it cost: the spend, the timing and
-    /// the model, which are the figures a save writes back whole.
-    pub fn restore_accounts(&mut self, record: &bravebot_session::sessions::Record) {
-        self.restore_spend(record.tokens, record.spend.clone());
-        self.restore_timing(record.timing.clone());
-        self.restore_model(record.model.clone());
-    }
-
-    /// Take on how an earlier session's turns spent their time.
-    ///
-    /// Separate from [`Session::restore_spend`] because a record written before timing was kept has
-    /// the one and not the other, and a resume must not have to choose between restoring both or
-    /// neither.
-    pub fn restore_timing(
-        &mut self,
-        by_turn: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
-    ) {
-        self.timing = by_turn;
-    }
-
-    /// What each turn cost, by turn number.
-    ///
-    /// Read for writing the session down, for the per-turn block an export carries, and for what
-    /// [`Session::report_spend`] draws.
-    pub fn spend_by_turn(&self) -> &std::collections::BTreeMap<usize, u64> {
-        &self.spend
-    }
-
-    /// Where each turn's wall clock went, by turn number, for writing the session down.
-    pub fn timing_by_turn(
-        &self,
-    ) -> &std::collections::BTreeMap<usize, bravebot_agent::timing::Timing> {
-        &self.timing
-    }
-
-    /// Every turn's timing added together.
-    pub fn timing_total(&self) -> bravebot_agent::timing::Timing {
-        let mut total = bravebot_agent::timing::Timing::default();
-        for timing in self.timing.values() {
-            total.add(*timing);
-        }
-        total
+    /// Drop the live list and the plan kept beside it.
+    fn forget_todos(&mut self) {
+        self.todos.clear();
+        self.reported.clear();
     }
 
     /// Restore checkpoint history and warnings that remain after every checkpoint is consumed.
@@ -2583,6 +1676,9 @@ impl Session {
         self.turn_history.clear();
         self.prompt_at = None;
         self.recall.clear();
+        // ASK-8: kept, a question in the new conversation would be answered from the one that was
+        // thrown away, and the person asked nothing.
+        self.answers.clear();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
@@ -2599,7 +1695,7 @@ impl Session {
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
         self.progress = Default::default();
-        self.todos.clear();
+        self.forget_todos();
         self.clear_in_progress();
         self.started = None;
         self.scroll = 0;
@@ -2839,123 +1935,6 @@ impl Session {
         self.transcript.push(Entry::assistant(text, Vec::new()));
     }
 
-    /// Whose work the reports that follow are, as the driver said.
-    ///
-    /// The one thing that decides where a line lands. Delegates work alongside the turn and
-    /// alongside each other, so the lines arrive interleaved: nothing here reads a line to work
-    /// out whose it was, because a line is prose a model had a hand in.
-    pub fn reporting_for(&mut self, delegate: Option<bravebot_agent::report::DelegateId>) {
-        self.attributed_to = delegate;
-    }
-
-    /// Where a report lands: under the delegate whose work it is, or in the turn's transcript.
-    ///
-    /// A slice rather than the vector, so nothing can add a line here. A delegate's lines are
-    /// bounded, and the bound is enforced where a line enters rather than by every caller
-    /// remembering: [`Session::hold`] is that entrance.
-    fn working_lines(&mut self) -> &mut [Entry] {
-        match self.attributed_to.and_then(|id| self.at(id)) {
-            Some(at) => {
-                &mut self.transcript[at]
-                    .delegate
-                    .as_mut()
-                    .expect("a delegate entry holds its delegate")
-                    .lines
-            }
-            None => &mut self.transcript,
-        }
-    }
-
-    /// Hold a line that is not a call: under the delegate whose work it is, to the same bound its
-    /// calls are held to, or in the turn's transcript.
-    ///
-    /// Not [`Session::working_lines`] and a push, which reaches the delegate's lines around the
-    /// only thing that bounds them.
-    fn hold(&mut self, entry: Entry) {
-        match self.attributed_to.and_then(|id| self.at(id)) {
-            Some(at) => self.transcript[at]
-                .delegate
-                .as_mut()
-                .expect("a delegate entry holds its delegate")
-                .hold(entry),
-            None => self.transcript.push(entry),
-        }
-    }
-
-    /// Where a delegate's block is, by the number the driver gave it.
-    ///
-    /// Searched from the end, because the one being reported on is almost always the one most
-    /// recently started.
-    fn at(&self, id: bravebot_agent::report::DelegateId) -> Option<usize> {
-        self.transcript
-            .iter()
-            .rposition(|entry| entry.delegate.as_ref().is_some_and(|held| held.id == id))
-    }
-
-    /// A delegate has begun, drawn where the call that started it happened.
-    ///
-    /// Nothing about the view moves for it. Where the view is open, the row it is on is a place
-    /// in a list this inserts a row into, so a place at or after the new delegate's moves with
-    /// it: without that, a delegate starting takes the screen from somebody reading a command,
-    /// since the commands are listed after the delegates.
-    pub fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
-        let inserted = self.asides.len() + self.delegates().len();
-        if let Some(watching) = &mut self.watching
-            && watching.at >= inserted
-        {
-            watching.at += 1;
-        }
-        let mut entry = Entry::system("");
-        entry.speaker = Speaker::Delegate;
-        entry.delegate = Some(Delegate {
-            id: delegation.id,
-            kind: delegation.kind,
-            task: delegation.task,
-            lines: Vec::new(),
-            calls: 0,
-            note: None,
-            reported: None,
-            failed: false,
-            stop: delegation.stop,
-        });
-        self.transcript.push(entry);
-    }
-
-    /// One delegate has finished, with what the turn was told about it and what it reported.
-    ///
-    /// Its block collapses to those two: what it did is behind it, and what it concluded is the
-    /// whole of what anybody acts on. Named rather than taken to be whichever was working,
-    /// because the one that finishes is not the one that started last.
-    pub fn delegate_finished(
-        &mut self,
-        id: bravebot_agent::report::DelegateId,
-        note: String,
-        failed: bool,
-        reported: Option<Reported>,
-    ) {
-        if self.attributed_to == Some(id) {
-            self.attributed_to = None;
-        }
-        if self.waiting_on == Some(id) {
-            self.waiting_on = None;
-        }
-        if let Some(at) = self.at(id)
-            && let Some(delegate) = self.transcript[at].delegate.as_mut()
-        {
-            delegate.note = Some(note);
-            delegate.reported = reported;
-            delegate.failed = failed;
-        }
-    }
-
-    /// Every delegate this session has started, oldest first.
-    pub fn delegates(&self) -> Vec<&Delegate> {
-        self.transcript
-            .iter()
-            .filter_map(|entry| entry.delegate.as_ref())
-            .collect()
-    }
-
     /// What a command printed, kept for the view.
     ///
     /// Appended rather than attached to a line, so the third command is where the view expects it
@@ -2991,346 +1970,6 @@ impl Session {
             outcome: printed.outcome,
             job: None,
         });
-    }
-
-    /// A background job started, ended, or is being stopped with its turn (RUN-26).
-    ///
-    /// Its row is made when it starts, with nothing printed yet, and every later event changes that
-    /// row. Whose job it is comes from the driver's attribution, never from anything in the event.
-    pub fn job(&mut self, event: bravebot_agent::report::JobEvent) {
-        use bravebot_agent::report::JobEvent;
-        match event {
-            JobEvent::Started {
-                name,
-                line,
-                moved_after,
-                stop,
-            } => self.outputs.push(Output {
-                command: line,
-                lines: Vec::new(),
-                total: 0,
-                // True so the first look's standing is the row's: looks are merged with `&=`.
-                read_by_the_planner: true,
-                outcome: bravebot_agent::report::Outcome::Running {
-                    ran_for: moved_after.unwrap_or_default(),
-                    waited: None,
-                },
-                job: Some(JobView {
-                    name,
-                    delegate: self.attributed_to,
-                    since: Instant::now(),
-                    moved_after,
-                    state: JobState::Running,
-                    stop,
-                }),
-            }),
-            JobEvent::Ended { name, outcome } => {
-                if let Some(row) = self.job_row(&name) {
-                    row.outcome = outcome;
-                    if let Some(job) = row.job.as_mut() {
-                        job.state = JobState::Ended;
-                    }
-                }
-            }
-            JobEvent::Dropped { name } => {
-                if let Some(job) = self.job_row(&name).and_then(|row| row.job.as_mut()) {
-                    job.state = JobState::EndedWithTurn;
-                }
-            }
-        }
-    }
-
-    /// The newest row of the job by this name that belongs to whoever the driver last said the
-    /// reports are from.
-    ///
-    /// The newest, because a job's start makes its row before anything else is said about it.
-    /// Searched from the first row and not from where the list of jobs starts: a kept job the person
-    /// stopped between turns is out of the next turn's list when that turn reports its finish.
-    fn job_row(&mut self, name: &str) -> Option<&mut Output> {
-        let whose = self.attributed_to;
-        self.outputs.iter_mut().rev().find(|row| {
-            row.job
-                .as_ref()
-                .is_some_and(|job| job.name == name && job.delegate == whose)
-        })
-    }
-
-    /// Every command this session ran, oldest first.
-    pub fn outputs(&self) -> &[Output] {
-        &self.outputs
-    }
-
-    /// The background jobs of the turn in flight, or of the last one, in the order they started.
-    pub fn jobs(&self) -> impl Iterator<Item = (&Output, &JobView)> {
-        self.outputs[self.jobs_from..]
-            .iter()
-            .filter_map(|row| row.job.as_ref().map(|job| (row, job)))
-    }
-
-    /// How many background jobs are running now, for the hint line.
-    pub fn jobs_running(&self) -> usize {
-        self.jobs().filter(|(_, job)| job.is_running()).count()
-    }
-
-    /// Keep a question asked beside the work, and open the view on it.
-    ///
-    /// Opened rather than left behind a key, because the person asked a question and an answer
-    /// they are not shown is not an answer. Nothing moves under a reader doing it: the press that
-    /// asked came from the input box, which this mode does not draw.
-    ///
-    /// The answer arrives out of a wait loop that answers keys, so a mode a person opened while
-    /// they waited is standing over the session when it lands. Each is put away rather than
-    /// opened around: the scroller is drawn in front of this view, so an answer under one is on
-    /// no screen at all, and a search left open below would take the letters that walk this list.
-    ///
-    /// The turn's own view is remembered only where this view was not already open, the way
-    /// [`Session::back_to_the_tail`] guards on the same question: while it is open `scroll` is an
-    /// offset into a watched row's lines, and the offset the transcript comes back on is the one
-    /// already held.
-    pub fn asked_aside(&mut self, aside: Aside) {
-        self.asides.push(aside);
-        let at = self.asides.len() - 1;
-        self.close_scroller();
-        self.close_history_search();
-        if self.watching.is_none() {
-            self.held_view = Some(self.scroll);
-        }
-        self.scroll = 0;
-        self.watching = Some(Watching {
-            at,
-            listing: false,
-            on_session: false,
-        });
-    }
-
-    /// Put back the asides a resumed session had, oldest first.
-    ///
-    /// The one thing the view holds that outlives the session that produced it. A delegate's
-    /// lines and what a command printed are not written down at all, so a resume brings back
-    /// these and nothing else.
-    pub fn restore_asides(&mut self, asides: Vec<Aside>) {
-        self.asides = asides;
-    }
-
-    /// Every question asked beside the work, oldest first.
-    pub fn asides(&self) -> &[Aside] {
-        &self.asides
-    }
-
-    /// The aside the view is on, where the row it is on is one.
-    pub fn watched_aside(&self) -> Option<&Aside> {
-        match self.watched() {
-            Some(Watched::Aside(aside)) => Some(aside),
-            _ => None,
-        }
-    }
-
-    /// Everything the view can open, in the order the list draws it.
-    ///
-    /// Grouped by kind rather than ordered by when each happened, so a row's place does not move
-    /// when the next thing of a different kind arrives. The asides come first because they are
-    /// the only rows that survive a resume: a resumed session's list is asides alone, and every
-    /// delegate and command the session goes on to produce appends after them.
-    ///
-    /// All three are work that happened outside the transcript, which is what the view is for.
-    pub fn watchable(&self) -> Vec<Watched<'_>> {
-        self.asides
-            .iter()
-            .map(Watched::Aside)
-            .chain(self.delegates().into_iter().map(Watched::Delegate))
-            .chain(self.outputs.iter().map(Watched::Output))
-            .collect()
-    }
-
-    /// Open the view: on the list where there are several rows, and on the one where there is one.
-    ///
-    /// `false` where there is nothing to look at, which leaves the key doing nothing at all. A
-    /// mode that opened on an empty screen would be worse than a key that did not answer.
-    pub fn watch(&mut self) -> bool {
-        let rows = self.watchable();
-        let Some(last) = rows.len().checked_sub(1) else {
-            return false;
-        };
-        // The delegate working, or the most recent row where none is. Somebody pressing the key
-        // while something is happening means that one, and there is nothing else it could mean
-        // when nothing is.
-        let at = rows
-            .iter()
-            .rposition(|row| matches!(row, Watched::Delegate(delegate) if delegate.is_running()))
-            .unwrap_or(last);
-        let listing = last > 0;
-        self.held_view = Some(self.scroll);
-        self.scroll = 0;
-        self.watching = Some(Watching {
-            at,
-            listing,
-            on_session: false,
-        });
-        true
-    }
-
-    /// Close it, putting the turn's own view back where it was left.
-    ///
-    /// `false` where it was not open, so a key can tell whether it was the one that closed
-    /// something from whether it has still to be answered by the ladder below.
-    pub fn stop_watching(&mut self) -> bool {
-        if self.watching.take().is_none() {
-            return false;
-        }
-        self.scroll = self.held_view.take().unwrap_or(0);
-        true
-    }
-
-    /// The delegate view, while it is open.
-    pub fn watching(&self) -> Option<Watching> {
-        self.watching
-    }
-
-    /// Whether one row's own lines are what is on the screen.
-    pub fn watching_a_delegate(&self) -> bool {
-        self.watching.is_some_and(|watching| !watching.listing)
-    }
-
-    /// Whether the list is what is on the screen.
-    pub fn listing_delegates(&self) -> bool {
-        self.watching.is_some_and(|watching| watching.listing)
-    }
-
-    /// The row the view is on, whether it is open or highlighted in the list.
-    ///
-    /// `None` where the list's highlight is on the session, which is a row and not one of these.
-    pub fn watched(&self) -> Option<Watched<'_>> {
-        let watching = self.watching.filter(|watching| !watching.on_session)?;
-        self.watchable().get(watching.at).copied()
-    }
-
-    /// The delegate the view is on, where the row it is on is a delegate.
-    pub fn watched_delegate(&self) -> Option<&Delegate> {
-        match self.watched() {
-            Some(Watched::Delegate(delegate)) => Some(delegate),
-            _ => None,
-        }
-    }
-
-    /// Ask the delegate the view is on to stop, leaving the turn and every other delegate going.
-    ///
-    /// Does nothing where the row is not a delegate, or where it has finished or been asked
-    /// already. Returns whether a stop was asked for.
-    pub fn stop_watched_delegate(&mut self) -> bool {
-        match self.watched_delegate() {
-            Some(delegate) if delegate.is_running() && !delegate.is_stopping() => {
-                delegate.stop.request();
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// What a command printed, where the row the view is on is a command.
-    pub fn watched_output(&self) -> Option<&Output> {
-        match self.watched() {
-            Some(Watched::Output(output)) => Some(output),
-            _ => None,
-        }
-    }
-
-    /// Whether the list's highlight is on the session rather than on one of the delegates.
-    pub fn listing_on_the_session(&self) -> bool {
-        self.watching
-            .is_some_and(|watching| watching.listing && watching.on_session)
-    }
-
-    /// Where the highlight sits among the list's rows, the session being the first of them.
-    pub fn list_highlight(&self) -> usize {
-        match self.watching {
-            Some(watching) if !watching.on_session => watching.at + 1,
-            _ => 0,
-        }
-    }
-
-    /// Open the delegate the list is on.
-    pub fn open_watched(&mut self) {
-        if let Some(watching) = &mut self.watching {
-            watching.listing = false;
-            self.scroll = 0;
-        }
-    }
-
-    /// Go back to the list from one row's lines.
-    ///
-    /// `false` where there is only one row: there is no list behind it, and the key that would
-    /// have gone back is the key that closes.
-    pub fn list_delegates(&mut self) -> bool {
-        if self.watchable().len() < 2 {
-            return false;
-        }
-        match &mut self.watching {
-            Some(watching) if !watching.listing => {
-                watching.listing = true;
-                watching.on_session = false;
-                self.scroll = 0;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Move to the next delegate, or to the previous one, in the order they were spawned.
-    ///
-    /// Each stops at its end rather than wrapping: somebody stepping through wants to arrive at
-    /// the last one and know that it is the last.
-    ///
-    /// The session is one of the rows in the list, above the first delegate, so moving up from
-    /// that one reaches it. It is not one of the steps in a delegate's own view: what `n` and `p`
-    /// are for there is comparing two runs, and a key that stepped out of the mode partway
-    /// through would be a different key wearing the same name.
-    pub fn watch_next(&mut self) {
-        let last = self.watchable().len().saturating_sub(1);
-        let Some(watching) = &mut self.watching else {
-            return;
-        };
-        if watching.on_session {
-            watching.on_session = false;
-            watching.at = 0;
-            self.scroll = 0;
-        } else if watching.at < last {
-            watching.at += 1;
-            self.scroll = 0;
-        }
-    }
-
-    pub fn watch_previous(&mut self) {
-        let Some(watching) = &mut self.watching else {
-            return;
-        };
-        if watching.on_session {
-            return;
-        }
-        if watching.at > 0 {
-            watching.at -= 1;
-            self.scroll = 0;
-        } else if watching.listing {
-            watching.on_session = true;
-            self.scroll = 0;
-        }
-    }
-
-    /// The entries the screen is drawn from: one delegate's own, or the turn's.
-    ///
-    /// The single place the two views part company, so everything that lays out a transcript does
-    /// it the same way for both and neither can drift from the other.
-    pub fn viewed(&self) -> &[Entry] {
-        if self.watching.is_none_or(|watching| watching.listing) {
-            return &self.transcript;
-        }
-        // Through the list rather than into the delegates, because a position is a place in the
-        // list and the list holds three kinds of row. Indexing the delegates with it would draw
-        // one delegate's lines under another kind of row every time the rows before it were not
-        // delegates.
-        match self.watched() {
-            Some(Watched::Delegate(delegate)) => &delegate.lines,
-            _ => &self.transcript,
-        }
     }
 
     /// Show a tool call that has begun.
@@ -3515,259 +2154,6 @@ impl Session {
         }
     }
 
-    /// Accept a typed character.
-    ///
-    /// Allowed while a turn runs as well as between turns. What it cannot do then is send: a
-    /// second turn must not begin while the first is in flight, and [`Session::submit`] still
-    /// refuses. Dropping the keys instead, which is what this used to do, meant a user typing
-    /// during a slow turn watched their words go nowhere with nothing to say why.
-    pub fn type_char(&mut self, c: char) {
-        // Before everything, including the two markers below. In NORMAL mode a letter is an
-        // instruction, and that is the whole of what the mode means: `!` and `?` there are vi's own
-        // keys rather than the ways shell mode and the key list are opened, and reading either as its
-        // marker would answer a press that was asking for something else. Both are a press of `i`
-        // away for somebody who wanted them.
-        if self.vi_normal() {
-            self.obey(c);
-            return;
-        }
-        // `?` on an empty line puts the list of keys up rather than typing a character, and a second
-        // press takes it down again. Only on an empty line, since a `?` in a sentence is the
-        // punctuation somebody is asking a question with, and not in shell mode, where it is a glob
-        // for the shell to expand.
-        //
-        // First, so the press that closes the list is not also the press that clears it below.
-        if c == '?' && self.input.is_empty() && !self.shell {
-            self.shortcuts = !self.shortcuts;
-            return;
-        }
-        // Any other key takes it down. The question has been asked and moved on from, and somebody
-        // typing again has finished reading.
-        self.shortcuts = false;
-
-        // `!` on an empty line is the mode rather than a character, which is what makes the rest of
-        // the line the command verbatim. Only on an empty line: a `!` inside a sentence is
-        // punctuation, and inside a command it is history expansion for the shell to deal with.
-        //
-        // Idle only. The mode is an armed state that changes what Enter does, and mid-turn the user
-        // cannot act on it: it would still be armed when the turn ended, over whatever the box held
-        // by then. A cancelled turn puts the prompt back, so `!` during one used to leave a sentence
-        // sitting behind a marker, and "rm the old builds" is a reasonable thing to have typed.
-        if c == '!' && self.input.is_empty() && !self.shell && self.status == Status::Idle {
-            self.shell = true;
-            self.shell_private = false;
-            return;
-        }
-        // A second `!` before anything else is typed makes the command private: its output is drawn
-        // and never recorded. Like the first it is a mode and not a character, so the line that runs
-        // is what the person sees after the marker.
-        if c == '!'
-            && self.input.is_empty()
-            && self.shell
-            && !self.shell_private
-            && self.status == Status::Idle
-        {
-            self.shell_private = true;
-            return;
-        }
-        if self.typing_over() {
-            self.type_over(c);
-            return;
-        }
-        // Editing a recalled prompt makes it the working line rather than a view of history,
-        // so the position indicator goes away as soon as a key is pressed.
-        self.history.leave();
-        self.input.insert(self.caret, c);
-        self.caret += c.len_utf8();
-        // Back to the top of whatever is now offered. A cursor left where it was would sit on a
-        // different command after one more letter, so the highlighted row would drift as the list
-        // narrowed under it.
-        self.completion = 0;
-    }
-
-    /// Start a new line in the prompt without sending it.
-    ///
-    /// Not [`Session::type_char`] with a newline, because that would read a leading `!` as shell
-    /// mode and would let the character be typed by any path that thinks it is typing text. A
-    /// newline in the prompt is one deliberate keystroke.
-    pub fn type_newline(&mut self) {
-        if self.typing_over() {
-            self.type_over('\n');
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        // A line that grew under the list is one the list was not put up over.
-        self.shortcuts = false;
-        self.input.insert(self.caret, '\n');
-        self.caret += 1;
-        // A command is one line by definition, and a reference ends at whitespace, so a newline
-        // closes whatever was being offered rather than narrowing it.
-        self.completion = 0;
-    }
-
-    /// Which style of editing the box does.
-    pub fn editing(&self) -> crate::vim::Editing {
-        self.editing
-    }
-
-    /// Settle the style of editing for this session, given what a settings file said.
-    ///
-    /// A choice the person made outranks the file, the same rule the model follows: a recorded choice
-    /// outlives the session that made it, and a file read afterwards would undo what somebody had just
-    /// asked for. With no choice recorded the file answers, and with neither it is the box everybody
-    /// has.
-    ///
-    /// A word that names no style is no choice at all, whichever of the two spelled it: both are read
-    /// from a file somebody may have edited by hand, so both are resolved here by the same rule rather
-    /// than each being trusted where it came from. A corrupt recorded word therefore leaves the file
-    /// answering, and a mistyped file leaves the ordinary box. Nothing is said about either: a settings
-    /// file is reported by `doctor`, and a session that refused to start over a mistyped editing
-    /// preference would be worse than one that ignores it.
-    ///
-    /// The recorded choice is read only for a session that persists, which is the rule every write
-    /// here follows: a test must not be handed the developer's own preference, or what the box does
-    /// under it would depend on the machine it ran on.
-    pub fn adopt_editing(&mut self, configured: Option<&str>) {
-        let stored = self
-            .persist
-            .then(bravebot_session::store::load_editing)
-            .flatten();
-        self.editing = stored
-            .as_deref()
-            .and_then(crate::vim::Editing::named)
-            .or_else(|| configured.and_then(crate::vim::Editing::named))
-            .unwrap_or_default();
-    }
-
-    /// Settle the model this session opens on, given the settings in force.
-    ///
-    /// The saved pick where [`bravebot_session::store::model`] leaves it in force, and otherwise
-    /// `None`, which is the configured model: a checkout's settings that outrank the pick named
-    /// the model the configuration already resolved to (BACKEND-11). The rule is in the store for
-    /// the reason [`Session::adopt_effort`]'s is.
-    ///
-    /// The pick is read only for a session that persists, for the reason given there. A pick
-    /// [`bravebot_agent::backend::pick`] sets aside is named in the transcript (BACKEND-47).
-    pub fn adopt_model(
-        &mut self,
-        settings: &bravebot_config::Settings,
-        config: &bravebot_config::Config,
-    ) {
-        let recorded = self
-            .persist
-            .then(bravebot_session::store::load_model)
-            .flatten();
-        let pick = bravebot_agent::backend::pick(
-            config,
-            bravebot_session::store::model(recorded, settings),
-        );
-        match &pick {
-            bravebot_agent::backend::Pick::SetAside(model) => {
-                self.note(t!(session_model_pick_set_aside, model = model.as_str()));
-            }
-            bravebot_agent::backend::Pick::Refused { recorded, reason } => {
-                self.note(t!(
-                    session_model_pick_refused,
-                    model = recorded.as_str(),
-                    reason = reason.as_str()
-                ));
-            }
-            bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
-        }
-        self.model = pick.into_model();
-    }
-
-    /// Settle how hard this session asks the model to think, given the settings in force.
-    ///
-    /// The rule is [`bravebot_session::store::effort`] and the whole of it is there, so the terminal,
-    /// a session in lines and a one-shot run cannot come to disagree about which of the two answers
-    /// (BACKEND-43). What that decides is the level the picker opens on and the level a turn sends;
-    /// a level the model in force reads none of is still not sent, by
-    /// [`Session::effort_in_force`], and is still not forgotten.
-    ///
-    /// Nothing is written: a level a file named is not a pick, and recording one would make reading
-    /// a settings file once enough to outlive it.
-    ///
-    /// The recorded pick is read only for a session that persists, the rule
-    /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
-    /// what it asks for would depend on the machine it ran on.
-    pub fn adopt_effort(&mut self, settings: &bravebot_config::Settings) {
-        let recorded = self
-            .persist
-            .then(bravebot_session::store::load_effort)
-            .flatten();
-        self.effort = bravebot_session::store::effort(recorded, settings);
-    }
-
-    /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
-    ///
-    /// The three routes resolved into one answer, by
-    /// [`bravebot_core::vetting::auto`], which is the whole of the rule. `asked` is the
-    /// command line's, taken as an argument rather than read here so a test decides it; `configured`
-    /// is the `vetting.auto` key from the home settings layer.
-    ///
-    /// The recorded choice is read only for a session that persists, which is the rule
-    /// [`Session::adopt_editing`] follows and matters more here: a test, and a session asked to
-    /// leave nothing behind, must not pick up a developer's standing answer to whether somebody is
-    /// asked before content nobody vouched for reaches the planner.
-    pub fn adopt_vetting(&mut self, asked: bool, configured: Option<bool>) {
-        let chosen = self
-            .persist
-            .then(bravebot_session::store::load_vetting)
-            .flatten();
-        self.vetting = bravebot_core::vetting::auto(asked, chosen, configured);
-    }
-
-    /// Whether a check that finds nothing may promote a slot without the person being asked.
-    pub fn auto_vetting(&self) -> bool {
-        self.vetting
-    }
-
-    /// Record the answer about auto-vetting the person gave at a prompt.
-    ///
-    /// Written through to disk only for a session that persists, the same rule the editing style
-    /// follows and for the same reason: a test, and a session asked to leave nothing behind, must
-    /// not rewrite the developer's own answer.
-    ///
-    /// Takes effect from the next turn. The turn in flight keeps the setting it began with, so a
-    /// question already on the screen is not withdrawn from under the person answering it.
-    pub fn choose_vetting(&mut self, auto: bool) {
-        if self.persist {
-            bravebot_session::store::save_vetting(auto);
-        }
-        self.vetting = auto;
-    }
-
-    /// Adopt configured keybindings from settings.
-    pub fn adopt_keybindings(&mut self, configured: &std::collections::BTreeMap<String, String>) {
-        self.bindings = crate::keybindings::Keybindings::from_map(configured);
-    }
-
-    /// The active keybindings for this session.
-    pub fn bindings(&self) -> &crate::keybindings::Keybindings {
-        &self.bindings
-    }
-
-    /// Record how many rows one wheel event moves the view by, from `tui.wheelRows`.
-    ///
-    /// Clamped rather than refused, which is the decision [`bravebot_agent::exec`] takes about a
-    /// deadline and for the same reason: the movement a figure asks for is visible the moment the
-    /// wheel is turned, so a count held to the range says so on the screen. A count nobody named
-    /// leaves [`WHEEL_ROWS`] in force.
-    pub fn adopt_wheel_rows(&mut self, configured: Option<usize>) {
-        let Some(rows) = configured else {
-            return;
-        };
-        let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
-        self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
-    }
-
-    /// Name the directory a line's first word is looked up in. Left unset, no line is one (CMD-17).
-    pub fn adopt_prompt_files(&mut self, directory: Option<std::path::PathBuf>) {
-        self.prompt_files = directory;
-    }
-
     /// Replace a line that names a prompt file with the file's text, for the person to read and send.
     ///
     /// Returns whether the key was spent here. A line no file answers to, and a line with a row of
@@ -3805,749 +2191,6 @@ impl Session {
                 true
             }
         }
-    }
-
-    /// How many rows one wheel event moves the view by.
-    pub fn wheel_rows(&self) -> u16 {
-        self.wheel_rows
-    }
-
-    /// Record the style of editing the person chose, keeping it for later sessions.
-    ///
-    /// Written through to disk only for a session that persists, the same rule the model and the
-    /// effort level follow and for the same reason: a test must not rewrite the developer's own
-    /// choice.
-    ///
-    /// The mode comes back to INSERT whichever style was chosen, because the choice is made away from
-    /// the box: coming back to one that takes the next letter as an instruction is not what somebody
-    /// who has just turned vi editing on expects. It is also the only sound answer for the other
-    /// direction, NORMAL not being a state the ordinary box has.
-    pub fn choose_editing(&mut self, editing: crate::vim::Editing) {
-        if self.persist {
-            bravebot_session::store::save_editing(editing.as_str());
-        }
-        let changed = self.editing != editing;
-        self.editing = editing;
-        // The selection goes with the mode that showed it, the way Escape out of VISUAL mode
-        // abandons it. INSERT mode has no stretch to act on, and the ordinary box has nowhere to
-        // draw one: what is left otherwise is a reversed run of characters in a box whose keys
-        // cannot account for it. Let go of while the mode still says which kind it was.
-        self.let_go_of_the_selection();
-        self.mode = crate::vim::Mode::Insert;
-        // An instruction waiting for its next key goes with the mode it was typed in, for the same
-        // reason: INSERT mode would draw it beside a box that is typing its letters. A count is the
-        // front of such an instruction and goes with it.
-        self.half_typed = None;
-        self.count = None;
-        self.held_count = None;
-        // The ordinary box keeps no steps, so what it types is in none of them, and `u` back in vi
-        // would put back a line from before that typing and lose it.
-        if changed {
-            self.inserting = None;
-            self.undo.clear();
-        }
-    }
-
-    /// The line being typed.
-    pub fn input(&self) -> &str {
-        &self.input
-    }
-
-    /// Where the next keystroke will land, as a byte offset into the line.
-    pub fn caret(&self) -> usize {
-        self.caret
-    }
-
-    /// Replace the line, leaving the caret where the user would carry on typing.
-    ///
-    /// Everything that puts a whole line in the box goes through here, so no path can leave the
-    /// caret pointing into a line that is no longer there.
-    ///
-    /// The list of keys goes with it, for the same reason and in the same one place. It is not part
-    /// of the line and cannot be rewritten with it, but it stands over the box, and a list left up
-    /// over a line that arrived under it belongs to a press two prompts ago. Several callers took it
-    /// down themselves and the ones that did not were the ones a person reached mid-turn: recalling
-    /// an earlier prompt, and a stopped turn handing its prompt back.
-    ///
-    /// The cursor into what is offered goes with it too, for a reason the list of keys does not
-    /// have: a row is read as a choice somebody made. What is offered is a function of the line, so
-    /// a line that arrived whole is a new list and an index into the one before it stands for a row
-    /// nobody walked to. Recalling `look at @test` under a cursor an arrow had moved sent nothing
-    /// and left `look at @tests/` in the box, because a finished name loses to a chosen row.
-    ///
-    /// The steps to undo go too, being copies of a line that is no longer the one in the box. Kept,
-    /// `u` after a send would put back the prompt that had just gone.
-    fn set_input(&mut self, line: impl Into<String>) {
-        self.handoff = false;
-        self.put_in_the_box(line);
-        self.undo.clear();
-        self.inserting = None;
-    }
-
-    /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
-    ///
-    /// For a completion, which finishes the line being typed rather than bringing another.
-    fn put_in_the_box(&mut self, line: impl Into<String>) {
-        self.abandon_the_selection();
-        // A line that arrives whole has none of the rows the last selection was kept by.
-        self.last_selection = None;
-        self.input = line.into();
-        self.caret = self.input.len();
-        self.shortcuts = false;
-        self.completion = 0;
-    }
-
-    /// Whether the line has more than one line in it, which is what gives Up and Down something
-    /// to move between.
-    pub fn is_multiline(&self) -> bool {
-        self.input.contains('\n')
-    }
-
-    /// The line the caret is on, as byte offsets into the input.
-    fn caret_line(&self) -> (usize, usize) {
-        let start = self.input[..self.caret]
-            .rfind('\n')
-            .map_or(0, |newline| newline + 1);
-        let end = self.input[self.caret..]
-            .find('\n')
-            .map_or(self.input.len(), |newline| self.caret + newline);
-        (start, end)
-    }
-
-    /// Move the caret one character towards the start, counting a marker as one.
-    ///
-    /// A marker stands for one thing, and a caret resting in the middle of one would be a caret
-    /// between two halves of a picture. So it is stepped over whole, in either direction, and the
-    /// places the caret can rest are the same places the user can see.
-    pub fn move_left(&mut self) {
-        if let Some((start, _)) = self.marker_before_caret() {
-            self.caret = start;
-            return;
-        }
-        if let Some(c) = self.input[..self.caret].chars().next_back() {
-            self.caret -= c.len_utf8();
-        }
-    }
-
-    /// Move the caret one character towards the end, counting a marker as one.
-    pub fn move_right(&mut self) {
-        if let Some((_, end)) = self.marker_at_caret() {
-            self.caret = end;
-            return;
-        }
-        if let Some(c) = self.input[self.caret..].chars().next() {
-            self.caret += c.len_utf8();
-        }
-    }
-
-    /// Move the caret to the start of the word before it.
-    ///
-    /// Words are runs of anything but whitespace, which is what makes a path or a flag one word:
-    /// stopping inside `--file` or `src/main.rs` would be several presses to cross something the
-    /// user thinks of as one thing.
-    pub fn move_word_left(&mut self) {
-        while self.input[..self.caret]
-            .chars()
-            .next_back()
-            .is_some_and(char::is_whitespace)
-        {
-            self.move_left();
-        }
-        while self.input[..self.caret]
-            .chars()
-            .next_back()
-            .is_some_and(|c| !c.is_whitespace())
-        {
-            self.move_left();
-        }
-    }
-
-    /// Move the caret to the end of the word after it.
-    pub fn move_word_right(&mut self) {
-        while self.input[self.caret..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace)
-        {
-            self.move_right();
-        }
-        while self.input[self.caret..]
-            .chars()
-            .next()
-            .is_some_and(|c| !c.is_whitespace())
-        {
-            self.move_right();
-        }
-    }
-
-    /// Move the caret to the start of the line it is on.
-    pub fn move_to_line_start(&mut self) {
-        self.caret = self.caret_line().0;
-    }
-
-    /// Move the caret to the end of the line it is on.
-    pub fn move_to_line_end(&mut self) {
-        self.caret = self.caret_line().1;
-    }
-
-    /// Move the caret to the start of its line, or to the start of the line above when it is
-    /// already there.
-    ///
-    /// `false` when there was nowhere left to go, so the caller can leave the key to the transcript
-    /// at the top of the prompt rather than having it do nothing.
-    ///
-    /// Two presses to cross a line boundary, which is what makes the first press cheap: someone who
-    /// wanted the start of this line gets it without also losing their place in the paragraph.
-    pub fn page_up(&mut self) -> bool {
-        let (start, _) = self.caret_line();
-        if self.caret > start {
-            self.caret = start;
-            return true;
-        }
-        if start == 0 {
-            return false;
-        }
-        self.caret = self.input[..start - 1]
-            .rfind('\n')
-            .map_or(0, |newline| newline + 1);
-        true
-    }
-
-    /// Move the caret to the end of its line, or to the end of the line below when it is already
-    /// there.
-    pub fn page_down(&mut self) -> bool {
-        let (_, end) = self.caret_line();
-        if self.caret < end {
-            self.caret = end;
-            return true;
-        }
-        if end == self.input.len() {
-            return false;
-        }
-        let below = end + 1;
-        self.caret = self.input[below..]
-            .find('\n')
-            .map_or(self.input.len(), |newline| below + newline);
-        true
-    }
-
-    /// Move the caret to the line above, keeping its position along the line where it can.
-    ///
-    /// `false` when there is no line above, which is what leaves Up to the history it belongs to
-    /// on a line with nothing to move within.
-    pub fn move_up_a_line(&mut self) -> bool {
-        let (start, _) = self.caret_line();
-        if start == 0 {
-            return false;
-        }
-        let above = self.input[..start - 1]
-            .rfind('\n')
-            .map_or(0, |newline| newline + 1);
-        self.caret = along(&self.input[above..start - 1], self.column()) + above;
-        self.settle_onto_a_marker();
-        true
-    }
-
-    /// Move the caret to the line below, keeping its position along the line where it can.
-    pub fn move_down_a_line(&mut self) -> bool {
-        let (_, end) = self.caret_line();
-        if end == self.input.len() {
-            return false;
-        }
-        let below = end + 1;
-        let ends = self.input[below..]
-            .find('\n')
-            .map_or(self.input.len(), |newline| below + newline);
-        self.caret = along(&self.input[below..ends], self.column()) + below;
-        self.settle_onto_a_marker();
-        true
-    }
-
-    /// Take the caret onto a marker it has landed inside of.
-    ///
-    /// A place along a line is counted in characters, and the characters a marker happens to be
-    /// spelled with count like any others, so a move between lines lands where Left and Right
-    /// refuse to stop and the next thing typed splits the marker in half.
-    ///
-    /// Onto the start of it rather than past the end, because the caret is drawn over the whole
-    /// marker it is on: the column the move was keeping is still under the caret, and the marker
-    /// the person is now looking at is the one they were aiming at.
-    fn settle_onto_a_marker(&mut self) {
-        if let Some((start, _)) = self.marker_at_caret() {
-            self.caret = start;
-        }
-    }
-
-    /// How many characters along its line the caret is.
-    fn column(&self) -> usize {
-        let (start, _) = self.caret_line();
-        self.input[start..self.caret].chars().count()
-    }
-
-    /// Delete the character after the caret, or the whole marker the caret is on.
-    ///
-    /// Whole for the reason [`Session::backspace`] takes one whole: the caret rests on a marker
-    /// as it rests on a character, and half a marker stands for nothing.
-    pub fn delete_forward(&mut self) {
-        if self.caret == self.input.len() {
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        match self.marker_at_caret() {
-            Some((start, end)) => self.input.replace_range(start..end, ""),
-            None => {
-                self.input.remove(self.caret);
-            }
-        }
-        self.completion = 0;
-    }
-
-    /// Delete the word before the caret.
-    ///
-    /// Nothing where there is no character before it, as [`Session::delete_forward`] does with none
-    /// in front: a press that deletes nothing leaves the line, the history it is being browsed from,
-    /// and any selection standing over it exactly as they were.
-    pub fn delete_word_before(&mut self) {
-        if self.caret == 0 {
-            return;
-        }
-        if self.typing_over() {
-            let was = self.caret;
-            self.move_word_left();
-            let start = std::mem::replace(&mut self.caret, was);
-            self.take_back_as_far_as(start);
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        let was = self.caret;
-        self.move_word_left();
-        self.kill(self.caret, was, false);
-    }
-
-    /// Delete the word after the caret, with the blanks in front of it.
-    ///
-    /// Nothing at the end of the line, for the reason [`Session::delete_word_before`] does nothing
-    /// at the start of it.
-    pub fn delete_word_after(&mut self) {
-        let was = self.caret;
-        self.move_word_right();
-        let end = std::mem::replace(&mut self.caret, was);
-        if end == was || self.typing_over() {
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        self.kill(was, end, true);
-    }
-
-    /// Take `from..to` out of the line and keep it for [`Session::yank`], joined to what the last
-    /// kill took where this one goes the same way and the line has not changed since.
-    ///
-    /// The register vi's `p` reads, so there is one place for removed text, and it is put back as
-    /// characters whatever the register held before.
-    fn kill(&mut self, from: usize, to: usize, forward: bool) {
-        let taken = self.input[from..to].to_string();
-        // Where the caret was: the callers may have moved it to the far end of the stretch already.
-        let was = if forward { from } else { to };
-        let joined = self.last_kill.take().filter(|last| {
-            last.forward == forward
-                && last.line == self.input
-                && last.caret == was
-                && self
-                    .register
-                    .as_ref()
-                    .is_some_and(|r| !r.lines && r.text == last.text)
-        });
-        let text = match joined {
-            Some(last) if forward => last.text + &taken,
-            Some(last) => taken + &last.text,
-            None => taken,
-        };
-        self.input.replace_range(from..to, "");
-        self.caret = from;
-        self.completion = 0;
-        self.register = Some(Yanked {
-            text: text.clone(),
-            lines: false,
-        });
-        self.last_kill = Some(Kill {
-            forward,
-            text,
-            line: self.input.clone(),
-            caret: self.caret,
-        });
-    }
-
-    /// Put the text the last kill or vi's `d` or `y` took back at the caret.
-    ///
-    /// Nothing where nothing has been taken. A marker in it names its attachment again while that is
-    /// still staged, and is text like any other once it is not.
-    pub fn yank(&mut self) {
-        let Some(yanked) = self.register.clone() else {
-            return;
-        };
-        if yanked.text.is_empty() {
-            return;
-        }
-        self.begin_a_change();
-        self.abandon_the_selection();
-        self.input.insert_str(self.caret, &yanked.text);
-        self.caret += yanked.text.len();
-    }
-
-    /// Delete from the caret back to the start of its line.
-    ///
-    /// Nothing where the caret is already there, for the reason [`Session::delete_word_before`] does
-    /// nothing at the start of the line.
-    pub fn delete_to_line_start(&mut self) {
-        let (start, _) = self.caret_line();
-        if start == self.caret {
-            return;
-        }
-        if self.typing_over() {
-            self.take_back_as_far_as(start);
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        self.kill(start, self.caret, false);
-    }
-
-    /// Delete from the caret to the end of its line.
-    ///
-    /// Nothing where the caret is already there, for the reason [`Session::delete_word_before`] does
-    /// nothing at the start of the line.
-    pub fn delete_to_line_end(&mut self) {
-        let (_, end) = self.caret_line();
-        if end == self.caret {
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        self.kill(self.caret, end, true);
-    }
-
-    /// Hold the skills a slash word could become while the line holds a slash word, and let them go
-    /// once it holds none.
-    ///
-    /// Held for the whole line rather than for the word being typed, because the names are also
-    /// what says a finished word is a skill, drawn in its own colour with what it takes after it.
-    pub fn settle_skills(&mut self, resolve: impl FnOnce() -> Vec<crate::skills::Skill>) {
-        let typing =
-            !self.shell && self.status != Status::Working && crate::skills::mentioned(&self.input);
-        match (typing, self.skills.is_some()) {
-            (true, false) => self.skills = Some(resolve()),
-            (false, true) => self.skills = None,
-            _ => {}
-        }
-    }
-
-    /// Hold the past sessions an `@` could name while the line ends in a reference, and let them go
-    /// once it does not.
-    ///
-    /// `resolve` returns a row for each session of the directory, newest first, and is called once
-    /// per reference rather than once per key.
-    pub fn settle_sessions(&mut self, resolve: impl FnOnce() -> Vec<bravebot_mentions::Entry>) {
-        let typing = !self.shell
-            && self.status != Status::Working
-            && bravebot_mentions::typed_reference(&self.input).is_some();
-        match (typing, self.past_sessions.is_some()) {
-            (true, false) => self.past_sessions = Some(resolve()),
-            (false, true) => self.past_sessions = None,
-            _ => {}
-        }
-    }
-
-    /// The skills held while a slash word is being typed, and none otherwise.
-    ///
-    /// None while work runs, even if the line that started it was holding some: the loop that
-    /// calls [`Session::settle_skills`] is not reached again until the work ends, so what was held
-    /// when Enter was pressed would otherwise be drawn as recognised for the whole turn.
-    pub fn held_skills(&self) -> &[crate::skills::Skill] {
-        if self.status == Status::Working {
-            return &[];
-        }
-        self.skills.as_deref().unwrap_or_default()
-    }
-
-    /// What the half-typed line could still become: a command or a skill, or a file reference.
-    ///
-    /// One of the two at most. Both are the last word, and a word opens with a slash or with an
-    /// `@`, so nothing can be both.
-    pub fn offered(&self) -> Offered {
-        // First, before either guard below. The list of keys is documentation somebody asked for by
-        // pressing a key, not machinery for finishing the line, so neither a turn in flight nor a
-        // command line has anything to say about it. It takes the place of what is offered, since
-        // the two answer the same space and only one of them was asked for.
-        //
-        // Answered after the guards, the flag was set by the press and the list had nowhere to go,
-        // so `?` during a turn did nothing on screen and then put the list up unasked when the turn
-        // ended. A turn going somewhere the person did not want is when they most want a key.
-        if self.shortcuts {
-            return Offered::Shortcuts;
-        }
-        // A command typed while work runs is carried out or queued (CMD-8), so the words are
-        // offered to be found. Skills and files are not: the skills are not read while work runs.
-        if self.status == Status::Working {
-            let commands = if self.shell {
-                Vec::new()
-            } else {
-                crate::command_table::completions(&self.input)
-            };
-            return if commands.is_empty() {
-                Offered::Nothing
-            } else {
-                Offered::Slash {
-                    commands,
-                    skills: Vec::new(),
-                }
-            };
-        }
-        // A command line is neither a slash command nor a sentence with a file reference in it.
-        // `/usr/bin/env` and an address with an `@` in it are ordinary arguments here, and
-        // completing either would rewrite the line under someone typing a path.
-        if self.shell {
-            return Offered::Nothing;
-        }
-        let commands = crate::command_table::completions(&self.input);
-        let skills = match (crate::skills::typed(&self.input), &self.skills) {
-            (Some(typed), Some(held)) => crate::skills::matching(held, typed),
-            _ => Vec::new(),
-        };
-        if !commands.is_empty() || !skills.is_empty() {
-            return Offered::Slash { commands, skills };
-        }
-        match bravebot_mentions::typed_reference(&self.input) {
-            Some(typed) => {
-                let mut entries =
-                    bravebot_mentions::matching(&self.workspace, &typed, &self.reference_sources);
-                // After the files: a session is named by a title or an id rather than walked
-                // into, and a path being typed towards is what a person most often means.
-                entries.extend(self.sessions_matching(&typed));
-                if entries.is_empty() {
-                    Offered::Nothing
-                } else {
-                    Offered::Files(entries)
-                }
-            }
-            None => Offered::Nothing,
-        }
-    }
-
-    /// The past sessions a half-typed reference could still become: those whose reference starts
-    /// with it, and, for words that are no path, those whose title holds them.
-    fn sessions_matching(&self, typed: &str) -> Vec<bravebot_mentions::Entry> {
-        const MOST: usize = 10;
-        let Some(held) = &self.past_sessions else {
-            return Vec::new();
-        };
-        let wanted = typed.to_lowercase();
-        held.iter()
-            .filter(|row| {
-                typed.is_empty()
-                    || row.path.starts_with(typed)
-                    || (!typed.contains('/')
-                        && row
-                            .title
-                            .as_deref()
-                            .is_some_and(|title| title.to_lowercase().contains(&wanted)))
-            })
-            .take(MOST)
-            .cloned()
-            .collect()
-    }
-
-    /// The commands the half-typed line could still become.
-    pub fn completions(&self) -> Vec<crate::command_table::Command> {
-        match self.offered() {
-            Offered::Slash { commands, .. } => commands,
-            _ => Vec::new(),
-        }
-    }
-
-    /// Which offered command is under the cursor, or `None` when no command is offered.
-    ///
-    /// Clamped here rather than when the input changes, because the list is a function of the
-    /// input: typing a letter can shorten it, and a cursor past the end would otherwise choose
-    /// nothing at the moment Tab was pressed.
-    pub fn highlighted_completion(&self) -> Option<crate::command_table::Command> {
-        let Offered::Slash { commands, skills } = self.offered() else {
-            return None;
-        };
-        let at = self.completion.min(commands.len() + skills.len() - 1);
-        commands.get(at).copied()
-    }
-
-    /// Which offered skill is under the cursor, or `None` when the cursor is on a command or no
-    /// skill is offered.
-    pub fn highlighted_skill(&self) -> Option<crate::skills::Skill> {
-        let Offered::Slash { commands, skills } = self.offered() else {
-            return None;
-        };
-        let at = self.completion.min(commands.len() + skills.len() - 1);
-        skills.get(at.checked_sub(commands.len())?).cloned()
-    }
-
-    /// Which offered file is under the cursor, or `None` when no file is offered.
-    pub fn highlighted_entry(&self) -> Option<bravebot_mentions::Entry> {
-        let Offered::Files(entries) = self.offered() else {
-            return None;
-        };
-        entries
-            .get(self.completion.min(entries.len().saturating_sub(1)))
-            .cloned()
-    }
-
-    /// Whether something is being offered, so the keys that walk the list belong to it.
-    ///
-    /// The shortcuts are not: there is nothing to choose among them, so Tab and the arrows keep
-    /// meaning what they mean everywhere else while the list is up.
-    pub fn is_completing(&self) -> bool {
-        matches!(self.offered(), Offered::Slash { .. } | Offered::Files(_))
-    }
-
-    /// Whether taking what is offered would change the line.
-    ///
-    /// What Enter turns on. Tab may be pressed on a finished word harmlessly, but Enter has to
-    /// choose between completing and sending, and a prompt ending in `@README.md` is a finished
-    /// sentence even though the word is still what the list is about. Completing there would leave
-    /// a user pressing Enter twice to say something perfectly well formed.
-    pub fn completion_would_change_the_line(&self) -> bool {
-        match self.offered() {
-            Offered::Nothing | Offered::Shortcuts => false,
-            Offered::Slash { skills, .. } => {
-                let typed = crate::skills::typed(&self.input);
-                // A skill's name typed in full is a finished sentence, as a file's is, whatever
-                // the untouched cursor is on: `/review` names a skill of its own while `/review-pr`
-                // or a command sharing the letters is listed above it.
-                if self.completion == 0
-                    && typed.is_some_and(|typed| skills.iter().any(|skill| skill.name == typed))
-                {
-                    return false;
-                }
-                if let Some(command) = self.highlighted_completion() {
-                    return command.name != self.input.trim();
-                }
-                self.highlighted_skill()
-                    .zip(typed)
-                    .is_some_and(|(skill, typed)| skill.name != typed)
-            }
-            Offered::Files(entries) => {
-                let Some(typed) = bravebot_mentions::typed_reference(&self.input) else {
-                    return false;
-                };
-                bravebot_mentions::enter_completes(
-                    &self.workspace,
-                    &typed,
-                    &entries,
-                    self.completion,
-                    &self.reference_sources,
-                )
-            }
-        }
-    }
-
-    /// How many things are offered, which is what bounds the cursor that walks them.
-    pub fn offered_count(&self) -> usize {
-        match self.offered() {
-            Offered::Slash { commands, skills } => commands.len() + skills.len(),
-            Offered::Files(entries) => entries.len(),
-            Offered::Nothing | Offered::Shortcuts => 0,
-        }
-    }
-
-    /// Move down what is offered, stopping at the end.
-    pub fn next_completion(&mut self) {
-        let last = self.offered_count().saturating_sub(1);
-        self.completion = (self.completion + 1).min(last);
-    }
-
-    /// Move up what is offered, stopping at the top.
-    pub fn previous_completion(&mut self) {
-        self.completion = self.completion.saturating_sub(1);
-    }
-
-    /// Take what is under the cursor.
-    ///
-    /// A command replaces the whole line, since a command *is* the line. A skill or a file
-    /// replaces only the half-typed word, because the rest is the sentence it was written into.
-    ///
-    /// None adds a trailing space where there is more to type: a command expecting an argument
-    /// gets one, and so do a skill and a file, while a directory does not, so the path can be
-    /// typed onwards into it.
-    pub fn accept_completion(&mut self) {
-        match self.offered() {
-            Offered::Slash { .. } => {
-                if let Some(command) = self.highlighted_completion() {
-                    let line = if command.argument.is_empty() {
-                        command.name.to_string()
-                    } else {
-                        format!("{} ", command.name)
-                    };
-                    self.put_in_the_box(line);
-                } else if let Some(skill) = self.highlighted_skill() {
-                    let start = self.last_word_starts_at();
-                    if !self.input[start..].starts_with('/') {
-                        return;
-                    }
-                    let kept = self.input[..start].to_string();
-                    self.put_in_the_box(format!("{kept}/{} ", skill.name));
-                } else {
-                    return;
-                }
-            }
-            Offered::Files(_) => {
-                let Some(entry) = self.highlighted_entry() else {
-                    return;
-                };
-                // The `@` that opened the reference is the one at the head of the last word,
-                // not the last `@` in the line. A file may have one in its name, and cutting
-                // there rebuilds the line around a path nobody chose: `@logo@2` plus the
-                // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = bravebot_mentions::last_word_starts_at(&self.input);
-                if !self.input[start..].starts_with('@') {
-                    return;
-                }
-                let kept = self.input[..start].to_string();
-                let trailing = if entry.is_directory { "" } else { " " };
-                // Escaped, so a name holding a space is still one word when the line is read back.
-                let path = bravebot_mentions::escape(&entry.path);
-                self.put_in_the_box(format!("{kept}@{path}{trailing}"));
-            }
-            Offered::Nothing | Offered::Shortcuts => return,
-        }
-        // A choice from a list drawn over the line rather than typing, so `.` does not make it again:
-        // a file chosen this way would be named a second time.
-        if let Some(inserting) = &mut self.inserting {
-            inserting.change = None;
-        }
-        self.completion = 0;
-    }
-
-    /// What Tab would make of a level started after `/effort `, with the caret at the end of it.
-    pub fn argument_completion(&self) -> Option<String> {
-        if self.shell || self.caret() != self.input.len() {
-            return None;
-        }
-        crate::command_table::complete_argument(&self.input)
-    }
-
-    /// Finish the level started after `/effort ` as far as the levels that fit it agree.
-    pub fn accept_argument_completion(&mut self) {
-        if let Some(line) = self.argument_completion() {
-            self.put_in_the_box(line);
-        }
-    }
-
-    /// Where the line's last word begins, which is where a completion of it is written.
-    fn last_word_starts_at(&self) -> usize {
-        self.input
-            .char_indices()
-            .rev()
-            .find(|(_, c)| c.is_whitespace())
-            .map_or(0, |(at, c)| at + c.len_utf8())
     }
 
     /// The worker appended the submitted prompt at this recounted position.
@@ -4615,7 +2258,7 @@ impl Session {
         self.turn_history.retain(|turn| turn.number <= self.turns);
         self.turn_places.retain(|turn, _| *turn <= self.turns);
         self.unplaced_todos.retain(|turn, _| *turn <= self.turns);
-        self.todos.clear();
+        self.forget_todos();
         self.progress = Default::default();
     }
 
@@ -4768,11 +2411,14 @@ impl Session {
     /// newlines are kept rather than flattened, since a pasted paragraph was written with them
     /// and the box draws them.
     pub fn paste(&mut self, text: &str) {
+        // Every path that writes text in whole comes through here (a paste, a dropped file, an
+        // image marker), so this is the one place that opens the ordinary box's step for all of
+        // them: one step for whichever of the three it was, not one for each insertion folding or
+        // a marker makes underneath it.
+        self.begin_an_ordinary_edit();
         self.abandon_the_selection();
         self.history.leave();
-        // Every path that writes text in whole comes through here (a paste, a dropped file, an
-        // image marker), and the list stands over a line that arrived under it as it does over a
-        // recalled one.
+        // The list stands over a line that arrived under it as it does over a recalled one.
         self.shortcuts = false;
         let text = normalised(text);
         self.input.insert_str(self.caret, &text);
@@ -5129,61 +2775,6 @@ impl Session {
             .find(|&(start, end)| start <= at && at < end)
     }
 
-    /// Delete the character before the caret, or leave shell mode where there is nothing left to
-    /// delete.
-    ///
-    /// Deleting back past the `!` leaves the mode, which is where the marker appears to be: a user
-    /// who typed it by mistake gets rid of it the way they got rid of any other character. Without
-    /// this the mode could only be left by clearing the whole line.
-    ///
-    /// A marker goes whole. It is one thing on the screen and one thing to the user, so taking a
-    /// character off the end of it would leave text standing for a picture that is no longer
-    /// attached, and the user would have to keep pressing to find out.
-    ///
-    /// A marker the caret is covering goes first, before anything in front of it. The covering is
-    /// visible: the whole of that marker is drawn under the caret, and a press that took the
-    /// character beside it instead would take something the user could see was not selected.
-    ///
-    /// Nothing where there is nothing to delete, as [`Session::delete_word_before`] does at the
-    /// same caret: the press leaves the line, the history it is being browsed from, and any
-    /// selection standing over it exactly as they were.
-    pub fn backspace(&mut self) {
-        // Read before anything is touched, because whether this press deletes at all is the
-        // question the guard below asks: a marker at the first column is under a caret there, and
-        // that press takes it.
-        let marker = self
-            .marker_at_caret()
-            .or_else(|| self.marker_before_caret());
-        // Nothing before the caret is where the marker appears to be, so this is the press that
-        // deletes it. Whatever follows stays and becomes an ordinary prompt: the mode is what was
-        // deleted, not the words. Leaving shell mode is not an edit of the line, so the offsets a
-        // selection is held as stay valid across it and the stretch stays on the screen.
-        if marker.is_none() && self.caret == 0 {
-            // The second marker goes first, so `!!` backs out to `!` as it was typed.
-            if self.shell_private() {
-                self.shell_private = false;
-            } else {
-                self.shell = false;
-            }
-            return;
-        }
-        if self.typing_over() {
-            self.take_back_what_was_typed_over();
-            return;
-        }
-        self.abandon_the_selection();
-        self.history.leave();
-        if let Some((start, end)) = marker {
-            self.input.replace_range(start..end, "");
-            self.caret = start;
-            self.completion = 0;
-            return;
-        }
-        self.move_left();
-        self.input.remove(self.caret);
-        self.completion = 0;
-    }
-
     /// Settle a turn that was stopped: either un-sent whole, or recorded as having stopped.
     ///
     /// The text returns to the box so a user who changed their mind can adjust it rather than
@@ -5238,7 +2829,7 @@ impl Session {
             // line is what the person is looking at and keeps the box, so the prompt has nowhere
             // to be put back to, and popping it anyway would leave it in no transcript, no history
             // and no box, with nothing left to ask for it back with.
-            let todos = std::mem::take(&mut self.todos);
+            let todos = self.take_todos();
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
             return;
@@ -5260,7 +2851,7 @@ impl Session {
         self.pasted.append(&mut self.sent_pasted);
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
-        self.todos.clear();
+        self.forget_todos();
     }
 
     /// Put a rewound turn's prompt back in the box, for editing and sending again.
@@ -5363,135 +2954,6 @@ impl Session {
         }
         self.set_input(prompt);
         self.submit()
-    }
-
-    /// Discard whatever has been typed, keeping it as the draft Up brings back first.
-    ///
-    /// A prompt walked back to is not kept: it is in the history already, and keeping it would
-    /// displace a draft for a line that was never lost.
-    ///
-    /// Guarded like the other editing methods: input belongs to the idle state, and clearing it
-    /// mid-turn would mean the field the user returns to is not the one they left.
-    pub fn clear_input(&mut self) {
-        if self.status == Status::Idle {
-            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
-                self.history.keep_draft(self.input.clone());
-            }
-            self.history.leave();
-            self.set_input(String::new());
-            // The mode goes with the line. Escape means "never mind this", and leaving the marker
-            // behind would arm the next thing typed as a command. The list of keys goes with the
-            // line too, which is settled where the line is written.
-            self.shell = false;
-        }
-    }
-
-    /// Put the line away, or bring back the one that was put away.
-    ///
-    /// Which of the two it does is read off the line rather than chosen: a line to put away is put
-    /// away, and an empty box is where a line put away earlier is wanted. Returns whether anything
-    /// happened, so a press that had nothing to do either way can be told from one that acted.
-    ///
-    /// The words alone travel. The mode stays where the user left it, so a prompt put away as a
-    /// prompt comes back into an armed shell as the command they meant to write, and a caret is not
-    /// carried because it belongs to an edit that has finished. Bringing one back empties the slot:
-    /// the line is in the box now, and a second press would put a copy of it beside the first.
-    ///
-    /// Markers are not touched on the way out. What is staged stays staged, and the row beneath the
-    /// box goes on saying so because it is drawn from what the line names: a marker put away names
-    /// nothing until the words holding it come back, and then it names what it always did.
-    ///
-    /// Allowed while a turn runs, exactly as typing and recall are: this writes a line and sends
-    /// nothing, and sending is the whole of what a running turn refuses. A turn in flight is when a
-    /// person most wants a half-written thought out of the way, since it is when a better one has
-    /// just occurred to them.
-    pub fn stash(&mut self) -> bool {
-        self.history.leave();
-        // The list of keys is not part of the line and cannot be put away, but it is standing over
-        // a box that is about to change, and everything else that rewrites the box takes it down.
-        self.shortcuts = false;
-        self.completion = 0;
-
-        if self.input.is_empty() {
-            // Taken rather than read, so the slot empties as the line fills: what was put away is
-            // back in front of the user, and the only copy of it is the one they can see.
-            match self.stashed.take() {
-                Some(line) => {
-                    self.set_input(line);
-                    true
-                }
-                None => false,
-            }
-        } else {
-            // Overwriting rather than stacking. One slot is what the key promises, and a press that
-            // silently pushed a second line would leave the first reachable only by pressing again.
-            self.abandon_the_selection();
-            self.last_selection = None;
-            self.stashed = Some(std::mem::take(&mut self.input));
-            self.caret = 0;
-            self.undo.clear();
-            self.inserting = None;
-            true
-        }
-    }
-
-    /// The line put away, for saying that there is one.
-    pub fn stashed(&self) -> Option<&str> {
-        self.stashed.as_deref()
-    }
-
-    /// Take the line back from an external editor.
-    ///
-    /// Replaces rather than appends: the editor was opened on this line, so what comes back is
-    /// the same line after however much thought, not something to add to it.
-    ///
-    /// Guarded like the other editing methods. Nothing can reach it mid-turn, since the key is
-    /// ignored while one runs, but the field belongs to the idle state either way.
-    pub fn take_edited(&mut self, line: impl Into<String>) {
-        if self.status != Status::Idle {
-            return;
-        }
-        // A recalled prompt that has been through an editor is the working line now, exactly as
-        // it would be after a keystroke.
-        self.history.leave();
-        self.set_input(line);
-        self.completion = 0;
-    }
-
-    /// Show the previous prompt, stepping further back on each call.
-    ///
-    /// Allowed while a turn runs, exactly as typing into the box is. Recall writes a line and
-    /// sends nothing, and sending is the whole of what a running turn refuses. It used to refuse
-    /// here too, from the days when the box took nothing mid-turn at all; typing was opened up
-    /// and this was left behind, so a person could compose their next prompt during a turn but
-    /// not reach the one they sent last.
-    pub fn recall_older(&mut self) {
-        if let Some(prompt) = self.history.older(&self.input) {
-            self.set_input(prompt);
-        }
-    }
-
-    /// The scope chord on a sent prompt in this session's scope: walk every stored prompt, staying
-    /// on the one on screen.
-    pub fn widen_history(&mut self) {
-        if let Some(prompt) = self.history.widen() {
-            self.set_input(prompt);
-        }
-    }
-
-    /// The scope chord on a sent prompt in the wide scope, where this session has sent one: walk
-    /// this session's prompts only.
-    pub fn narrow_history(&mut self) {
-        if let Some(prompt) = self.history.narrow() {
-            self.set_input(prompt);
-        }
-    }
-
-    /// Step forward through recalled prompts, back to the line being typed.
-    pub fn recall_newer(&mut self) {
-        if let Some(prompt) = self.history.newer() {
-            self.set_input(prompt);
-        }
     }
 
     /// Whether the armed command line is the private form, whose output is never recorded.
@@ -6135,6 +3597,11 @@ impl Session {
         )
     }
 
+    /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
+    pub fn driver_prompt_is_pending(&self) -> bool {
+        self.driver_prompt_pending
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
     /// Taken once.
     pub fn take_driver_prompt(&mut self) -> bool {
@@ -6193,71 +3660,6 @@ impl Session {
     /// The definition every turn of this session addresses, where it was started under one.
     pub fn standing_definition(&self) -> Option<&Addressed> {
         self.standing.as_ref()
-    }
-
-    /// Start looking again because the turn that just ended asked to, repeating the person's line.
-    ///
-    /// Nothing is sent now. The turn that asked has just taken the look it is reporting, so the
-    /// first tick is the wait away rather than immediate, and the person reads one answer rather
-    /// than the same answer twice.
-    ///
-    /// Refused while a goal is set, because a goal is the one thing a session is working towards
-    /// and a watch nobody typed is not a reason to drop it. A person's own `/loop` may replace a
-    /// goal, since they are there to mean it.
-    pub fn watch_again(&mut self, prompt: &str, wakeup: crate::loops::Wakeup) {
-        if self.goal.is_some() {
-            self.note(t!(loop_not_armed_under_a_goal));
-            return;
-        }
-        // And refused while a standing watch is live, for the same reason: a session does one
-        // thing at a time that happens without anybody typing, and a turn that took somebody's
-        // watch off to start a loop would be ending the standing answer to replace it with the
-        // repeating one.
-        if !self.watches.is_empty() {
-            self.note(t!(loop_not_armed_under_a_watch));
-            return;
-        }
-        let after = crate::loops::spell(wakeup.after);
-        self.looping = Some(crate::loops::Running::armed(
-            prompt.to_string(),
-            wakeup,
-            Instant::now(),
-        ));
-        self.note(t!(loop_armed_by_the_turn, after = after));
-    }
-
-    /// Say what is repeating and when the next tick is due, or that nothing is.
-    ///
-    /// What the bare command answers. The line is part of it because a loop is announced once, at
-    /// the top of a session that has since scrolled, and somebody who has come back to a room with
-    /// a loop running in it is asking what they set going as much as when it next goes.
-    ///
-    /// Its first line only, the way `/status` carries it: a prompt is whatever somebody typed, and
-    /// the rest of a pasted one would arrive as a wall of transcript nobody asked for.
-    pub fn report_loop(&mut self) {
-        let Some(running) = self.looping.as_ref() else {
-            self.note(t!(loop_none));
-            return;
-        };
-        let prompt = crate::render::one_line(running.prompt());
-        let pace = running.pace();
-        let when = running.when(Instant::now());
-        self.note(t!(
-            loop_active,
-            prompt = &prompt,
-            pace = &pace,
-            when = &when
-        ));
-        self.note(t!(loop_ends_with));
-    }
-
-    /// Stop the loop, and say whether there was one.
-    pub fn stop_loop(&mut self) -> bool {
-        let stopped = self.looping.take().is_some();
-        if stopped {
-            self.note(t!(loop_stopped));
-        }
-        stopped
     }
 
     /// The condition this session is working towards, where one is set.
@@ -6485,332 +3887,6 @@ impl Session {
         }
     }
 
-    /// Every live watch, oldest first, for the report that lists them.
-    pub fn watches(&self) -> &[watch::Watch] {
-        self.watches.live()
-    }
-
-    /// Whether this turn may arm a standing watch, and why not where it may not.
-    ///
-    /// Read once, as the turn is started, and handed to it: the tool answers out of this rather
-    /// than guessing, so what the planner is told matches what the session will actually do.
-    pub fn arming(&self) -> watch::Arming {
-        use watch::Arming;
-        if self.looping.is_some() {
-            return Arming::UnderALoop;
-        }
-        if self.goal.is_some() {
-            return Arming::UnderAGoal;
-        }
-        match watch::MAX_LIVE.saturating_sub(self.watches.live().len()) {
-            0 => Arming::Full,
-            free => Arming::Allowed { free },
-        }
-    }
-
-    /// Arm a standing watch on a path the turn that has just ended asked to be told about.
-    ///
-    /// The turn already went through the gate a read of the path goes through, so nothing here
-    /// asks a second time. What is decided here is what only the session can decide: whether it
-    /// is already doing something that happens without anybody typing, whether it has room, and
-    /// what the first look at the path saw.
-    ///
-    /// `under` is the working directory the first look was taken in, and it travels with the
-    /// watch so that every later look is taken against the same directory. Taken from the caller
-    /// that took the look rather than from this session's own record of where it is working: one
-    /// fact read twice is two answers waiting to differ, and the one that matters is the
-    /// workspace's.
-    pub fn arm_watch(
-        &mut self,
-        path: &str,
-        under: impl Into<std::path::PathBuf>,
-        first: watch::Looked,
-    ) {
-        if self.looping.is_some() {
-            self.note(t!(watch_not_armed_under_a_loop));
-            return;
-        }
-        if self.goal.is_some() {
-            self.note(t!(watch_not_armed_under_a_goal));
-            return;
-        }
-        match self.watches.arm(
-            path.to_string(),
-            under.into(),
-            self.turns,
-            first,
-            Instant::now(),
-        ) {
-            Ok(number) => self.note(t!(watch_armed, number = number, path = path)),
-            Err(watch::Refused::Full) => {
-                self.note(t!(watch_not_armed_full, count = watch::MAX_LIVE))
-            }
-            Err(watch::Refused::NothingToLookAt) => {
-                self.note(t!(watch_not_armed_unreadable, path = path))
-            }
-        }
-    }
-
-    /// Look at every watched path, and send the fire that is due where one is.
-    ///
-    /// The sibling of [`Session::loop_tick`], and called from the same place for the same reason:
-    /// nobody is going to press anything to make a fire happen, so a pass taken only after input
-    /// arrives would sit there until somebody typed something unrelated.
-    ///
-    /// A fire waits for an idle session and for the queue to empty, exactly as a tick does. A
-    /// filesystem event is not a licence to interrupt: the person is still the one using this
-    /// session.
-    ///
-    /// `look` is the caller's, because what this session may still reach is the workspace's
-    /// question rather than this one's, and it is handed the working directory each watch was
-    /// armed under along with the path: a relative path is the file it was armed on only while
-    /// that is still the working directory. `now` is the caller's for the same reason the registry
-    /// takes one: the interval between two looks is five seconds, and a test that had to wait
-    /// them out would be a test nobody runs.
-    pub fn watch_fired(
-        &mut self,
-        now: Instant,
-        look: impl FnMut(&str, &std::path::Path) -> watch::Looked,
-    ) -> Option<String> {
-        for (number, why) in self.watches.look(now, look) {
-            match why {
-                watch::Reaped::Aged => self.note(t!(watch_aged_out, number = number)),
-                watch::Reaped::OutOfReach => self.note(t!(watch_out_of_reach, number = number)),
-            }
-        }
-        if self.status != Status::Idle || !self.queued.is_empty() {
-            return None;
-        }
-        let watch = self.watches.due(now)?;
-        let change = watch.change()?;
-        let (number, path) = (watch.number(), watch.path().to_string());
-        self.watches.dispatched(number);
-        match change {
-            watch::Change::Written => self.note(t!(watch_fired, number = number, path = &path)),
-            watch::Change::Removed => {
-                self.note(t!(watch_fired_removed, number = number, path = &path))
-            }
-            watch::Change::Appeared => {
-                self.note(t!(watch_fired_appeared, number = number, path = &path))
-            }
-        }
-        let prompt = watch::fired(number, &path, change);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
-    }
-
-    /// Whether the turn running now is a watch's fire.
-    ///
-    /// What makes a fire's prompt the driver's rather than the person's: an `@` in the sentence
-    /// this program wrote names nothing, and a wait the turn asks for leaves no loop repeating
-    /// it.
-    pub fn watch_is_firing(&self) -> bool {
-        self.watches.firing().is_some()
-    }
-
-    /// Record that the turn a fire started has ended, which is where the gap to the next fire is
-    /// measured from.
-    pub fn watch_turn_ended(&mut self) {
-        self.watches.turn_ended(Instant::now());
-    }
-
-    /// End the watch whose fire is the turn being stopped, and say whether there was one.
-    ///
-    /// Without this the key never reaches a watch that fires often: every press lands on a turn,
-    /// and the next fire arrives seconds later. A turn that was not a fire ends no watch, because
-    /// that press is a person steering their own work.
-    pub fn stop_firing_watch(&mut self) -> bool {
-        let Some(number) = self.watches.stop_firing() else {
-            return false;
-        };
-        self.note(t!(watch_stopped_with_its_turn, number = number));
-        true
-    }
-
-    /// End one watch because somebody named it, and say whether there was one.
-    pub fn stop_watch(&mut self, number: usize) -> bool {
-        let stopped = self.watches.stop(number);
-        if stopped {
-            self.note(t!(watch_stopped, number = number));
-        } else {
-            self.note(t!(watch_no_such, number = number));
-        }
-        stopped
-    }
-
-    /// End every live watch because somebody pressed the key that stops things, and say whether
-    /// there were any.
-    pub fn stop_watches(&mut self) -> bool {
-        let stopped = self.watches.stop_all();
-        if stopped > 0 {
-            self.note(t!(watches_stopped, count = stopped));
-        }
-        stopped > 0
-    }
-
-    /// End every watch the working directory moving has closed the answer for, and say so.
-    ///
-    /// A watch is armed on the path as the turn wrote it, which for the tool that arms one is a
-    /// relative path, and a relative path means the working directory. So a move leaves it naming
-    /// a file in the new directory that nobody armed a watch on, and the answer that allowed it
-    /// was about the directory that has just closed. Said one watch at a time, as the closed
-    /// directories are, because each one is something the session was going to tell the person
-    /// about and now will not.
-    pub fn end_watches_left_behind(&mut self, root: &std::path::Path) {
-        for number in self.watches.stop_moved(root) {
-            self.note(t!(watch_out_of_reach, number = number));
-        }
-    }
-
-    /// End every live watch because the session is about to do one of the other two things that
-    /// happen without anybody typing.
-    ///
-    /// Silent where there are none, so a person who never armed one is not told about a feature
-    /// every time they type `/loop`.
-    fn end_watches_for_another_kind(&mut self) {
-        let stopped = self.watches.stop_all();
-        if stopped > 0 {
-            self.note(t!(watches_replaced, count = stopped));
-        }
-    }
-
-    /// Say what is being watched, or that nothing is.
-    ///
-    /// What the bare command answers, and the same list `/status` draws. A watch that ended in
-    /// silence is indistinguishable from one that is live and has seen nothing, so the way to
-    /// tell them apart has to be askable.
-    pub fn report_watches(&mut self) {
-        let now = Instant::now();
-        let lines: Vec<String> = self
-            .watches
-            .live()
-            .iter()
-            .map(|watch| {
-                t!(
-                    watch_listed,
-                    number = watch.number(),
-                    path = watch.path(),
-                    turn = watch.armed_by(),
-                    left = crate::loops::spell(watch.left(now))
-                )
-            })
-            .collect();
-        if lines.is_empty() {
-            self.note(t!(watch_none));
-            return;
-        }
-        for line in lines {
-            self.note(line);
-        }
-    }
-
-    /// Say which background jobs the turn in flight has, or the last one had, and where each is,
-    /// or that there are none (RUN-27).
-    ///
-    /// Named as `/jobs stop` takes them, with the words `/status` uses for where each one is. Every
-    /// word is the driver's or this end's clock, and none is anything a job printed.
-    pub fn report_jobs(&mut self) {
-        let lines: Vec<String> = self
-            .jobs()
-            .map(|(row, job)| {
-                let command = crate::status::cut(&row.command, crate::status::JOB_LINE);
-                let standing = job.standing(&row.outcome);
-                match job.delegate {
-                    Some(delegate) => t!(
-                        jobs_listed_of_delegate,
-                        name = job.name.clone(),
-                        number = delegate.to_string(),
-                        command = command,
-                        standing = standing
-                    )
-                    .to_string(),
-                    None => t!(
-                        jobs_listed,
-                        name = job.name.clone(),
-                        command = command,
-                        standing = standing
-                    )
-                    .to_string(),
-                }
-            })
-            .collect();
-        if lines.is_empty() {
-            self.note(t!(jobs_none));
-            return;
-        }
-        for line in lines {
-            self.note(line);
-        }
-    }
-
-    /// Ask for one background job to be stopped, and say whether it is (RUN-27).
-    ///
-    /// Sets the job's token and nothing else: the turn reads it at its next step and does the
-    /// stopping, so the row says the job is being stopped until the driver says it was. A job of
-    /// another delegate by the same name is a different job, which is why the delegate is part of
-    /// the match.
-    pub fn stop_job(&mut self, name: &str, delegate: Option<&str>) -> bool {
-        let label = match delegate {
-            Some(number) => t!(
-                job_of_delegate,
-                name = name.to_string(),
-                number = number.to_string()
-            )
-            .to_string(),
-            None => name.to_string(),
-        };
-        let turn_is_running = self.a_turn_is_running();
-        let job = self.outputs[self.jobs_from..]
-            .iter_mut()
-            .rev()
-            .filter_map(|row| row.job.as_mut())
-            .find(|job| {
-                job.name == name && job.delegate.map(|id| id.to_string()).as_deref() == delegate
-            });
-        let (said, asked) = match job {
-            None => (t!(jobs_no_such, name = label).to_string(), false),
-            Some(job) => match job.state {
-                JobState::Running => {
-                    job.stop.request();
-                    job.state = JobState::Stopping;
-                    (t!(job_stop_asked, name = label).to_string(), true)
-                }
-                // The token is already set. With a turn in flight it reads it; with none, nothing
-                // will, so the stop is carried out below rather than answered with a refusal.
-                JobState::Stopping if !turn_is_running && self.kept_jobs.is_some() => {
-                    (t!(job_stop_asked, name = label).to_string(), true)
-                }
-                JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
-                JobState::Ended | JobState::EndedWithTurn => {
-                    (t!(jobs_already_ended, name = label).to_string(), false)
-                }
-            },
-        };
-        self.note(said);
-        // Between turns nothing reads the token, so the stop is carried out here and the row says
-        // so. The planner is told at the next turn's first round, as it is of any finish (RUN-27).
-        if asked && !turn_is_running {
-            self.carry_out_stops();
-        }
-        asked
-    }
-
-    /// Kill every job whose stop token is set and say each was the person's stop (RUN-27).
-    ///
-    /// For the moments no turn is left to read a token: between turns, and at a turn's end, where a
-    /// reply with no tool calls ends the turn without another step and a kept session's jobs
-    /// outlive it.
-    fn carry_out_stops(&mut self) {
-        let Some(kept) = &self.kept_jobs else {
-            return;
-        };
-        for (name, ran_for) in kept.stop_requested() {
-            self.job(bravebot_agent::report::JobEvent::Ended {
-                name,
-                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
-            });
-        }
-    }
-
     /// Say where each listed memory is kept and what the map says of it (MEMORY-12), one note
     /// each, or that no definition keeps one. Paths and standings only: nothing a file holds is
     /// read to say them.
@@ -6913,67 +3989,6 @@ impl Session {
                 path = path.display().to_string()
             ));
         }
-    }
-
-    /// Send the next tick, if one is due and the session is free to take it.
-    ///
-    /// Called on the way round the interface's own loop, so a tick waits for the turn in flight
-    /// and for everything the person queued behind it. A schedule is a request to be asked
-    /// again, not a licence to interrupt.
-    pub fn loop_tick(&mut self) -> Option<String> {
-        self.loop_tick_at(Instant::now())
-    }
-
-    fn loop_tick_at(&mut self, now: Instant) -> Option<String> {
-        let running = self.looping.as_ref()?;
-        if running.aged_out(now) {
-            self.looping = None;
-            self.note(t!(loop_aged_out));
-            return None;
-        }
-        if self.status != Status::Idle || !self.queued.is_empty() || !running.due(now) {
-            return None;
-        }
-        self.dispatch_tick()
-    }
-
-    /// Arm the next tick from the turn that has just ended.
-    ///
-    /// `wakeup` is what a self-paced turn asked for. Nothing happens where the finished turn was
-    /// not a tick: a person typing their own prompt in the middle of a loop is not a tick of it,
-    /// and must not reset the clock.
-    pub fn loop_turn_ended(&mut self, wakeup: Option<crate::loops::Wakeup>) {
-        let Some(running) = self.looping.as_mut() else {
-            return;
-        };
-        if !running.ended(wakeup, Instant::now()) {
-            self.looping = None;
-            if wakeup.is_some_and(|wakeup| wakeup.stop) {
-                self.note(t!(loop_finished));
-            } else {
-                self.note(t!(loop_unpaced));
-            }
-        }
-    }
-
-    /// Send a tick, announcing which one it is.
-    ///
-    /// The line is the loop's own, taken from what the person typed, and it carries no files: one
-    /// staged in the box belonged to the line it was staged in. A picture is the exception the loop
-    /// itself makes, and only once: [`crate::loops::Running::dispatching`] hands it to the first tick
-    /// and has nothing to hand any tick after that. A `@path` in the prompt is read back out of it
-    /// every tick, the way it is for any other prompt.
-    fn dispatch_tick(&mut self) -> Option<String> {
-        let running = self.looping.as_mut()?;
-        let (prompt, pasted, attached) = running.dispatching();
-        let count = running.ticks();
-        let quiet = running.quiet();
-        if quiet > 0 {
-            self.note(t!(loop_tick_quiet, count = count, quiet = quiet));
-        } else {
-            self.note(t!(loop_tick, count = count));
-        }
-        Some(self.begin_turn(prompt, (attached, pasted), Vec::new()))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -7093,6 +4108,7 @@ impl Session {
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
         self.turn_in_flight = true;
+        self.turn_model = self.model.clone();
         self.stopping = false;
         self.back_to_the_tail();
         self.turns += 1;
@@ -7104,7 +4120,7 @@ impl Session {
         self.copied = None;
         // The previous turn's plan is not this turn's. Leaving it would show finished work as
         // though the new turn had it outstanding.
-        self.todos.clear();
+        self.forget_todos();
         self.written = 0;
         self.progress = Default::default();
         self.clear_in_progress();
@@ -7180,7 +4196,7 @@ impl Session {
     ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
-        let todos = std::mem::take(&mut self.todos);
+        let todos = self.take_todos();
         let reply = reply.into();
         self.transcript.push(
             Entry::assistant(crate::reasoning::spoken(&reply), trail)
@@ -7196,38 +4212,6 @@ impl Session {
         // Added to rather than set, since a turn that compacted part way through has already put
         // that cost here under the same number.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
-    }
-
-    /// Record how the turn just finished divided its time up.
-    ///
-    /// Beside [`Session::complete`] rather than inside it, in the same way the context measurement
-    /// is: both are facts the worker brings back about the turn, and neither is knowable from the
-    /// transcript. The wall figure is not taken from here, because this side has the better one.
-    ///
-    /// Added to rather than set, for the reason the token breakdown is: a turn that compacted part
-    /// way through has already charged that wait to the same number.
-    pub fn spent_time(&mut self, timing: bravebot_agent::timing::Timing) {
-        let entry = self.timing.entry(self.turns).or_default();
-        entry.inference_ms += timing.inference_ms;
-        entry.tools_ms += timing.tools_ms;
-        entry.stalled_ms += timing.stalled_ms;
-    }
-
-    /// Cumulative usage from the worker, retained until this turn ends.
-    pub fn progressed(&mut self, spent: bravebot_agent::Spent) {
-        self.progress = spent;
-    }
-
-    fn charge_progress(&mut self) -> u64 {
-        let spent = std::mem::take(&mut self.progress);
-        self.tokens += spent.tokens;
-        *self.spend.entry(self.turns).or_default() += spent.tokens;
-        self.spent_time(spent.timing);
-        self.served_from_cache(
-            spent.cached,
-            spent.tokens.saturating_sub(spent.output_tokens),
-        );
-        spent.tokens
     }
 
     fn forget_cancelled_prompt(&mut self) {
@@ -7246,7 +4230,7 @@ impl Session {
         self.finish_turn(tokens, bravebot_agent::Ending::Stopped { attempts });
         if self.is_quitting() {
             self.forget_cancelled_prompt();
-            let todos = std::mem::take(&mut self.todos);
+            let todos = self.take_todos();
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
         } else {
@@ -7260,157 +4244,13 @@ impl Session {
     /// five tasks done is more useful shown that way than blank.
     pub fn fail(&mut self, message: impl Into<String>, ending: bravebot_agent::Ending) {
         let tokens = self.charge_progress();
-        let todos = std::mem::take(&mut self.todos);
+        let todos = self.take_todos();
         self.transcript
             .push(Entry::failure(message).with_todos(todos));
         self.status = Status::Idle;
         // Reported as a failure rather than left to the success line, which would put a tick
         // beside a turn that did not finish.
         self.finish_turn(tokens, ending);
-    }
-
-    /// Record how full the context is, against the budget it is compacted at.
-    pub fn measured(&mut self, used: u64, budget: u64, guessed: bool) {
-        if used == 0 {
-            self.occupancy = Occupancy::Unmeasured;
-        } else {
-            self.occupancy = Occupancy::Measured {
-                used,
-                budget,
-                guessed,
-            };
-        }
-    }
-
-    /// Record that compaction shortened the conversation underneath the session, and by how much.
-    ///
-    /// `won_back` is in tokens, against the budget the conversation is compacted at. Zero stands
-    /// for no figure rather than for a compaction that gave nothing back: a summary that saved
-    /// nothing is worth no more to a reader than a server that reported nothing.
-    pub fn compacted(&mut self, won_back: u64, budget: u64) {
-        self.occupancy = Occupancy::Compacted { won_back, budget };
-    }
-
-    /// The occupancy state of the session context.
-    pub fn occupancy(&self) -> Occupancy {
-        self.occupancy
-    }
-
-    /// Update the context budget and guessed status against which occupancy is calculated,
-    /// preserving the measured token count.
-    pub fn update_budget(&mut self, budget: u64, guessed: bool) {
-        if let Occupancy::Measured { used, .. } = self.occupancy {
-            self.occupancy = Occupancy::Measured {
-                used,
-                budget,
-                guessed,
-            };
-        }
-    }
-
-    /// Record what the last turn asked for, what the server answered with, and which tier it ran on.
-    ///
-    /// `comparable` says whether the two names are drawn from one roster, and so whether a difference
-    /// between them means anything. The caller knows which backend answered; this cannot tell.
-    pub fn served(
-        &mut self,
-        requested: impl Into<String>,
-        served: impl Into<String>,
-        premium: bool,
-        comparable: bool,
-    ) {
-        self.served = Some((requested.into(), served.into()));
-        self.premium = Some(premium);
-        self.served_names_are_comparable = comparable;
-    }
-
-    /// Whether the last turn spent a subscription credential, or `None` before one has run.
-    pub fn premium(&self) -> Option<bool> {
-        self.premium
-    }
-
-    /// Record how much of the turn just finished the backend did not have to read.
-    pub fn served_from_cache(
-        &mut self,
-        cached: bravebot_aichat::protocol::Cached,
-        prompt_tokens: u64,
-    ) {
-        self.cached = Some(cached);
-        self.cached_prompt_tokens = Some(prompt_tokens);
-    }
-
-    /// Put back what an earlier turn read, or forget the figure with `None`.
-    ///
-    /// The figure is the last turn's, so anything that changes which turn that is has to say so:
-    /// undoing a turn puts back the one before it.
-    pub fn restore_cache(
-        &mut self,
-        cached: Option<bravebot_aichat::protocol::Cached>,
-        prompt_tokens: Option<u64>,
-    ) {
-        self.cached = cached;
-        self.cached_prompt_tokens = prompt_tokens;
-    }
-
-    /// What the last turn read out of the cache and wrote into it, or `None` before one has run.
-    pub fn cached(&self) -> Option<bravebot_aichat::protocol::Cached> {
-        self.cached
-    }
-
-    /// Prompt tokens behind the last turn's cache figures.
-    pub fn cached_prompt_tokens(&self) -> Option<u64> {
-        self.cached_prompt_tokens
-    }
-
-    /// The model the server last reported using, or `None` before any turn has run.
-    ///
-    /// In a resumed session that has not yet had a turn, the model its record names.
-    pub fn served_model(&self) -> Option<&str> {
-        match &self.served {
-            Some((_, served)) => Some(served.as_str()),
-            None => self.recorded_model.as_deref(),
-        }
-    }
-
-    /// The model the last turn asked for, where the server answered with something else.
-    ///
-    /// A turn always asks for a name: the one picked with `/model` where there is one, and the
-    /// configured default otherwise, which is why the recorded half is not optional. Making it so
-    /// left every session running its configuration's model unable to report a substitution at all.
-    ///
-    /// `None` where they agree, so a caller has nothing to report on the ordinary path. Compared
-    /// exactly, which works because both names come from the same roster: what was asked for is a
-    /// name off a list the endpoint gave, and what answered is a name from the same list.
-    ///
-    /// Also `None` where the two were never comparable. A request may name an opaque handle instead
-    /// of a model, and a handle standing for a different name is the indirection working rather than a
-    /// substitution, so comparing them would put a warning on every turn. Whether they are comparable
-    /// is recorded by whoever knew which backend answered, rather than guessed at from the spelling.
-    ///
-    /// `None` for the automatic entry as well. That name asks the server to choose a model per
-    /// request, so a concrete one coming back is the entry doing its job rather than something
-    /// served in place of what was asked for.
-    pub fn substituted_model(&self) -> Option<&str> {
-        let (requested, served) = self.served.as_ref()?;
-        if !self.served_names_are_comparable || requested == bravebot_config::DEFAULT_MODEL {
-            return None;
-        }
-        (requested != served).then_some(requested.as_str())
-    }
-
-    /// How full the context is, as a percentage, or `None` where nothing has been measured.
-    ///
-    /// Capped at a hundred rather than allowed past it. The budget is a guess at a window nobody
-    /// reports, so a request larger than it is a session that will be compacted next round, not a
-    /// context that is a hundred and forty per cent full.
-    pub fn fullness(&self) -> Option<u64> {
-        self.occupancy.percent()
-    }
-
-    /// How much room the last compaction won back, as a percentage of the budget, or `None`
-    /// where there is no figure to state.
-    pub fn won_back(&self) -> Option<u64> {
-        self.occupancy.won_back()
     }
 
     /// Enter the working state for something that is not a turn.
@@ -7537,153 +4377,6 @@ impl Session {
         self.transcript.extend(said);
     }
 
-    /// Tokens the turn in flight has spent so far, which are charged to the session when it ends.
-    pub fn running_tokens(&self) -> u64 {
-        if self.a_turn_is_running() {
-            self.progress.tokens
-        } else {
-            0
-        }
-    }
-
-    /// Tokens the session has spent, the figure `/cost` opens with: what earlier turns were charged
-    /// and what the turn in flight has spent so far.
-    pub fn spent_tokens(&self) -> u64 {
-        self.tokens + self.running_tokens()
-    }
-
-    /// Put what each turn has spent in the transcript.
-    ///
-    /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
-    /// turns and one turn that ran away apart not at all, and those want different fixes. The
-    /// share is beside each figure because that is the comparison a reader would otherwise do in
-    /// their head, one row at a time.
-    ///
-    /// Tokens rather than money, because nothing here knows what a token is charged at. No model
-    /// listing carries a price, and a prompt the service answered out of its own cache is billed
-    /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
-    /// money would be composed here rather than measured.
-    pub fn report_spend(&mut self) {
-        // A turn still running is charged when it ends, so what it has spent so far is added here:
-        // asked mid-turn (CMD-8), the count of turns already includes it.
-        let mut spend = self.spend.clone();
-        let running = self.running_tokens();
-        if running > 0 {
-            *spend.entry(self.turns).or_default() += running;
-        }
-        let total = self.spent_tokens();
-        let mut lines = vec![crate::status::Line::new(
-            t!(status_this_session),
-            if total == 0 && spend.is_empty() {
-                t!(cost_nothing_spent).to_string()
-            } else {
-                format!(
-                    "{} · {}",
-                    t!(count_turns, count = self.turns),
-                    crate::status::tokens(total)
-                )
-            },
-        )];
-
-        for (turn, spent) in &spend {
-            let label = match turn {
-                0 => t!(cost_before_the_first_turn).to_string(),
-                number => t!(cost_turn, number = number),
-            };
-            let line = crate::status::Line::new(&label, crate::status::tokens(*spent));
-            lines.push(match total {
-                0 => line,
-                total => line.with_note(t!(cost_share, percent = spent * 100 / total)),
-            });
-        }
-
-        // What the total holds that the rows do not account for. A record written before turns
-        // were charged separately keeps the whole of it here, and a session resumed from one keeps
-        // the part it spent before the resume, so an empty breakdown is the far end of this case
-        // rather than a case of its own. Left out, the rows would read as an account of the total
-        // that quietly does not add up to it.
-        let unattributed = total.saturating_sub(spend.values().sum());
-        if unattributed > 0 {
-            lines.push(
-                crate::status::Line::new("", crate::status::tokens(unattributed))
-                    .with_note(t!(cost_unattributed)),
-            );
-        }
-
-        self.report(crate::status::Report { lines });
-    }
-
-    /// Put what the last request was made of in the transcript, by category (`/context`).
-    ///
-    /// Read from the view of the request the driver built and the count the server reported for
-    /// it, and never from the transcript. Each section is a length in bytes of something the
-    /// driver composed or carried, scaled to the measured total, so no row is chosen by reading
-    /// what a result says and the section names are fixed words.
-    pub fn report_context(&mut self) {
-        let used = match self.occupancy {
-            Occupancy::Measured { used, budget, .. } if budget > 0 => used,
-            Occupancy::Compacted { .. } => {
-                self.note(t!(context_compacted));
-                return;
-            }
-            _ => {
-                self.note(t!(context_not_measured));
-                return;
-            }
-        };
-        let Some(view) = self.last_request.as_ref() else {
-            self.note(t!(context_no_request));
-            return;
-        };
-
-        let mut bytes = [0u64; 8];
-        bytes[CONTEXT_TOOLS] = view.tools_bytes;
-        for span in &view.spans {
-            use bravebot_agent::request_view::Provenance;
-            let section = match (span.role, &span.provenance) {
-                ("system", Provenance::TrustedFile(_)) => CONTEXT_INSTRUCTIONS,
-                ("system", Provenance::Trusted("skill list")) => CONTEXT_SKILLS,
-                ("system", _) => CONTEXT_SYSTEM,
-                ("user", Provenance::Typed | Provenance::TypedWithFiles) => CONTEXT_TYPED,
-                ("assistant", _) => CONTEXT_PLANNER,
-                ("tool", _) => CONTEXT_RESULTS,
-                _ => CONTEXT_OTHER,
-            };
-            bytes[section] += span.text.len() as u64;
-        }
-        let shares = apportion(used, &bytes);
-        let names = [
-            t!(context_section_system),
-            t!(context_section_instructions),
-            t!(context_section_skills),
-            t!(context_section_tools),
-            t!(context_section_typed),
-            t!(context_section_planner),
-            t!(context_section_results),
-            t!(context_section_other),
-        ];
-
-        let mut lines = vec![crate::status::Line::new(
-            t!(context_total),
-            format!(
-                "{} · {}",
-                crate::status::tokens(used),
-                crate::render::context_reading(self)
-            ),
-        )];
-        for (name, share) in names.iter().zip(shares) {
-            if share == 0 {
-                continue;
-            }
-            lines.push(
-                crate::status::Line::new(name, crate::status::tokens(share))
-                    .with_note(t!(cost_share, percent = share * 100 / used)),
-            );
-        }
-        self.report(crate::status::Report { lines });
-        self.note(t!(context_approximate));
-    }
-
     /// Put a status report in the transcript, one note per line.
     ///
     /// In the transcript rather than over the screen, so it scrolls back with everything else and
@@ -7762,199 +4455,6 @@ impl Session {
         self.show_trail = !self.show_trail;
     }
 
-    /// Open the info panel where it was left open last time.
-    ///
-    /// Read only for a session that persists, as the editing style is, so a test is not handed the
-    /// developer's own choice. Closed where nothing was recorded.
-    pub fn adopt_panel(&mut self) {
-        self.panel = self
-            .persist
-            .then(bravebot_session::store::load_panel)
-            .flatten()
-            .unwrap_or(false);
-    }
-
-    /// Take the answer an earlier session gave to `/caffeinate`'s explanation.
-    ///
-    /// Read only for a session that persists, as the panel is, so a test is not handed the
-    /// developer's own answer.
-    pub fn adopt_caffeinate(&mut self) {
-        if self.persist && bravebot_session::store::load_caffeinate_confirmed() {
-            self.caffeinate.confirm();
-        }
-    }
-
-    /// Carry out `/caffeinate`, and take or release the hold it changes at once.
-    pub fn toggle_caffeinate(&mut self) {
-        use crate::caffeinate::Toggled;
-        match self.caffeinate.toggle() {
-            Toggled::Explained => self.note(t!(caffeinate_explained)),
-            Toggled::Confirmed => {
-                if self.persist {
-                    bravebot_session::store::save_caffeinate_confirmed();
-                }
-                self.note(t!(caffeinate_on));
-            }
-            Toggled::On => self.note(t!(caffeinate_on)),
-            Toggled::Off => self.note(t!(caffeinate_off)),
-        }
-        self.keep_awake();
-    }
-
-    /// Whether the session has work that sleeping would stop: a turn in flight, or a loop with a
-    /// tick to come, which a `schedule_next` wait is.
-    ///
-    /// A background job ends with its turn, so the turn covers it. A watch is not counted: it waits
-    /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
-    /// as long as the session is open.
-    pub fn work_pending(&self) -> bool {
-        self.status == Status::Working || self.looping.is_some()
-    }
-
-    /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
-    /// otherwise. A hold that could not be kept is said, and `/caffeinate` is then off.
-    pub fn keep_awake(&mut self) {
-        use crate::caffeinate::Unavailable;
-        let busy = self.work_pending();
-        match self.caffeinate.follow(busy) {
-            Ok(()) => {}
-            Err(Unavailable::Missing(error)) => self.note(t!(
-                caffeinate_unavailable,
-                program = crate::caffeinate::PROGRAM,
-                reason = error.to_string()
-            )),
-            Err(Unavailable::Ended) => {
-                self.note(t!(caffeinate_ended, program = crate::caffeinate::PROGRAM))
-            }
-        }
-    }
-
-    /// Whether the person has the info panel open, whether or not the last frame had room for it.
-    pub fn panel_open(&self) -> bool {
-        self.panel
-    }
-
-    /// Open or close the info panel.
-    ///
-    /// On a terminal too narrow to draw it, a press to open changes nothing and a note says why.
-    /// Opening a panel the screen cannot show would leave the press looking as if it did nothing,
-    /// and the next widening would bring back a panel nobody remembered opening. A press to close
-    /// always closes, so a panel left open before the terminal was narrowed can be put away.
-    pub fn toggle_panel(&mut self) {
-        if !self.panel && !crate::panel::fits(self.laid.columns) {
-            self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
-            return;
-        }
-        self.panel = !self.panel;
-        if self.persist {
-            bravebot_session::store::save_panel(self.panel);
-        }
-    }
-
-    /// Record what the info panel names the session by. True where an open panel now has
-    /// something to show that the last frame did not, so the caller draws another.
-    pub fn identify(&mut self, name: &str, directory: String, branch: Option<&str>) -> bool {
-        let identity = Identity {
-            name: name.to_string(),
-            directory,
-            branch: branch.map(str::to_string),
-            ..self.identity.clone()
-        };
-        self.reidentify(identity)
-    }
-
-    /// Record the links the info panel shows, answering as [`Session::identify`] does.
-    pub fn link(&mut self, issue: Option<&str>, pull_request: Option<&str>) -> bool {
-        let identity = Identity {
-            issue: issue.map(str::to_string),
-            pull_request: pull_request.map(str::to_string),
-            ..self.identity.clone()
-        };
-        self.reidentify(identity)
-    }
-
-    /// Record the id the info panel shows, answering as [`Session::identify`] does.
-    pub fn name_id(&mut self, id: Option<&str>) -> bool {
-        let identity = Identity {
-            id: id.map(str::to_string),
-            ..self.identity.clone()
-        };
-        self.reidentify(identity)
-    }
-
-    fn reidentify(&mut self, identity: Identity) -> bool {
-        let changed = self.identity != identity;
-        self.identity = identity;
-        changed && self.panel
-    }
-
-    /// Turn follow-up suggestions on or off for the session, from the `suggestions` setting
-    /// (INPUT-43). Read once at startup, so what is paid for does not change under a turn.
-    pub fn adopt_suggestions(&mut self, on: bool) {
-        self.suggesting = on;
-        if !on {
-            self.suggestion = None;
-        }
-    }
-
-    /// Whether the session asks for a suggestion when a turn ends.
-    pub fn suggests(&self) -> bool {
-        self.suggesting
-    }
-
-    /// The suggestion on offer in the empty box, if there is one.
-    pub fn suggestion(&self) -> Option<&str> {
-        self.suggestion.as_deref()
-    }
-
-    /// Put `text` in the empty box as a suggestion, where the box is still empty and idle.
-    ///
-    /// A suggestion that arrives after the person has begun typing, or sent something, is not
-    /// offered: it was a guess about a state that has passed.
-    pub fn offer_suggestion(&mut self, text: String) {
-        if self.suggesting
-            && self.status == Status::Idle
-            && self.input.is_empty()
-            && !self.shell
-            && !self.searching_history()
-        {
-            self.suggestion = Some(text);
-        }
-    }
-
-    /// Take the suggestion away, for a key that is not the one that accepts it.
-    pub fn dismiss_suggestion(&mut self) {
-        self.suggestion = None;
-    }
-
-    /// Drop a suggestion the box has stopped being empty for, or the session stopped being idle for.
-    pub fn settle_suggestion(&mut self) {
-        if self.suggestion.is_some() && (!self.input.is_empty() || self.status != Status::Idle) {
-            self.suggestion = None;
-        }
-    }
-
-    /// Move the suggestion into the box as text to edit. Nothing sends it, and one that begins
-    /// with `/` is words in the box like any other until Enter is pressed on it (CMD-1).
-    ///
-    /// Whether there was one to take.
-    pub fn accept_suggestion(&mut self) -> bool {
-        match self.suggestion.take() {
-            Some(text) if self.input.is_empty() => {
-                self.set_input(text);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
-    /// figures and still in the session's total, as an aside is.
-    pub fn charge_suggestion(&mut self, tokens: u64) {
-        self.tokens += tokens;
-        *self.spend.entry(self.turns).or_insert(0) += tokens;
-    }
-
     /// Keep the session's background jobs between turns (RUN-15).
     pub fn keep_jobs_between_turns(&mut self) {
         self.kept_jobs = Some(bravebot_agent::tools::SessionJobs::new());
@@ -7985,11 +4485,15 @@ impl Session {
     /// The task list the panel shows: the one the turn in flight reported, or else the last one a
     /// turn finished with.
     ///
-    /// Read off the transcript rather than kept, so a resumed session shows the plan it was left
+    /// Past the turn in flight it is read off the transcript rather than kept, so a resumed session shows the plan it was left
     /// with and `/clear`, which empties the transcript, empties this too.
     pub fn plan(&self) -> &[bravebot_core::todo::Row] {
         if !self.todos.is_empty() {
             return &self.todos;
+        }
+        // An empty report in a turn that had already reported rows leaves those rows the plan.
+        if !self.reported.is_empty() {
+            return &self.reported;
         }
         self.transcript
             .iter()
@@ -8012,502 +4516,6 @@ impl Session {
 
     pub fn is_quitting(&self) -> bool {
         self.status == Status::Quitting
-    }
-
-    /// Open the search over the prompt history.
-    ///
-    /// Seeded with whatever is in the box, when that is one line the person typed: somebody who
-    /// typed half a prompt and then reached for the history has already said what they are looking
-    /// for, and a pasted paragraph is not that. The line stays in the box, so leaving puts nothing
-    /// back.
-    ///
-    /// A prompt walked back to is not a line they typed, and seeding with it leaves a search whose
-    /// only match is the prompt already in the box: the walk again, one keystroke wider.
-    ///
-    /// Nothing to search is nothing to open. A panel over the transcript saying a person has never
-    /// sent a prompt is a mode they then have to get out of.
-    pub fn open_history_search(&mut self) -> bool {
-        if self.history.is_empty() {
-            return false;
-        }
-        let typed = !self.input.contains('\n') && !self.history.on_a_sent_prompt();
-        let seed = match typed {
-            true => self.input.trim().to_string(),
-            false => String::new(),
-        };
-        self.history_search = Some(crate::history_search::Search::looking_for(seed));
-        true
-    }
-
-    /// Open it with the scope already narrowed to the prompts sent from this workspace.
-    ///
-    /// The way in from a prompt walked back to. Somebody who has walked back at all has said the
-    /// prompt they want is an old one, and the workspace they are in is the narrower question; the
-    /// wide list is one more press of the same key from there.
-    pub fn open_history_search_here(&mut self) {
-        self.open_history_search();
-        if let Some(search) = &mut self.history_search {
-            search.narrow();
-        }
-    }
-
-    /// Close it, leaving the box as it was.
-    pub fn close_history_search(&mut self) {
-        self.history_search = None;
-    }
-
-    pub fn searching_history(&self) -> bool {
-        self.history_search.is_some()
-    }
-
-    /// What is being searched for, for the renderer and for a test.
-    pub fn history_search(&self) -> Option<&crate::history_search::Search> {
-        self.history_search.as_ref()
-    }
-
-    /// The prompts the open search answers with, oldest first.
-    ///
-    /// Empty when nothing is open, so a caller need not ask twice.
-    pub fn history_matches(&self) -> Vec<&bravebot_session::store::Entry> {
-        match &self.history_search {
-            Some(search) => search.matching(self.history.entries(), self.project().as_deref()),
-            None => Vec::new(),
-        }
-    }
-
-    /// The prompt under the cursor in the open search.
-    pub fn history_match(&self) -> Option<&bravebot_session::store::Entry> {
-        let matching = self.history_matches();
-        let at = self.history_search.as_ref()?.at(matching.len())?;
-        matching.get(at).copied()
-    }
-
-    /// Narrow the search by one character.
-    pub fn type_into_history_search(&mut self, c: char) {
-        if let Some(search) = &mut self.history_search {
-            search.typed(c);
-        }
-    }
-
-    /// Widen it by one, reporting whether there was anything to remove.
-    pub fn backspace_history_search(&mut self) -> bool {
-        match &mut self.history_search {
-            Some(search) => search.backspace(),
-            None => false,
-        }
-    }
-
-    /// Move the cursor to an older match.
-    pub fn history_search_older(&mut self) {
-        let matches = self.history_matches().len();
-        if let Some(search) = &mut self.history_search {
-            search.older(matches);
-        }
-    }
-
-    /// Move the cursor to a newer match.
-    pub fn history_search_newer(&mut self) {
-        if let Some(search) = &mut self.history_search {
-            search.newer();
-        }
-    }
-
-    /// Swap between every prompt and the ones sent from this workspace.
-    pub fn scope_history_search(&mut self) {
-        if let Some(search) = &mut self.history_search {
-            search.scope();
-        }
-    }
-
-    /// Take the prompt under the cursor into the box, and close the search.
-    ///
-    /// Into the box rather than sent, because a stored line is content: the file it came from can
-    /// be edited, and on a shared machine by somebody else. The keystroke that sends it is the
-    /// person's, exactly as it would have been had they typed the line.
-    ///
-    /// It replaces what was in the box, since what was in the box is what the search was seeded
-    /// with: keeping both would leave the person editing their own half-typed line with the
-    /// recalled one appended to it.
-    pub fn take_history_match(&mut self) -> bool {
-        let Some(prompt) = self.history_match().map(|entry| entry.prompt.clone()) else {
-            return false;
-        };
-        self.close_history_search();
-        self.set_input(prompt);
-        self.history.leave();
-        true
-    }
-
-    /// Open the scroller on the view already on the screen.
-    ///
-    /// Nothing about the view is touched. The scroller reads the offset the wheel writes, so the
-    /// row under somebody's eye when they press the key is the row under it afterwards. The
-    /// screen around it does change shape, since the box and the indicator come off it, and the
-    /// rows they were using are given to the transcript. What that means for the view is settled
-    /// where every other change of shape is settled, in [`Session::note_layout`]: the row at the
-    /// top stays where it is, and the rows gained appear beneath it, which is where the box that
-    /// gave them up was.
-    pub fn open_scroller(&mut self) {
-        self.scroller = Some(Scroller::default());
-    }
-
-    /// Close it, leaving the view where it was left.
-    pub fn close_scroller(&mut self) {
-        if let Some(Scroller {
-            before: Some((scroll, laid)),
-            ..
-        }) = self.scroller.take()
-        {
-            self.scroll = scroll;
-            self.laid = laid;
-        }
-    }
-
-    /// Keep the request a turn is about to send, replacing the one before it.
-    pub fn set_last_request(&mut self, view: bravebot_agent::request_view::RequestView) {
-        self.last_request = Some(view);
-    }
-
-    /// Open the scroller on the last request a turn built (`/request`).
-    ///
-    /// Read from the value the turn handed over, so it shows what was sent and nothing is rebuilt
-    /// from the transcript. Before any turn has sent one there is nothing to open, which is said.
-    pub fn show_request(&mut self) {
-        let Some(view) = self.last_request.clone() else {
-            self.note(t!(request_none_yet));
-            return;
-        };
-        let before = (self.scroll, self.laid.clone());
-        // The first row, counted from the end of the layout the last frame drew; the next frame
-        // measures the request and holds this row.
-        self.scroll = self.furthest();
-        self.scroller = Some(Scroller {
-            request: Some(Box::new(view)),
-            before: Some(before),
-            ..Scroller::default()
-        });
-    }
-
-    /// Whether the scroller is showing a request rather than the transcript.
-    pub fn viewing_request(&self) -> bool {
-        self.scroller
-            .as_ref()
-            .is_some_and(|scroller| scroller.request.is_some())
-    }
-
-    pub fn scrolling(&self) -> bool {
-        self.scroller.is_some()
-    }
-
-    /// What the scroller is doing, for the renderer and for a test.
-    pub fn scroller(&self) -> Option<&Scroller> {
-        self.scroller.as_ref()
-    }
-
-    /// Take what the last frame laid out, and hold the view on the row it was showing.
-    ///
-    /// The offset is counted from the end, and while the scroller is open both ends move: rows
-    /// arrive underneath as a turn writes them, and the screen changes shape when the box comes
-    /// off it. Either would otherwise slide the view down the transcript. Holding the view is the
-    /// whole of what the scroller is for, so the offset is worked out afresh from the row that was
-    /// at the top, rather than carried across a layout it was measured against.
-    ///
-    /// A view sitting at the tail with nothing open stays at the tail, since somebody watching a
-    /// reply arrive is watching the end of it. An open scroller holds even that, because opening it
-    /// is somebody saying they have stopped watching. A view scrolled away from the tail is held
-    /// wherever it was left, the wheel at rest as much as the scroller, so the lines a reply adds
-    /// under it do not drag it back down.
-    pub fn note_layout(&mut self, laid: Laid) {
-        if self.scrolling() || self.scroll > 0 {
-            let top = self.top_row();
-            let furthest = laid.rows.saturating_sub(laid.height);
-            self.scroll = furthest.saturating_sub(top);
-        }
-        self.laid = laid;
-    }
-
-    /// How far back the view can go before it is looking at the first row.
-    fn furthest(&self) -> u16 {
-        self.laid.rows.saturating_sub(self.laid.height)
-    }
-
-    /// The row at the top of the view.
-    pub fn top_row(&self) -> u16 {
-        self.furthest()
-            .saturating_sub(self.scroll.min(self.furthest()))
-    }
-
-    /// Move the view back by `rows`, stopping at the first row rather than counting past it.
-    pub fn scroller_back(&mut self, rows: u16) {
-        self.scroll = self.scroll.saturating_add(rows).min(self.furthest());
-    }
-
-    /// Move the view on by `rows`, stopping at the last.
-    pub fn scroller_on(&mut self, rows: u16) {
-        self.scroll = self.scroll.saturating_sub(rows);
-    }
-
-    pub fn scroller_to_first_row(&mut self) {
-        self.scroll = self.furthest();
-    }
-
-    pub fn scroller_to_last_row(&mut self) {
-        self.scroll = 0;
-    }
-
-    /// Half a screen, and never nothing: a view one row tall still has to move when asked.
-    pub fn half_screen(&self) -> u16 {
-        (self.laid.height / 2).max(1)
-    }
-
-    pub fn whole_screen(&self) -> u16 {
-        self.laid.height.max(1)
-    }
-
-    /// Put `row` at the top of the view.
-    fn scroller_to_row(&mut self, row: u16) {
-        self.scroll = self.furthest().saturating_sub(row);
-    }
-
-    /// Move `times` prompts back, or to the first row past the earliest.
-    ///
-    /// Where these land is settled by what the person typed and by nothing read out of the
-    /// workspace: a prompt is the one thing in a transcript they wrote themselves. Every step that
-    /// moves reaches another prompt or the end, so stopping at the first that moves nothing bounds a
-    /// count by how many prompts there are.
-    pub fn to_previous_prompt(&mut self, times: u32) {
-        for _ in 0..times {
-            let top = self.top_row();
-            match self.laid.prompts.iter().rev().find(|row| **row < top) {
-                Some(row) => {
-                    let row = *row;
-                    self.scroller_to_row(row)
-                }
-                None => self.scroller_to_first_row(),
-            }
-            if self.top_row() == top {
-                break;
-            }
-        }
-    }
-
-    /// Move `times` prompts on, or to the last row past the latest.
-    pub fn to_next_prompt(&mut self, times: u32) {
-        for _ in 0..times {
-            let top = self.top_row();
-            match self.laid.prompts.iter().find(|row| **row > top) {
-                Some(row) => {
-                    let row = *row;
-                    self.scroller_to_row(row)
-                }
-                None => self.scroller_to_last_row(),
-            }
-            if self.top_row() == top {
-                break;
-            }
-        }
-    }
-
-    /// Expand the call nearest the top of the view, among those on the screen, past its glimpse or its twelve lines of change,
-    /// or collapse it again, and keep the view on it.
-    ///
-    /// `relaid` lays the transcript out afresh, since the rows move once a call changes size.
-    /// Only the session's own transcript expands: a delegate's block draws its calls as one row.
-    pub fn toggle_expanded(&mut self, relaid: impl Fn(&Session) -> Laid) {
-        if self.watched_delegate().is_some() {
-            return;
-        }
-        let top = self.top_row();
-        let bottom = top.saturating_add(self.laid.height);
-        let Some(&(start, _, index)) = self
-            .laid
-            .expandable
-            .iter()
-            .find(|(start, end, _)| *end >= top && *start < bottom)
-        else {
-            return;
-        };
-        if let Some(entry) = self.transcript.get_mut(index) {
-            entry.expanded = !entry.expanded;
-        }
-        self.laid = relaid(self);
-        self.scroller_to_row(start.min(top));
-    }
-
-    /// Start typing a search, with nothing in it yet.
-    pub fn begin_search(&mut self) {
-        if let Some(scroller) = &mut self.scroller {
-            scroller.typing = Some(String::new());
-        }
-    }
-
-    /// Whether a search is being typed, which is what makes a letter a letter again.
-    pub fn typing_a_search(&self) -> bool {
-        self.scroller
-            .as_ref()
-            .is_some_and(|scroller| scroller.typing.is_some())
-    }
-
-    pub fn type_into_search(&mut self, c: char) {
-        if let Some(typing) = self.scroller.as_mut().and_then(|s| s.typing.as_mut()) {
-            typing.push(c);
-        }
-    }
-
-    /// Take the last character back, and say whether there was one.
-    ///
-    /// An empty needle backspaced into is the search being abandoned, which is what the key means
-    /// when there is nothing left of what it deletes.
-    pub fn backspace_search(&mut self) -> bool {
-        match self.scroller.as_mut().and_then(|s| s.typing.as_mut()) {
-            Some(typing) => typing.pop().is_some(),
-            None => false,
-        }
-    }
-
-    /// Clear a finished search, and say whether there was one to clear.
-    ///
-    /// The highlights go and the view stays. Somebody who has found what they were looking for
-    /// wants the marks off the screen, not to be put back at the box.
-    pub fn clear_search(&mut self) -> bool {
-        match &mut self.scroller {
-            Some(scroller) if !scroller.needle.is_empty() => {
-                scroller.needle.clear();
-                scroller.at = 0;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Abandon a search being typed, leaving the view where it was.
-    pub fn abandon_search(&mut self) {
-        if let Some(scroller) = &mut self.scroller {
-            scroller.typing = None;
-        }
-    }
-
-    /// Run what has been typed, and say what is now being looked for.
-    ///
-    /// The rows it matches are not known here. They come from a layout at the width the transcript
-    /// is drawn in, which is the renderer's to do, so the caller runs this and then lands the view
-    /// on what the layout found.
-    pub fn run_search(&mut self) {
-        if let Some(scroller) = &mut self.scroller
-            && let Some(typed) = scroller.typing.take()
-        {
-            scroller.needle = typed;
-            scroller.at = 0;
-        }
-    }
-
-    /// What a finished search is looking for, which is what the renderer highlights.
-    pub fn needle(&self) -> &str {
-        self.scroller
-            .as_ref()
-            .map_or("", |scroller| scroller.needle.as_str())
-    }
-
-    /// Land on the first match at or after the top of the view, wrapping to the first of all.
-    ///
-    /// At or after, rather than after, because a search run while a match is already on the top
-    /// row has found that one and should not step over it.
-    pub fn land_on_a_match(&mut self, rows: &[u16]) {
-        let top = self.top_row();
-        let landing = rows
-            .iter()
-            .position(|row| *row >= top)
-            .or(if rows.is_empty() { None } else { Some(0) });
-        self.land_at(rows, landing);
-    }
-
-    /// Walk to the next match or the previous one, wrapping at either end.
-    ///
-    /// `rows` holds the row each match was drawn on, one entry per match, so two matches on one
-    /// row are two presses: the view stays where it is for the second and the footer says which
-    /// of the two it is on. That is what makes the count reachable, since a step that moved the
-    /// view would have nowhere to go.
-    ///
-    /// Counting from the match the view last landed on where it is still there, and from the view
-    /// otherwise: somebody who has scrolled away means the next match from what they are looking
-    /// at rather than from where the key last took them.
-    pub fn to_a_match(&mut self, rows: &[u16], forwards: bool) {
-        let top = self.top_row();
-        let landing = match self.on_a_match(rows) {
-            Some(at) if forwards => Some((at + 1) % rows.len()),
-            Some(at) => Some(at.checked_sub(1).unwrap_or(rows.len() - 1)),
-            None if forwards => rows
-                .iter()
-                .position(|row| *row > top)
-                .or(if rows.is_empty() { None } else { Some(0) }),
-            None => rows
-                .iter()
-                .rposition(|row| *row < top)
-                .or(rows.len().checked_sub(1)),
-        };
-        self.land_at(rows, landing);
-    }
-
-    /// Which match the view is on, where it is still on the one it last landed on.
-    ///
-    /// Landing on a row nearer the end than a screen leaves the view a screen short of it, so
-    /// what the view is on is the row landing there would have reached rather than the row
-    /// itself.
-    fn on_a_match(&self, rows: &[u16]) -> Option<usize> {
-        let at = self.scroller.as_ref()?.at;
-        let row = *rows.get(at)?;
-        (row.min(self.furthest()) == self.top_row()).then_some(at)
-    }
-
-    fn land_at(&mut self, rows: &[u16], landing: Option<usize>) {
-        let Some(index) = landing else {
-            return;
-        };
-        let row = rows[index];
-        self.scroller_to_row(row);
-        if let Some(scroller) = &mut self.scroller {
-            scroller.at = index;
-        }
-    }
-
-    pub fn toggle_scroller_help(&mut self) {
-        if let Some(scroller) = &mut self.scroller {
-            scroller.help = !scroller.help;
-        }
-    }
-
-    /// Take a key as the next digit of a count, or `false` where it is not one.
-    pub fn count_in_the_scroller(&mut self, c: char) -> bool {
-        let Some(scroller) = self.scroller.as_mut() else {
-            return false;
-        };
-        match crate::vim::counted(scroller.count, c) {
-            Some(count) => {
-                scroller.count = Some(count);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Take the count waiting for this key, so that the key after it starts with none.
-    pub fn take_the_scroller_count(&mut self) -> Option<u32> {
-        self.scroller
-            .as_mut()
-            .and_then(|scroller| scroller.count.take())
-    }
-
-    /// How many rows of transcript sit below the view, which is what has yet to be read.
-    pub fn rows_below(&self) -> u16 {
-        self.scroll.min(self.furthest())
-    }
-
-    pub fn scroll_up(&mut self, lines: u16) {
-        self.scroll = self.scroll.saturating_add(lines);
-    }
-
-    pub fn scroll_down(&mut self, lines: u16) {
-        self.scroll = self.scroll.saturating_sub(lines);
     }
 }
 
@@ -11290,6 +7298,28 @@ mod tests {
         assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
     }
 
+    /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
+    /// new conversation puts is asked, not answered from the one that was thrown away.
+    #[test]
+    fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
+        let mut session = Session::new(".");
+        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+
+        session.clear();
+
+        assert_eq!(
+            session.recall_answer("pick one: Cache: Which?"),
+            None,
+            "a chosen answer outlived /clear"
+        );
+        assert_eq!(
+            session.recall_answer("skip: Branch: Which?"),
+            None,
+            "a declined question outlived /clear"
+        );
+    }
+
     /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
     /// question the person deliberately passed over back in front of them.
     #[test]
@@ -12677,6 +8707,27 @@ mod tests {
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
     }
 
+    /// The first tick goes out as `start_loop`'s return value; every later one goes out of
+    /// `loop_tick`. A later tick of a loop over `/exit` is still the seven characters sent to the
+    /// planner: the session does not quit, a turn begins, and nothing is left waiting as a command.
+    #[test]
+    fn a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing() {
+        let mut s = session();
+        s.start_loop(crate::loops::request("5m /exit"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        let later = Instant::now() + Duration::from_secs(5 * 60 + 1);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("/exit"));
+
+        assert!(!s.is_quitting(), "a tick ran the command it spelled");
+        assert_eq!(s.status, Status::Working, "the tick did not begin a turn");
+        assert!(
+            s.take_queued_command().is_none(),
+            "a tick was left waiting as a command"
+        );
+    }
+
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
     /// has a first token to compare a later one against.
     fn saw(token: &str) -> watch::Looked {
@@ -12749,6 +8800,55 @@ mod tests {
             .watch_fired(later + Duration::from_secs(6), |_, _| saw("created"))
             .expect("an appearance did not fire");
         assert_eq!(prompt, watch::fired(1, "new.md", watch::Change::Appeared));
+    }
+
+    /// A person with several watches armed reads an announcement against the number they end a
+    /// watch by and the file they asked about, so it names the watch that moved, which here is
+    /// neither the first armed nor the last.
+    #[test]
+    fn a_fire_announces_the_watch_it_came_from() {
+        let later = Instant::now() + Duration::from_secs(6);
+        let announced =
+            |s: &Session, line: &str| s.transcript.iter().any(|entry| entry.text == line);
+        let armed = |second: watch::Looked| {
+            let mut s = session();
+            s.arm_watch("first.md", ARMED_IN, saw("one"));
+            s.arm_watch("second.md", ARMED_IN, second);
+            s.arm_watch("third.md", ARMED_IN, saw("one"));
+            s
+        };
+        let looking = |second: watch::Looked| {
+            move |path: &str, _: &std::path::Path| {
+                if path == "second.md" {
+                    second.clone()
+                } else {
+                    saw("one")
+                }
+            }
+        };
+
+        let mut s = armed(saw("one"));
+        s.watch_fired(later, looking(saw("two")))
+            .expect("a change did not fire");
+        assert!(
+            announced(&s, &t!(watch_fired, number = 2, path = "second.md")),
+            "a write was not announced as the second watch's"
+        );
+
+        let mut s = armed(watch::Looked::Absent);
+        assert!(
+            s.watch_fired(later, looking(watch::Looked::Absent))
+                .is_none()
+        );
+        s.watch_fired(later + Duration::from_secs(6), looking(saw("created")))
+            .expect("an appearance did not fire");
+        assert!(
+            announced(
+                &s,
+                &t!(watch_fired_appeared, number = 2, path = "second.md")
+            ),
+            "an appearance was not announced as the second watch's"
+        );
     }
 
     /// A filesystem event is not a licence to interrupt: the person is still the one using this
@@ -12994,6 +9094,20 @@ mod tests {
                 .any(|entry| entry.text == t!(watch_stopped_with_its_turn, number = 1)),
             "the watch ended in silence"
         );
+    }
+
+    /// LAYER-6: the terminal can say which watch the turn it starts is the fire of, which is what
+    /// the turn's prompt is recorded with, and says none for a turn a person typed.
+    #[test]
+    fn the_watch_a_fire_belongs_to_is_known_for_the_tag() {
+        let mut s = session();
+        s.arm_watch("notes.md", ARMED_IN, saw("first"));
+        assert_eq!(s.firing_watch(), None);
+        s.watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+            saw("second")
+        })
+        .expect("a fire");
+        assert_eq!(s.firing_watch(), Some((1, "notes.md".to_string())));
     }
 
     /// A turn that was not a fire ends no watch: that press is a person steering their own work.
@@ -14474,7 +10588,7 @@ mod tests {
             bravebot_session::store::Entry::sent("mine before", None),
             bravebot_session::store::Entry::sent("somebody else's", None),
         ]);
-        assert!(!s.history.can_narrow());
+        assert_eq!(s.history.next_scope(), None);
         s.replay(
             &conversation,
             "a title",
@@ -14488,8 +10602,8 @@ mod tests {
         );
         s.recall_older();
         assert_eq!(s.input, "somebody else's");
-        assert!(s.history.can_narrow());
-        s.narrow_history();
+        assert_eq!(s.history.next_scope(), Some(crate::history::Scope::Session));
+        s.cycle_history_scope();
         assert_eq!(s.input, "mine before");
         s.recall_older();
         assert_eq!(
@@ -14744,6 +10858,78 @@ mod tests {
             s.todos_by_turn().is_empty(),
             "a finished turn's list would still be written to the new session"
         );
+    }
+
+    /// A turn that reported rows and then an empty list keeps those rows as its plan whichever way
+    /// it ends. `take_todos` is what hands them to the closing entry, so a failure or a stop that
+    /// left `reported` behind would show nothing, or the turn before's plan, with `todos` empty
+    /// either way.
+    #[test]
+    fn a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan() {
+        let rows = || {
+            bravebot_core::todo::rows(&bravebot_core::todo::List::new(vec![
+                bravebot_core::todo::Item::new("the plan", bravebot_core::todo::Status::Active),
+            ]))
+        };
+        // The closing entry is what keeps the plan: `plan()` also reads the live copy, which
+        // stays whether or not the entry got it.
+        let texts = |s: &Session| -> Vec<String> {
+            let entry = s.transcript.last().expect("the turn closed with an entry");
+            entry.todos.iter().map(|row| row.content.clone()).collect()
+        };
+
+        let mut failed = session();
+        failed.type_char('a');
+        failed.submit();
+        failed.set_todos(rows());
+        failed.set_todos(Vec::new());
+        failed.fail("went wrong", went_wrong());
+        assert_eq!(texts(&failed), ["the plan"], "a failed turn lost its plan");
+
+        let mut stopped = session();
+        stopped.type_char('a');
+        stopped.submit();
+        stopped.set_todos(rows());
+        stopped.set_todos(Vec::new());
+        // Something queued behind the turn keeps its prompt sent, so the stop is recorded.
+        stopped.type_char('b');
+        assert!(stopped.queue());
+        stopped.stopped(Some(0));
+        stopped.restore("a");
+        assert_eq!(
+            texts(&stopped),
+            ["the plan"],
+            "a stopped turn lost its plan"
+        );
+    }
+
+    /// A plan is discarded where its turn is: a rewind removes the turns it described, and an
+    /// un-sent prompt was never a turn. Neither may leave the plan the empty report kept, or the
+    /// panel would show work no transcript has.
+    #[test]
+    fn a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report() {
+        let rows = || {
+            bravebot_core::todo::rows(&bravebot_core::todo::List::new(vec![
+                bravebot_core::todo::Item::new("the plan", bravebot_core::todo::Status::Active),
+            ]))
+        };
+
+        let mut rewound = session();
+        rewound.type_char('a');
+        rewound.submit();
+        rewound.set_todos(rows());
+        rewound.set_todos(Vec::new());
+        rewound.rewind_history();
+        assert!(rewound.plan().is_empty(), "a rewind left the plan");
+
+        let mut unsent = session();
+        unsent.type_char('a');
+        unsent.submit();
+        unsent.set_todos(rows());
+        unsent.set_todos(Vec::new());
+        unsent.stopped(Some(0));
+        unsent.restore("a");
+        assert!(unsent.plan().is_empty(), "an un-sent prompt left a plan");
     }
 
     /// A report reads as a block, so both columns line up: an aside starting wherever its value
@@ -17387,6 +13573,10 @@ mod tests {
 
         /// `/compact` is a model call made in the middle of a turn, so its wait is that turn's and it
         /// is inference rather than time nobody can account for.
+        ///
+        /// The aside starts three seconds in the past. Under the real clock an aside that does
+        /// nothing reads zero in every figure, and a wait charged to tools or to the person would
+        /// then still equal the wall clock.
         #[test]
         fn an_aside_charges_its_wait_to_the_turn_it_interrupted() {
             let mut s = session();
@@ -17394,8 +13584,15 @@ mod tests {
             s.type_char('a');
             s.submit();
             s.complete("reply", Vec::new(), 400);
+            let before = s
+                .timing_by_turn()
+                .get(&1)
+                .copied()
+                .expect("turn 1 recorded");
 
             s.begin_aside();
+            assert!(s.started.is_some(), "an aside did not start the clock");
+            s.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
             s.end_aside(250);
 
             let turn = s
@@ -17403,25 +13600,33 @@ mod tests {
                 .get(&1)
                 .copied()
                 .expect("turn 1 recorded");
-            assert_eq!(
-                turn.inference_ms, turn.wall_ms,
-                "an aside's wait was not counted as time spent on the model"
+            let waited = turn.inference_ms - before.inference_ms;
+            assert!(
+                waited >= 3_000,
+                "an aside's wait was not counted as time spent on the model: {turn:?}"
             );
+            assert_eq!(
+                turn.wall_ms - before.wall_ms,
+                waited,
+                "the wait is not in the turn's wall clock as well: {turn:?}"
+            );
+            assert_eq!(turn.tools_ms, before.tools_ms, "{turn:?}");
+            assert_eq!(turn.stalled_ms, before.stalled_ms, "{turn:?}");
         }
 
         /// An aside asked before the first turn waits on the model exactly as one asked during a
         /// turn does. Charged to no turn, that wait is in none of the figures the session adds up,
         /// so a session that sat for a minute on its first question reports having taken no time.
         ///
-        /// The entry is what this asserts rather than the figure in it, as
-        /// `a_failed_turn_still_accounts_for_its_wall_clock` does and for the same reason: the
-        /// clock is the real one, so a test's aside is over in well under the millisecond every
-        /// figure here is measured in.
+        /// The aside starts three seconds in the past, so the figures differ from zero and a wait
+        /// charged to the wrong one is seen.
         #[test]
         fn an_aside_before_the_first_turn_records_its_wait_ahead_of_that_turn() {
             let mut s = session();
 
             s.begin_aside();
+            assert!(s.started.is_some(), "an aside did not start the clock");
+            s.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
             s.end_aside(250);
 
             let leading = s
@@ -17429,10 +13634,16 @@ mod tests {
                 .get(&0)
                 .copied()
                 .expect("the wait was recorded ahead of the first turn");
-            assert_eq!(
-                leading.inference_ms, leading.wall_ms,
-                "an aside's wait was not counted as time spent on the model"
+            assert!(
+                leading.inference_ms >= 3_000,
+                "an aside's wait was not counted as time spent on the model: {leading:?}"
             );
+            assert_eq!(
+                leading.wall_ms, leading.inference_ms,
+                "the wait is not in the leading entry's wall clock as well"
+            );
+            assert_eq!(leading.tools_ms, 0, "{leading:?}");
+            assert_eq!(leading.stalled_ms, 0, "{leading:?}");
             assert_eq!(
                 s.timing_total().wall_ms,
                 leading.wall_ms,
@@ -18760,6 +14971,71 @@ mod tests {
         assert_eq!(after("one two three", 0, "fz"), 0);
     }
 
+    /// A backward jump looks at the first character of the line, the last position it can reach, and
+    /// a target there is the previous occurrence like any other. That holds on the first row and on
+    /// a later one, and for the keys that repeat a jump the other way as much as for `F` and `T`.
+    #[test]
+    fn a_backward_jump_reaches_a_target_that_begins_the_line() {
+        assert_eq!(after("xab", 2, "Fx"), 0);
+        assert_eq!(after("xab", 2, "Tx"), 1);
+        assert_eq!(after("ab\nxcd", 5, "Fx"), 3);
+        assert_eq!(after("ab\nxcd", 5, "Tx"), 4);
+        // Turned round by `,`, which is the same jump the other way, and repeated by `;`.
+        assert_eq!(after("-ab-", 0, "f-,"), 0);
+        assert_eq!(after("-ab-", 0, "t-,"), 1);
+        assert_eq!(after("-a-b-", 4, "F-;"), 0);
+        // The second of two, so the walk has to look at the first character after finding another.
+        assert_eq!(after("-a-b", 3, "2F-"), 0);
+    }
+
+    /// Looking at the first character of the line does not mean looking at what is not part of the
+    /// walk: the character under the caret is not an occurrence, and the row before is another line.
+    /// A caret already at the start of its line has nothing behind it, so `T` there stays put rather
+    /// than stopping one short of the character it is standing on.
+    #[test]
+    fn a_backward_jump_only_looks_behind_the_caret_and_along_its_own_line() {
+        assert_eq!(after("xab", 0, "Fx"), 0);
+        assert_eq!(after("xab", 0, "Tx"), 0);
+        assert_eq!(after("ab\nxcd", 3, "Fx"), 3);
+        assert_eq!(after("ab\nxcd", 3, "Tx"), 3);
+        assert_eq!(after("x\nab", 3, "Fx"), 3);
+        assert_eq!(after("x\nab", 3, "Tx"), 3);
+    }
+
+    /// The stretch an operator takes is measured by the same walk, so `dFx` and `dTx` reach a target at
+    /// the start of the line as they do one in the middle of it.
+    #[test]
+    fn an_operator_takes_the_stretch_back_to_a_target_that_begins_the_line() {
+        assert_eq!(edited("xab", 2, "dFx"), "b");
+        assert_eq!(edited("xab", 2, "dTx"), "xb");
+    }
+
+    /// A marker is one character to the caret, and one that begins the line is a place `F` can land.
+    /// A character the marker is spelled with is still not a place to land, so `F1` finds nothing.
+    #[test]
+    fn a_backward_jump_can_land_on_a_marker_that_begins_the_line() {
+        let staged = |keys: &str| {
+            let mut s = vi();
+            s.attach(picture(b"pixels"));
+            for c in " ab".chars() {
+                s.type_char(c);
+            }
+            let end = s.input.len() - 1;
+            s.enter_vi_normal();
+            s.caret = end;
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.caret, end)
+        };
+        assert_eq!(staged("F[").0, 0);
+        let (caret, end) = staged("F1");
+        assert_eq!(
+            caret, end,
+            "a digit inside the marker is not somewhere to land"
+        );
+    }
+
     /// The jump is over the line the caret is on, not the whole input. These keys are for reaching a
     /// bracket in front of you, and one that crossed a newline would land off the row being read.
     #[test]
@@ -18989,6 +15265,33 @@ mod tests {
             s.type_char(c);
         }
         s.input
+    }
+
+    /// `;` and `,` are motions to an operator, the last jump again and the last jump the other way
+    /// round, so `d;` takes the stretch up to and including the next match. With no jump to repeat
+    /// the pair changes nothing and ends the wait.
+    #[test]
+    fn an_operator_takes_the_repeated_jump_as_its_stretch() {
+        assert_eq!(edited("a-b-c-d", 0, "f-d;"), "ac-d");
+        assert_eq!(edited("a-b-c-d", 5, "F-d;"), "a-c-d");
+        assert_eq!(edited("a-b-c-d", 3, "f-d,"), "a-b-d");
+        assert_eq!(edited("a-b-c-d", 0, "f-c;X"), "aXc-d");
+        assert_eq!(edited("a-b-c-d", 0, "d;"), "a-b-c-d");
+        assert_eq!(edited("a-b-c-d", 0, "d,x"), "-b-c-d");
+    }
+
+    /// `d,` goes the other way round for one stretch only: the jump a later `;` repeats is still the
+    /// one `f` made, so it goes forward rather than back.
+    #[test]
+    fn an_operator_taking_the_reversed_jump_leaves_the_jump_to_repeat_alone() {
+        assert_eq!(edited("a-b-c-d-e", 3, "f-d,;x"), "a-b-de");
+    }
+
+    /// `.` after `d,` measures the reversed jump again, and that must leave the jump to repeat
+    /// alone as the first `d,` did.
+    #[test]
+    fn repeating_an_operator_that_took_the_reversed_jump_leaves_the_jump_to_repeat_alone() {
+        assert_eq!(edited("a-b-c-d-e-f-g", 3, "f-d,.;x"), "a-de-f-g");
     }
 
     /// A count in front of a motion is how many times over it is meant, and `0` stays the key for
@@ -19936,6 +16239,235 @@ mod tests {
         assert_eq!(keyed("one", 0, "Afoo\x1bxu").input, "onefoo");
         assert_eq!(keyed("one", 0, "Afoo\x1bxuu").input, "one");
         assert_eq!(keyed("one two", 0, "cwX\x1bw.uu").input, "one two");
+    }
+
+    /// The ordinary box has the undo stack vi already does, pushed before each edit.
+    ///
+    /// A run of typing is one step, folded into one the way an INSERT session folds vi's.
+    #[test]
+    fn a_typing_run_in_the_ordinary_box_is_one_change_to_undo() {
+        let mut s = session();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "");
+        assert!(!s.undo_last_change(), "a run is one step, not five");
+    }
+
+    /// Ctrl-U takes the line back to its start; undo puts the line and the caret back as they
+    /// stood before the press.
+    #[test]
+    fn ctrl_u_then_undo_restores_the_line_and_caret_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        let caret = s.caret();
+        s.delete_to_line_start();
+        assert_eq!(s.input, "");
+
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "one two");
+        assert_eq!(s.caret(), caret);
+    }
+
+    /// Sending the line clears what there was to undo, the way choosing a style or a line arriving
+    /// whole already does for vi: the undo chord after a send must not put back a prompt that has
+    /// already gone.
+    #[test]
+    fn undo_after_a_send_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        assert!(s.submit().is_some());
+        assert!(!s.undo_last_change());
+        assert_eq!(s.input, "");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "",
+            "typing after the send opened no step of its own"
+        );
+    }
+
+    /// Clearing the line, the way Escape does, leaves nothing to undo either: a step taken of a
+    /// line that has gone is a step `u` after it would put back by mistake.
+    #[test]
+    fn undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        assert_eq!(s.input, "");
+        assert!(
+            !s.undo_last_change(),
+            "clearing the line left a step to undo"
+        );
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "",
+            "typing after the clear opened no step of its own"
+        );
+    }
+
+    /// Putting the line away and bringing it back both leave nothing to undo: a step is a copy of
+    /// a line that stood in the box, and the stash is a line that has left it.
+    #[test]
+    fn undo_after_stashing_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        assert!(s.stash(), "putting the line away did nothing");
+        assert_eq!(s.input, "");
+        assert!(
+            !s.undo_last_change(),
+            "putting the line away left a step to undo"
+        );
+
+        assert!(s.stash(), "bringing the line back did nothing");
+        assert_eq!(s.input, "one two");
+        assert!(
+            !s.undo_last_change(),
+            "bringing the line back left a step to undo"
+        );
+        assert_eq!(s.input, "one two");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "one two",
+            "typing after the stash round-trip opened no step of its own"
+        );
+    }
+
+    /// Switching to the other style and back leaves nothing to undo, the way INPUT-28 already says
+    /// for vi: a step taken under one style answers to keys the other does not press.
+    #[test]
+    fn undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.choose_editing(crate::vim::Editing::Ordinary);
+        assert!(!s.undo_last_change(), "switching style left a step to undo");
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "one two",
+            "typing after the switch opened no step of its own"
+        );
+    }
+
+    /// Recalling an earlier prompt is a line arriving whole, the way a send, a clear or a stash
+    /// is, so it leaves nothing to undo either.
+    #[test]
+    fn undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box() {
+        let mut s = session();
+        for c in "sent before".chars() {
+            s.type_char(c);
+        }
+        assert!(s.submit().is_some());
+
+        s.recall_older();
+        assert_eq!(s.input, "sent before");
+        assert!(
+            !s.undo_last_change(),
+            "recalling a prompt left a step to undo"
+        );
+
+        s.type_char('x');
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "sent before",
+            "typing after the recall opened no step of its own"
+        );
+    }
+
+    /// A marker is kept behind an edit the same as the text around it, so deleting one and undoing
+    /// the delete puts the marker, and the attachment it still names, back.
+    #[test]
+    fn undo_brings_back_a_deleted_marker_with_its_attachment() {
+        let mut s = session();
+        for c in "abc".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in "xyz".chars() {
+            s.type_char(c);
+        }
+        for _ in 0.."xyz".len() + 1 {
+            s.move_left();
+        }
+        s.backspace();
+        assert_eq!(s.input, "abcxyz");
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "the marker was still there to delete"
+        );
+
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "abc[Image #1]xyz");
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "the picture did not come back with its marker"
+        );
+    }
+
+    /// Undoing a run closes it, so the next run opens a step of its own rather than finding one
+    /// still marked open from before the undo and sharing it, which would leave the second run
+    /// with no step on the stack to put back at all.
+    #[test]
+    fn a_second_typing_run_after_undo_opens_its_own_step() {
+        let mut s = session();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "");
+
+        for c in "abc".chars() {
+            s.type_char(c);
+        }
+        assert!(s.undo_last_change());
+        assert_eq!(s.input, "", "the second run opened no step of its own");
+    }
+
+    /// A yank closes whatever run was open the same way a delete or a paste does, so typing after
+    /// one opens a step of its own rather than finding the run from before the yank still marked
+    /// open and sharing it.
+    #[test]
+    fn typing_after_a_yank_opens_its_own_run() {
+        let mut s = session();
+        for c in "one".chars() {
+            s.type_char(c);
+        }
+        s.register = Some(Yanked {
+            text: "X".to_string(),
+            lines: false,
+        });
+        s.yank();
+        assert_eq!(s.input, "oneX");
+
+        for c in "yz".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "oneXyz");
+
+        assert!(s.undo_last_change());
+        assert_eq!(
+            s.input, "oneX",
+            "typing after the yank opened no step of its own"
+        );
     }
 
     /// The register yanked at the start of the line and then put over a selection made at `at`,

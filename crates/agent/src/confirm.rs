@@ -445,6 +445,9 @@ impl Confined {
                 Requested::Loopback => {
                     t!(run_carries_loopback, program = program.as_str()).to_string()
                 }
+                Requested::SshKey => {
+                    t!(run_carries_ssh_key, program = program.as_str()).to_string()
+                }
                 Requested::Scope(scope) => self.scope_sentence(*scope, program),
                 Requested::Toolchain(toolchain) => t!(
                     run_carries_toolchain,
@@ -730,6 +733,7 @@ impl RunRequest {
                         bravebot_sandbox::scope::Scope::Signing
                     )
                     | bravebot_sandbox::scope::Requested::Loopback
+                    | bravebot_sandbox::scope::Requested::SshKey
             ) && !names.contains(&request.name())
             {
                 names.push(request.name());
@@ -835,6 +839,8 @@ pub struct OutputRequest {
     pub command: String,
     /// What it printed, in full.
     pub output: String,
+    /// The label it was released under, in the same short form the trail uses (LABEL-10).
+    pub label: String,
     /// How many lines that is, counted before the bytes were released.
     ///
     /// Carried rather than counted here, for the reason [`WriteRequest::diff`] is carried: this
@@ -850,6 +856,9 @@ pub struct OutputRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 impl OutputRequest {
@@ -885,6 +894,10 @@ pub struct VetRequest {
     pub expects: String,
     /// The content, in full. Empty for a picture, which is shown as a file to open instead.
     pub content: String,
+    /// The label the content was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
+    /// text to carry it beside.
+    pub label: Option<String>,
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
@@ -892,6 +905,9 @@ pub struct VetRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
     /// Where the slot holds a picture or a PDF, the copy of it the person is asked to open.
     ///
     /// `None` for text, and for a picture on a run bypassing permissions, where the mode answers
@@ -1054,6 +1070,9 @@ pub struct VouchRequest {
     /// whatever it says has to be true of all of them. What a file holds decides how it is
     /// previewed and never whether it is asked about.
     pub preview: String,
+    /// The label the preview was released under, in the same short form the trail uses
+    /// (LABEL-10).
+    pub label: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
     /// What a check said about the whole file, or that it did not complete.
@@ -1065,6 +1084,9 @@ pub struct VouchRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 /// A file the planner has asked to read that holds something the scan took for a credential.
@@ -1143,8 +1165,6 @@ pub struct ToolListRequest {
     pub refused: usize,
     /// How many tools were withheld by the server's allow or deny list.
     pub withheld: usize,
-    /// Whether a list for this declaration was vouched for before and this one is not it.
-    pub changed: bool,
     /// What a check said about the list, or that none was made.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1614,9 +1634,8 @@ pub trait Confirmer {
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
     ///
-    /// A yes promotes the list as drawn, descriptions and all, and records a digest of it, so an
-    /// unchanged list asks nothing next session. That makes it a standing decision, like the vouch
-    /// offer, and a verdict travels with it on the same footing.
+    /// A yes promotes the list as drawn, descriptions and all, for the rest of the session and
+    /// records nothing, so the next session asks again.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
 
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
@@ -2801,6 +2820,8 @@ mod tests {
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2811,6 +2832,8 @@ mod tests {
             truncated: false,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 

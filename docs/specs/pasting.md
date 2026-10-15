@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/editing.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
@@ -207,7 +208,10 @@ Command-V is the terminal's chord and never reaches this process: the byte strea
 no encoding for that modifier, and the terminal writes the clipboard's *text* into the pty instead,
 which is why a picture silently arrives as nothing. Ctrl-V comes through as a byte, so the TUI goes
 around the terminal and reads the clipboard itself. An empty paste is read as the picture that was
-meant. A picture wins over text when the clipboard holds both, since copying an image in a browser
+meant, except while the scroller ([SCROLL-2](scroller.md#SCROLL-2)), the delegate view
+([WATCH-9](watching.md#WATCH-9)), a picker ([CMD-8](commands.md#CMD-8)) or the prompt search
+([INPUT-19](terminal-input.md#INPUT-19)) is open, where every paste is ignored and none reads the
+clipboard. A picture wins over text when the clipboard holds both, since copying an image in a browser
 leaves the page's URL behind as text and text has another key.
 
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.

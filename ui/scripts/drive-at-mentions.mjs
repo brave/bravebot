@@ -146,6 +146,24 @@ try {
   const rows = await page.locator('.entries .attached').allInnerTexts()
   assert.deepEqual(rows.map((text) => text.trim()), ['Read src/nested/deep.md'], 'one Read row, drawn before the reply came back')
 
+  // ---- a name with a space is completed to the escaped text, and Enter completes a half of one ---
+  mkdirSync(join(project, 'My Documents'))
+  writeFileSync(join(project, 'My Documents/notes.md'), 'Notes.\n')
+  await field.fill('read @My')
+  await list.waitFor()
+  await page.keyboard.press('Tab')
+  await valueIs('read @My\\ Documents/')
+  await field.fill('read @My\\ Doc')
+  await list.waitFor()
+  await page.keyboard.press('Enter')
+  await valueIs('read @My\\ Documents/')
+  assert.equal(rounds.length, 1, 'Enter on a half-typed name holding an escaped space completed it rather than sending')
+  await page.keyboard.type('no')
+  await list.waitFor()
+  await page.keyboard.press('Tab')
+  await valueIs('read @My\\ Documents/notes.md ')
+  await field.fill('')
+
   // ---- a name outside the project is refused at send, and nothing goes -------------------------
   await field.fill('Read @../outside.txt')
   await field.press('Enter')

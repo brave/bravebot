@@ -69,9 +69,8 @@ terminal.
 
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
-planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias and
-records a digest of the list, so the same list is offered unasked in a later session and a changed
-one is asked about again. Each call is then put to them with three answers, after any permission
+planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias for the session
+and records nothing, so a later session asks again. Each call is then put to them with three answers, after any permission
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
@@ -86,8 +85,7 @@ Issue #83 is where the unwired client was written down, and it names the four th
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
 label [mcp.md](mcp.md) puts on a result reaches a slot, and whether servers are confined. Every
 clause below answers one of them. Whether a server's description reaches the planner at all was
-settled there too: the person vouches for the tool list after the handshake, and its digest is
-recorded beside the server's approval.
+settled there too: the person vouches for the tool list after the handshake, every session.
 
 Every clause names the tests that pin it. Where a built clause has an unbuilt half, the clause says
 which, and that sentence is what keeps a reader from taking the present tense as a claim about the
@@ -233,7 +231,6 @@ was recorded, and leaves every other project's as it was. An incognito session w
 |---|---|---|---|
 | A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
-| The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
@@ -790,10 +787,11 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
-the declaration it was listed under. A later session whose server sends the same list offers it with
-nobody asked. One whose list changed says so, and asks again. A project path that
-[SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a server and not for its list.
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later session asks again about a list that is the
+same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
+decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
+`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
+server and not for its list.
 
 Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
 names allow. Its description is a sentence this process writes, naming the alias and saying every
@@ -823,18 +821,15 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 `verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
-`verified-by: bravebot_config::mcp::a_vouched_list_reads_back_beside_the_approval_it_was_listed_by`
-`verified-by: bravebot_config::mcp::a_vouched_list_lasts_as_long_as_its_declaration_resolves`
-`verified-by: bravebot_config::mcp::a_line_that_is_not_a_vouch_is_passed_over`
+`verified-by: bravebot_config::mcp::a_tools_line_an_earlier_version_wrote_is_passed_over_and_dropped`
 `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement`
-`verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for`
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
-`verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
+`verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
@@ -1315,7 +1310,7 @@ Each call from then on is asked.
 **How it is built.** A requested server nothing approved is started without
 [SERVERS-4](#SERVERS-4)'s question being drawn, and nothing is written to `mcp-approved` or
 `mcp-projects`. A server's list is offered without [SERVERS-8](#SERVERS-8)'s question being drawn or
-a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
+a check being made, since nobody would read the check's verdict. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
 so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
 offered in it. A hop off a remote server's declaration is refused without
@@ -1728,6 +1723,12 @@ This spec cannot land without these. Each is named by what the clause says rathe
   of the instructions and inside a margin, and a planner that reads them has still read text somebody
   else wrote, which a person read before saying yes. The margin is a boundary for a person looking at a screen; for a model it is a
   convention, and conventions are what injection attacks are made of.
+- **A standing answer to a tool outlives a change to the server it was given for.** It is filed under
+  the alias, the tool and the project, and read whatever the alias is declared as. After the
+  declaration changes and the person answers [SERVERS-4](#SERVERS-4)'s question about the new list,
+  a tool answered about before goes unasked to a server that is no longer the one the answer was
+  given to, and the same holds when the server redefines the tool under its name. A call carrying the
+  person's private data still asks.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.

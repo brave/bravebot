@@ -1,0 +1,15 @@
+[package]
+name = "bravebot-connector"
+description = "Client for the credential authority that performs connector calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bravebot-sandbox = { path = "../sandbox" }
+bravebot-core = { path = "../core" }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -12,8 +12,8 @@
 
 use crate::protocol::{
     Diagnostics, Operation, RpcNotification, RpcRequest, RpcResponse, content_length,
-    diagnostics_in, frame, hover_text, initialize_params, locations_in, path_to_uri,
-    position_params, reference_params,
+    diagnostic_text_in, diagnostics_in, frame, hover_text, initialize_params, locations_in,
+    path_to_uri, position_params, reference_params,
 };
 use crate::{Answer, LspError, LspResult};
 use bravebot_core::capability::Capability;
@@ -1125,6 +1125,18 @@ impl Server {
     /// not waited for: [`Diagnostics`]' caller is told through [`Server::is_indexed`] whether what
     /// came back may be short.
     pub fn diagnostics(&mut self, path: &str) -> LspResult<Option<Diagnostics>> {
+        self.last_notice(path, diagnostics_in)
+    }
+
+    /// Send the file and read the last notice the server publishes about it with `read`.
+    ///
+    /// `read` picks what to take out of a notice, so a caller that wants no prose passes a reader
+    /// that never touches it.
+    fn last_notice<T>(
+        &mut self,
+        path: &str,
+        read: impl Fn(&Value, &str, i64) -> Option<T>,
+    ) -> LspResult<Option<T>> {
         let uri = path_to_uri(path);
         // What was already queued predates the bytes about to be sent, so a notice in it describes
         // a version of the file that is gone.
@@ -1151,11 +1163,40 @@ impl Server {
                 return Ok(latest);
             };
             self.note_progress(&message);
-            if let Some(found) = diagnostics_in(&message, &uri, sent) {
+            if let Some(found) = read(&message, &uri, sent) {
                 latest = Some(found);
                 quiet_from = Some(Instant::now());
             }
         }
+    }
+
+    /// The `diagnostics` operation: what the server publishes about a file, in two halves.
+    ///
+    /// LSP-13. The severities and lines are structure and travel as [`Diagnostics`]. The messages
+    /// are content, handed back as a bare string for the caller to label. Both are read from the
+    /// same notice, so the lines the planner is told and the messages it may later vet describe the
+    /// same bytes. A server that publishes nothing in time is [`LspError::NoReport`], not a clean
+    /// file.
+    fn report(&mut self, path: &str) -> LspResult<Answer> {
+        let published = self.last_notice(path, |message, uri, sent| {
+            Some((
+                diagnostics_in(message, uri, sent)?,
+                diagnostic_text_in(message, uri, sent)?,
+            ))
+        })?;
+        let Some((found, text)) = published else {
+            return Err(LspError::NoReport {
+                language: self.served.clone(),
+            });
+        };
+        Ok(Answer {
+            locations: Vec::new(),
+            // Whether there is anything to hand back is read from the count, an integer the
+            // notice reported, and never from the length of the words.
+            text: (found.count() > 0).then_some(text),
+            diagnostics: Some(found),
+            partial: !self.indexed,
+        })
     }
 
     /// Notice a server saying it has finished indexing.
@@ -1243,6 +1284,11 @@ impl Server {
         self.settle();
 
         let operation = question.operation;
+        // Answered from a notice the server publishes, and ahead of the requests below: `method()`
+        // names that notice, which is nothing a client may put as a request.
+        if operation == Operation::Diagnostics {
+            return self.report(question.path);
+        }
         let uri = path_to_uri(question.path);
 
         // The protocol requires a document be opened before it is asked about: a server answers
@@ -1281,9 +1327,8 @@ impl Server {
                 Value::Array(items) if !items.is_empty() => items[0].clone(),
                 _ => {
                     return Ok(Answer {
-                        locations: Vec::new(),
-                        text: None,
                         partial: !self.indexed,
+                        ..Answer::default()
                     });
                 }
             };
@@ -1316,6 +1361,7 @@ impl Server {
             text: (operation == Operation::Hover)
                 .then(|| hover_text(&result))
                 .flatten(),
+            diagnostics: None,
             // LSP-7: an answer given before the index settled is partial, whatever it found.
             partial: !self.indexed,
         })
@@ -2387,6 +2433,128 @@ done
         assert_ne!(unconfigured, missing);
     }
 
+    #[cfg(unix)]
+    const CANNOT_BE_RUN: &str = "bravebot-lsp-cannot-be-run";
+
+    #[cfg(unix)]
+    fn a_program_that_cannot_be_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(CANNOT_BE_RUN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn no_program_anywhere(_: &str) -> Option<PathBuf> {
+        None
+    }
+
+    /// LSP-6: a question put to `Servers::ask` fails with the sentence for the case it is in, and
+    /// never with an empty answer or a search over the tree. A planner that read any of the three
+    /// as "nothing calls this" would delete a function that is called.
+    ///
+    /// Through the entry point the tool calls rather than the error values: the three sentences
+    /// are only distinct if `ask` reaches the right one for the right cause. The program that
+    /// cannot be run is a file without the execute bit, so the failure is the launch's and the
+    /// server never reaches the protocol.
+    #[cfg(unix)]
+    #[test]
+    fn asking_with_no_server_says_which_of_the_three_cases_it_is() {
+        let scratch = crate::testutil::Scratch::new(CANNOT_BE_RUN);
+        std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
+        std::fs::write(scratch.join("src").join("a.rs"), "pub struct Held;\n").expect("write");
+        std::fs::write(scratch.join("notes.txt"), "Held\n").expect("write");
+        std::fs::write(scratch.join("server"), "#!/bin/sh\nexit 0\n").expect("write the server");
+
+        let asked_about = |servers: &mut Servers, path: &str| {
+            let started_asking = std::cell::Cell::new(false);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = bravebot_core::policy::Routing::new();
+            routing.insert_trusted("task", "look up");
+            let mut policy = Policy::begin(
+                routing,
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+                &mut sink,
+            )
+            .expect("policy");
+            let result = servers.ask(
+                &mut policy,
+                &Question {
+                    operation: Operation::References,
+                    path,
+                    line: 1,
+                    character: 12,
+                    query: None,
+                },
+                &mut |_| {
+                    started_asking.set(true);
+                    true
+                },
+            );
+            (result, started_asking.get())
+        };
+
+        let mut cannot_run = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            a_program_that_cannot_be_run,
+            false,
+            Vec::new,
+        );
+        let mut absent = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            no_program_anywhere,
+            false,
+            Vec::new,
+        );
+
+        let (unconfigured, asked) = asked_about(&mut absent, "notes.txt");
+        let unconfigured =
+            unconfigured.expect_err("a file no server is configured for is no answer");
+        assert!(
+            matches!(&unconfigured, LspError::NoServerFor { path } if path == "notes.txt"),
+            "{unconfigured:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that cannot exist"
+        );
+
+        let (missing, asked) = asked_about(&mut absent, "src/a.rs");
+        let missing = missing.expect_err("a server that is not installed is no answer");
+        assert!(
+            matches!(&missing, LspError::NoBinary { program, .. } if program == "rust-analyzer"),
+            "{missing:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that is not there"
+        );
+
+        let (failed, asked) = asked_about(&mut cannot_run, "src/a.rs");
+        let failed = failed.expect_err("a server that did not start is no answer");
+        assert!(matches!(&failed, LspError::Start { .. }), "{failed:?}");
+        assert!(
+            asked,
+            "the person was not asked before the launch was tried"
+        );
+
+        let said = [
+            unconfigured.to_string(),
+            missing.to_string(),
+            failed.to_string(),
+        ];
+        assert!(
+            said[0].contains("no language server is configured"),
+            "{}",
+            said[0]
+        );
+        assert!(said[1].contains("is not installed"), "{}", said[1]);
+        assert!(said[2].contains("did not start"), "{}", said[2]);
+        for sentence in &said {
+            assert!(!sentence.contains("no references"), "{sentence}");
+        }
+    }
+
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
     #[cfg(unix)]
     #[test]
@@ -2446,6 +2614,7 @@ done
                 kind: None,
             }],
             text: None,
+            diagnostics: None,
             partial: true,
         };
         assert!(
@@ -4014,6 +4183,184 @@ done
             servers
                 .diagnostics(&mut policy, &format!("{path}.txt"))
                 .is_none()
+        );
+    }
+    #[cfg(unix)]
+    const DIAGNOSING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_NOTHING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-nothing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_BEFORE_INDEXED: &str = "bravebot-lsp-diagnosing-before-indexed";
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_saying_nothing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_NOTHING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_before_it_is_indexed(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_BEFORE_INDEXED).join("server"))
+    }
+
+    /// LSP-13: the `diagnostics` operation answers with the lines the server found and, apart from
+    /// them, the words it wrote, both read from the one notice that followed the file it was sent.
+    /// A second question sends the file again as a change and reads the notice that follows that.
+    ///
+    /// The script publishes one error on `didOpen` and none on `didChange`. Lines and words that
+    /// came from different notices, or a second answer that read the first one's, would not match
+    /// what each answer is asserted to hold.
+    #[cfg(unix)]
+    #[test]
+    fn the_diagnostics_operation_answers_lines_and_words_from_one_notice() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_ON_REQUEST);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        let question = Question {
+            operation: Operation::Diagnostics,
+            path,
+            line: 1,
+            character: 1,
+            query: None,
+        };
+
+        let opened = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the question starts the server and it reports");
+        assert_eq!(
+            opened.diagnostics,
+            Some(Diagnostics {
+                errors: vec![7],
+                warnings: 0,
+                others: 0
+            })
+        );
+        assert_eq!(opened.text.as_deref(), Some("7:1 error: opened"));
+        assert!(
+            opened.locations.is_empty(),
+            "a diagnostic is not a location"
+        );
+        assert!(!opened.partial);
+        assert_eq!(servers.running(), 1);
+
+        let changed = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the running server reports again");
+        assert_eq!(
+            changed.diagnostics,
+            Some(Diagnostics::default()),
+            "the second answer read the notice from before the file was sent again"
+        );
+        assert_eq!(changed.text, None, "a file with nothing wrong has no words");
+    }
+
+    /// LSP-13 and LSP-6: a server that publishes nothing about the file is not a file with no
+    /// errors. The operation reports that it did not report, in words that cannot be read as a clean
+    /// result, and not as a server that is absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_publishes_nothing_is_no_report_and_not_a_clean_file() {
+        let (_launching, scratch, file) =
+            a_workspace_a_server_rejects(DIAGNOSING_NOTHING_ON_REQUEST);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_saying_nothing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+
+        let error = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect_err("a server that said nothing has no answer to give");
+        assert!(matches!(error, LspError::NoReport { .. }), "{error:?}");
+        assert!(
+            !error.is_absence_of_a_server(),
+            "a server that ran and was quiet is not an absent one"
+        );
+        let said = error.to_string();
+        assert!(said.contains("does not mean it has no errors"), "{said}");
+        assert!(!said.contains("no errors reported"), "{said}");
+    }
+
+    /// LSP-13 and LSP-7: a report given while the index is still building says it may be short,
+    /// whatever it found. The question that started the server reported it settled, so the test
+    /// puts it back to unsettled and past its wait, which is where a server that never reports its
+    /// indexing finished stands after the bound.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_given_before_the_index_settled_is_partial() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_BEFORE_INDEXED);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_before_it_is_indexed,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+        let server = servers
+            .running
+            .get_mut(&Key::Builtin(Language::Rust))
+            .expect("the question started it");
+        server.indexed = false;
+        server.waited = true;
+
+        let answer = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("an unsettled index still reports what it has");
+        assert!(
+            answer.partial,
+            "the report did not say the index was still building"
+        );
+        assert!(
+            answer.diagnostics.is_some(),
+            "an unsettled index still reports what it has"
         );
     }
 }

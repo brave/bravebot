@@ -66,6 +66,7 @@ from the label the delegate's own context earned.
 
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
+`verified-by: bravebot_agent::turn::the_shape_a_report_takes_follows_the_label_of_the_delegate_that_wrote_it`
 
 <a id="AGENT-5"></a>
 ### AGENT-5: one call may fan a task out, and every delegate it starts is gated on its own

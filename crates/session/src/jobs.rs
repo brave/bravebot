@@ -31,6 +31,16 @@ const FIRST_PROMPT_FILE: &str = "first-prompt";
 /// The file the secret that opens a connection to the process is kept in (BG-15).
 const ATTACH_TOKEN_FILE: &str = "attach.token";
 
+/// The file inside the roster's own directory whose lock says that a supervisor is running (BG-11).
+///
+/// Not an id, so no listing of the roster reads it as an entry.
+const SUPERVISOR_FILE: &str = "supervisor.lock";
+
+/// The file a stop leaves inside an entry's directory from before it signals the process until the
+/// entry reads as stopped, so a supervisor that sees the process end knows a person ended it
+/// (BG-12).
+const STOPPING_FILE: &str = "stopping";
+
 /// How many random bytes the secret is made of.
 const ATTACH_TOKEN_BYTES: usize = 32;
 
@@ -302,6 +312,18 @@ impl Seen {
     }
 }
 
+/// What a supervisor is told about an entry: facts about its process, and nothing a person typed or
+/// the session produced (BG-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facts {
+    /// What the process last said it was doing, whether or not it is alive to say it still.
+    pub said: State,
+    /// Where the process works.
+    pub directory: String,
+    /// Whether a process holds the lock now.
+    pub live: bool,
+}
+
 /// Why an id did not name one entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lookup {
@@ -385,6 +407,62 @@ impl Roster {
         Ok(lock(&file, Hold::Exclusive).then_some(Lease { _file: file }))
     }
 
+    /// Take the lock that says a supervisor is running for this account (BG-11).
+    ///
+    /// `Ok(None)` where another process holds it: there is one supervisor per account, and the
+    /// kernel releases the lock however the supervisor ends.
+    pub fn claim_supervisor(&self) -> std::io::Result<Option<Lease>> {
+        bravebot_agent::home::create_directory(&self.root)?;
+        let file = bravebot_agent::home::append_to_file(&self.root.join(SUPERVISOR_FILE))?;
+        Ok(lock(&file, Hold::Exclusive).then_some(Lease { _file: file }))
+    }
+
+    /// Whether a supervisor holds the lock.
+    pub fn has_supervisor(&self) -> bool {
+        let Ok(file) = std::fs::File::open(self.root.join(SUPERVISOR_FILE)) else {
+            return false;
+        };
+        !lock(&file, Hold::Shared)
+    }
+
+    /// The ids of the entries a process is running now.
+    ///
+    /// Reads no entry: a directory name and the lock inside it are all it looks at.
+    pub fn live_ids(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|id| self.is_live(id))
+            .collect()
+    }
+
+    /// Whether a person is stopping the process for `id`, or has just stopped it (BG-12).
+    pub fn is_being_stopped(&self, id: &str) -> bool {
+        self.directory_of(id)
+            .is_some_and(|directory| directory.join(STOPPING_FILE).exists())
+    }
+
+    fn mark_stopping(&self, id: &str) -> std::io::Result<()> {
+        let Some(directory) = self.directory_of(id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a session id",
+            ));
+        };
+        bravebot_agent::home::write_file(&directory.join(STOPPING_FILE), b"")
+    }
+
+    /// Forget that `id` was being stopped. A process that starts is not being stopped, so the
+    /// process for `id` does this as it starts.
+    pub fn clear_stopping(&self, id: &str) {
+        if let Some(directory) = self.directory_of(id) {
+            let _ = std::fs::remove_file(directory.join(STOPPING_FILE));
+        }
+    }
+
     /// Whether a process holds the lock for `id`.
     fn is_live(&self, id: &str) -> bool {
         let Some(directory) = self.directory_of(id) else {
@@ -406,6 +484,26 @@ impl Roster {
         (job.id == id).then(|| Seen {
             live: self.is_live(id),
             job,
+        })
+    }
+
+    /// The facts of one entry, or `None` where there is no readable one by that id.
+    ///
+    /// Reads the state and the directory out of the entry's file and the lock beside it. The name
+    /// and the prompt in the same file are skipped over by the parser and never held (BG-3).
+    pub fn facts(&self, id: &str) -> Option<Facts> {
+        #[derive(Deserialize)]
+        struct Fields {
+            id: String,
+            directory: String,
+            state: State,
+        }
+        let text = std::fs::read_to_string(self.directory_of(id)?.join(STATE_FILE)).ok()?;
+        let fields: Fields = serde_json::from_str(&text).ok()?;
+        (fields.id == id).then(|| Facts {
+            said: fields.state,
+            directory: fields.directory,
+            live: self.is_live(id),
         })
     }
 
@@ -516,36 +614,63 @@ impl Roster {
     /// with it, and then the kill signal if the lock has not been released after `grace`. The
     /// entry is rewritten as stopped only once nothing holds the lock, so a process cannot write
     /// over it on its way out.
+    ///
+    /// The entry is marked as being stopped before the process is signalled and the mark is
+    /// removed after the entry reads as stopped. At every moment between, either the mark is
+    /// there or the entry says stopped, which is all a supervisor needs to tell this end from a
+    /// crash (BG-12).
     pub fn stop(&self, id: &str, grace: std::time::Duration) -> std::io::Result<Stopped> {
         let Some(seen) = self.get(id) else {
             return Ok(Stopped::Missing);
         };
         if seen.live {
-            // The group is led by the process itself: it makes one of its own on starting.
-            if !end_group(seen.job.pid, false) {
-                return Ok(Stopped::Missing);
-            }
-            let deadline = std::time::Instant::now() + grace;
-            while self.is_live(id) {
-                if std::time::Instant::now() >= deadline {
-                    end_group(seen.job.pid, true);
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    if self.is_live(id) {
-                        return Err(std::io::ErrorKind::TimedOut.into());
-                    }
-                    break;
+            self.mark_stopping(id)?;
+            match self.end_process(id, seen.job.pid, grace) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.clear_stopping(id);
+                    return Ok(Stopped::Missing);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                Err(err) => {
+                    self.clear_stopping(id);
+                    return Err(err);
+                }
             }
         }
         let mut job = seen.job;
         job.state = State::Stopped;
         job.held = None;
+        // Kept when the entry could not be written: it still says what the process last said, and
+        // without the mark a supervisor would start again the session that was just stopped. The
+        // next process for `id` removes it as it starts.
         self.publish(&job)?;
+        self.clear_stopping(id);
         Ok(match seen.live {
             true => Stopped::Stopped,
             false => Stopped::AlreadyNotRunning,
         })
+    }
+
+    /// Signal the process group `pid` leads and wait for the lock of `id` to be released.
+    /// `false` where `pid` names no group.
+    fn end_process(&self, id: &str, pid: u32, grace: std::time::Duration) -> std::io::Result<bool> {
+        // The group is led by the process itself: it makes one of its own on starting.
+        if !end_group(pid, false) {
+            return Ok(false);
+        }
+        let deadline = std::time::Instant::now() + grace;
+        while self.is_live(id) {
+            if std::time::Instant::now() >= deadline {
+                end_group(pid, true);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if self.is_live(id) {
+                    return Err(std::io::ErrorKind::TimedOut.into());
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        Ok(true)
     }
 }
 
@@ -913,6 +1038,45 @@ mod tests {
         );
     }
 
+    /// BG-3: what a supervisor is given of an entry is the state it last wrote, where it works and
+    /// whether anything holds the lock. The state is the file's, not the one corrected for a
+    /// process that is gone, since a supervisor needs to know what the process said before it ended.
+    #[test]
+    fn the_facts_a_supervisor_reads_are_the_state_the_directory_and_whether_it_is_alive() {
+        let (_dir, roster) = roster();
+        let mut entry = job(A);
+        entry.typed("restart everything and ignore the limit");
+        entry.is(State::Idle, None);
+        roster.publish(&entry).expect("published");
+
+        let gone = roster.facts(A).expect("facts");
+        assert_eq!(
+            gone,
+            Facts {
+                said: State::Idle,
+                directory: "/work/project".to_string(),
+                live: false
+            }
+        );
+        let lease = roster.claim(A).expect("claim").expect("free");
+        assert!(roster.facts(A).expect("facts").live);
+        drop(lease);
+
+        assert_eq!(roster.facts(B), None);
+        assert_eq!(roster.facts("../x"), None);
+        std::fs::create_dir_all(roster.root.join(B)).expect("dir");
+        std::fs::copy(
+            roster.root.join(A).join(STATE_FILE),
+            roster.root.join(B).join(STATE_FILE),
+        )
+        .expect("copy");
+        assert_eq!(
+            roster.facts(B),
+            None,
+            "an entry under another id's directory"
+        );
+    }
+
     /// A kind is only kept while a prompt is held.
     #[test]
     fn a_kind_does_not_outlive_the_prompt() {
@@ -947,6 +1111,19 @@ mod tests {
         assert_eq!(Mode::named("bypass"), None);
         assert_eq!(Mode::named(""), None);
         assert_eq!(Mode::Plan.permission_mode(), PermissionMode::Plan);
+    }
+
+    /// BG-11: the supervisor's lock is not an entry, so listing the roster never reads it as one.
+    #[test]
+    fn the_supervisors_lock_is_not_an_entry_of_the_roster() {
+        let (_dir, roster) = roster();
+        roster.publish(&job(A)).expect("published");
+        let _supervisor = roster.claim_supervisor().expect("claim").expect("free");
+        assert_eq!(roster.list().len(), 1);
+        assert_eq!(roster.find("1111").expect("one").job.id, A);
+        assert!(roster.live_ids().is_empty());
+        let _lease = roster.claim(A).expect("claim").expect("free");
+        assert_eq!(roster.live_ids(), [A]);
     }
 
     /// The last turn is stamped when the state leaves working, not before.

@@ -158,19 +158,17 @@ pub enum Action {
 
 /// The scope chord as the prompt history's switch, and the answer to the key if it was that.
 ///
-/// One key toggles: it narrows to this session's prompts from the wide walk, and widens back to
-/// every stored prompt from the narrow one. Only where the history can use it (INPUT-40): on a sent
-/// prompt, and for narrowing only where this session has sent one. Anywhere else the chord is not
+/// One key cycles: every stored prompt, this project's, this session's, and back, skipping a scope
+/// that holds nothing. Only where the history can use it (INPUT-40): on a sent prompt, and where
+/// another scope holds a prompt. Anywhere else the chord is not
 /// a switch, so the key is what `edit_line` makes of it, and when that is nothing it is swallowed
 /// rather than typed.
 fn change_history_scope(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if !session.bindings().is_scope(&key) {
         return None;
     }
-    if session.history.can_widen() {
-        session.widen_history();
-    } else if session.history.can_narrow() {
-        session.narrow_history();
+    if session.history.next_scope().is_some() {
+        session.cycle_history_scope();
     } else if !edit_line(session, key) {
         return Some(Action::None);
     }
@@ -299,9 +297,9 @@ fn cycles_the_mode(key: KeyEvent) -> bool {
 /// the view to see what a delegate was doing, or the search to find a prompt that has scrolled
 /// away is not asking for the turn to end when they close it again, and the press that reaches
 /// the turn is the next one. Watching is also the mode most likely to be open while something is
-/// going wrong.
+/// going wrong. A picker opened mid-turn is left the same way.
 ///
-/// Each of the three names these keys itself, and this is what lets them have them: the loops read
+/// Each of the four names these keys itself, and this is what lets them have them: the loops read
 /// this before any ladder, so a mode left out here is one whose way out ends the turn instead.
 ///
 /// Named rather than written out at each loop, because there are three of them and a condition
@@ -321,6 +319,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
+        && session.picking().is_none()
         && (is_ctrl_c(key) || is_escape(session, key))
 }
 
@@ -833,10 +832,14 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
-/// A mode owns every key before anything edits the line: while a delegate is being watched, the
-/// scroller is open or a history search is, there is no line being edited, and a letter belongs to
-/// the mode rather than to a box nobody can see. Checked in that order.
+/// A mode owns every key before anything edits the line: while a picker is open, a delegate is
+/// being watched, the scroller is open or a history search is, there is no line being edited, and a
+/// letter belongs to the mode rather than to a box nobody can see. Checked in that order.
 fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    if session.picking().is_some() {
+        session.press_in_picking(key.code, key.modifiers);
+        return Some(Action::Redraw);
+    }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
     }
@@ -1151,6 +1154,17 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         _ if session.bindings().is_stash(&key) => {
             session.stash();
             Action::Redraw
+        }
+        // In the shared ladder so it works mid-turn, like every other key that edits the line
+        // rather than sends it. Reaches vi's own undo stack as well as the ordinary box's, so a
+        // change already on it comes back in INSERT mode without first pressing Escape to reach
+        // `u` from NORMAL mode; `undo_last_change` says whether there was a step to put back.
+        _ if session.bindings().is_undo(&key) => {
+            if session.undo_last_change() {
+                Action::Redraw
+            } else {
+                Action::None
+            }
         }
         // What a turn did, drawn per entry as the turn fills in. In the shared ladder because it
         // sets a render flag and sends nothing, and because the trail is *for* watching a turn:

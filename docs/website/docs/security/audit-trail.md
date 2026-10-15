@@ -121,6 +121,17 @@ refused for redirecting output into a file.
 BLOCK   sandbox: write_file: the read-only sandbox mode refuses a write, so nothing was written
 ```
 
+A `run` call that asks for no sandbox (`unconfined`) or for a credential scope (`scopes`) and is
+refused gets a blocked `sandbox` line naming the argument and every cause that held. The planner is
+told one sentence that names no setting, so this line is where to read which one withheld the
+request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
+a turn that confines none of its runs, or for `scopes` a platform with no sandbox or a session with
+no profile directory.
+
+```
+BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it
+```
+
 ## Delegates and checkouts are recorded
 
 A [delegate](../how-it-works.md#delegates) gets a line when it starts and another when it ends. The

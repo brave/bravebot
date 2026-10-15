@@ -1723,8 +1723,8 @@ impl Handle {
             build: build.to_string(),
             front,
             // Every checkout the record holds is carried through a save until a front end that
-            // restores them says which it took back, so one that restores none (the desktop)
-            // does not write them away (CHECKOUT-16).
+            // restores them says which it took back, so one that restores none does not write
+            // them away (CHECKOUT-16).
             unplaced: record.checkouts.clone(),
         }
     }

@@ -3,7 +3,9 @@
 
     pr-fix.py start <pr>                fetch, check the head out in .worktrees/pr-<pr>, rebase
     pr-fix.py continue <pr>             stage the resolved files and carry on
-    pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure
+    pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure;
+                                        --wait polls until one fails or --wait-seconds N (default 540)
+                                        have passed since the script started, counting every poll
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
                                         targets named, printing only a failure
@@ -15,7 +17,13 @@ Every step that needs no judgement is decided here, so what it prints is only wh
 act on: the line ranges of each conflict, the log of each failing job, the text of each open review
 comment. <pr> is a number or a pull request URL, several of them separated by commas or spaces, or
 `all` for every open pull request in brave/bravebot by the user git is configured as. Several run in
-parallel, each in a process of its own. It works from the main clone or from any worktree.
+parallel, each in a process of its own, and each one's output is printed as soon as it finishes. Several
+that wait share one wait, so they take no longer than one. It works from the main clone or from any
+worktree.
+
+A branch already checked out in another worktree is used there and a `reused:` line says where. Each
+step that works in the worktree refuses a locked one, which something else may be using, unless given
+--use-locked, which takes one pull request.
 """
 
 import argparse
@@ -38,6 +46,7 @@ except ImportError:
 
 REVIEWER = "netzenbot-reviewer"
 SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
+TREE_STEPS = ("start", "continue", "check", "push")
 
 
 def _load_shared():
@@ -185,7 +194,6 @@ def stop_reason(text):
 
 def report(pr, said=""):
     tree = pr.tree
-    print(f"worktree {tree}")
     state = rebase_dir(tree)
     if state is None:
         if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
@@ -230,6 +238,7 @@ def report(pr, said=""):
 
 
 def start(pr):
+    pr_worktree.announce(pr)
     git("worktree", "prune", cwd=pr.here)
     fetch(pr.here, pr.base_remote, pr.base)
     fetch(pr.here, pr.head_remote, pr.head)
@@ -269,6 +278,7 @@ def start(pr):
 
 
 def resume(pr):
+    pr_worktree.announce(pr)
     tree = pr.tree
     if rebase_dir(tree) is None:
         return report(pr)
@@ -334,7 +344,7 @@ def review(pr):
         check=False,
     )
     if done.returncode:
-        print(f"could not request {REVIEWER} on {pr.url}:\n{(done.stderr or done.stdout).strip()}", file=sys.stderr)
+        print(f"could not request {REVIEWER} on {pr.url}:\n{pr_worktree.printed(done)}", file=sys.stderr)
         return 1
     print(f"requested {REVIEWER} on {pr.url}")
     return 0
@@ -376,19 +386,20 @@ def failure_log(link):
     return tail(done.stdout or done.stderr)
 
 
-def ci(pr, wait):
+def ci(pr, until):
+    """Report the checks on the head. With `until`, a `time.monotonic()` value, poll for them to settle until then."""
     tree = pr.tree
     if tree.is_dir() and rev("HEAD", tree) != pr.head_sha:
         print(f"{tree} is at {rev('HEAD', tree)[:8]} and GitHub tests {pr.head_sha[:8]}; "
               f"these results are for {pr.head_sha[:8]}")
-    rollup, waited = pr.rollup, 0
+    rollup = pr.rollup
     while True:
         failing, pending, passing = classify(rollup)
         running = bool(pending) or not rollup
-        if failing or not running or not wait or waited >= WAIT_SECONDS:
+        left = None if until is None else until - time.monotonic()
+        if failing or not running or left is None or left <= 0:
             break
-        time.sleep(POLL_SECONDS)
-        waited += POLL_SECONDS
+        time.sleep(min(POLL_SECONDS, left))
         rollup = json.loads(
             run("gh", "pr", "view", str(pr.number), "--repo", BASE_REPO, "--json", "statusCheckRollup").stdout
         ).get("statusCheckRollup") or []
@@ -479,22 +490,23 @@ def child_command(step, number, flags):
     return [sys.executable, str(Path(__file__).resolve()), step, str(number), *flags]
 
 
-def fan_out(step, numbers, flags):
-    """Run the step for each pull request in a process of its own, printing each one's output in order."""
+def fan_out(step, numbers, flags, queued=True):
+    """Run the step for each pull request in a process of its own, printing each one's output as it finishes."""
 
     def one(number):
         done = subprocess.run(
             child_command(step, number, flags), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
-        return done.returncode, done.stdout
+        return number, done.returncode, done.stdout
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(numbers), MAX_PARALLEL)) as pool:
-        running = [pool.submit(one, number) for number in numbers]
-        codes = []
-        for number, future in zip(numbers, running):
-            code, out = future.result()
-            print(f"== #{number}")
-            print(out.rstrip("\n"))
+    # A wait is never queued: one behind a full pool would start after the others had spent the shared time.
+    workers = min(len(numbers), MAX_PARALLEL) if queued else len(numbers)
+    codes = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for future in concurrent.futures.as_completed([pool.submit(one, number) for number in numbers]):
+            number, code, out = future.result()
+            # Flushed because stdout is a pipe, so a run stopped before the last one settles still returns these.
+            print(f"== #{number}\n" + out.rstrip("\n"), flush=True)
             codes.append(code)
     return 1 if 1 in codes else max(codes)
 
@@ -505,22 +517,40 @@ def main():
     parser.add_argument("prs", nargs="+", metavar="pr")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
     parser.add_argument("--wait", action="store_true")
+    parser.add_argument(
+        "--wait-seconds", type=int, metavar="N",
+        help=f"how long --wait may take, counted from when the script started (default {WAIT_SECONDS})",
+    )
+    parser.add_argument(
+        "--use-locked", action="store_true", help="work in a locked worktree the branch is already checked out in"
+    )
     args = parser.parse_args()
     if args.target and args.step != "check":
         parser.error("only check takes make targets")
     if args.wait and args.step != "ci":
         parser.error("only ci can wait")
+    if args.wait_seconds is not None and not args.wait:
+        parser.error("--wait-seconds needs --wait")
+    if args.use_locked and args.step not in TREE_STEPS:
+        parser.error(f"only {', '.join(TREE_STEPS[:-1])} and {TREE_STEPS[-1]} work in a worktree")
+    seconds = WAIT_SECONDS if args.wait_seconds is None else args.wait_seconds
+    until = time.monotonic() + seconds if args.wait else None
     here = Path(git("rev-parse", "--show-toplevel", cwd=None))
     numbers = pr_numbers(args.prs, here)
     if not numbers:
         sys.exit(0)
+    if args.use_locked and len(numbers) > 1:
+        parser.error("--use-locked takes the one pull request whose locked worktree the person agreed to")
     if len(numbers) > 1:
-        flags = (["--wait"] if args.wait else []) + [f for t in args.target for f in ("--target", t)]
-        sys.exit(fan_out(args.step, numbers, flags))
+        flags = [f for t in args.target for f in ("--target", t)]
+        if until is not None:
+            # Each process counts from its own start, so what is left of the one shared wait is handed over now.
+            flags += ["--wait", "--wait-seconds", str(max(int(until - time.monotonic()), 0))]
+        sys.exit(fan_out(args.step, numbers, flags, queued=until is None))
     steps = {
         "start": start,
         "continue": resume,
-        "ci": lambda pr: ci(pr, args.wait),
+        "ci": lambda pr: ci(pr, until),
         "comments": comments,
         "check": lambda pr: check(pr, args.target),
         "push": push,
@@ -529,7 +559,11 @@ def main():
     try:
         if args.step == "start":
             shared.acquire(here)
-        sys.exit(steps[args.step](lookup(numbers[0], create=args.step == "start")))
+        pr = lookup(numbers[0], create=args.step == "start")
+        if args.step in TREE_STEPS:
+            words = [args.step, str(pr.number)] + [f for t in args.target for f in ("--target", t)]
+            pr_worktree.refuse_locked(pr, SCRIPT, words, args.use_locked)
+        sys.exit(steps[args.step](pr))
     finally:
         shared.release()
 

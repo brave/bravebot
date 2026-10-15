@@ -8,13 +8,10 @@
 # lines, or read the warnings check-spec prints.
 
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
-docs/specs/background-sessions.md:BG-3: the supervisor moves process state and decides nothing from content
 docs/specs/background-sessions.md:BG-7: a question the session would ask is held until a person answers it
 docs/specs/background-sessions.md:BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
-docs/specs/background-sessions.md:BG-11: a person can stop a session, and there is one supervisor per account
-docs/specs/background-sessions.md:BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
 docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
@@ -22,10 +19,16 @@ docs/specs/session-messages.md:MSG-2: a message is sent only from a context that
 docs/specs/session-messages.md:MSG-3: the first message to a session is put to a person, with the target and the whole text
 docs/specs/session-messages.md:MSG-4: a second answer covers later messages to the same session for the rest of the turn, and no longer
 docs/specs/session-messages.md:MSG-5: a message is delivered to a live process, and starts nothing
-docs/specs/session-messages.md:MSG-6: a message never starts a turn
-docs/specs/session-messages.md:MSG-7: the receiving planner is told what the text is, in words the driver wrote
-docs/specs/session-messages.md:MSG-8: the receiver's driver decides nothing from a message, and a message is nothing a person types
-docs/specs/session-messages.md:MSG-9: a message arrives with the label it was sent under, and the receiver can only lower it
 docs/specs/session-messages.md:MSG-10: a session sends a bounded number of messages
 docs/specs/session-messages.md:MSG-11: both transcripts show the message, and the trail records that it happened
 docs/specs/session-messages.md:MSG-12: a delegate and a processor are offered no `message_session`
+docs/specs/worktrees.md:WORKTREE-1: `--worktree` starts a fresh interactive session in a worktree made for it
+docs/specs/worktrees.md:WORKTREE-2: a name is a label of ASCII letters, digits, `.`, `_` and `-`, and decides no path
+docs/specs/worktrees.md:WORKTREE-3: `--worktree` is refused where a delegate's checkout would be, and where a checkout would not be kept
+docs/specs/worktrees.md:WORKTREE-4: a worktree is written, placed, labelled and ruled as a checkout is
+docs/specs/worktrees.md:WORKTREE-5: the session works in the worktree as a delegate works in its checkout, and reads its sources from the project directory
+docs/specs/worktrees.md:WORKTREE-6: the record is kept under the project directory and names the worktree
+docs/specs/worktrees.md:WORKTREE-7: a resume returns to the worktree, and is refused where it cannot
+docs/specs/worktrees.md:WORKTREE-8: a worktree is kept until the person removes it, and the sweep never takes one
+docs/specs/worktrees.md:WORKTREE-9: a command that begins another session works where this says, and `/cd`, `/branch` and an apply to the worktree itself are refused
+docs/specs/worktrees.md:WORKTREE-10: `--worktree` composes with no other way of starting a session

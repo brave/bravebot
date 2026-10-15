@@ -107,7 +107,8 @@ into it.
 When a task ends, the hook lists what the branch has changed since it left `upstream/main`, or
 `origin/main` without one: its commits, and the working tree's staged, unstaged and untracked
 files. It does nothing unless one is a file where an answer is kept, asked for or registered: the
-files `approval-binding` is selected by, the prompting spec and the files it governs. Otherwise it
+files `approval-binding` is selected by, the prompting spec and the files it governs, and the test
+that applies the register's changes to its answers (`crates/agent/src/kept_answers.rs`). Otherwise it
 runs the mechanical half of `make check-security`, about five seconds. A failure blocks the stop and
 hands the findings back to the session to fix. A stop that follows a block is let through with the
 findings shown to the person, so a session that cannot fix one still ends. CI runs the same check as

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Selftest for issue_helper.py, which every poster of an issue shares."""
+"""Selftest for issue_helper.py, which the issue-poster definition runs to file an issue."""
 
 import contextlib
 import importlib.util

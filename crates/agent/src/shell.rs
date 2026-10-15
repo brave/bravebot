@@ -246,8 +246,9 @@ pub fn record<S: Sink>(
     } else {
         format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
     };
-    conversation.push_from(
+    conversation.push_composed_from(
         Message::user(said),
+        crate::conversation::Composed::Written,
         crate::request_view::Provenance::Trusted("shell output"),
     );
 

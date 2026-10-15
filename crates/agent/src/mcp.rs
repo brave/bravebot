@@ -1,10 +1,10 @@
 //! The MCP servers a session reached, as a turn meets them (SERVERS-7, SERVERS-8, SERVERS-13).
 //!
 //! A server's list of tools is the server's own words, so nothing of it reaches the planner until
-//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. A yes records a
-//! digest of the list beside the server's approval, so the same list asks nothing the next session
-//! and a list that changed asks again. Every call to a tool on a list somebody vouched for is then
-//! put to the person with three answers, the second of which stops asking for that one tool in that
+//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. The question is
+//! asked every session and nothing is recorded, since a comparison with an earlier list would be a
+//! decision taken from the server's bytes. Every call to a tool on a list somebody vouched for is
+//! then put to the person with three answers, the second of which stops asking for that one tool in that
 //! one project.
 //!
 //! The servers themselves were started before the session opened, by whoever assembled it. What
@@ -52,8 +52,8 @@ pub struct Reached {
 }
 
 impl Reached {
-    /// `declaration` is the digest of the declaration the server was started from, which a vouch
-    /// for its list is recorded beside.
+    /// `declaration` is the digest of the declaration the server was started from, which a move
+    /// is recorded over.
     pub fn new(connection: Connection, listing: Listing, declaration: Digest) -> Self {
         Self {
             connection,
@@ -339,12 +339,11 @@ impl Session {
     /// A server the turn holds no grant for is one it is offered nothing of, so its list waits
     /// for a turn that does rather than being put to a person who could not use the answer here.
     ///
-    /// A list that is the one somebody vouched for under this declaration before is offered with
-    /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
-    /// the person as it is drawn. A yes promotes it, and records its digest where the session may
-    /// write and a person gave the answer; a no offers none of its tools for the rest of the
-    /// session, and a turn stopped at the question leaves it unasked. Settled at the start of a turn a person asked for, since that is where there is
-    /// somebody to put the question to.
+    /// Every list is checked, unless every check is being bypassed, and put to the person as it is
+    /// drawn, every session: the list is a server's bytes, and nothing here decides from them
+    /// whether it was seen before. A yes promotes it; a no offers none of its tools for the rest
+    /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
+    /// of a turn a person asked for, since that is where there is somebody to put the question to.
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -401,22 +400,7 @@ impl Session {
         let alias = server.alias.as_str();
         let refused = listing.refused();
         let withheld = listing.withheld();
-        let recorded = self.0.directory.as_deref().and_then(|directory| {
-            Approvals::read(directory).vouched_list(&held(&server.declaration))
-        });
-
-        let (list, changed) = match recorded {
-            Some(recorded) => match policy.promote_a_recorded_tool_list(
-                alias,
-                listing.list().clone(),
-                &recorded.to_string(),
-                |text| Digest::of_list(text).to_string(),
-            ) {
-                Ok(promoted) => return (offered(promoted), Usage::default()),
-                Err(list) => (list, true),
-            },
-            None => (listing.list().clone(), false),
-        };
+        let list = listing.list().clone();
 
         // Not made where every check is being bypassed, for the reason a vouch makes none there:
         // the mode answers this question yes, so nobody would read the word.
@@ -447,7 +431,6 @@ impl Session {
             tools,
             refused,
             withheld,
-            changed,
             verdict,
             reason,
         };
@@ -473,40 +456,7 @@ impl Session {
                 return (State::Declined, usage);
             }
         };
-        // What bypassing answered records nothing, so the next session that asks anybody asks.
-        if by == Endorsed::ByAPerson {
-            self.record_list(said, server, &promoted);
-        }
         (offered(promoted), usage)
-    }
-
-    /// Record a vouch for this list beside the declaration it was listed by, where the session may.
-    fn record_list<R: Reporter>(
-        &self,
-        said: &mut Said<'_, R>,
-        server: &Server,
-        list: &Labelled<String>,
-    ) {
-        let (Some(directory), true) = (&self.0.directory, self.0.writable) else {
-            return;
-        };
-        let Ok(text) = list.clone().into_trusted() else {
-            return;
-        };
-        let written = Approvals::to_change(directory)
-            .map_err(|why| unreadable_record(&why))
-            .and_then(|mut approvals| {
-                approvals.vouch_list(*held(&server.declaration), Digest::of_list(&text));
-                replace(&records::approvals_file(directory), approvals.to_text())
-                    .map_err(|error| error.to_string())
-            });
-        if let Err(error) = written {
-            said.notice(t!(
-                mcp_tools_not_recorded,
-                alias = server.alias.as_str(),
-                error = error
-            ));
-        }
     }
 
     /// The tools this turn may offer: every tool on every list somebody vouched for.

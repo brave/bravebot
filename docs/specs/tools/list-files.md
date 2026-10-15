@@ -144,6 +144,7 @@ endorse a file over a directory they own.
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
 `verified-by: bravebot_agent::workspace::a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at`
 `verified-by: bravebot_agent::workspace::a_listing_with_no_depth_walks_the_whole_tree`
+`verified-by: bravebot_agent::workspace::a_depth_of_two_or_more_walks_that_many_levels_and_names_where_it_stopped`
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
 `verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
 `verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`

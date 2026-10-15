@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/settings.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/render/prompt.rs

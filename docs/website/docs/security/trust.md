@@ -88,6 +88,14 @@ trusting one decides. Trusting `docs` does not undo a distrust recorded for `Doc
 directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
 about `docs`.
 
+**A refusal reaches every spelling Unicode makes one name.** An accented name can be written as a
+letter followed by a combining accent mark or as one precomposed letter. Unicode treats the two as
+one name, and a volume such as APFS opens one file under either. A file you refused, or one a
+fetched page was written to, stays untrusted whichever of the two the model types. The map cannot
+ask the volume whether it keeps the two apart, so the refusal reaches both. A trust does not:
+vouching for one spelling decides that spelling, and where a refusal is recorded for the other the
+less trusting rule decides.
+
 ## What a write does
 
 Every row here is exact. A write matching a row does what that row says and nothing else.
@@ -442,13 +450,14 @@ All of these are deliberate.
   have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
   of it.
 
-- **A symlink inside the project gives one file two names, and each name is its own rule.** A rule is
-  keyed on the path an operation spelled, while confinement resolves where that path lands, and the
-  two do not have to agree. So content written as untrusted through one name is read back as trusted
-  under the other, which is the one way the round trip in [What a write does](#what-a-write-does)
-  stays open. Two spellings of the same name are a single rule, so this is about a link in the tree
-  and not about punctuation in a path. If a tree holds a link to somewhere else inside itself, that is
-  a tree to say no to.
+- **A symlink or a hard link inside the project gives one file two names, and each name is its own
+  rule.** A rule is keyed on the path an operation spelled, while confinement resolves where that
+  path lands, and the two do not have to agree. So content written as untrusted through one name is
+  read back as trusted under the other, which is the one way the round trip in
+  [What a write does](#what-a-write-does) stays open. A second path to the same tree, such as a
+  macOS firmlink or a Linux bind mount, does the same once you have opened both. Spellings that differ
+  only in punctuation or letter case are a single rule, so this is about a link or a mount and not
+  about those. If a tree holds a link to somewhere else inside itself, that is a tree to say no to.
 
 - **Confinement is settled before an operation runs, not while it runs.** Where a path lands is worked
   out by resolving it, and the read or the write happens after that. A tree already arranged to escape

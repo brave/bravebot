@@ -80,21 +80,30 @@ report does not count.
 
 ## Step 3: is it already fixed?
 
-Verify against `upstream/main` (whichever remote points at `brave/bravebot`), not the working
-tree, which may be on somebody's branch:
+Verify against `<remote>/main`, not the working tree, which may be on somebody's branch.
+`<remote>` is whichever remote points at `brave/bravebot`. Look it up once:
 
 ```bash
-git fetch upstream
-git grep -n '<symbol>' upstream/main -- crates/
-git log upstream/main --oneline -S '<symbol>' -- <path>
-git log upstream/main --oneline --grep '<terms>'
+git remote -v
 ```
 
-If the behaviour the report describes no longer happens on `upstream/main`, name the commit that
+A clone of `brave/bravebot` names it `origin`, and a checkout whose `origin` is a fork usually
+names it `upstream`. Write that name for `<remote>` in every command here and in the steps below.
+If no remote points at `brave/bravebot`, stop and say so, and do not use another remote in its
+place.
+
+```bash
+git fetch <remote>
+git grep -n '<symbol>' <remote>/main -- crates/
+git log <remote>/main --oneline -S '<symbol>' -- <path>
+git log <remote>/main --oneline --grep '<terms>'
+```
+
+If the behaviour the report describes no longer happens on `<remote>/main`, name the commit that
 changed it and check it is on the branch:
 
 ```bash
-git merge-base --is-ancestor <sha> upstream/main
+git merge-base --is-ancestor <sha> <remote>/main
 ```
 
 A fix that landed before the report was submitted means the report is against old code. Not
@@ -120,7 +129,7 @@ misread the rule. That is not a known problem; it is not a problem.
 
 ## Step 5: is it valid?
 
-Read the code path the report names on `upstream/main` and confirm, with a file and line:
+Read the code path the report names on `<remote>/main` and confirm, with a file and line:
 
 - The input really is under the attacker's control the report claims, without a precondition the
   attacker does not have (a person already approving the effect, write access to the person's own
@@ -140,10 +149,10 @@ where nothing fails today.
 | Verdict | When | Awarded | Action |
 |---|---|---|---|
 | **DUPLICATE** | Already posted on GitHub before the report | No | Cite the issue or pull request |
-| **FIXED** | Does not happen on `upstream/main` | No | Cite the commit |
+| **FIXED** | Does not happen on `<remote>/main` | No | Cite the commit |
 | **KNOWN** | Written down as a known cost or a deliberate behaviour | No | Cite the document and section |
 | **INVALID** | Does not reproduce, misreads the rule, or needs a precondition that is the attacker's goal already | No | Say which claim fails, with a file and line |
-| **VALID** | Reproduces on `upstream/main`, needs fixing, and none of the above | Yes | Draft the issue, ask, then file it (step 7) |
+| **VALID** | Reproduces on `<remote>/main`, needs fixing, and none of the above | Yes | Draft the issue, ask, then file it (step 7) |
 
 Where the evidence is split, for instance valid but only partly overlapping an existing issue,
 say so and leave the award to the user rather than rounding either way. Where the report is valid
@@ -178,7 +187,7 @@ For a family:
 
 1. List the other inputs the same fix would have missed: the spellings, platforms or tools the
    earlier fixes did not name.
-2. Check each on `upstream/main` as step 5 checks the report, and say for each whether it was run
+2. Check each on `<remote>/main` as step 5 checks the report, and say for each whether it was run
    or read. A run is a test or a reproduction, and a read is an argument from the code.
 3. File a sibling that fails and is not already posted (step 2) as an issue of its own, drafted and
    asked about like the report's own. Do not widen the report's issue to hold it. The report did
@@ -216,7 +225,7 @@ The body, written in the repository's own words rather than the reporter's:
 
 - What happens, and what it costs a person using bravebot.
 - The clause it breaks, quoted, where there is one.
-- The code path on `upstream/main`, as file and symbol, with the line you read.
+- The code path on `<remote>/main`, as file and symbol, with the line you read.
 - Where the bytes come from and what the code does with them.
 - How to reproduce it from the tree.
 - The fix, where it is clear.

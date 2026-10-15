@@ -11,7 +11,6 @@ import re
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -366,99 +365,80 @@ class Work(unittest.TestCase):
         body = next(w for w in self.ran()[1])[-1].removeprefix("body=")
         self.assertEqual(preflight.ADVISORY_RUN.fullmatch(body).groups(), ("2026-10-09", "0123456789ab"))
 
-    def poster(self, cited=(), duplicate=None, labels=None):
-        calls = []
-
-        def gh(args, repo=None):
-            calls.append(args)
-            query = args[args.index("--search") + 1]
-            return json.dumps([{"number": 5, "title": "t", "state": "OPEN", "url": "u"}] if any(g in query for g in cited) else [])
-
-        def post(repo, draft, assignee=None):
-            calls.append(["create", draft["id"]])
-            return f"https://github.com/brave/bravebot/issues/{100 + len(calls)}"
-
-        return calls, types.SimpleNamespace(
-            gh=gh,
-            helper=pa.load_poster().helper,
-            post=post,
-            existing_labels=lambda repo: set(labels or ["bug", "security", "needs-security-review", "severity/high", "area/tools", "release-blocking"]),
-            assignable=lambda repo, login: True,
-            already_filed=lambda repo, draft: duplicate,
-            JITTER=(0.0, 0.0),
-        )
-
-    def post_args(self, **extra):
-        return self.args(**dict({"repo": "brave/bravebot", "assignee": None, "max": 12, "pace": 0.0}, **extra))
-
     def drafted(self, *ids):
         for ghsa in ids:
             self.vet(ghsa, verdict="affected", issue=self.issue)
             self.check(ghsa, verdict="confirmed")
         quiet(pa.draft, self.args())
 
-    def test_post_skips_an_advisory_the_tracker_already_cites_and_records_both(self):
+    def filed_args(self, ghsa, issue, **extra):
+        return self.args(id=ghsa, issue=issue, existing=False, **extra)
+
+    def filed_json(self):
+        return json.loads((self.work / "filed.json").read_text())
+
+    def run_filed(self, ghsa, issue, *flags):
+        return quiet(pa.main, ["filed", "--work-dir", str(self.work), "--id", ghsa, "--issue", issue, *flags])
+
+    def test_filed_merges_into_what_is_already_recorded(self):
         self.drafted(A, B)
-        calls, poster = self.poster(cited=[A])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        code, out = quiet(pa.filed, self.filed_args(A, "41"))
         self.assertEqual(code, 0)
-        self.assertIn(f'"{A}" in:body', calls[0][calls[0].index("--search") + 1])
-        self.assertEqual([c for c in calls if c[0] == "create"], [["create", B]])
-        filed = json.loads((self.work / "filed.json").read_text())
-        self.assertEqual(filed[A], {"issue": 5, "how": "existing"})
-        self.assertEqual(filed[B]["how"], "filed")
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn(A, out)
+        self.assertIn("#41", out)
+        quiet(pa.filed, self.filed_args(B, "42"))
+        self.assertEqual(self.filed_json(), {A: {"issue": 41, "how": "filed"}, B: {"issue": 42, "how": "filed"}})
 
-        calls.clear()
-        quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(calls, [])
+    def test_existing_records_how_existing_and_a_later_call_replaces_an_entry(self):
+        self.drafted(A)
+        self.run_filed(A, "7", "--existing")
+        self.assertEqual(self.filed_json(), {A: {"issue": 7, "how": "existing"}})
+        self.run_filed(A, "8")
+        self.assertEqual(self.filed_json(), {A: {"issue": 8, "how": "filed"}})
 
-    def test_a_dry_run_or_a_missing_label_posts_and_records_nothing(self):
-        self.drafted(A, B)
-        calls, poster = self.poster(cited=[B])
-        quiet(pa.post, self.post_args(dry_run=True), poster=poster)
+    def test_filed_refuses_and_writes_nothing_for_an_unknown_id_or_a_bad_issue_number(self):
+        self.drafted(A)
+        for ghsa, issue in ((B, "5"), (A, "0"), (A, "-3"), (A, "x"), (A, "1.5"), (A, ""), (A, "True")):
+            with self.subTest(id=ghsa, issue=issue):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                    code = pa.main(["filed", "--work-dir", str(self.work), "--id", ghsa, "--issue", issue])
+                self.assertEqual(code, 2)
+                self.assertTrue(err.getvalue().startswith("peer-advisories: "))
+                self.assertFalse((self.work / "filed.json").exists())
+
+    def test_filed_refuses_without_a_readable_drafts_file(self):
+        self.assertFalse((self.work / "drafts.json").exists())
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
         self.assertFalse((self.work / "filed.json").exists())
-        self.assertEqual([c for c in calls if c[0] == "create"], [])
+        (self.work / "drafts.json").write_text("not json")
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
+        self.assertFalse((self.work / "filed.json").exists())
 
-        calls, poster = self.poster(labels=["bug"])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 2)
-        self.assertEqual(calls, [])
+    def test_filed_refuses_an_unreadable_filed_json_rather_than_overwrite_it(self):
+        self.drafted(A)
+        (self.work / "filed.json").write_text("not json")
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
+        self.assertEqual((self.work / "filed.json").read_text(), "not json")
 
-    def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
-        """A confirmed defect left unfiled is vetted again by the next run, and a runaway run must still stop."""
-        drafts = [{"id": f"GHSA-{n:04d}-0000-0000", "title": f"defect {n}", "labels": ["bug"]} for n in range(101)]
-        (self.work / "drafts.json").write_text(json.dumps(drafts))
-        calls, poster = self.poster()
-        with mock.patch.object(pa, "load_poster", lambda: poster):
-            code, out = quiet(pa.main, ["post", "--work-dir", str(self.work), "--pace", "0"])
-        self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in calls if c[0] == "create"], [d["id"] for d in drafts[:100]])
-        self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
-        self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
+    def test_record_ledgers_what_filed_wrote(self):
+        self.drafted(A, B)
+        ledger = self.root / pa.LEDGER
+        self.run_filed(A, "99")
+        quiet(pa.record, self.args(), today="2026-09-30")
+        entries = pa.read_ledger(ledger)
+        self.assertEqual(sorted(entries), [A])
+        self.assertEqual((entries[A]["verdict"], entries[A]["issue"], entries[A]["date"]), ("affected", "#99", "2026-09-30"))
+        self.run_filed(B, "100", "--existing")
+        quiet(pa.record, self.args(), today="2026-10-01")
+        entries = pa.read_ledger(ledger)
+        self.assertEqual((entries[B]["verdict"], entries[B]["issue"]), ("affected", "#100"))
 
-    def test_post_stopped_by_a_gh_failure_files_only_the_rest_when_run_again(self):
-        """Both SKILL.md files tell a run whose post stopped on a gh failure to run it again, which must not file twice."""
-        drafts = [{"id": ghsa, "title": f"defect {ghsa}", "labels": ["bug"]} for ghsa in (A, B, C)]
-        (self.work / "drafts.json").write_text(json.dumps(drafts))
-        _, poster = self.poster()
-        files = poster.post
-
-        def files_b_and_reports_a_failure(repo, draft, assignee=None):
-            url = files(repo, draft, assignee)
-            if draft["id"] == B:
-                raise RuntimeError("HTTP 502")
-            return url
-
-        poster.post = files_b_and_reports_a_failure
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 1)
-        self.assertEqual(list(json.loads((self.work / "filed.json").read_text())), [A])
-
-        calls, poster = self.poster(cited=[B])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in calls if c[0] == "create"], [C])
-        self.assertEqual(json.loads((self.work / "filed.json").read_text())[B]["issue"], 5)
+    def test_post_is_not_a_command(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            pa.main(["post", "--work-dir", str(self.work)])
+        self.assertFalse(hasattr(pa, "post"))
 
 
 class Tree(unittest.TestCase):

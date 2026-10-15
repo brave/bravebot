@@ -655,7 +655,6 @@ mod tests {
             tools: Vec::new(),
             refused: 0,
             withheld: 0,
-            changed: false,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
         }
@@ -802,6 +801,8 @@ mod tests {
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 

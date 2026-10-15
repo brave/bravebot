@@ -23,7 +23,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 12 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 21 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
-| [turns.md](turns.md) | `TURN` | 9 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, and what is done about the same call three times running |
+| [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
+| [turns.md](turns.md) | `TURN` | 10 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, and how the reads of one round are run together |
 | [prompting.md](prompting.md) | `PROMPT` | 11 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
 | [permission-modes.md](permission-modes.md) | `MODE` | 12 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
@@ -36,7 +37,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [instructions.md](instructions.md) | `INSTR` | 14 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 31 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 43 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 44 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 21 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 27 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
@@ -48,6 +49,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 31 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 18 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
+| [connectors.md](connectors.md) | `CONNECTOR` | 9 | the client that hands a credential authority one request for a connector call and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 16 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 9 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
@@ -59,8 +61,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 35 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
-| [background-sessions.md](background-sessions.md) | `BG` | 15 | proposed, the roster, its list and stop, `--bg`, `/bg`, attach and reply built: sessions that keep running after the terminal closes, with a list, attach and reply |
-| [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, nothing built: one background session sending text to another, put to a person and never starting a turn |
+| [background-sessions.md](background-sessions.md) | `BG` | 15 | proposed, the roster, its list and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
+| [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, receiving built and sending not: one background session sending text to another, put to a person and never starting a turn |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 8 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and `bug-report`, which names it |
@@ -84,9 +86,9 @@ the routing-versus-content split they share.
 | [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 14 | `read_git` |
-| [tools/lsp.md](tools/lsp.md) | `LSP` | 12 | `lsp` |
+| [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 6 | `write_file` |
-| [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 6 | `edit_file` |
+| [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 7 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 6 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 28 | `run` |

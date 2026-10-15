@@ -28,10 +28,13 @@ pub mod granted;
 pub mod home;
 pub mod hooks;
 pub mod host_proxy;
+#[cfg(test)]
+mod kept_answers;
 pub mod lsp;
 pub mod manifest;
 pub mod mcp;
 pub mod memory;
+pub mod messages;
 pub mod mode;
 pub mod outcome;
 pub mod output_schema;

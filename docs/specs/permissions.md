@@ -80,9 +80,24 @@ and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
 not cover `weather2`. A specifier that could name nothing callable, such as one holding a space, a
 second colon, or a `*` anywhere but as the whole tool, is unreadable ([PERM-11](#PERM-11)).
 
+An entry in `deny`, `ask` or `allow` is written either as the rule text or as an object holding the
+rule text and why it was written: `{"rule": "Bash(git push *)", "reason": "ask me before a push"}`.
+Both forms are the same rule, anchored the same way ([PERM-3](#PERM-3)) and deciding the same thing.
+The reason is display text: it is shown to the person beside the rule and is never matched,
+compared, or branched on. An object with no `rule` string is unreadable ([PERM-11](#PERM-11)), and a
+`reason` that is blank or not a string is no reason at all.
+
+A `reason` is read from the person's own `~/.bravebot/settings.json` and ignored in a project, local
+or `--settings` layer, which is the layering `summaryModel` and the `provider` block already have.
+The rule itself is unaffected: a lower layer's `deny` or `ask` rule decides what it decided before,
+and its `reason` is not read at all.
+
 **Why.** Routing is trusted and public before it reaches any gate, so matching on it is the driver
 deciding from trusted input, which is what the driver is for. A rule matched against observed bytes
-would be the driver branching on untrusted content, whatever the rule said.
+would be the driver branching on untrusted content, whatever the rule said. A reason says why a
+person wrote a rule, and every surface shows it as their words, so a sentence a checkout wrote is
+not read: a checkout could otherwise write in the person's voice about a refusal they did not
+explain.
 
 `verified-by: bravebot_core::permissions::a_bare_family_name_covers_every_use_of_it`
 `verified-by: bravebot_core::permissions::a_rule_for_one_family_does_not_decide_another`
@@ -96,6 +111,15 @@ would be the driver branching on untrusted content, whatever the rule said.
 `verified-by: bravebot_core::permissions::a_web_fetch_rule_decides_nothing_about_other_families`
 `verified-by: bravebot_core::permissions::an_mcp_rule_is_its_own_family`
 `verified-by: bravebot_core::permissions::an_mcp_rule_covers_the_server_or_the_tool_it_names`
+`verified-by: bravebot_core::permissions::a_rule_carries_no_reason_until_one_is_attached`
+`verified-by: bravebot_core::permissions::explain_attaches_a_reason_by_list_and_written_text`
+`verified-by: bravebot_core::permissions::a_reason_decides_nothing`
+`verified-by: bravebot_config::settings::a_reason_in_the_persons_own_file_is_read_back_with_the_rule`
+`verified-by: bravebot_config::settings::a_reason_another_layer_wrote_is_not_read_back_and_its_rule_still_holds`
+`verified-by: bravebot_config::settings::a_reason_that_is_blank_or_not_a_string_is_absence`
+`verified-by: bravebot_config::settings::a_rule_written_as_a_line_carries_no_reason`
+`verified-by: bravebot_agent::permissions::a_reason_the_person_wrote_reaches_the_rule_and_a_checkouts_does_not`
+`verified-by: bravebot_agent::permissions::a_reason_a_checkout_wrote_does_not_reach_a_rule_the_person_granted`
 
 <a id="PERM-2"></a>
 ### PERM-2: deny, then ask, then allow, and the first match decides
@@ -220,6 +244,7 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_agent::turn::a_single_slash_ask_rule_in_the_project_file_asks_before_a_write`
 `verified-by: bravebot_agent::turn::a_single_slash_deny_in_a_named_file_inside_the_project_starts_beside_that_file`
 `verified-by: bravebot_agent::home::a_settings_rule_is_anchored_at_the_home_directory_the_accessor_names`
+`verified-by: bravebot_config::settings::an_object_entrys_rule_is_anchored_where_a_line_is`
 
 <a id="PERM-4"></a>
 ### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants
@@ -299,7 +324,11 @@ The rule is about the file, not about the spelling used to ask for it. Naming a 
 reference reaches the same refusal, including on the one route that may read quarantined content: a
 processor is handed no denied file either. The planner is told the rule refused and that retrying is
 not the answer, and where the path arrived through a reference the refusal names the reference rather
-than the path, as everything else that goes back to the planner does.
+than the path, as everything else that goes back to the planner does. Where the person's own file
+gave the rule a reason ([PERM-1](#PERM-1)), the refusal carries that sentence as they wrote it,
+including a path it names: the reference-not-path rule is about the name the call used, and this is
+the person's own text. A `reason` any other layer wrote is in no refusal the planner is given,
+because the planner is given nothing a checkout wrote.
 
 The file a name lands on is judged as well as the name. A call is checked against the rules under
 the name it gave and again under the name it reaches once every symbolic link on the way is followed
@@ -391,6 +420,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
+`verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_created_through_a_link_to_it`
@@ -430,6 +460,10 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::tools::a_read_refused_by_a_rule_with_a_reason_says_the_reason`
+`verified-by: bravebot_agent::tools::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
+`verified-by: bravebot_agent::tools::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
+`verified-by: bravebot_agent::turn::a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else
@@ -548,6 +582,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
+`verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -562,6 +597,7 @@ altered a session nobody had configured would be a change to every session.
 `verified-by: bravebot_core::permissions::no_rules_decide_nothing`
 `verified-by: bravebot_agent::permissions::no_block_is_no_rules`
 `verified-by: bravebot_config::settings::the_permissions_block_and_the_env_block_do_not_need_each_other`
+`verified-by: bravebot_ui_bridge::rules::a_rule_written_after_a_session_opened_governs_the_next_one`
 
 ## The question
 
@@ -820,8 +856,10 @@ which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
 `verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_refusal_where_reads_stay_in_the_workspace_names_the_key_and_not_add_dir`
+`verified-by: bravebot_agent::workspace::a_directory_is_not_offered_to_be_opened_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_outward_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout`
 `verified-by: bravebot_agent::workspace::a_move_inward_is_allowed_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_agent::workspace::a_move_through_a_link_out_of_the_tree_is_refused_where_reads_stay_in_the_workspace`
 `verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
@@ -924,6 +962,10 @@ have made each of those three depend on nobody else having spoken.
   makes it sound: an entry covers one rule text from one file in one workspace, so what a second
   session honours unasked is exactly what a person read and accepted. Deleting the line, or the
   file, is the way back, and `doctor` names both.
+- **A grant names its workspace by path.** A checkout removed and cloned again at the same path,
+  with the same rule text in the same settings file, is covered by what was granted for the one
+  before it, since an entry holds no identity of the directory where the startup answer does
+  ([TRUST-23](trust-map.md#TRUST-23)).
 - **A grant given at the interface is not read by a session in lines.** `bravebot -p` installs no
   `allow` rule at all, and the session that puts its questions as lines rather than as panels
   ([cli.md](cli.md)) asks nothing here, so a rule granted in the panel is a prompt again on either.

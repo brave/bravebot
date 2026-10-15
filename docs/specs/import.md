@@ -142,6 +142,12 @@ substitution and would send its requests nowhere. It is listed as left ([IMPORT-
 entry names none, so an entry for one of those ids is left as naming another SDK
 ([IMPORT-4](#IMPORT-4)). Any other id with no `npm` is OpenAI-compatible.
 
+**An `openai` entry is OpenAI-compatible when it names no `npm`**, and is offered at
+`https://api.openai.com/v1`. One naming `@ai-sdk/openai` is left as another SDK
+([IMPORT-4](#IMPORT-4)), that package speaking the Responses API, which this program does not send.
+An entry that names no variable is written with `OPENAI_API_KEY`, the variable opencode reads for
+this id.
+
 **A `google-vertex` entry naming a project is the exception.** The service it names is reached
 through its OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so the entry is
 offered where it states `options.project`. One stating none is left ([IMPORT-4](#IMPORT-4)), because
@@ -188,6 +194,9 @@ build reads it.
 `verified-by: bravebot_config::import::an_entry_naming_another_sdk_is_not_offered`
 `verified-by: bravebot_config::import::disabled_providers_are_not_offered`
 `verified-by: bravebot_config::import::an_auth_json_key_for_a_known_id_is_a_provider`
+`verified-by: bravebot_config::import::an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint`
+`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_auth_json_key_for_openai_is_a_provider`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
 `verified-by: bravebot_config::import::a_top_level_model_is_copied_where_its_provider_is`
 `verified-by: bravebot_config::import::a_limit_is_written_wherever_bravebot_reads_half_of_it`
@@ -233,6 +242,7 @@ API key would otherwise see the three routes and no sign that their setup was lo
 
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location`
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_is_left_and_said`
+`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`
 `verified-by: bravebot_config::import::what_claude_code_uses_and_bravebot_cannot_is_named_and_not_shown`
@@ -294,8 +304,9 @@ file it would be kept in, says the key is kept there in plain text, and does not
 
 An affirmative answer writes `options.apiKey`. Any other answer writes the entry with `env` naming
 the variable opencode itself reads for that id, compiled in beside the endpoint (`openrouter` reads
-`OPENROUTER_API_KEY`), and says to export it. Where no variable is known, the entry is written with
-no credential, which is what a local model server needs, and the line says so.
+`OPENROUTER_API_KEY` and `openai` reads `OPENAI_API_KEY`), and says to export it. Where no variable
+is known, the entry is written with no credential, which is what a local model server needs, and the
+line says so.
 
 A `{file:path}` credential is not followed. It is treated as a declined key, and its line names the
 path.

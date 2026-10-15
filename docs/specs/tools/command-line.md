@@ -141,13 +141,14 @@ Refused, as a compile error with the offending span named:
 |---|---|
 | `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw |
 | `<(…)`, `>(…)` | same, plus a file descriptor nobody named |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` that names nothing (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
 | `$((…))` | arithmetic is a language, and a language needs an interpreter |
 | `&` | backgrounding is a parameter of the call, not a token in the line |
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
 | a glob in program position | a program worked out from what is on disk is a program that changes when the tree does |
 
 **A refusal returns an error and runs nothing.** There is no degraded mode, no "fall back to
@@ -175,12 +176,17 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_command_whose_text_would_be_computed_is_refused`
 `verified-by: bravebot_agent::cmdline::process_substitution_is_refused`
 `verified-by: bravebot_agent::cmdline::a_variable_is_refused`
+`verified-by: bravebot_agent::cmdline::a_dollar_that_names_nothing_is_an_ordinary_character`
+`verified-by: bravebot_agent::cmdline::a_dollar_that_opens_an_expansion_is_still_refused`
+`verified-by: bravebot_agent::cmdline::the_variable_refusal_names_the_quoting_that_works`
 `verified-by: bravebot_agent::cmdline::arithmetic_is_refused`
 `verified-by: bravebot_agent::cmdline::backgrounding_is_refused`
 `verified-by: bravebot_agent::cmdline::a_here_document_is_refused`
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
+`verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
+`verified-by: bravebot_agent::cmdline::a_parenthesis_not_written_onto_an_argument_keeps_the_general_refusal`
 `verified-by: bravebot_agent::cmdline::a_pattern_in_program_position_is_refused`
 `verified-by: bravebot_agent::cmdline::quoting_makes_a_refused_construct_ordinary_text`
 `verified-by: bravebot_agent::cmdline::a_line_that_half_compiles_yields_nothing`
@@ -658,6 +664,7 @@ never be able to spend a large fraction of the conversation.
 
 `verified-by: bravebot_agent::tools::a_capped_output_keeps_its_head_and_its_tail`
 `verified-by: bravebot_agent::tools::an_output_inside_the_cap_is_left_alone`
+`verified-by: bravebot_agent::tools::a_capped_output_says_how_many_bytes_and_lines_went`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_output_stays_reachable`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_job_output_stays_reachable`

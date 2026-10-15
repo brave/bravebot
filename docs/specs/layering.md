@@ -43,6 +43,7 @@ this spec.
 | `bravebot-cli` | Command-line entry point | `core`, `diag`, `agent`, `approval`, `config`, `i18n`, `mcp`, `net`, `sandbox`, `session`, `skus`, `stamp`, `tui` | Presentation. Where nobody can be asked, effects are refused rather than applied unseen. Writes the one file that declares an MCP server, only from a command a person typed, and records an approval of one only on their answer at a terminal. Starts the servers a session was asked for, each only on an answer a person gave or recorded or under the mode they named that answers for them, a local one only confined and a remote one only through the egress gate. See [mcp-servers.md](mcp-servers.md) |
 | `bravebot-mcp` | Model Context Protocol client: the extension boundary for tools | `core`, `diag`, `config`, `net`, `sandbox` | An opaque call erases the routing/content split, so primitives stay native rather than moving behind it. Reaches `config` for the one rule of what a tool's word may be, so the name a list offers and the name a standing answer records are read alike |
 | `bravebot-lsp` | Language server client: a read-only question about a symbol | `core`, `diag`, `sandbox` | Speaks the protocol only. Starts a server under the spawn gate in `sandbox` and reaches nothing else of it. Asks a closed set of read-only methods and never a name a caller supplies, so a server's own method list cannot widen what this does. Separates a location from the text at it: the type carrying a location holds no text, which is what [tools/lsp.md](tools/lsp.md) rests on |
+| `bravebot-connector` | Client for the credential authority that performs connector calls | `core`, `sandbox` | Holds no credential and names no service: starts the one program a person's definition names, under the spawn gate in `sandbox`, writes it one request built from the locked routing, and reads one reply. The reply's payload and failure detail are what a service sent, so they carry the call's capability label, untrusted and private for a connector, and are never read here. See [connectors.md](connectors.md) |
 | `bravebot-filetype` | Whether the start of a file says it is text, and whether a directory's name is one a walk of the tree steps over | none | Pure: no I/O, no label and no dependency, so the agent, the desktop's file helper and `mentions` can share it without any of them depending on another. It judges the bytes or the name it is handed and reads nothing itself |
 | `bravebot-mentions` | Naming a file with `@` in a prompt: the entries offered while a name is typed, what Enter does with it, and which files a sent line names | `filetype` | Shared by `tui` and `ui-bridge` so both front ends read a line alike. Lists one directory's names for a person to choose from, and reads no file's contents. Decides nothing for the planner: a name it returns becomes context only when a person sends the line, and the read is the agent's. Links no terminal library, and neither `core` nor `agent`, so none of it runs inside the driver |
 | `bravebot-sandbox` | OS-level confinement: what a subprocess may reach, what a crash of this process may leave behind, and which of its pages swap may take | none | Confines processes running code we did not write. A processor's caller is our own code, so it is not what this confines. Also holds what a process says to the kernel about its own memory image, which is a platform call rather than a policy and belongs with the other ones: the crate that owns a credential forbids `unsafe`, so it can clear a buffer and asks this one for anything the kernel has to be told. Holds the gate every start of a program and every creation of a control channel runs under, so none overlaps another, and the switch that stops a same-user process reading this one on Linux. See [session-view.md](session-view.md#RPCVIEW-8) |
@@ -177,8 +178,10 @@ is meant to trust, an inch above them.
 A conversation holds messages composed rather than typed: a file somebody named, put in front of
 the planner as a user-role message, a watch that fired while no turn was running to notice it, a
 prompt a front end sent on its own account rather than on anybody's instruction, and the messages
-the agent writes for the planner alone: a tool result sent as prose, the note a resume adds and the
-summary a compaction leaves. Each is recorded
+the agent writes for the planner alone: a tool result sent as prose, the note a resume adds, the
+summary a compaction leaves, and a nudge, a report or a notice written between rounds, as well as a
+line it writes for a turn nobody typed, the standard input a run was given and the output of a shell
+line a person ran. Each is recorded
 with a tag saying which it is, the tag rides beside the message rather than inside it so that no
 part of it reaches a backend, and a surface drawing the conversation back decides what to draw from
 the tag. Reading the words to decide instead is a
@@ -212,6 +215,8 @@ turn it is the context that turn worked from.
 
 `verified-by: bravebot_agent::turn::a_file_the_turn_admits_is_recorded_as_a_message_the_agent_composed`
 `verified-by: bravebot_agent::turn::a_prompt_the_agent_composed_is_recorded_as_one`
+`verified-by: bravebot_agent::turn::a_prompt_the_driver_wrote_is_recorded_as_one`
+`verified-by: bravebot_agent::turn::the_nudge_for_a_spent_tool_budget_is_not_a_prompt`
 `verified-by: bravebot_agent::conversation::a_message_the_agent_composed_is_recorded_as_one`
 `verified-by: bravebot_agent::conversation::the_tag_is_not_part_of_what_the_planner_is_sent`
 `verified-by: bravebot_agent::conversation::a_record_written_before_the_tag_still_reads`

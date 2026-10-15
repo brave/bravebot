@@ -20,7 +20,7 @@
 use crate::ask::{self, Answer};
 use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
-use crate::event::{Event, Principle, Role, Sink};
+use crate::event::{Event, Principle, RecordingSink, Role, Sink};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::slot::SlotId;
 use crate::trust::TrustStore;
@@ -127,6 +127,47 @@ impl fmt::Display for Denial {
 
 impl std::error::Error for Denial {}
 
+/// Why a session refused a `run` call's request for reach past its profile (SANDBOX-26,
+/// SANDBOX-29).
+///
+/// A fixed set of facts about the session, chosen by the driver where it refuses, so the trail can
+/// say which setting withheld a request that the planner is told no setting for. The one piece of
+/// text carried is a sandbox mode's own name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunRequestCause {
+    /// The sandbox mode does not take the request, named by its own name.
+    SandboxMode(&'static str),
+    /// The turn confines none of its runs, so no mode is in force.
+    NoConfinement,
+    /// The platform has no sandbox to confine a run with, whatever the turn asked for.
+    NoPlatformSandbox,
+    /// The workspace is one the person has not trusted
+    /// ([TRUST-7](../../../docs/specs/trust-map.md#TRUST-7)).
+    UntrustedWorkspace,
+    /// The administrator's file closed the network the runs have.
+    ManagedClosedNetwork,
+    /// The call came from a delegate.
+    Delegate,
+    /// The session names no profile directory for a request to be recorded under.
+    NoProfileDirectory,
+}
+
+impl fmt::Display for RunRequestCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SandboxMode(mode) => write!(f, "the {mode} sandbox mode does not take it"),
+            Self::NoConfinement => f.write_str("this turn confines none of its runs"),
+            Self::NoPlatformSandbox => {
+                f.write_str("this platform has no sandbox to confine runs with")
+            }
+            Self::UntrustedWorkspace => f.write_str("the workspace is not trusted"),
+            Self::ManagedClosedNetwork => f.write_str("a managed setting closes the network"),
+            Self::Delegate => f.write_str("a delegate may not ask"),
+            Self::NoProfileDirectory => f.write_str("the session has no profile directory"),
+        }
+    }
+}
+
 type Gated<T> = Result<T, Denial>;
 
 /// The routing block for one turn: trusted key/value pairs that decide where effects
@@ -135,7 +176,7 @@ type Gated<T> = Result<T, Denial>;
 /// Every value is `(T,pub)` by construction: [`Routing::insert`] only accepts a
 /// trusted-public [`Labelled`], so untrusted content cannot enter routing even by
 /// mistake.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Routing {
     fields: BTreeMap<String, String>,
 }
@@ -190,7 +231,7 @@ struct Grant {
 }
 
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ReleasePlan {
     sources: BTreeSet<SlotId>,
 }
@@ -279,7 +320,8 @@ pub enum AfterRepeatedCall {
 
 /// The reference monitor for exactly one turn.
 ///
-/// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn.
+/// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
+/// there is, [`Policy::branch`], records into a buffer of its own and is not a second turn.
 pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
@@ -315,6 +357,12 @@ pub struct Policy<'sink, S: Sink> {
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
     /// nothing.
     backslash_separates: bool,
+    /// Whether a `request_path` is granted here without a question and opens its directory to the
+    /// file tools, as of the tool call being answered.
+    ///
+    /// Said by the caller before each call, since the permission mode can change between two of
+    /// them, and read only to word a refusal ([`Policy::path_requests_are_granted_unasked`]).
+    path_requests_unasked: bool,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// Which command lines this session has already put to the user at a run prompt.
@@ -482,6 +530,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: Vec::new(),
             sink,
             denials: 0,
+            path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
@@ -1054,43 +1103,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, label))
     }
 
-    /// Give the planner a server's tool list where it is the list a person vouched for before.
-    ///
-    /// The comparison is here because it is a decision taken from the server's bytes, and this
-    /// module is the one place allowed to take one. `digest` is how the list's record was spelled
-    /// when it was written, a plain function so it can carry nothing in with it. A list that is
-    /// not the one recorded comes back as it was, to be put to the person again: a package run at
-    /// `@latest` whose tools changed asks again, and one whose tools did not asks nothing.
-    pub fn promote_a_recorded_tool_list(
-        &mut self,
-        alias: &str,
-        list: Labelled<String>,
-        recorded: &str,
-        digest: fn(&str) -> String,
-    ) -> Result<Labelled<String>, Labelled<String>> {
-        let was = list.label();
-        let proof = Declassification::authorise("a tool list, compared with the one vouched for");
-        let text = list.declassify(&proof);
-        if digest(&text) != recorded {
-            self.allow(
-                "mcp_tools",
-                format!(
-                    "the tools {alias} offers are not the list the user vouched for before, asking"
-                ),
-            );
-            return Err(Labelled::new(text, was));
-        }
-        let label = Label::trusted_public();
-        self.allow(
-            "mcp_tools",
-            format!(
-                "the tools {alias} offers were {was}; they are the list the user vouched for \
-                 before, so the planner is offered them at {label}"
-            ),
-        );
-        Ok(Labelled::new(text, label))
-    }
-
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
@@ -1149,6 +1161,74 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let authority = self.file_authority();
         let guard = authority.capture();
         capture(self, &guard)
+    }
+
+    /// [`Policy::capture_files`] for a capture that only reads, which other such captures run
+    /// beside.
+    ///
+    /// The closure is given no handle to enter an effect, so it cannot change a file decision.
+    /// It is still held against every effect, so the bytes it reads and the label it assigns them
+    /// belong to one state of the map. The closure must not prompt, call a model, or wait for a
+    /// process or delegate.
+    pub fn capture_files_shared<R>(&mut self, capture: impl FnOnce(&mut Self) -> R) -> R {
+        let authority = self.file_authority();
+        let _guard = authority.capture_shared();
+        capture(self)
+    }
+
+    /// A policy that decides as this one does and records what it decides in `record`, for work
+    /// that runs beside other work on another thread.
+    ///
+    /// Everything this policy holds is copied, and the file authority is shared, so a decision the
+    /// map makes is the one the map makes for this policy. Nothing the branch does reaches this
+    /// policy until [`Policy::rejoin`]: its events stay in `record`, and its denials are not
+    /// counted here. Only the events and the denials rejoin. A branch may therefore run only what
+    /// leaves the rest of the policy as it found it, which is a gate that reads. One that records
+    /// a grant, an answer or a loaded skill would lose it.
+    pub fn branch<'b>(&self, record: &'b mut RecordingSink) -> Policy<'b, RecordingSink> {
+        Policy {
+            routing: self.routing.clone(),
+            release: self.release.clone(),
+            capabilities: self.capabilities.clone(),
+            grants: self.grants.clone(),
+            sink: record,
+            denials: 0,
+            path_requests_unasked: self.path_requests_unasked,
+            trust: self.trust.clone(),
+            root: self.root.clone(),
+            scratch: self.scratch.clone(),
+            skill_reach: self.skill_reach.clone(),
+            backslash_separates: self.backslash_separates,
+            programs: self.programs.clone(),
+            asked: self.asked.clone(),
+            remembered: self.remembered.clone(),
+            permissions: self.permissions.clone(),
+            delegates: self.delegates.clone(),
+            at: self.at,
+            named_out_delegating: self.named_out_delegating,
+            write_limits: self.write_limits.clone(),
+            spawned: self.spawned,
+            tree: self.tree.clone(),
+            vouch_asked: self.vouch_asked.clone(),
+            exposed: self.exposed.clone(),
+            fetching: self.fetching.clone(),
+            calling_server: self.calling_server.clone(),
+            calling_socket: self.calling_socket.clone(),
+            server_hop: self.server_hop.clone(),
+            context: self.context,
+            holds: self.holds,
+        }
+    }
+
+    /// Take back what a [`Policy::branch`] recorded: its events, emitted here in the order it
+    /// took them, and the refusals among them counted.
+    pub fn rejoin(&mut self, record: RecordingSink) {
+        for event in record.into_events() {
+            if matches!(event, Event::GateBlocked { .. }) {
+                self.denials += 1;
+            }
+            self.sink.emit(event);
+        }
     }
 
     /// Say which directory this turn runs in.
@@ -1417,6 +1497,41 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.hold(
             report.confidentiality,
             "the planner was given a delegate's private report",
+        );
+    }
+
+    /// Take in the text of a message another session sent, under the label it was sent with
+    /// (MSG-9).
+    ///
+    /// The label arrives as a word beside the text. It is read back and never chosen here: a word
+    /// that names no label, or no word at all, is the lowest label there is, so a message that lost
+    /// its label on the way is quarantined rather than shown. Nothing the text says reaches the
+    /// label, and nothing here can give a message a better one than it was sent with.
+    ///
+    /// This is a road in, and the only one for a message: the first label such a value ever
+    /// receives, assigned from where it came from. The trail records how long it is and the label
+    /// it was given, and none of its words.
+    pub fn admit_session_message(&mut self, sent_as: &str, text: String) -> Labelled<String> {
+        let label = Label::named(sent_as).unwrap_or_else(Label::untrusted_private);
+        self.allow(
+            "provenance",
+            format!(
+                "{} characters in a message from another session, labelled {label}",
+                text.chars().count()
+            ),
+        );
+        Labelled::new(text, label)
+    }
+
+    /// Hold what a message from another session held, once the planner has been given its words.
+    ///
+    /// A message labelled private makes what the planner writes from here private, as a private
+    /// report from a delegate does, and a resumed session keeps that. A message the planner was
+    /// given a reference to never entered its context.
+    pub fn heard_from_session(&mut self, message: Label) {
+        self.hold(
+            message.confidentiality,
+            "the planner was given a private message from another session",
         );
     }
 
@@ -1932,55 +2047,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(value, label)
     }
 
-    /// Label the output of a program, from what it is and what went into it.
-    ///
-    /// Two cases, and which one applies is decided here rather than by the caller.
-    ///
-    /// An **opaque** program gets `(U,priv)`. Nothing can establish what it did, so nothing better
-    /// than the pessimistic label holds. This is the default and covers everything not in
-    /// [`crate::pure::FILTERS`].
-    ///
-    /// A **side-effect-free filter** passes its input's label through. `wc -l` reading stdin cannot
-    /// do anything but count what it was given, so its output is a function of its input and carries
-    /// the input's label. With no input at all, as with `pwd`, the output is a function of state the
-    /// user established and is trusted.
-    ///
-    /// **This is not an upgrade.** It is the first label the output ever receives, assigned from
-    /// provenance the kernel tracked, exactly as [`Policy::label_model_output`] is. Nothing
-    /// relabels: an untrusted input yields an untrusted result, and there is no argument or
-    /// declaration that makes a filter's output better than what it consumed.
-    ///
-    /// Eligibility is judged from `(program, args)`, which are trusted by the time they reach here,
-    /// since argv is routing and has either been promoted or endorsed. So this is a comparison on
-    /// trusted data, which the rule permits. It is nonetheless the most consequential such comparison in
-    /// the kernel, because a gap in the table means untrusted bytes labelled trusted.
-    pub fn label_command_output(
-        &mut self,
-        program: &str,
-        args: &[String],
-        stdin: Option<Label>,
-    ) -> Label {
-        if !crate::pure::is_pure_filter(program, args) {
-            let label = Label::untrusted_private();
-            self.allow(
-                "provenance",
-                format!("{program}: output labelled {label}, since what it did is unknown"),
-            );
-            return label;
-        }
-
-        // A filter with no input produces a function of nothing an attacker influenced.
-        let label = stdin.unwrap_or_else(Label::trusted_public);
-        self.allow(
-            "provenance",
-            format!(
-                "{program}: output labelled {label}, carried through a filter that only transforms \
-                 its input"
-            ),
-        );
-        label
-    }
-
     /// Label what a command the user typed themselves printed.
     ///
     /// Shell mode is the user working in their own workspace, so the command is theirs in the way
@@ -1994,7 +2060,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the bytes may have come out of the workspace and running a command does not publish them.
     ///
     /// **This is not an upgrade.** It is the first label these bytes ever receive, assigned from
-    /// provenance the driver knows, exactly as [`Policy::label_command_output`] and
+    /// provenance the driver knows, exactly as [`Policy::before_plan`] and
     /// [`Policy::label_user_configuration`] are. Nothing here relabels a value that already had a
     /// label.
     ///
@@ -2028,7 +2094,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// **This is not an upgrade.** It is the first label these bytes ever receive, assigned from
     /// provenance the driver knows, exactly as [`Policy::label_model_output`] and
-    /// [`Policy::label_command_output`] are. Nothing here relabels a value that already had a
+    /// [`Policy::before_plan`] are. Nothing here relabels a value that already had a
     /// label, and nothing here may be pointed at a path outside that directory: a file from the
     /// workspace is labelled by the trust map, through `Workspace::read`, and asking this instead
     /// would be laundering it.
@@ -6405,6 +6471,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("requested_scopes", detail);
     }
 
+    /// Say whether a `request_path` is granted without a question for the call about to be
+    /// answered (PATHREQ-7).
+    pub fn grant_path_requests_unasked(&mut self, unasked: bool) {
+        self.path_requests_unasked = unasked;
+    }
+
+    /// Whether a `request_path` is granted without a question and opens its directory to the file
+    /// tools, which is what a refusal of a file tool tells the planner to rely on (PATHREQ-7).
+    pub fn path_requests_are_granted_unasked(&self) -> bool {
+        self.path_requests_unasked
+    }
+
     /// Record the permission mode a turn begins with, by its name.
     ///
     /// The mode decides whether the next prompt is drawn, and it is the one thing that changes
@@ -6797,7 +6875,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let value = proposed.clone().declassify(&proof);
         // The label is all this decides. Whether the path stays inside the workspace is settled
         // when it resolves, after this line is written, and a refusal there is recorded by
-        // `refuse_outside_workspace`.
+        // `refuse_outside_workspace` or `refuse_path_inside_workspace`.
         self.allow(
             "promote",
             format!("{tool}.{field} proposed by the model, public and non-destructive"),
@@ -6813,10 +6891,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// argument, as `read_file.path`. `named` is the name the planner was told, `ref:N` for a
     /// reference, and `offered` is what the person was told they can do about it.
     pub fn refuse_outside_workspace(&mut self, call: &str, named: &str, offered: &str) {
+        self.refuse_confined_path(call, named, "resolves outside the workspace", offered);
+    }
+
+    /// Record that a path inside the workspace was refused for not being named relative to its
+    /// root (TRUST-10), so the planner was told to name it that way. The arguments are those of
+    /// [`Policy::refuse_outside_workspace`], whose record this is where the path does not leave.
+    pub fn refuse_path_inside_workspace(&mut self, call: &str, named: &str, offered: &str) {
+        self.refuse_confined_path(
+            call,
+            named,
+            "is inside the workspace but not named relative to its root",
+            offered,
+        );
+    }
+
+    fn refuse_confined_path(&mut self, call: &str, named: &str, finding: &str, offered: &str) {
         let _ = self.deny(
             "confine",
             Principle::Confinement,
-            format!("{call}: '{named}' resolves outside the workspace; remedy offered: {offered}"),
+            format!("{call}: '{named}' {finding}; remedy offered: {offered}"),
         );
     }
 
@@ -6843,6 +6937,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "sandbox",
             Principle::Confinement,
             format!("{call}: the {mode} sandbox mode refuses a write, so nothing was written"),
+        );
+    }
+
+    /// Record that a `run` call asked for reach past the session's profile and the session
+    /// refused it (SANDBOX-26, SANDBOX-29).
+    ///
+    /// The planner is told one sentence that names no setting, so without this the trail holds
+    /// nothing that says which setting withheld the request (TRACE-1), and the turn reads as clean.
+    /// `argument` is the `run` argument, `unconfined` or `scopes`, and `causes` is every reason that
+    /// held, in the fixed order the caller lists them. Each is a fact about the session and none is
+    /// text a call or a tool produced (TRACE-2).
+    pub fn refuse_run_request(&mut self, argument: &'static str, causes: &[RunRequestCause]) {
+        debug_assert!(!causes.is_empty(), "a refusal with no cause names nothing");
+        let causes: Vec<String> = causes.iter().map(RunRequestCause::to_string).collect();
+        let _ = self.deny(
+            "sandbox",
+            Principle::Confinement,
+            format!(
+                "run.{argument}: the request was refused and the line did not run: {}",
+                causes.join("; ")
+            ),
         );
     }
 
@@ -9828,26 +9943,6 @@ five
         );
     }
 
-    /// A list asks nothing where it is the one somebody vouched for before, and a list that is not
-    /// comes back as it was, still quarantined, to be put to them again.
-    #[test]
-    fn a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for() {
-        let mut sink = RecordingSink::new();
-        let mut policy = open_policy(&mut sink);
-        let listed = |text: &str| Labelled::new(text.to_string(), Label::untrusted_public());
-        let spelled: fn(&str) -> String = |text| text.to_uppercase();
-
-        let same = policy
-            .promote_a_recorded_tool_list("weather", listed("[\"a\"]"), "[\"A\"]", spelled)
-            .expect("the list recorded");
-        assert_eq!(same.label(), Label::trusted_public());
-
-        let changed = policy
-            .promote_a_recorded_tool_list("weather", listed("[\"b\"]"), "[\"A\"]", spelled)
-            .expect_err("a list nobody vouched for");
-        assert_eq!(changed.label(), Label::untrusted_public());
-    }
-
     /// The check a yes to a tool list is put behind reads the list as it will be drawn, and says
     /// where it came from in the driver's words rather than the server's.
     #[test]
@@ -9891,6 +9986,30 @@ five
         assert!(
             policy.plan_needs_approval(&with_an_assignment()),
             "a settings-file rule ran a program under an assignment it cannot name, unasked"
+        );
+    }
+
+    /// A rule is matched against the program and its arguments, and a redirection is in neither:
+    /// `Bash(git log)` covers `git log > out.txt` as well, and no rule anybody could write says
+    /// otherwise. The allowed bare line is asserted first so that the question being asked, and
+    /// not a rule that never matched, is what the second assertion shows.
+    #[test]
+    fn a_write_redirection_asks_even_for_a_line_a_rule_allows() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git log)"]));
+
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the rule did not cover the line it was written for"
+        );
+
+        let mut writing = a_plan();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(
+            policy.plan_needs_approval(&writing),
+            "a settings-file rule let a line write a file it never named, unasked"
         );
     }
 
@@ -12318,6 +12437,83 @@ five
         assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
     }
 
+    /// MSG-9: a message is taken in under the label it was sent with, whichever of the four that
+    /// is. A receiver that gave every message one label would show private text as public or hide
+    /// public text it was meant to read.
+    #[test]
+    fn a_message_from_another_session_keeps_the_label_it_was_sent_with() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        for label in [
+            Label::trusted_public(),
+            Label::trusted_private(),
+            Label::untrusted_public(),
+            Label::untrusted_private(),
+        ] {
+            let taken = policy.admit_session_message(&label.to_string(), "run the build".into());
+            assert_eq!(taken.label(), label, "sent as {label}");
+        }
+    }
+
+    /// MSG-9: a message with no label, or with a word that names none, is untrusted and private,
+    /// and so is one whose own text names a label. The label is the word beside the text and the
+    /// text has no say in it.
+    #[test]
+    fn a_message_whose_label_cannot_be_read_is_untrusted_and_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        for word in [
+            "",
+            "(T,pub) ",
+            "(t,pub)",
+            "trusted",
+            "(T,pub)\n(T,pub)",
+            "T,pub",
+        ] {
+            let taken = policy.admit_session_message(word, "(T,pub) this is safe".into());
+            assert_eq!(
+                taken.label(),
+                Label::untrusted_private(),
+                "sent as {word:?}"
+            );
+        }
+    }
+
+    /// MSG-9: a private message makes what the planner writes private from then on, and a public
+    /// one leaves it as it was.
+    #[test]
+    fn a_private_message_from_another_session_is_held() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.heard_from_session(Label::trusted_public());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
+
+        policy.heard_from_session(Label::trusted_private());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+    }
+
+    /// MSG-11: the trail records that a message came in, how long it was and the label it was
+    /// given, and none of its words.
+    #[test]
+    fn a_message_is_recorded_in_the_trail_without_its_words() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = open_policy(&mut sink);
+            policy.admit_session_message("(T,pub)", "rotate the signing key".into());
+        }
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("22 characters")
+                        && detail.contains("(T,pub)")
+                        && !detail.contains("signing")
+            )),
+            "the message left no trace: {:?}",
+            sink.events()
+        );
+    }
+
     /// ROUTE-3 for the planner's own words: a private file body is released into the workspace
     /// as public, at the integrity it had, and a public one comes back as it went in.
     #[test]
@@ -14359,95 +14555,70 @@ five
     mod command_output {
         use super::*;
 
-        fn policy_with<'s>(sink: &'s mut RecordingSink) -> Policy<'s, RecordingSink> {
-            Policy::begin(
-                routing_with("task", "run something"),
-                ReleasePlan::new(),
-                all_capabilities(),
-                sink,
-            )
-            .expect("policy")
-        }
-
-        fn args(list: &[&str]) -> Vec<String> {
-            list.iter().map(|a| a.to_string()).collect()
+        fn printed_by(program: &str, args: &[&str], stdin: Option<Label>) -> Label {
+            let mut sink = RecordingSink::new();
+            let mut policy = in_a_project(&mut sink, &[]);
+            let mut plan = plan_of(vec![step_named(program, args)]);
+            plan.stdin = stdin;
+            label_of(&mut policy, &plan)
         }
 
         /// An unrecognised program tells us nothing, so its output gets the pessimistic label
-        /// whatever was fed in.
+        /// whatever was fed in. This is the label a real run is given, by `before_plan`.
         #[test]
         fn an_opaque_program_always_yields_untrusted_private_output() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             for stdin in [
                 None,
                 Some(Label::trusted_public()),
                 Some(Label::trusted_private()),
             ] {
                 assert_eq!(
-                    policy.label_command_output("git", &args(&["log"]), stdin),
+                    printed_by("git", &["log"], stdin),
                     Label::untrusted_private(),
                     "git log output was not pessimistically labelled"
                 );
             }
         }
 
-        /// The point of the feature: a filter's output is a function of its input, so a trusted input
-        /// yields a readable result.
+        /// A filter's output is a function of its input, so a trusted input yields a trusted
+        /// result. Private, since a line that ran is never published by running.
         #[test]
-        fn a_filter_passes_a_trusted_label_through() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            assert_eq!(
-                policy.label_command_output("wc", &args(&["-l"]), Some(Label::trusted_private())),
-                Label::trusted_private()
-            );
+        fn a_filter_fed_a_trusted_label_prints_trusted_private_output() {
+            for stdin in [Label::trusted_public(), Label::trusted_private()] {
+                assert_eq!(
+                    printed_by("wc", &["-l"], Some(stdin)),
+                    Label::trusted_private(),
+                    "{stdin}"
+                );
+            }
         }
 
-        /// And the direction that matters more: a filter never improves what it consumed.
+        /// A filter never improves what it consumed: an untrusted input prints untrusted output.
         #[test]
-        fn a_filter_passes_an_untrusted_label_through_unchanged() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            for label in [Label::untrusted_public(), Label::untrusted_private()] {
+        fn a_filter_fed_an_untrusted_label_prints_untrusted_output() {
+            for stdin in [Label::untrusted_public(), Label::untrusted_private()] {
                 assert_eq!(
-                    policy.label_command_output("wc", &args(&["-l"]), Some(label)),
-                    label,
-                    "a filter upgraded its input's label"
+                    printed_by("wc", &["-l"], Some(stdin)),
+                    Label::untrusted_private(),
+                    "a filter upgraded its input's label: {stdin}"
                 );
             }
         }
 
         /// A filter taking no input produces a function of nothing an attacker influenced, which is
-        /// what makes `pwd` useful.
+        /// what makes `pwd` useful. It is private all the same: a run is not a release.
         #[test]
-        fn a_filter_with_no_input_yields_trusted_output() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
-            assert_eq!(
-                policy.label_command_output("pwd", &args(&[]), None),
-                Label::trusted_public()
-            );
+        fn a_filter_with_no_input_prints_trusted_private_output() {
+            assert_eq!(printed_by("pwd", &[], None), Label::trusted_private());
         }
 
         /// The interpreters must not get pass-through, since they can write files and run commands
         /// from an argument. This is the case a mistake would be worst.
         #[test]
         fn interpreters_get_no_pass_through_even_on_trusted_input() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             for program in ["sed", "awk", "bash"] {
                 assert_eq!(
-                    policy.label_command_output(
-                        program,
-                        &args(&["x"]),
-                        Some(Label::trusted_public())
-                    ),
+                    printed_by(program, &["x"], Some(Label::trusted_public())),
                     Label::untrusted_private(),
                     "{program} was granted label pass-through"
                 );
@@ -14458,24 +14629,13 @@ five
         /// label would then describe stdin while the data came from disk.
         #[test]
         fn an_eligible_program_reading_a_file_gets_no_pass_through() {
-            let mut sink = RecordingSink::new();
-            let mut policy = policy_with(&mut sink);
-
             assert_eq!(
-                policy.label_command_output(
-                    "grep",
-                    &args(&["-r", "secret"]),
-                    Some(Label::trusted_public())
-                ),
+                printed_by("grep", &["-r", "secret"], Some(Label::trusted_public())),
                 Label::untrusted_private(),
                 "grep recursing the filesystem was granted pass-through"
             );
             assert_eq!(
-                policy.label_command_output(
-                    "head",
-                    &args(&["-1", "/etc/hosts"]),
-                    Some(Label::trusted_public())
-                ),
+                printed_by("head", &["-1", "/etc/hosts"], Some(Label::trusted_public())),
                 Label::untrusted_private()
             );
         }
@@ -14486,14 +14646,17 @@ five
         fn the_labelling_decision_is_recorded() {
             let mut sink = RecordingSink::new();
             {
-                let mut policy = policy_with(&mut sink);
-                policy.label_command_output("wc", &args(&["-l"]), Some(Label::trusted_public()));
+                let mut policy = in_a_project(&mut sink, &[]);
+                let mut plan = plan_of(vec![step_named("wc", &["-l"])]);
+                plan.stdin = Some(Label::trusted_public());
+                label_of(&mut policy, &plan);
             }
             assert!(
                 sink.events().iter().any(|e| matches!(
                     e,
                     Event::GatePassed { gate, detail }
-                        if *gate == "provenance" && detail.contains("wc")
+                        if *gate == "provenance"
+                            && detail.contains(&format!("output labelled {}", Label::trusted_private()))
                 )),
                 "the labelling was not recorded"
             );
@@ -15279,6 +15442,25 @@ five
                 .before_delegate(&argument("reader"), &private, None)
                 .expect_err("private content must not become a prompt");
             assert_eq!(err.principle, Principle::Confinement);
+            assert!(!policy.finish());
+        }
+
+        /// DELEGATE-2: the refusal reads the kind's label as well as the task's. A task that is
+        /// public beside a kind that is private is refused, and the refusal names the kind.
+        #[test]
+        fn a_private_kind_cannot_direct_a_delegate_beside_a_public_task() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            let private_kind = Labelled::new("reader".to_string(), Label::untrusted_private());
+            let err = policy
+                .before_delegate(&private_kind, &argument("summarise the notes"), None)
+                .expect_err("a private kind must not decide what a delegate is");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(
+                err.to_string().contains("kind is"),
+                "the refusal does not name the kind: {err}"
+            );
             assert!(!policy.finish());
         }
 
@@ -16135,6 +16317,77 @@ five
                 reasons[0]
             );
             assert!(sink.events().iter().any(Event::is_refusal));
+        }
+
+        /// TRACE-1: a `run` request for reach past the profile that the session refuses is a refusal
+        /// under `sandbox`, naming the argument and each cause that held, in the order given. The
+        /// planner is told no setting, so this record is the only place to read which one withheld
+        /// it. The turn does not end as clean, and the entry holds the mode's name and fixed words
+        /// and nothing else (TRACE-2).
+        #[test]
+        fn a_refused_run_request_names_its_argument_and_every_cause_that_held() {
+            use super::RunRequestCause::{
+                Delegate, ManagedClosedNetwork, NoConfinement, NoPlatformSandbox,
+                NoProfileDirectory, SandboxMode, UntrustedWorkspace,
+            };
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_run_request(
+                "unconfined",
+                &[
+                    SandboxMode("strict"),
+                    UntrustedWorkspace,
+                    ManagedClosedNetwork,
+                    Delegate,
+                ],
+            );
+            turn.refuse_run_request("scopes", &[NoConfinement]);
+            turn.refuse_run_request("scopes", &[NoProfileDirectory]);
+            turn.refuse_run_request("scopes", &[NoPlatformSandbox]);
+            assert!(!turn.finish(), "a turn that refused a request ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.unconfined: the request was refused and the line did not run: the \
+                         strict sandbox mode does not take it; the workspace is not trusted; a \
+                         managed setting closes the network; a delegate may not ask"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: this turn \
+                         confines none of its runs"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: the \
+                         session has no profile directory"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: this \
+                         platform has no sandbox to confine runs with"
+                    ),
+                ]
+            );
         }
 
         /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds
@@ -17243,5 +17496,126 @@ five
             "an unvouched pre-image is left unread, not denied: {:?}",
             sink.events()
         );
+    }
+
+    /// A branch decides what the policy it came from would: the context the planner has met, the
+    /// rules in force, the capabilities held. One that began from nothing would pass a read in a
+    /// context the policy refuses it in.
+    #[test]
+    fn a_branch_decides_what_the_policy_it_came_from_would() {
+        for met in [Integrity::Trusted, Integrity::Untrusted] {
+            let mut sink = RecordingSink::new();
+            let policy = Policy::begin(
+                routing_with("task", "read"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap()
+            .with_permissions(permissions(&["Read(//work/secret.txt)"], &[], &[]))
+            .resuming(met);
+            let mut record = RecordingSink::new();
+            let mut branch = policy.branch(&mut record);
+
+            let proposed = delegates::argument("src");
+            assert_eq!(
+                branch
+                    .promote_confined_read("search", "directory", &proposed)
+                    .is_ok(),
+                met == Integrity::Trusted,
+                "context {met:?}"
+            );
+            assert_eq!(branch.context_integrity(), met);
+            assert!(branch.before_capability(Capability::FileRead).is_ok());
+            assert!(branch.before_capability(Capability::ShellExec).is_err());
+            assert!(branch.read_is_denied("/work/secret.txt"));
+            assert!(!branch.read_is_denied("/work/other.txt"));
+        }
+    }
+
+    /// A branch words a refusal as the policy it came from would. One that began with the grant of
+    /// an unasked `request_path` unset would tell the planner to ask when the policy grants it
+    /// without a question.
+    #[test]
+    fn a_branch_keeps_whether_path_requests_are_granted_unasked() {
+        for unasked in [true, false] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.grant_path_requests_unasked(unasked);
+            let mut record = RecordingSink::new();
+            let branch = policy.branch(&mut record);
+            assert_eq!(
+                branch.path_requests_are_granted_unasked(),
+                unasked,
+                "policy granting unasked: {unasked}"
+            );
+        }
+    }
+
+    /// A branch shares the map rather than copying it, so a decision made after the branch began
+    /// is the one it reads. A snapshot would read a path as trusted after a write had made it
+    /// untrusted.
+    #[test]
+    fn a_branch_reads_the_file_decisions_made_after_it_began() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        let policy = open_policy(&mut sink).with_trust(store);
+        let authority = policy.file_authority();
+        let mut record = RecordingSink::new();
+        let branch = policy.branch(&mut record);
+        assert!(!branch.read_is_quarantined("src/a.rs"));
+
+        authority.publish("src/a.rs", Integrity::Untrusted);
+
+        assert!(branch.read_is_quarantined("src/a.rs"));
+        assert!(!branch.read_is_quarantined("src/b.rs"));
+    }
+
+    /// What a branch decides stays in its own record until the policy takes it back, and then
+    /// arrives in the order the branch took it, with its refusals counted. A branch that wrote to
+    /// the policy's sink would interleave with its siblings; one that was not counted would leave a
+    /// turn that was refused reading as clean.
+    #[test]
+    fn what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order() {
+        let run = |rejoin: bool| {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "read"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            policy.before_capability(Capability::FileRead).unwrap();
+            let (mut first, mut second) = (RecordingSink::new(), RecordingSink::new());
+            {
+                let mut a = policy.branch(&mut first);
+                a.before_capability(Capability::FileRead).unwrap();
+                let _ = a.before_capability(Capability::ShellExec);
+                let mut b = policy.branch(&mut second);
+                let _ = b.before_capability(Capability::WebFetch);
+            }
+            let (first_events, second_events) = (first.events().to_vec(), second.events().to_vec());
+            if rejoin {
+                policy.rejoin(first);
+                policy.rejoin(second);
+            }
+            let clean = policy.finish();
+            (sink.events().to_vec(), clean, first_events, second_events)
+        };
+
+        let (alone, alone_clean, first, second) = run(false);
+        let (joined, joined_clean, ..) = run(true);
+
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(second.len(), 1, "{second:?}");
+        assert!(
+            alone_clean,
+            "a refusal in a branch counted before it rejoined"
+        );
+        assert!(!joined_clean, "a refusal in a branch was not counted");
+        assert_eq!(joined[..alone.len()], alone[..]);
+        assert_eq!(joined[alone.len()..], [first, second].concat()[..]);
     }
 }

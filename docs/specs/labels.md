@@ -16,10 +16,12 @@ guards:
       - crates/agent/src/tools.rs: 27
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
-      - crates/agent/tests/workspace.rs: 37
+      - crates/agent/tests/incognito.rs: 1
+      - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 114
+      - crates/connector/src/lib.rs: 2
+      - crates/core/src/policy.rs: 113
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
@@ -34,14 +36,15 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools.rs: 36
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 58
+      - crates/agent/tests/workspace.rs: 59
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
-      - crates/core/src/policy.rs: 63
+      - crates/connector/src/lib.rs: 1
+      - crates/core/src/policy.rs: 62
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -50,14 +53,15 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
-      - crates/agent/src/manifest.rs: 10
+      - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 22
-      - crates/agent/src/turn.rs: 5
+      - crates/agent/src/turn.rs: 6
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 255
+      - crates/agent/tests/incognito.rs: 1
+      - crates/agent/tests/workspace.rs: 280
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -68,7 +72,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 60
+      - crates/core/src/policy.rs: 59
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -96,6 +100,19 @@ guards:
     sites:
       - crates/agent/src/tools.rs: 1
       - crates/core/src/policy.rs: 1
+  - symbol: Policy::names_for_display
+    sites:
+      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/turn.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::promote_reference_for_read
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
+  - symbol: Policy::destination_from_reference
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
   - symbol: VettingSpec::where_it_came_from
     sites:
       - crates/core/src/policy.rs: 5
@@ -106,7 +123,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 10
+      - crates/agent/src/turn.rs: 12
       - crates/core/src/policy.rs: 8
   - symbol: Policy::render_in_place
     sites:
@@ -264,12 +281,23 @@ the way it pins a declassification. A decision relocated into the kernel and tak
 address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
 outside the gates does not compile at all, bar the single release named next.
 
-One of those sentences does leave the kernel, because the person being asked whether to let a
-slot's bytes through has to be told which file they are. It leaves through a single gate that
-records the release, and the `guards` list pins that gate's uses file by file too, so a second
-reader of a slot's address anywhere downstream is a line in a diff rather than a branch nobody
-is shown. Apart from that release, outside the kernel a slot answers one question about its
-address, whether asking for its bytes will open a file, which names nothing.
+Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
+`guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
+than a branch nobody is shown:
+
+- **The sentence saying where its bytes came from**, through `release_where_a_slot_came_from`,
+  because the person being asked whether to let a slot's bytes through has to be told which file
+  they are.
+- **The file a reference names, for a line a person reads**, through `names_for_display`. It
+  returns every slot's filename as a plain string to be worded into a preview, a note or a task
+  line, and records one `Declassified` event and one `display` allow for the call. It is a display
+  release and nothing it returns may become a path an effect uses.
+- **The file a reference names, as a read's path or a destination**, through
+  `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
+  settles and which share `path_of_reference`.
+
+Apart from those, outside the kernel a slot answers one question about its address, whether asking
+for its bytes will open a file, which names nothing.
 
 **`bravebot-core` and `bravebot-agent` are both the driver.** Moving a branch from one
 into the other does not remove it.
@@ -284,7 +312,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from is the one accessor that can, and it records the release. Those eight are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
@@ -332,9 +360,11 @@ settled.
 
 A witness records that bytes moved somewhere they were already allowed to go: a filesystem write,
 an HTTP body, a human's screen, or the standard input of a program a person endorsed
-([run.md](tools/run.md#RUN-3)). Each of those destinations has a gate of its own, one for
-putting content in front of the planner, one for reshaping it for display, and one for reading
-trusted content. A declassification anywhere else is almost certainly a violation.
+([run.md](tools/run.md#RUN-3)). A connector's authority is such a program, named by the person in
+their own connector definition, and what its standard input is given is the HTTP body it becomes.
+Each of those destinations has a gate of its own, one for putting content in front of the planner,
+one for reshaping it for display, and one for reading trusted content. A declassification anywhere
+else is almost certainly a violation.
 
 The copy of a picture a person is asked to open ([VET-4](tools/vet-content.md#VET-4)) is one more
 filesystem write on this list, at a gate of its own for that one file.
@@ -419,8 +449,8 @@ and the content has no say in it.
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
-| what a program that can only transform its input printed | its input's label, carried through unchanged | `verified-by: bravebot_core::policy::a_filter_passes_an_untrusted_label_through_unchanged` |
-| what such a program printed with no input at all | trusted and public, because it is a function of nothing an attacker influenced | `verified-by: bravebot_core::policy::a_filter_with_no_input_yields_trusted_output` |
+| what a program that can only transform its input printed, fed content | private, and trusted only where what was fed in is, because a program prints what it was given and a run is not a release | `verified-by: bravebot_core::policy::a_filter_fed_an_untrusted_label_prints_untrusted_output` `verified-by: bravebot_core::policy::a_filter_fed_a_trusted_label_prints_trusted_private_output` |
+| what such a program printed with no input at all | trusted and private, because it is a function of nothing an attacker influenced, and private because a run is not a release | `verified-by: bravebot_core::policy::a_filter_with_no_input_prints_trusted_private_output` |
 | what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
 | input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
@@ -430,21 +460,18 @@ and the content has no say in it.
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
-| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, and a digest records which list that was | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for` |
+| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
 | where a remote server's reply pointed, once a person says the server moved there | trusted and public, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
 | a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+| a message another background session sent | the label it was sent with, read back from the word beside the text, so a message never arrives better than it left; untrusted and private where there is no word or the word names no label ([MSG-9](session-messages.md#MSG-9)) | `verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with` `verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private` `verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference` |
 | a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
 
 Where a path is known, integrity is the trust map's answer about that path rather than the
 capability's, which is what the three rows for reads say and why the first row is the label a read
 starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md).
-
-A road proposed and not built is a message one background session sends another, which
-[session-messages.md](session-messages.md#MSG-9) has arrive under the label it was sent with and be
-quarantined when it has none. It becomes a row when it is built.
 
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
@@ -501,7 +528,8 @@ what catches it.
 
 Where released content leaves this process for a surface to draw, the label it was released under
 travels with it, as the label rather than as a word composed at the boundary. Every carrier of such
-content states one: a preview of quarantined bytes, and a remark accompanying a write. The boundary
+content states one: a preview of quarantined bytes, the bytes a person is asked to read in a
+prompt, the sentence a check wrote about them, and a remark accompanying a write. The boundary
 neither reads the content nor decides the label, so what arrives is what the gate released, and a
 carrier added later states one too.
 
@@ -527,6 +555,9 @@ arrives at all.
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::wire::released_content_crosses_the_transport_with_the_label_it_was_released_under`
 `verified-by: bravebot_ui_bridge::wire::quarantined_content_says_how_much_it_left_out`
+`verified-by: bravebot_ui_bridge::wire::an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_under`
+`verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
+`verified-by: bravebot_agent::turn::a_prompt_to_read_output_carries_the_label_the_slot_was_released_under`
 `verified-by: bravebot_agent::turn::the_preview_of_a_mixed_listing_states_the_label_of_the_untrusted_entries`
 
 ## Known costs

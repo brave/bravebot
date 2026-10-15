@@ -223,7 +223,7 @@ fn a_session_recalls_a_prompt_stored_by_an_earlier_session() {
 
         assert_eq!(session.input(), "a question from before");
         assert_eq!(session.history.position(), Some((1, 1)));
-        assert!(!session.history.can_narrow());
+        assert_eq!(session.history.next_scope(), None);
     });
 }
 

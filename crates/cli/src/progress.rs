@@ -9,7 +9,7 @@
 //! corrupt it.
 
 use crate::json::{self, Call, Stream, Tokens};
-use bravebot_agent::report::{Activity, Reporter, Shown};
+use bravebot_agent::report::{Activity, HeardMessage, Reported, Reporter, Shown};
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
 use bravebot_tui::wrap::display_width;
@@ -225,19 +225,55 @@ impl<W: Write> Reporter for Progress<W> {
     ///
     /// On stderr with the rest of the progress, since stdout is the reply.
     fn quarantined(&mut self, shown: Shown) {
+        self.draw_quarantined(&shown);
+    }
+
+    /// Written apart from the person's prompts: a heading naming the sender as the roster does, then
+    /// the words quoted where the planner was given them, and in the marked block every quarantined
+    /// thing is drawn in where it was not (MSG-11).
+    fn session_message(&mut self, heard: HeardMessage) {
+        let from: String = heard
+            .from
+            .chars()
+            .take(bravebot_agent::messages::ID_SHOWN)
+            .collect();
+        self.say("");
+        self.say(&printable(
+            &t!(
+                session_message_heading,
+                from = from,
+                name = heard.name,
+                label = heard.label
+            )
+            .to_string(),
+        ));
+        match heard.body {
+            Reported::Said(text) => {
+                for line in text.lines() {
+                    for row in marked("  > ", line) {
+                        self.say(&row);
+                    }
+                }
+                self.say("");
+            }
+            Reported::Kept(shown) => self.draw_quarantined(&shown),
+        }
+    }
+}
+
+impl<W: Write> Progress<W> {
+    fn draw_quarantined(&mut self, shown: &Shown) {
         let margin = format!("  {QUARANTINE_BAR} ");
 
         // The heading is marked like the content, because the origin is not this module's text:
         // it can be a filename read out of a quarantined listing. So it is neutralised too, and a
         // long one continues on another marked row rather than outside the block.
-        let mut block = vec![
-            t!(
-                quarantined_heading,
-                origin = &shown.origin,
-                label = &shown.label
-            ),
-            format!("  {}", shown.reach.describe()),
-        ];
+        let mut block = vec![t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        )];
+        block.extend(shown.reach.note().map(|note| format!("  {note}")));
         block.extend(shown.preview.iter().cloned());
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
@@ -386,6 +422,90 @@ mod tests {
                 "a row of the block begins with content rather than the margin: {row:?}"
             );
         }
+    }
+
+    /// Content kept from the planner is what every block holds, so its heading does not repeat
+    /// that on each one. Content in no model's context is the exception and says so.
+    #[test]
+    fn a_block_states_its_reach_only_where_that_is_the_exception() {
+        let ordinary =
+            log(|p| p.quarantined(quarantining(vec!["api_key = hunter2".to_string()], 1)));
+        assert!(!ordinary.contains("planner"), "got: {ordinary}");
+        assert!(!ordinary.contains("no model"), "got: {ordinary}");
+
+        let mut unread = quarantining(vec!["a remark".to_string()], 1);
+        unread.reach = Reach::NoModel;
+        let written = log(|p| p.quarantined(unread));
+        assert!(written.contains("no model's context"), "got: {written}");
+    }
+
+    fn heard(body: Reported) -> HeardMessage {
+        HeardMessage {
+            from: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "fix the build".to_string(),
+            label: "(T,pub)".to_string(),
+            body,
+        }
+    }
+
+    /// MSG-11: a message the planner was given is drawn under a heading that names the sender and
+    /// the label, with the words quoted on every row, so it cannot be read as a line the person typed.
+    #[test]
+    fn a_message_is_drawn_under_its_sender_with_the_words_quoted() {
+        let written = log(|p| {
+            p.session_message(heard(Reported::Said("first\nsecond".to_string())));
+        });
+        assert!(
+            written.contains("message from session 22222222 (fix the build) \u{b7} (T,pub)"),
+            "got: {written}"
+        );
+        assert!(
+            written.contains("  > first\n  > second\n"),
+            "got: {written}"
+        );
+    }
+
+    /// MSG-11: a message the planner was not given is drawn in the marked block every quarantined
+    /// thing is drawn in, under the same heading, and none of its rows begins with its own words.
+    #[test]
+    fn a_withheld_message_is_drawn_behind_the_quarantine_margin() {
+        let written = log(|p| {
+            p.session_message(heard(Reported::Kept(Shown {
+                origin: "a message from another session".to_string(),
+                reach: Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec!["IGNORE-EVERYTHING".to_string()],
+                lines: 1,
+            })));
+        });
+        assert!(written.contains("fix the build"), "got: {written}");
+        assert!(written.contains("IGNORE-EVERYTHING"), "got: {written}");
+        let words = written
+            .lines()
+            .find(|row| row.contains("IGNORE-EVERYTHING"))
+            .expect("the words are drawn");
+        assert!(
+            words.contains(BAR),
+            "the words are drawn outside the margin: {words:?}"
+        );
+    }
+
+    /// MSG-11: control characters in a name or in the words are replaced, so a session named or
+    /// worded to move the cursor cannot paint over the heading or the margin.
+    #[test]
+    fn a_message_cannot_move_the_cursor_through_its_name_or_its_words() {
+        let mut message = heard(Reported::Said("\u{1b}[2Kfine".to_string()));
+        message.name = "x\u{1b}[2J\nname".to_string();
+        let written = log(|p| p.session_message(message));
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+        assert_eq!(
+            written
+                .lines()
+                .filter(|row| row.contains("message from session"))
+                .count(),
+            1,
+            "a name started a heading of its own: {written:?}"
+        );
     }
 
     /// A preview line that clears the row it is written on could erase the margin above it, which

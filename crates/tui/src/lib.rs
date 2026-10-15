@@ -44,6 +44,7 @@ pub mod manifest_run;
 pub mod markdown;
 pub mod model_prompt;
 pub mod panel;
+pub mod picking;
 pub mod preview;
 pub mod prompt_files;
 pub mod reasoning;

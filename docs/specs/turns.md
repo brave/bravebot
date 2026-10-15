@@ -13,6 +13,7 @@ documented-by:
   - docs/website/docs/troubleshooting.md
   - docs/website/docs/reference/cli.md
   - docs/website/docs/using/transcript.md
+  - docs/website/docs/reference/tools.md
 ---
 
 ## Scope
@@ -21,7 +22,8 @@ How long a turn may go on, what happens when it does not stop, and what is said 
 without producing anything or ends without checking anything. What completed requests cost survives
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
 into its output ceiling. What a session does when it has spent as many tokens as the person said
-it may. What a turn does when the planner asks for the same call three times running.
+it may. What a turn does when the planner asks for the same call three times running. How the reads of one
+round are run when the planner asks for several together.
 
 ## Clauses
 
@@ -438,3 +440,62 @@ call and no result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the nu
 `verified-by: bravebot_agent::turn::the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried`
 `verified-by: bravebot_agent::turn::two_held_calls_are_two_questions`
 `verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
+
+<a id="TURN-10"></a>
+### TURN-10: the independent reads of a round run at the same time
+
+When one reply from the planner asks for several calls, each run of consecutive `list_files` and
+`search` calls is read at the same time, at most 8 at once. Every other call runs alone and in the
+order it was asked, after the calls before it have finished and before the calls after it start.
+`read_file`, `read_git` and `lsp` are among them. Each can ask the person, call a model, or keep
+state that a later call reads, so running one beside another call would change what that call sees
+or the order the person is asked in.
+
+**Nothing the planner is given changes.** Results are added in the order the calls were asked and
+not the order the reads finished. A reference is numbered, a note drawn and a line recorded in the
+trail where that call's turn comes, so a round of reads leaves the same conversation, trail and
+screen as the same calls run one after another. A call in a run is announced when its result is
+taken and not while it reads.
+
+**What joins a run.** A call joins when it is a `list_files` or `search` that this run offers, its
+arguments are JSON, the person has declared no hook for a finished call of that tool, and it would
+not be held as a third identical repeat ([TURN-9](#TURN-9)). One such call is not a run. A hook is
+left out because it can change the files the next read looks at, and a held call asks a question.
+
+**Each read decides as the turn would.** A read runs under a branch of the turn's policy, which
+holds the same rules, capabilities and context, shares the one file authority, and records into a
+buffer of its own. The buffer reaches the turn's trail when that call's turn comes, and a refusal in
+it is counted then. A read is used only while the planner's context is what it was when the run
+began. If the context has met something untrusted since, the call runs for itself under the context
+the calls before it left. No label, routing or approval decision changes.
+
+**Reads wait for effects and not for each other.** A read holds the file authority's access lock
+shared, and an effect entering or completing holds it exclusive ([TRUST-4](trust-map.md#TRUST-4)).
+Two reads therefore overlap, and neither captures bytes while an effect on a file is entering.
+
+**Cancelling.** The cancel is checked before the run starts, before a thread starts each read, and
+before each call is taken. A read already running finishes, as a search does when it runs alone. A
+call after the one the cancel stopped at never has its result used or its lines recorded, so the
+trail holds the calls before the cancel and no others.
+
+**No setting.** The limit of 8 and what joins a run are fixed.
+
+**Known costs.** A run that is slow shows nothing until its first call is announced, where a
+call run alone is announced as it starts. The time a run took is added to the turn's tool time once,
+and each call in it is shown as finishing at once.
+
+`verified-by: bravebot_agent::turn::results_come_back_in_the_order_the_calls_were_made`
+`verified-by: bravebot_agent::turn::references_are_numbered_in_the_order_the_calls_were_made`
+`verified-by: bravebot_agent::turn::a_call_that_writes_separates_the_reads_before_it_from_the_reads_after`
+`verified-by: bravebot_agent::turn::a_cancel_during_the_reads_leaves_only_the_calls_before_it_in_the_trail`
+`verified-by: bravebot_agent::turn::a_run_of_reads_ends_at_a_call_that_asks_or_is_hooked_or_would_be_held`
+`verified-by: bravebot_agent::tools::reads_taken_beforehand_leave_the_trail_the_screen_and_the_answers_a_sequential_run_does`
+`verified-by: bravebot_agent::tools::the_reads_of_a_round_are_inside_their_captures_at_the_same_time`
+`verified-by: bravebot_agent::tools::no_more_reads_run_at_once_than_the_limit`
+`verified-by: bravebot_agent::tools::a_cancel_stops_the_reads_not_yet_started`
+`verified-by: bravebot_agent::tools::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
+`verified-by: bravebot_agent::tools::a_read_is_used_only_while_the_context_is_what_it_ran_under`
+`verified-by: bravebot_agent::tools::only_a_read_the_run_offers_is_taken_beforehand`
+`verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`
+`verified-by: bravebot_core::policy::a_branch_reads_the_file_decisions_made_after_it_began`
+`verified-by: bravebot_core::policy::what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order`

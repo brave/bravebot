@@ -113,6 +113,9 @@ fn run(
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
     let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
+    let inbox = hosting
+        .as_ref()
+        .map(|hosting| std::sync::Arc::clone(&hosting.inbox));
     let interrupted = hosting
         .as_ref()
         .is_some_and(|hosting| hosting.after_an_interruption);
@@ -475,6 +478,7 @@ fn run(
             .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref(), under.as_deref())),
         mcp: reached.session(),
         beside: beside_turns,
+        inbox,
         auto_vetting: bravebot_core::vetting::auto(
             bravebot_core::vetting::asked_for(),
             bravebot_session::store::load_vetting(),
@@ -650,6 +654,8 @@ struct Running<'a> {
     mcp: Option<bravebot_agent::mcp::Session>,
     /// Where a turn's progress goes where this session has no terminal of its own.
     beside: Option<crate::host::Broadcast>,
+    /// Where messages from other sessions wait for the planner, in a background session (MSG-6).
+    inbox: Option<std::sync::Arc<dyn bravebot_agent::messages::Inbox>>,
     /// The record a background session writes after each turn, which is what starting it again
     /// resumes from (BG-1).
     kept: Option<Kept>,
@@ -763,6 +769,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.answers.asked_about.clone())
             .already_exposed(self.answers.exposed.clone())
+            .with_inbox(self.inbox.clone())
             .addressing(self.agent.as_ref().map(|agent| agent.name.clone()));
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
@@ -1394,7 +1401,6 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             tools: &tools,
             refused: request.refused,
             withheld: request.withheld,
-            changed: request.changed,
             check: checked(request.verdict),
         });
         self.about(Held::Tools);
@@ -2816,6 +2822,8 @@ mod tests {
                     reference: "ref:1".to_string(),
                     verdict,
                     reason: None,
+                    label: String::new(),
+                    reason_label: None,
                 });
             }),
             held(Held::Read)
@@ -2838,6 +2846,8 @@ mod tests {
                         verdict,
                         reason: None,
                         picture: picture.clone(),
+                        label: None,
+                        reason_label: None,
                     });
                 }),
                 held(Held::Read),
@@ -2874,6 +2884,8 @@ mod tests {
                     truncated: false,
                     verdict,
                     reason: None,
+                    label: String::new(),
+                    reason_label: None,
                 });
             }),
             held(Held::Vouch)
@@ -2894,7 +2906,6 @@ mod tests {
                     tools: Vec::new(),
                     refused: 0,
                     withheld: 0,
-                    changed: false,
                     verdict,
                     reason: None,
                 });
@@ -2975,6 +2986,8 @@ mod tests {
             reference: "ref:1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         });
 
         assert_eq!(decision, Decision::Approve);
@@ -3004,6 +3017,8 @@ mod tests {
             verdict: Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         });
 
         assert_eq!(decision, Decision::Approve);

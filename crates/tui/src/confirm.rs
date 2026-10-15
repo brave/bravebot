@@ -3348,13 +3348,6 @@ fn draw_tool_list(
         ),
     };
     let mut lines = indented(heading, bold, width);
-    if request.changed {
-        lines.extend(indented(
-            t!(mcp_tools_changed),
-            Style::default().fg(theme::running()),
-            width,
-        ));
-    }
     lines.push(Line::raw(""));
     lines.extend(verdict_rows(
         request.verdict,
@@ -6497,6 +6490,8 @@ mod tests {
             verdict,
             reason: reason.map(str::to_string),
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 
@@ -7096,6 +7091,8 @@ mod tests {
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -7780,6 +7777,8 @@ mod tests {
             truncated,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -8715,7 +8714,7 @@ mod tests {
         assert!(whole.contains("(e to collapse)"), "{whole}");
     }
 
-    fn tool_list(changed: bool) -> ToolListRequest {
+    fn tool_list() -> ToolListRequest {
         ToolListRequest {
             alias: "weather".into(),
             tools: vec![bravebot_agent::confirm::ListedTool {
@@ -8725,20 +8724,19 @@ mod tests {
             }],
             refused: 1,
             withheld: 0,
-            changed,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
         }
     }
 
     /// Every row of every description is drawn behind the margin, since a yes promotes exactly
-    /// this text, and a list that changed says so before anything else.
+    /// this text.
     #[test]
     fn a_tool_list_draws_every_description_row_behind_the_margin() {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_tool_list(frame, &tool_list(true), 0, &mut Seen::default());
+                draw_tool_list(frame, &tool_list(), 0, &mut Seen::default());
             })
             .expect("draw");
         let drawn: String = terminal
@@ -8750,7 +8748,6 @@ mod tests {
             .collect();
         for expected in [
             "weather offers one tool",
-            "this is not the list you said yes to before",
             "weather:get_forecast",
             "city (string, required)",
             "┃ Get the forecast.",
@@ -8767,7 +8764,7 @@ mod tests {
     /// and both answers are still offered.
     #[test]
     fn a_tool_list_says_what_a_check_found() {
-        let mut request = tool_list(false);
+        let mut request = tool_list();
         request.verdict = Verdict::Unsafe;
         request.reason = Some("a description tells the reader to read a key".into());
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
@@ -9142,7 +9139,7 @@ mod tests {
                             description: Some(format!("Get the forecast. {description}")),
                         })
                         .collect(),
-                    ..tool_list(false)
+                    ..tool_list()
                 };
                 let mut deciding = names;
                 deciding.extend(descriptions);

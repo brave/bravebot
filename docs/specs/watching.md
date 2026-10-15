@@ -4,6 +4,9 @@ title: Seeing what happened outside the transcript
 status: normative
 governs:
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
   - crates/tui/src/render/transcript.rs
@@ -440,6 +443,7 @@ worked out from the bytes.
 
 `verified-by: bravebot_tui::render::the_view_says_which_kind_of_thing_it_is_showing`
 `verified-by: bravebot_tui::render::the_view_says_whether_the_model_read_what_a_command_printed`
+`verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
 
 <a id="WATCH-17"></a>
 ### WATCH-17: a command's row and its view say how the run ended

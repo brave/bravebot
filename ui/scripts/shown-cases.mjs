@@ -34,9 +34,10 @@ export const CASES = {
       directory: '/work/zqr36', releasesPrivate: false, canBeRemembered: true,
       line: 'grep zqr31 notes.md', writes: ['/work/project/zqr32.txt'], stdin: 'zqr33',
       ambient: [{ authority: 'agent-socket', named: 'zqr34' }], requestedScopes: ['zqr35'],
+      confinement: { heading: 'confined to:', directories: ['/work/zqr37'], sentences: ['zqr38 each stage brings nothing more'] },
       vouches: [{ program: 'grep', args: ['zqr99'], display: 'grep zqr99' }], summary: 'search the notes',
     },
-    tokens: ['zqr01', 'zqr30', 'zqr31', 'zqr32', 'zqr33', 'zqr34', 'zqr35', 'zqr36'],
+    tokens: ['zqr01', 'zqr30', 'zqr31', 'zqr32', 'zqr33', 'zqr34', 'zqr35', 'zqr36', 'zqr37', 'zqr38'],
     standing: ['zqr99'],
   },
   output: {
@@ -139,10 +140,10 @@ export const CASES = {
     kind: 'mcp-tools',
     event: 'mcp-tools.request',
     request: {
-      request: 112, alias: 'zqt31', refused: 0, changed: false, vetting: { verdict: 'safe' },
+      request: 112, alias: 'zqt31', refused: 0, changed: false, vetting: { verdict: 'safe', reason: `zqt32 ${filler(80)}` },
       tools: range(30).map((n) => ({ name: n === 0 ? 'zqt01' : n === 29 ? 'zqt30' : `tool_${n}`, arguments: ['path'], description: 'Reads a file.' })),
     },
-    tokens: ['zqt01', 'zqt30', 'zqt31'],
+    tokens: ['zqt01', 'zqt30', 'zqt31', 'zqt32'],
     standing: [],
   },
   'mcp-call': {

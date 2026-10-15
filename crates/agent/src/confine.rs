@@ -648,7 +648,8 @@ impl Confinement {
     /// `None` where it asks nothing (SANDBOX-16).
     ///
     /// Asked where every `git` step of the line that carries the remote scope by its argv and is
-    /// left unchosen names one host and owner, no `git.identities` entry names that owner, and ssh
+    /// left unchosen, or was chosen at an earlier prompt and the planner asked for `ssh-key`, names
+    /// one host and owner, no `git.identities` entry names that owner, and ssh
     /// could offer between two and [`KEY_CHOICES`] public keys: those at its default names and those
     /// an `IdentityFile` line of the person's ssh configuration names, judged as an entry's key is.
     /// The candidates come from the person's own files and the address from the argv, so nothing a
@@ -656,8 +657,14 @@ impl Confinement {
     pub fn key_choice(&self, steps: &[&Step], record: &Path) -> Option<KeyChoice> {
         let home = self.home.as_deref()?;
         let mut asked: Option<bravebot_sandbox::scope::Address> = None;
+        let asked_again = self.requested.contains(&Requested::SshKey);
         for step in steps {
-            if self.identified(step) != Some(Identified::Unchosen) {
+            let open = match self.identified(step) {
+                Some(Identified::Unchosen) => true,
+                Some(Identified::Chosen { .. } | Identified::LeftToSsh(_)) => asked_again,
+                _ => false,
+            };
+            if !open {
                 continue;
             }
             let address = ssh_address(&step.args)?;
@@ -1035,6 +1042,8 @@ impl Confinement {
             for request in self.requested_for(step) {
                 policy = match *request {
                     Requested::Loopback => policy.allow_loopback(),
+                    // Lends nothing: it only has the prompt number the keys again.
+                    Requested::SshKey => policy,
                     Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
                     Requested::Scope(scope) => {
                         let mut policy = scope.grant(policy, home, &place);
@@ -1158,11 +1167,20 @@ impl Confinement {
     /// program chose, since a program's error text is not where the profile is decided. It ends
     /// with the fixed sentence about credential locations.
     pub fn profile(&self, steps: &[&Step]) -> String {
+        self.profile_offering(steps, false)
+    }
+
+    /// [`Confinement::profile`], naming the one-line `unconfined` route to a step that signs where
+    /// `unconfined_offered` says the session would accept the request, so a planner is never
+    /// pointed at an argument it would be refused.
+    pub fn profile_offering(&self, steps: &[&Step], unconfined_offered: bool) -> String {
         let (signs, refused) = self.signing_state(steps);
-        let source = if signs {
-            SIGNING_KEY_SOURCE_SENTENCE
-        } else {
-            ""
+        let source = match (signs, unconfined_offered) {
+            (false, _) => String::new(),
+            (true, false) => format!("{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}."),
+            (true, true) => format!(
+                "{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}{SIGNING_UNCONFINED_WAY_OUT}."
+            ),
         };
         let refusal = if refused {
             SIGNING_KEY_REFUSED_SENTENCE
@@ -1295,6 +1313,7 @@ impl Confinement {
                     Requested::Scope(scope) => scopes.insert(scope.name()),
                     Requested::Toolchain(toolchain) => toolchains.insert(toolchain.name()),
                     Requested::Loopback => !std::mem::replace(&mut loopback, true),
+                    Requested::SshKey => false,
                 };
             }
         }
@@ -1780,6 +1799,20 @@ const SIGNING_KEY_SOURCE_SENTENCE: &str = " A step that signs a commit is lent t
      neither of these fails with \"Couldn't load public key\" until the person adds that key to \
      the agent or sets it in one of those places.";
 
+/// Said after [`SIGNING_KEY_SOURCE_SENTENCE`], so that the other way a signature fails, which
+/// prints "No private key found", is told from it. Fixed text: it does not branch on what the
+/// program printed.
+const SIGNING_AGENT_SENTENCE: &str = " A step that signs never reads a private key: it signs \
+     through the person's ssh agent. A signature that fails with \"No private key found\" means \
+     the configured public key was lent but the agent does not hold its private key, not that the \
+     key is missing or that the sandbox hides it, and it is solved by the person loading the key \
+     with `ssh-add`";
+
+/// The way through [`SIGNING_AGENT_SENTENCE`] names where the session accepts a request for a line
+/// with no sandbox, ending without a full stop so the caller can end the sentence.
+const SIGNING_UNCONFINED_WAY_OUT: &str = ", or by running that one commit line with \
+     'unconfined': true, which the person is asked to approve and which runs with no sandbox";
+
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
 const SIGNING_KEY_REFUSED_SENTENCE: &str = " A step that signs a commit reads only a public key: \
@@ -1857,7 +1890,8 @@ const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, th
      one any account holds, so a retry offers the same key. Only the person chooses the key, for a \
      git step whose argv names the ssh address: at its run prompt in the terminal interface, which \
      offers the public keys ssh could use where there is more than one and no key was chosen for \
-     the owner, or with an entry \
+     the owner, or for one already chosen where the retry's `scopes` names `ssh-key`, or with an \
+     entry \
      `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
      ~/.bravebot/settings.json. In the terminal interface `/reach keys` lists the keys chosen at a \
      prompt and `/reach keys remove <number>` forgets one, so the next prompt asks again. In either \
@@ -2236,7 +2270,8 @@ mod tests {
     use super::*;
     use bravebot_sandbox::policy::PathKind;
 
-    const HOME: &str = "/home/person";
+    // Not under /home: macOS mounts autofs there, so each lookup beneath it asks the automounter.
+    const HOME: &str = "/people/person";
 
     fn step(resolved: &str, args: &[&str]) -> Step {
         Step {
@@ -2389,14 +2424,14 @@ mod tests {
 
     #[test]
     fn a_windows_session_inside_a_credential_location_is_refused() {
-        refused_naming(&confinement(&["/home/person/.bravebot"]), ".bravebot");
+        refused_naming(&confinement(&["/people/person/.bravebot"]), ".bravebot");
         refused_naming(
-            &confinement(&["/home/person/.bravebot/profiles"]),
+            &confinement(&["/people/person/.bravebot/profiles"]),
             ".bravebot",
         );
-        refused_naming(&confinement(&["/home/person/.ssh/keys"]), ".ssh");
-        refused_naming(&confinement(&["/home/person/.config/gcloud"]), "gcloud");
-        refused_naming(&confinement(&["/home/person/.config"]), "gcloud");
+        refused_naming(&confinement(&["/people/person/.ssh/keys"]), ".ssh");
+        refused_naming(&confinement(&["/people/person/.config/gcloud"]), "gcloud");
+        refused_naming(&confinement(&["/people/person/.config"]), "gcloud");
     }
 
     /// `gcloud` and `gpg` keep their directories under `%APPDATA%` on Windows, so a session opened
@@ -2406,16 +2441,16 @@ mod tests {
     #[test]
     fn a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused() {
         refused_naming(
-            &confinement(&["/home/person/AppData/Roaming/gcloud"]),
+            &confinement(&["/people/person/AppData/Roaming/gcloud"]),
             "gcloud",
         );
         refused_naming(
-            &confinement(&["/home/person/AppData/Roaming/gnupg/private-keys-v1.d"]),
+            &confinement(&["/people/person/AppData/Roaming/gnupg/private-keys-v1.d"]),
             "gnupg",
         );
-        refused_naming(&confinement(&["/home/person/AppData/Roaming"]), "gcloud");
+        refused_naming(&confinement(&["/people/person/AppData/Roaming"]), "gcloud");
         assert!(
-            confinement(&["/home/person/AppData/Roaming/other"])
+            confinement(&["/people/person/AppData/Roaming/other"])
                 .root_reaching_credentials()
                 .is_none()
         );
@@ -2428,20 +2463,20 @@ mod tests {
     #[test]
     fn a_windows_session_on_local_application_data_or_a_browser_profile_is_refused() {
         refused_naming(
-            &confinement(&["/home/person/AppData/Local"]),
+            &confinement(&["/people/person/AppData/Local"]),
             "BraveSoftware",
         );
         // The location as the refusal quotes it, which the session directory inside it is not.
         refused_naming(
-            &confinement(&["/home/person/AppData/Local/Google/Chrome/User Data"]),
+            &confinement(&["/people/person/AppData/Local/Google/Chrome/User Data"]),
             "/Google/Chrome`",
         );
         refused_naming(
-            &confinement(&["/home/person/AppData/Roaming/Microsoft"]),
+            &confinement(&["/people/person/AppData/Roaming/Microsoft"]),
             "Credentials",
         );
         assert!(
-            confinement(&["/home/person/AppData/Local/pip"])
+            confinement(&["/people/person/AppData/Local/pip"])
                 .root_reaching_credentials()
                 .is_none()
         );
@@ -2454,12 +2489,12 @@ mod tests {
     fn a_session_inside_the_browser_relays_directory_is_refused_on_every_platform() {
         for prelude in [Prelude::MacOs, Prelude::Linux] {
             refused_naming(
-                &reading_confinement(prelude, &["/home/person/.bravebot-browser"]),
-                "/home/person/.bravebot-browser",
+                &reading_confinement(prelude, &["/people/person/.bravebot-browser"]),
+                "/people/person/.bravebot-browser",
             );
         }
         refused_naming(
-            &confinement(&["/home/person/.bravebot-browser"]),
+            &confinement(&["/people/person/.bravebot-browser"]),
             ".bravebot-browser",
         );
     }
@@ -2473,12 +2508,12 @@ mod tests {
     fn a_session_inside_a_credential_location_is_refused_on_every_platform() {
         for prelude in [Prelude::MacOs, Prelude::Linux] {
             for (root, location) in [
-                ("/home/person/.ssh", "/home/person/.ssh"),
-                ("/home/person/.ssh/keys", "/home/person/.ssh"),
-                ("/home/person/.bravebot", "/home/person/.bravebot"),
+                ("/people/person/.ssh", "/people/person/.ssh"),
+                ("/people/person/.ssh/keys", "/people/person/.ssh"),
+                ("/people/person/.bravebot", "/people/person/.bravebot"),
                 (
-                    "/home/person/.config/gcloud/inner",
-                    "/home/person/.config/gcloud",
+                    "/people/person/.config/gcloud/inner",
+                    "/people/person/.config/gcloud",
                 ),
             ] {
                 refused_naming(&reading_confinement(prelude, &[root]), location);
@@ -2508,7 +2543,7 @@ mod tests {
     /// project directory. The regression it rejects: folding case on Linux, which refuses it.
     #[test]
     fn a_linux_session_is_compared_to_the_credential_locations_with_case() {
-        for root in ["/home/person/.SSH", "/home/person/.Kube/inner"] {
+        for root in ["/people/person/.SSH", "/people/person/.Kube/inner"] {
             assert!(
                 reading_confinement(Prelude::Linux, &[root])
                     .root_reaching_credentials()
@@ -2517,8 +2552,8 @@ mod tests {
             );
         }
         refused_naming(
-            &reading_confinement(Prelude::Linux, &["/home/person/.ssh"]),
-            "/home/person/.ssh",
+            &reading_confinement(Prelude::Linux, &["/people/person/.ssh"]),
+            "/people/person/.ssh",
         );
     }
 
@@ -2530,9 +2565,9 @@ mod tests {
             for root in [
                 HOME,
                 "/",
-                "/home/person/project",
-                "/home/person/.sshfoo",
-                "/home/person/.config",
+                "/people/person/project",
+                "/people/person/.sshfoo",
+                "/people/person/.config",
             ] {
                 assert!(
                     reading_confinement(prelude, &[root])
@@ -2590,10 +2625,10 @@ mod tests {
                 "{root}: a persistence location is refused for writing only"
             );
         }
-        let beside = reading_confinement(Prelude::MacOs, &["/home/person/project"]);
+        let beside = reading_confinement(Prelude::MacOs, &["/people/person/project"]);
         let policy = beside.policy(
             &step("/bin/cat", &["f"]),
-            Path::new("/home/person/project"),
+            Path::new("/people/person/project"),
             &[],
         );
         assert!(policy.unwritable.is_empty(), "{:?}", policy.unwritable);
@@ -2601,8 +2636,8 @@ mod tests {
 
     #[test]
     fn a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case() {
-        refused_naming(&confinement(&["/home/person/.AWS"]), ".aws");
-        refused_naming(&confinement(&["/HOME/Person"]), ".bravebot");
+        refused_naming(&confinement(&["/people/person/.AWS"]), ".aws");
+        refused_naming(&confinement(&["/PEOPLE/Person"]), ".bravebot");
     }
 
     /// The regression it rejects: comparing the components as lossy text, which makes a name with a
@@ -2612,16 +2647,16 @@ mod tests {
     fn a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike() {
         use std::os::unix::ffi::OsStrExt;
 
-        let invalid = Path::new(OsStr::from_bytes(b"/home/person/tool-\xff"));
-        let lookalike = Path::new("/home/person/tool-\u{FFFD}");
+        let invalid = Path::new(OsStr::from_bytes(b"/people/person/tool-\xff"));
+        let lookalike = Path::new("/people/person/tool-\u{FFFD}");
         assert!(!overlaps(invalid, lookalike) && !overlaps(lookalike, invalid));
         assert!(overlaps(invalid, invalid));
         assert!(overlaps(
             invalid,
-            Path::new(OsStr::from_bytes(b"/HOME/Person/TOOL-\xff/inside"))
+            Path::new(OsStr::from_bytes(b"/PEOPLE/Person/TOOL-\xff/inside"))
         ));
 
-        let home = PathBuf::from(OsStr::from_bytes(b"/home/per\xffson"));
+        let home = PathBuf::from(OsStr::from_bytes(b"/people/per\xffson"));
         let confined = |root: PathBuf| {
             Confinement::new(
                 Prelude::Windows,
@@ -2637,7 +2672,7 @@ mod tests {
                 .is_some()
         );
         assert!(
-            confined(PathBuf::from("/home/per\u{FFFD}son/.ssh"))
+            confined(PathBuf::from("/people/per\u{FFFD}son/.ssh"))
                 .root_reaching_credentials()
                 .is_none()
         );
@@ -2646,9 +2681,9 @@ mod tests {
     #[test]
     fn a_windows_session_beside_the_credential_locations_is_not_refused() {
         for root in [
-            "/home/person/project",
-            "/home/person/.sshfoo",
-            "/home/other",
+            "/people/person/project",
+            "/people/person/.sshfoo",
+            "/people/other",
             "/work",
         ] {
             assert!(
@@ -2722,7 +2757,7 @@ mod tests {
                 ("/work/project/tools/git", vec!["commit"]),
                 ("/var/scratch/git", vec!["commit"]),
                 ("/tmp/git", vec!["commit"]),
-                ("/home/person/.cargo/registry/git", vec!["commit"]),
+                ("/people/person/.cargo/registry/git", vec!["commit"]),
             ] {
                 assert!(
                     !lifted(&confined, step(program, &args)),
@@ -4089,6 +4124,36 @@ mod tests {
         assert!(!plain.profile(&[&cat]).contains("also let programs reach"));
     }
 
+    /// SANDBOX-28: a yes to a path puts that path in the profile and no other. Its parent, a
+    /// sibling and a directory whose name merely starts with it get no row of their own, and a read
+    /// grant adds no row anywhere that programs may write.
+    #[test]
+    fn a_path_let_reach_does_not_reach_its_parent_or_a_sibling() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/in"),
+            write: false,
+            why: "the build needs it".to_string(),
+        }];
+        let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
+        let held = plain.clone().with_path_reach(&granted);
+        let cat = step("/bin/cat", &["file"]);
+        let before = plain.policy(&cat, Path::new("/work/project"), &[]);
+        let after = held.policy(&cat, Path::new("/work/project"), &[]);
+
+        assert!(reads(&after, "/data/in"), "the fixture grants nothing");
+        for other in ["/data", "/data/out", "/data/in-other", "/data/in/sub"] {
+            assert!(
+                !reads(&after, other),
+                "a grant of /data/in put {other} in the profile"
+            );
+        }
+        assert_eq!(
+            after.writable.len(),
+            before.writable.len(),
+            "a read grant added a place programs may write"
+        );
+    }
+
     /// The prompt's description and the failure sentence say how many entries are in force and never
     /// which paths, and say nothing where there are none.
     #[test]
@@ -4170,10 +4235,10 @@ mod tests {
             policy.readable.iter().any(|row| row.ends_with(tail))
         };
         assert!(
-            !has_row(&windows, "home/person"),
+            !has_row(&windows, "people/person"),
             "the home directory is a row"
         );
-        assert!(has_row(&windows, "home/person/projects"));
+        assert!(has_row(&windows, "people/person/projects"));
         let refused: Vec<_> = held.filesystem().refused().collect();
         assert_eq!(refused.len(), 1);
         assert_eq!(refused[0].0.entry.path, "~");
@@ -4183,7 +4248,7 @@ mod tests {
         );
 
         let (held, linux) = policy(Prelude::Linux, &["~"]);
-        assert!(has_row(&linux, "home/person"));
+        assert!(has_row(&linux, "people/person"));
         assert_eq!(held.filesystem().refused().count(), 0);
     }
 
@@ -6467,6 +6532,33 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    /// SANDBOX-16: a failure of a step that signs says what "No private key found" means and the
+    /// way through, and names `'unconfined': true` only where the session would accept it.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_told_what_no_private_key_found_means() {
+        let (home, confined) =
+            a_confinement_over_a_home_that("agent-held", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let status = step("/usr/bin/git", &["status"]);
+
+        let plain = confined.profile(&[&commit]);
+        assert!(plain.contains("No private key found"), "{plain}");
+        assert!(plain.contains("never reads a private key"), "{plain}");
+        assert!(plain.contains("`ssh-add`"), "{plain}");
+        assert!(!plain.contains("unconfined"), "{plain}");
+
+        let offered = confined.profile_offering(&[&commit], true);
+        assert!(offered.contains("No private key found"), "{offered}");
+        assert!(offered.contains("'unconfined': true"), "{offered}");
+        assert!(offered.contains("`ssh-add`"), "{offered}");
+
+        let none = confined.profile_offering(&[&status], true);
+        assert!(!none.contains("No private key found"), "{none}");
+        assert!(!none.contains("unconfined"), "{none}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     /// SANDBOX-16: a key an `[includeIf "gitdir:..."]` of the person's own configuration supplies
     /// for the run's directory is the one the stage is lent, in place of the one set above it. A
     /// key in the repository's own configuration is not read.
@@ -7286,6 +7378,77 @@ mod tests {
             many.confinement(&[]).key_choice(&[&push], &record),
             None,
             "more keys than digits"
+        );
+    }
+
+    /// SANDBOX-16, SANDBOX-26: a line that asks for `ssh-key` has the prompt number the keys again
+    /// for an owner chosen at an earlier prompt, whether the choice was a key or ssh's own order,
+    /// and for no other owner. An entry in the settings still decides without a question, and a
+    /// line that does not ask is not asked again. The regressions it rejects are a request that
+    /// does nothing, one that overrides an entry the person wrote, one that offers the choice for
+    /// a stage with an assignment in front of it, and a choice made without the request being
+    /// needed.
+    #[test]
+    #[cfg(unix)]
+    fn a_request_for_ssh_key_asks_again_for_an_owner_already_chosen_and_for_no_entry() {
+        let places = IdentityPlaces::with_two_keys("choice-again");
+        let record = places.home.join("reach.jsonl");
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let mut assigned = push.clone();
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        let asks = [Requested::SshKey];
+        for chosen in [
+            places.chosen("acme", None),
+            places.chosen("acme", Some(&places.work_key())),
+        ] {
+            let held = places.confinement(&[]).with_chosen_keys(vec![chosen]);
+            assert_eq!(held.key_choice(&[&push], &record), None, "asked unprompted");
+            let choice = held
+                .clone()
+                .with_requested(&asks)
+                .key_choice(&[&push], &record)
+                .expect("the request asks again");
+            assert_eq!(choice.owner(), "github.com/acme");
+            assert_eq!(choice.candidates, [places.default_key(), places.work_key()]);
+            assert_eq!(
+                held.clone()
+                    .with_requested(&asks)
+                    .key_choice(&[&assigned], &record),
+                None,
+                "a stage with an assignment carries no scope"
+            );
+        }
+        let by_entry = places
+            .confinement(&[("github.com/acme", "~/.ssh/work")])
+            .with_requested(&asks);
+        assert_eq!(
+            by_entry.key_choice(&[&push], &record),
+            None,
+            "the request overrode an entry"
+        );
+        // An owner nothing chose is asked about with or without the request, so the request adds
+        // no question where there was none to ask again, and a choice for another owner is no
+        // reason to ask about this one a second time.
+        let other = places
+            .confinement(&[])
+            .with_chosen_keys(vec![places.chosen("other", None)]);
+        assert_eq!(
+            other
+                .clone()
+                .with_requested(&asks)
+                .key_choice(&[&push], &record),
+            other.key_choice(&[&push], &record),
+        );
+        let held = other.with_chosen_keys(vec![places.chosen("acme", None)]);
+        let both = step(
+            "/usr/bin/git",
+            &["push", "git@github.com:other/widgets.git"],
+        );
+        assert_eq!(
+            held.with_requested(&asks)
+                .key_choice(&[&push, &both], &record),
+            None,
+            "two owners asked again at once"
         );
     }
 

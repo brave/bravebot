@@ -86,6 +86,7 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |
 | a pattern in program position | a program worked out from what is on disk changes when the tree does |
 | anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
@@ -320,6 +321,11 @@ running them, which is not what happened: the label is about who answered for th
 shown the output and a run the mode approved vouches for nothing: the planner is told that
 `read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
 in the same result. The advice does not name the mode, which the planner is told only in plan mode.
+Screening changes it too, in any mode ([`--vet`](../security/permissions.md#bypassing)). A check's
+word answers `read_output` first, so the user is not shown the output a check finds nothing in, and
+the planner is told that `read_output` hands the output back as text it can read or reports it kept
+back, and, on a run's result that passed `read: true`, that the argument was not applied. It says
+nothing of what decided, and names neither the mode nor the check.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
@@ -390,6 +396,11 @@ its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`. Every
 first, and removed rather than blanked, so a program that tells an unset variable from an empty one
 sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
+
+The description of `run` tells the planner that these two are removed, and that the variables your
+settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+also says that a program reporting one of them unset says nothing about whether you have set it, so a
+build that fails for want of one is not reported to you as a gap in your setup.
 
 **The rest of your environment stays, and that is not an oversight.** `run aws s3 ls` and `run gh pr
 list` are ordinary requests, and no rule matching variable names can tell one of those from an

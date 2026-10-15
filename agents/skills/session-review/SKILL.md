@@ -13,7 +13,16 @@ allowed-tools: Bash(python3 agents/skills/session-review/*), Bash(git status*)
 
 Every bravebot session is recorded under `~/.bravebot/sessions`, one directory per working
 directory, as `<id>.json` and `<id>.audit.jsonl`. Those records show where bravebot failed the
-person using it. This skill reads them, files what it finds, and remembers which it has read.
+person using it, including a task left unfinished or finished in part that another coding agent
+would probably have finished. They also show turns the person did not expect, which appear as the
+person asking why bravebot did or did not do something. The review looks for those and proposes a
+change that would have avoided each. This skill reads them, files what it finds, and remembers
+which it has read.
+
+It files defects in the bravebot product (`crates/`, `ui/` and the behaviour the specs describe). A
+session often runs one of this repository's own skills, such as `pr-fix` or `rebase`. Defects in
+those skills, the scripts beside them, the `Makefile`, `contrib/` and the CI workflows are left out.
+A session whose only findings are of that kind has no problems to file and still gets its marker.
 
 The memory is `<id>.analysis.jsonl` beside the session: one line per review, holding the date, the
 main commit, the number of turns reviewed, the issues filed and the counts dropped and held back.
@@ -40,11 +49,11 @@ the turns after the ones reviewed. A session with no problems gets a marker too.
 
 ## Four things a run must not do
 
-**A run never posts by hand.** `session-review.py post` is the only thing here that writes to the
-tracker. It uses the same duplicate search, pacing, cap and label check as the
-[peer-advisories](../peer-advisories/SKILL.md) skill. `gh` is absent from this skill's
-`allowed-tools` so that a `gh issue create` typed here asks first. An issue filed outside the
-script goes through the [issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script here files an issue. Every issue
+goes through the [issue-poster](../../agents/issue-poster.md) definition (step 6), and
+`session-review.py filed` is the only thing here that records the result. `gh` is absent from
+this skill's `allowed-tools` so that a `gh` call that files an issue typed here asks first, and so does every
+call the poster makes.
 
 **A run never puts session content in an issue.** A session holds the person's files, command
 output and messages, and an issue is public. The analyzer is told to describe each problem in its
@@ -126,23 +135,32 @@ python3 agents/skills/session-review/session-review.py draft --work-dir "$WORK_D
 
 Print its output: one title and label set per confirmed problem, then any problems held back as
 security concerns. The labels follow
-[labelling-issues.md](../../../docs/development/labelling-issues.md): `bug` or `enhancement`, an
-`area/*` where one is clear, and never an `importance`, `urgency` or `size`. Tell the user about each
-held-back problem.
+[labelling-issues.md](../../../docs/development/labelling-issues.md): `bug` or `enhancement`,
+`session-analysis` on every issue, an `area/*` where one is clear, and never an `importance`,
+`urgency` or `size`. Tell the user about each held-back problem.
 
-### Step 6: file (zero model tokens)
+### Step 6: file
+
+Read `{work_dir}/drafts.json`: one entry per draft, with `id`, `title`, `labels` and `body_file`.
+For each entry in turn, up to 100 in a run, hand it to the
+[issue-poster](../../agents/issue-poster.md) definition with the title, the body file, the labels
+the entry names, the assignee only where the user named somebody, and this instruction: the issue
+is a finding nobody has read, so apply no `importance`, `urgency` or `size`; search the open and
+closed issues for the words of the title before posting, and post nothing when an issue already
+covers the problem. A `dry-run` run files nothing and records nothing.
+
+A missing label refuses the post and prints the `gh label create` line; creating a label is the
+user's call, so stop and tell them. Stop at a failure and print it.
+
+Then record each report, so that step 7 and a second run both see it:
 
 ```bash
-python3 agents/skills/session-review/session-review.py post --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
+python3 agents/skills/session-review/session-review.py filed --work-dir "$WORK_DIR" --id {id} --issue {number} [--existing]
 ```
 
-Run the step in the background and wait for it, so that no time limit on a tool call stops it
-partway. Pass `--dry-run` on a `dry-run` run, and `--assignee` only where the user named somebody.
-Print the output. A missing label stops the step before anything is posted and prints the
-`gh label create` for it; creating a label is the user's call, so stop and tell them. A `gh` failure
-while posting stops the step at that draft. Run the step once more: it skips every draft
-`filed.json` records and searches the tracker for the rest before posting. Where it fails again,
-print the error and stop.
+Pass `--existing` where the poster posted nothing because an issue already covered the problem, and
+that issue's number as `{number}`. A draft `filed.json` already records is not handed to the
+poster again.
 
 ### Step 7: mark the sessions (zero model tokens)
 

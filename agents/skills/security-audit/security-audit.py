@@ -381,6 +381,28 @@ ACCEPTED = re.compile(r"(?:^|;\s*)accepted: \[[^\]]*\]\(([^)#\s]+)#known-costs\)
 # A cell that holds a mark rather than a statement.
 PLACEHOLDER = re.compile(r"^(?:[-?.\s]*|n/?a|tbd|todo|none)$", re.IGNORECASE)
 
+# The second table of the register: a row for each row above it and a column for each way the world
+# changes under a yes. Each cell is statements joined by `;`, and a statement opens with what
+# happens and says why.
+CHANGES = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGE_LEADERS = ("asked again", "not reached", "by design", "accepted")
+CHANGE_STATEMENT = re.compile(r"^(" + "|".join(CHANGE_LEADERS) + r"):\s*(.*)$", re.DOTALL)
+# A reason shorter than this is a mark, however it is spelled.
+CHANGE_REASON_WORDS = 3
+# The one test that applies a change to an answer for each cell citing it, and the file whose table
+# of cases is read for the row and change each case applies.
+CHANGES_TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+CHANGES_TABLE_FILE = Path("crates/agent/src/kept_answers.rs")
+CHANGES_TABLE_CASE = re.compile(r'Case\s*\{\s*row:\s*"([^"]+)",\s*change:\s*"([^"]+)"', re.DOTALL)
+
 
 REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
 
@@ -793,24 +815,34 @@ def clause_body(lines, clause):
     return body
 
 
-def table(lines):
-    """The rows of the first table in `lines`, header first, each one its cells.
+def tables(lines):
+    """Every table in `lines`, each one its rows, header first, each row its cells.
 
-    The dashes under the header are dropped, so what comes back is what the table says rather than
-    how it is drawn.
+    The dashes under a header are dropped, so what comes back is what a table says rather than how
+    it is drawn.
     """
+    found = []
     rows = []
     for raw in lines:
         stripped = raw.strip()
         if not stripped.startswith("|"):
             if rows:
-                break
+                found.append(rows)
+                rows = []
             continue
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
         if all(set(cell) <= set("-: ") for cell in cells) and any("-" in cell for cell in cells):
             continue
         rows.append(cells)
-    return rows
+    if rows:
+        found.append(rows)
+    return found
+
+
+def table(lines):
+    """The rows of the first table in `lines`, header first, each one its cells."""
+    found = tables(lines)
+    return found[0] if found else []
 
 
 def table_rows(lines):
@@ -2576,6 +2608,225 @@ def check_answers_registered(specs, sources):
             )
 
 
+def check_changes_under_a_yes(specs, sources):
+    """A kept answer with no statement of what each change to the world does to it, and one whose
+    statement is a mark.
+
+    A yes is kept under a key, and the defect this repository keeps being sent is a key that matches
+    something else after the world changed under it: a second checkout laid out like the first, a
+    file replaced, an argument added. The register says what each answer is kept under; this holds
+    it to saying, for every answer and every such change, that the person is asked again, that the
+    key cannot be reached by it, that the design keeps the answer, or that the cost is accepted.
+    """
+    spec, _, rows, _ = register_of(specs)
+    if spec is None or not rows:
+        return
+    found = tables(clause_body(spec.lines, REGISTER))
+    matrix = found[1] if len(found) > 1 else None
+
+    def unreadable(summary, fix):
+        return finding(
+            ERROR,
+            "changes-unreadable",
+            "the register's table of what changes do to a kept answer could not be read, so nothing "
+            "checks that each answer says what a change to the world does to it",
+            summary,
+            "trust",
+            "medium",
+            fix=fix,
+        )
+
+    if not matrix or len(matrix) < 2:
+        yield unreadable(
+            f"`{spec.rel}` {REGISTER} has no second table after the register",
+            "restore the table, one row for each row of the register",
+        )
+        return
+    header, body = matrix[0], matrix[1:]
+    if tuple(header[1:]) != CHANGES:
+        yield unreadable(
+            f"the columns of that table are {header[1:]}, and the check reads {list(CHANGES)}",
+            "restore the columns, or update `CHANGES` here to the ones the table has now",
+        )
+        return
+
+    named_rows = [row[0] for row in rows]
+    seen = set()
+    for row in body:
+        name = row[0]
+        if name in seen:
+            yield finding(
+                ERROR,
+                "changes-row-duplicate",
+                f"the table of what changes do has two rows for {name}",
+                f"`{spec.rel}` {REGISTER} says twice what a change to the world does to {name}",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="keep one row",
+            )
+        seen.add(name)
+        if name not in named_rows:
+            yield finding(
+                ERROR,
+                "changes-row-unknown",
+                f"the table of what changes do has a row for {name}, which is not a row of the register",
+                f"`{spec.rel}` {REGISTER} says what changes do to {name}, and no row of the register "
+                "above it is called that",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="name a row as its first cell spells it, or add the row to the register",
+            )
+    for name in named_rows:
+        if name not in seen:
+            yield finding(
+                ERROR,
+                "changes-row-missing",
+                f"the table of what changes do has no row for {name}",
+                f"`{spec.rel}` {REGISTER} puts {name} in the register and says nothing of what a "
+                "change to the world does to it",
+                "trust",
+                "medium",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="add the row, with a statement in every column",
+                gain="an answer whose key nobody has held against a moved checkout or a replaced file "
+                "is how a yes comes to cover something the person was never shown",
+            )
+
+    index = mechanics.TestIndex()
+    crates = mechanics.crate_directories()
+    cases = set()
+    table_source = sources.get(CHANGES_TABLE_FILE)
+    if table_source is not None:
+        cases = set(CHANGES_TABLE_CASE.findall("\n".join(table_source)))
+    cited_cases = set()
+
+    def cell_finding(kind, name, change, summary, fix, severity=ERROR):
+        return finding(
+            severity,
+            kind,
+            f"the register says nothing usable of {name} when {change.lower()}",
+            f"`{spec.rel}` {REGISTER}, {name} under '{change}': {summary}",
+            "trust",
+            "low",
+            evidence=[f"{spec.rel} {REGISTER}: {name} / {change}"],
+            fix=fix,
+        )
+
+    for row in body:
+        name = row[0]
+        for change, cell in zip_longest(CHANGES, row[1:]):
+            if change is None:
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    "a column is added",
+                    "the row has a cell past the last column",
+                    "drop the extra cell",
+                )
+                break
+            statements = [one.strip() for one in (cell or "").split(";") if one.strip()]
+            if not statements or PLACEHOLDER.match(cell or ""):
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    change,
+                    "the cell is empty or a mark",
+                    "say what happens: asked again, not reached, by design or accepted, and why",
+                )
+                continue
+            for statement in statements:
+                led = CHANGE_STATEMENT.match(statement)
+                if not led:
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{statement[:60]}` does not open with one of {', '.join(CHANGE_LEADERS)}",
+                        "open the statement with what happens, then a colon",
+                    )
+                    continue
+                leader, rest = led.groups()
+                cited = CITED_TEST.findall(statement)
+                if leader == "accepted":
+                    for target in ACCEPTED.findall(statement):
+                        linked = spec.path.parent / target
+                        headed = linked.is_file() and any(
+                            line.strip() == KNOWN_COSTS
+                            for line in linked.read_text(encoding="utf-8").split("\n")
+                        )
+                        if not headed:
+                            yield cell_finding(
+                                "changes-cost-missing",
+                                name,
+                                change,
+                                f"it accepts a cost in `{target}`, which has none",
+                                "link the spec whose Known costs admit it, or write the entry there",
+                            )
+                    if not ACCEPTED.findall(statement):
+                        yield cell_finding(
+                            "changes-cost-missing",
+                            name,
+                            change,
+                            "it says accepted without linking the Known costs entry that admits it",
+                            "write `accepted: [spec.md](spec.md#known-costs)`",
+                        )
+                    continue
+                reason = CITED_TEST.sub("", rest)
+                if len(reason.split()) < CHANGE_REASON_WORDS or PLACEHOLDER.match(reason.strip()):
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{leader}` is not followed by a reason",
+                        "say why in the cell",
+                    )
+                if leader == "asked again" and not cited:
+                    yield cell_finding(
+                        "changes-unpinned",
+                        name,
+                        change,
+                        "it says the person is asked again and cites no test",
+                        "cite the test as `verified-by: crate::module::test_name`",
+                    )
+                for reference in cited:
+                    if reference == CHANGES_TABLE_TEST:
+                        cited_cases.add((name, change))
+                        if (name, change) not in cases:
+                            yield cell_finding(
+                                "changes-case-missing",
+                                name,
+                                change,
+                                f"it cites the table test, and `{CHANGES_TABLE_FILE}` has no case "
+                                "for that row and change",
+                                "add the case, or cite the test that pins it",
+                            )
+                    status, detail = index.resolve(reference, crates)
+                    if status != "ok":
+                        yield cell_finding(
+                            "changes-test-missing",
+                            name,
+                            change,
+                            f"it names `{reference}`, which is not a test there ({status}"
+                            + (f": {detail}" if detail else "")
+                            + ")",
+                            "correct the name to the test as it is now",
+                        )
+    for name, change in sorted(cases - cited_cases):
+        yield finding(
+            ERROR,
+            "changes-case-unlisted",
+            f"a case in `{CHANGES_TABLE_FILE}` applies '{change}' to {name}, and no cell cites the table test",
+            f"`{CHANGES_TABLE_FILE}` runs a case for {name} under '{change}', which `{spec.rel}` "
+            f"{REGISTER} does not say is pinned by it",
+            "trust",
+            "low",
+            evidence=[f"{CHANGES_TABLE_FILE}: {name} / {change}"],
+            fix=f"cite `verified-by: {CHANGES_TABLE_TEST}` in that cell, or drop the case",
+        )
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
@@ -2723,7 +2974,11 @@ def changed_lanes(base, specs):
 
 def touches_kept_answers(touched, specs):
     """Whether any of these paths is where an answer is kept, asked for or registered."""
-    binding = set(REMEMBERED_SETS) | {str(one[0]) for one in REGISTERED.values()}
+    binding = (
+        set(REMEMBERED_SETS)
+        | {str(one[0]) for one in REGISTERED.values()}
+        | {str(CHANGES_TABLE_FILE)}
+    )
     return bool(touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))))
 
 
@@ -2858,6 +3113,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
     findings += list(check_answers_registered(specs, sources))
+    findings += list(check_changes_under_a_yes(specs, sources))
     return findings
 
 
