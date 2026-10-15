@@ -2117,9 +2117,15 @@ pub(crate) mod scripted_hosts {
 }
 
 impl<'a> Tools<'a> {
+    /// Whether this call's programs are held to a profile at all: the turn confines them and the
+    /// sandbox mode is not `off`.
+    fn confines_programs(&self) -> bool {
+        self.confine_runs && self.sandbox != bravebot_sandbox::SandboxMode::Off
+    }
+
     /// What this call's programs are confined to, or `None` where they are not.
     fn confinement(&self) -> Option<crate::confine::Confinement> {
-        if !self.confine_runs || self.sandbox == bravebot_sandbox::SandboxMode::Off {
+        if !self.confines_programs() {
             return None;
         }
         let roots = std::iter::once(self.workspace.root().to_path_buf())
@@ -3629,8 +3635,11 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
 
     // Read once, so a write refused below is recorded under the mode that refused it.
     let mode = tools.permission_mode.get();
-    // A delegate is not given the tool a refusal would send it to.
-    policy.grant_path_requests_unasked(!tools.delegated && mode.answers_a_run_unasked());
+    // A delegate is not given the tool a refusal would send it to, and a session that refuses the
+    // call outright (PATHREQ-5) has no grant for the refusal to promise.
+    let path_requests_granted =
+        !tools.delegated && mode.answers_a_run_unasked() && path_requests_accepted(policy, tools);
+    policy.grant_path_requests_unasked(path_requests_granted);
     let mut produced = match name.as_str() {
         // A server's tool is not one of this program's, so no definition's `tools:` line names
         // it, and it was offered only where the run holds its server.
@@ -7963,12 +7972,15 @@ const LONGEST_PATH_REASON: usize = 300;
 
 /// Whether this turn may be asked for reach to a path at all (SANDBOX-28).
 ///
-/// The same turns that may be asked for a credential scope: confined (`Tools::confinement` is
-/// `None` under `off`, which `request_path` checks next), and in a workspace the person has trusted. A project file or a settings layer has no way to say
-/// yes to this, since the only road to a grant is the confirmer, and a turn nobody is at to ask is
-/// refused by the one it is given.
+/// The same turns that may be asked for a credential scope: confined, which the sandbox mode `off`
+/// is not, and in a workspace the person has trusted. A project file or a settings layer has no way
+/// to say yes to this, since the only road to a grant is the confirmer, and a turn nobody is at to
+/// ask is refused by the one it is given.
+///
+/// A file tool's refusal reads this too, so that it names `request_path` only where the call is
+/// not refused outright (PATHREQ-7).
 fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
-    tools.confine_runs && policy.trusts_path(&tools.workspace.trust_key("."))
+    tools.confines_programs() && policy.trusts_path(&tools.workspace.trust_key("."))
 }
 
 /// Ask the person to let programs reach one more path for the session (SANDBOX-28).
@@ -8308,7 +8320,7 @@ fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requ
 /// from. A turn nobody is at to ask is refused by the confirmer the prompt goes to, since a
 /// request is always asked about.
 fn requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
-    let confined = tools.confine_runs && tools.sandbox != bravebot_sandbox::SandboxMode::Off;
+    let confined = tools.confines_programs();
     let trusted = policy.trusts_path(&tools.workspace.trust_key("."));
     match confined && trusted {
         true => Ok(()),
