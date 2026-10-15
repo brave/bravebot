@@ -55016,6 +55016,37 @@ fn several_edits_to_one_file_are_approved_once_as_one_diff() {
     assert_eq!(seen[0].contents, "ONE\ntwo\nTHREE\nfour\nFIVE\n");
 }
 
+/// The person approving an edit to a long file is shown the lines it changes however far apart its
+/// passages are, and not a notice that the change is too large to show.
+#[test]
+fn edits_far_apart_in_a_long_file_are_approved_as_two_changes() {
+    use bravebot_agent::diff::Change;
+
+    let before: String = (1..=5000).map(|n| format!("line {n}\n")).collect();
+    let (after, seen, _) = run_one_edit(
+        "edit-far-apart",
+        &before,
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"line 5\n","new_text":"line 5\ninserted early\n"},
+            {"old_text":"line 4995\n","new_text":"line 4995\ninserted late\n"}]}"#,
+    );
+
+    assert_eq!(seen.len(), 1);
+    let diff = &seen[0].diff;
+    assert!(diff.is_exact(), "the span between the passages was counted");
+    assert_eq!((diff.added(), diff.removed()), (2, 0));
+    let added: Vec<String> = diff
+        .condensed(2)
+        .into_iter()
+        .filter_map(|change| match change {
+            Change::Added(line) => Some(line),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(added, ["inserted early", "inserted late"]);
+    assert_eq!(after.lines().count(), 5002);
+}
+
 /// A pair that does not match refuses the whole call: nobody is asked, the earlier pairs are not
 /// written, and the planner is told which pair it was.
 #[test]

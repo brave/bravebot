@@ -39,7 +39,12 @@ authored, its author and its subject, as `git log --format='%h %ad %an %s' --dat
 ([GIT-12](#GIT-12)).
 `show` prints a commit with its message and its diff as `git show` does, a tag with its message and
 then its commit, and `<revision>:<path>` as the file or directory stood at that revision. `diff`
-compares two commits' trees as `git diff` prints them. Revisions are read in git's syntax, as git
+compares two commits' trees as `git diff` prints them. How far apart a file's changes lie does not
+count against matching its two sides line by line. That takes at most four million steps, a step
+being one comparison of two lines or one line read, and a search for a shortest edit is given up
+past a thousand edits. A file that exceeds the bound is described by a notice in place of hunks. The
+notice names the lines the sides differ between, the lines within those that could not be matched,
+and the most lines they could have removed and added. Revisions are read in git's syntax, as git
 resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. Loose and packed
 objects, deltas included, read the same.
 
@@ -66,6 +71,8 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::show_prints_a_commit_its_message_and_its_diff_as_git_does`
 `verified-by: bravebot_agent::git::show_lists_a_directory_and_prints_a_file_at_a_revision`
 `verified-by: bravebot_agent::git::diff_compares_two_commits_as_git_diff_prints_them`
+`verified-by: bravebot_agent::git::edits_far_apart_in_a_long_file_are_two_hunks`
+`verified-by: bravebot_agent::git::a_stretch_that_cannot_be_lined_up_is_named_by_its_lines`
 `verified-by: bravebot_agent::git::revisions_resolve_through_names_ancestry_and_peels_as_git_does`
 `verified-by: bravebot_agent::git::ranges_and_pairs_are_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::a_range_leaves_out_what_its_start_already_reaches`

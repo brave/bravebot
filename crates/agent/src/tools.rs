@@ -3448,8 +3448,10 @@ fn change_report(
         );
     }
 
+    // The counts of a diff that could not be lined up treat the part it gave up on as replaced.
+    let limit = if diff.is_exact() { "" } else { "at most " };
     let changed = format!(
-        "added {}, removed {}",
+        "added {limit}{}, removed {limit}{}",
         tally(diff.added(), "line", "lines"),
         tally(diff.removed(), "line", "lines")
     );
@@ -14792,6 +14794,20 @@ mod tests {
                 changes.contains(&crate::diff::Change::Added("new".to_string())),
                 "the hunks do not show the change: {changes:?}"
             );
+        }
+
+        /// The counts of a diff that could not be lined up are limits, and the planner is told so
+        /// rather than given them as the size of its own write.
+        #[test]
+        fn a_change_that_could_not_be_lined_up_is_reported_as_limits() {
+            let before: String = (0..3000).map(|n| format!("old {n}\n")).collect();
+            let after: String = (0..3000).map(|n| format!("new {n}\n")).collect();
+            let diff = Diff::compute(&before, &after);
+            assert!(!diff.is_exact());
+
+            let (note, _) = change_report(Intent::Edit, &diff, None);
+
+            assert_eq!(note, "added at most 3000 lines, removed at most 3000 lines");
         }
 
         /// A write that changes nothing must say so rather than reporting a size, which would

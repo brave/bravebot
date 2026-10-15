@@ -47,8 +47,14 @@ located and the body is shown to a person in full.
 <a id="EDIT-3"></a>
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace
 
+The diff compares the whole file, so passages a long way apart are shown as separate changes. A
+file whose two sides cannot be matched line by line within the bound [`read_git`](read-git.md)
+states for `diff` is shown as a notice that the change is too large to show, with no changes
+listed.
+
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
+`verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`
 `verified-by: bravebot_agent::turn::an_approved_edit_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_edit_does_not_happen`
 `verified-by: bravebot_agent::turn::an_edit_cannot_escape_the_workspace`
