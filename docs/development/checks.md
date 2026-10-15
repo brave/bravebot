@@ -133,7 +133,10 @@ names, the paths it governs, the call sites a guarded symbol pins, and the table
 runs `gh issue create` instead of handing the draft to the definition. Its helper's selftest,
 [../../agents/issue_helper_selftest.py](../../agents/issue_helper_selftest.py), runs beside it: the
 label and assignee checks the definition's post command makes are in
-[../../agents/issue_helper.py](../../agents/issue_helper.py). CI runs it too, so a new use of a guarded symbol fails a
+[../../agents/issue_helper.py](../../agents/issue_helper.py). The selftest of the manifest reader and
+writer the skill scripts share,
+[../../agents/work_dir_selftest.py](../../agents/work_dir_selftest.py), runs there too. CI runs it
+too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
 [../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff

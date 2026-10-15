@@ -19,6 +19,7 @@ files and prints a pointer to them.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -41,6 +42,12 @@ from specs import (  # noqa: E402
     crate_directories,
     load_specs,
 )
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
 
 ERROR = "error"
 WARNING = "warning"
@@ -1428,8 +1435,7 @@ def main():
             f"{len(findings)} mechanical findings"
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings, chosen, args.strict), file=sys.stderr)
     print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest_path)}))

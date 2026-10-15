@@ -41,6 +41,7 @@ def load(name, path):
 # `filed` command, so a tool added there is compared here.
 pa = load("peer_advisories", HERE.parent / "peer-advisories" / "peer-advisories.py")
 specs = load("check_spec_specs", HERE.parent / "check-spec" / "specs.py")
+workdir = pa.workdir
 
 Problem = pa.Problem
 
@@ -341,7 +342,7 @@ def pending(args):
         "units": research,
         "subjects": {u["unit"]: u for u in chosen},
     }
-    (work / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    workdir.write_manifest(work, manifest)
 
     reviewed = sum(1 for u in units if u["unit"] in ledger)
     print(

@@ -46,6 +46,7 @@ def _load_peer():
 # Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the `filed`
 # command are peer-advisories.py, which this reuses rather than restating.
 pa = _load_peer()
+workdir = pa.workdir
 Problem = pa.Problem
 one_line = pa.one_line
 
@@ -224,7 +225,7 @@ def pending(args, now=None):
         entries.append(dict(session, prompt_file=str(prompt), results_file=str(result)))
 
     manifest = {"root": str(root), "ref": ref, "commit": tip, "sessions": entries}
-    (work / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    workdir.write_manifest(work, manifest)
     reviewed = sum(1 for s in found if s["marker"] is not None)
     print(
         f"{len(found)} sessions found, {reviewed} reviewed before, {len(chosen)} to review against {ref} {tip[:12]};"
