@@ -8,6 +8,7 @@
 //! deliberate: a subscription that silently stops being used looks like the model got worse for no
 //! reason, and the error names the fix (re-import, or unset the premium endpoint).
 
+use crate::calendar::civil_from_days;
 use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_skus::{DeviceError, Registration, StoreError};
 
@@ -342,29 +343,6 @@ fn current_timestamp() -> String {
     )
 }
 
-/// Convert a count of days since 1970-01-01 to a civil date.
-///
-/// Howard Hinnant's `civil_from_days`, which is exact for every date this will ever see and
-/// handles leap years without a table.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = (z - era * 146_097) as u64;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i64 + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    } as u32;
-
-    (if month <= 2 { year + 1 } else { year }, month, day)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,22 +392,6 @@ mod tests {
         assert_eq!(now.as_bytes()[10], b'T');
         assert_eq!(now.as_bytes()[13], b':');
         assert_eq!(now.as_bytes()[16], b':');
-    }
-
-    /// Known epochs, including a leap day, since an off-by-one in the calendar maths would pick
-    /// the wrong credential for a whole day.
-    #[test]
-    fn days_since_the_epoch_convert_to_the_right_civil_date() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(1), (1970, 1, 2));
-        assert_eq!(civil_from_days(365), (1971, 1, 1));
-        // 2000 was a leap year despite being a century.
-        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-        assert_eq!(civil_from_days(11_017), (2000, 3, 1));
-        // 2100 is not a leap year.
-        assert_eq!(civil_from_days(47_540), (2100, 2, 28));
-        assert_eq!(civil_from_days(47_541), (2100, 3, 1));
-        assert_eq!(civil_from_days(20_687), (2026, 8, 22));
     }
 
     fn batch() -> bravebot_skus::StoredCredentials {

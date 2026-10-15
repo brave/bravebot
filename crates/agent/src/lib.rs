@@ -12,6 +12,7 @@ pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+mod calendar;
 pub mod cmdline;
 pub mod compact;
 pub mod confine;
