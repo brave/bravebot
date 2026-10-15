@@ -1275,6 +1275,7 @@ impl Config {
             .map(|mut entry| {
                 if entry.bedrock.is_none() {
                     entry.stored_key = stored.get(&entry.id).cloned();
+                    entry.reconcile_stored_credential();
                 }
                 entry
             })

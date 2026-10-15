@@ -2258,7 +2258,7 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
         )
         .expect("policy");
 
-        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &[], &egress)
             .expect("the roster was fetched");
 
         let captured = received.recv().expect("request captured");
@@ -2273,6 +2273,73 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
             "a gateway's roster request named this product (credential: {token:?})"
         );
     }
+}
+
+/// BACKEND-54: the roster request carries `options.headers` the same way a chat request does. A
+/// gateway that needs a header to route a request needs it to answer a listing too, so a roster
+/// asked without one is a person seeing no models with nothing local to explain it. Dropping the
+/// loop that attaches `headers` in `list_from_gateway` would pass every other test here, since
+/// each of them passes `&[]`; this is the one that would catch it.
+#[test]
+fn a_header_the_block_asked_for_reaches_the_roster_request() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-route": "{{env:GW_ROUTE}}"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let headers = provider.request_headers(|name| match name {
+        "GW_ROUTE" => Some("eu".to_string()),
+        _ => None,
+    });
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &headers,
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the roster request: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("x-route"),
+        Some("eu"),
+        "the value went out as the reference the file wrote, not what it resolved to: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("authorization"),
+        Some("Bearer a-token"),
+        "a configured header replaced the credential on the roster request: {:?}",
+        captured.headers
+    );
 }
 
 /// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
@@ -2365,6 +2432,7 @@ fn an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists() 
         &mut policy,
         &provider,
         Some("a-token"),
+        &[],
         &egress,
     )
     .expect("the roster was fetched");

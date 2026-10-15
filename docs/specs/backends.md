@@ -2389,17 +2389,17 @@ the same printing as any other configured text, so a control character in a name
 terminal.
 
 **Why.** A gateway in front of several services routes on a header of its own: a tenant id, a
-routing key, a second credential. Without this the block cannot reach one, and the only header a
-person could influence was Vertex's key. The values are person-written configuration, so nothing
-untrusted is read here, and that is also the bound: a project layer that could add a header could
-send the session's credential and context to a service nobody in the checkout agreed to, which is
-what BACKEND-24 keeps out of a file nobody opened. Refusing the framing names is what keeps the
-request the one this program built, since a header is appended rather than replaced and two values
-under one name leave the service to choose. Refusing the credential's own name keeps one request
-from carrying two things that authenticate it. A reference inside a longer value is refused rather
-than sent because nothing here substitutes, so what would go is the literal braces. A refusal that
-named no header leaves whoever wrote the block with no line to edit, and one that quoted the value
-would print a routing key or a second credential into wherever the output goes.
+routing key, a second credential. Without this the block cannot reach one. The values are
+person-written configuration, so nothing untrusted is read here, and that is also the bound: a
+project layer that could add a header could send the session's credential and context to a service
+nobody in the checkout agreed to, which is what BACKEND-24 keeps out of a file nobody opened.
+Refusing the framing names is what keeps the request the one this program built, since a header is
+appended rather than replaced and two values under one name leave the service to choose. Refusing
+the credential's own name keeps one request from carrying two things that authenticate it. A
+reference inside a longer value is refused rather than sent because nothing here substitutes, so
+what would go is the literal braces. A refusal that named no header leaves whoever wrote the block
+with no line to edit, and one that quoted the value would print a routing key or a second
+credential into wherever the output goes.
 
 `verified-by: bravebot_config::provider::a_header_a_block_asked_for_is_read`
 `verified-by: bravebot_config::provider::a_header_that_would_change_framing_is_refused`

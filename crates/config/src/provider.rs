@@ -582,6 +582,37 @@ impl Provider {
     pub(crate) fn names_a_credential(&self) -> bool {
         !self.env.is_empty() || self.api_key.is_some() || self.stored_key.is_some()
     }
+
+    /// Refuse a header named for the credential now that a stored key makes this block one that
+    /// names a credential, which `Self::one` could not know when it built `headers`.
+    ///
+    /// `stored_key` is filled in after parsing, by whichever caller reads
+    /// `~/.bravebot/gateway-keys.json` (`Config::from_sources`), so a block naming no `env` and no
+    /// `apiKey` passed `header_entries` its `names_a_credential` as `false` and kept a header named
+    /// for the credential as an ordinary one. Left uncorrected, the request this block builds would
+    /// carry that header's value and the stored key both: two credentials on one request, with
+    /// whichever `Request::header` call ran last deciding which one a reader of the request sees.
+    ///
+    /// A no-op where `stored_key` is still `None`, or where `self.headers` holds nothing by that
+    /// name, so a block already refusing it from `env` or `apiKey` is not reported twice.
+    pub(crate) fn reconcile_stored_credential(&mut self) {
+        if self.stored_key.is_none() {
+            return;
+        }
+        let credential_name = match self.id == GOOGLE_VERTEX_ID {
+            true => VERTEX_KEY_HEADER,
+            false => "authorization",
+        };
+        if let Some(position) = self
+            .headers
+            .iter()
+            .position(|held| held.name == credential_name)
+        {
+            let header = self.headers.remove(position);
+            self.headers_refused
+                .push((header.name, HeaderFault::Reserved));
+        }
+    }
 }
 
 /// What a gateway block says about the credential its requests carry.
@@ -1667,6 +1698,68 @@ mod tests {
         let sent = no_credential.request_headers(|_| None);
         assert_eq!(sent.len(), 1, "nothing else was going to set that header");
         assert_eq!(sent[0].0, "authorization");
+    }
+
+    /// A block naming no `env` and no `apiKey` still names a credential once a key is stored for
+    /// its id, but `Self::one` cannot know that: `stored_key` is filled in later, by
+    /// `Config::from_sources`. Left alone, the written `authorization` would reach the request
+    /// beside the stored key `credential_header` adds, carrying two credentials on one request.
+    /// `reconcile_stored_credential` is what `Config::from_sources` calls to settle this once the
+    /// key is known.
+    #[test]
+    fn a_stored_key_refuses_a_written_authorization_once_it_is_known() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        // Before the key is stored, nothing named a credential, so the header was kept.
+        assert_eq!(
+            provider.request_headers(|_| None).len(),
+            1,
+            "a block naming no credential yet should still send its own header"
+        );
+        assert!(provider.headers_refused.is_empty());
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a second credential was sent beside the stored key"
+        );
+        assert_eq!(
+            provider.headers_refused,
+            [("authorization".to_string(), HeaderFault::Reserved)]
+        );
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("stored-placeholder"));
+        assert_eq!(source, Some(Source::Stored));
+    }
+
+    /// Nothing to do where the block already refused the header from `env` or `apiKey`: a second
+    /// pass over a name no longer in `headers` must not report it twice.
+    #[test]
+    fn reconciling_a_stored_key_is_a_no_op_once_a_credential_was_already_named() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "env": ["GW_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert_eq!(provider.headers_refused.len(), 1);
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert_eq!(
+            provider.headers_refused.len(),
+            1,
+            "a header already refused was reported a second time: {:?}",
+            provider.headers_refused
+        );
     }
 
     /// Vertex AI takes its key in a header of its own, so the name to refuse is that one and not
