@@ -328,6 +328,9 @@ impl Session {
                     operator,
                     crate::vim::Extent::To(crate::vim::Motion::ToChar(repeated)),
                 ));
+                // Measuring the stretch recorded the jump as made, which for `,` is the reversed
+                // one: the jump to repeat stays the one the person made, as it does for a bare `,`.
+                self.last_find = Some(find);
                 return;
             }
             self.carry_out(pending.then(c));
