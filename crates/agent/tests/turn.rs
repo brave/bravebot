@@ -1816,6 +1816,80 @@ fn a_sibling_directory_named_to_a_listing_or_a_search_is_offered_as_itself() {
     }
 }
 
+/// A planner whose task text names the working directory in full reads, lists and writes by that
+/// spelling. The path is inside the workspace, so the refusal it reads and the trail say so and say
+/// which spelling is taken, instead of that the path leaves the workspace, and the relative
+/// spelling then reads the file.
+#[test]
+fn a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative() {
+    let scratch = Scratch::new("inside-remedy");
+    std::fs::write(scratch.path.join("notes.txt"), "buy milk").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let in_full = workspace.root().join("notes.txt").display().to_string();
+    let directory = workspace.root().display().to_string();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "read_file",
+            &serde_json::json!({ "path": in_full }).to_string(),
+        ),
+        tool_request(
+            "list_files",
+            &serde_json::json!({ "directory": directory }).to_string(),
+        ),
+        tool_request("read_file", r#"{"path":"notes.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the notes"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let last = bodies.last().expect("the last request");
+    assert_eq!(
+        last.matches("is inside the workspace").count(),
+        2,
+        "the read and the listing were not both told the path is inside: {last}"
+    );
+    assert!(
+        last.contains("relative to the workspace root"),
+        "the refusal did not say which spelling is taken: {last}"
+    );
+    assert!(
+        !last.contains("resolves outside the workspace"),
+        "a path inside the workspace was said to leave it: {last}"
+    );
+    assert!(
+        last.contains("buy milk"),
+        "the relative spelling did not read the file: {last}"
+    );
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 2, "{:?}", sink.events());
+    for line in &refused {
+        assert!(
+            line.contains("is inside the workspace but not named relative to its root")
+                && line.contains("remedy offered: name it relative to the workspace root"),
+            "the trail does not record what the planner was told: {line}"
+        );
+        assert!(
+            !line.contains("resolves outside the workspace"),
+            "the trail says a path inside the workspace leaves it: {line}"
+        );
+    }
+}
+
 /// Once the person has opened the worktree beside the working directory, the planner's `../<name>/..`
 /// path reaches it, and a failure names the absolute path the call was made on rather than the
 /// spelling that was typed, so the planner and the trail say the same file (TRUST-10).
@@ -20724,6 +20798,53 @@ fn a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it
         assert_eq!(
             said.contains("'unconfined': true"),
             pointed,
+            "{} (front end asks: {front_end_asks}): {said}",
+            mode.name()
+        );
+    }
+}
+
+/// A write refused because its path is inside the workspace but not named relative to its root is not
+/// followed by the way out a write that leaves it has (SANDBOX-29): a run line with no sandbox is
+/// not how to write a file the relative spelling reaches, and a planner pointed at one asks the
+/// person to approve it.
+#[test]
+fn a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("write-inside");
+    for (mode, front_end_asks) in [
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, true),
+        (bravebot_sandbox::SandboxMode::WorkspaceWrite, false),
+        (bravebot_sandbox::SandboxMode::Strict, true),
+    ] {
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(front_end_asks);
+        let name = format!("write-inside-{}-{front_end_asks}", mode.name());
+        let in_full = std::env::temp_dir()
+            .join(format!("bravebot-turn-{name}"))
+            .join("fresh.txt");
+        let call = [(
+            "write_file",
+            serde_json::json!({ "path": in_full.display().to_string(), "contents": "howdy\n" }),
+        )];
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+        let turn = path_turn(
+            &name,
+            &places,
+            &call,
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(true);
+        let said = message_from(&turn.results[0], "Result of write_file");
+        assert!(said.contains("is inside the workspace"), "{said}");
+        assert!(
+            !said.contains("unconfined") && !said.contains("outside the workspace"),
             "{} (front end asks: {front_end_asks}): {said}",
             mode.name()
         );

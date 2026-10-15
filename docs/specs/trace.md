@@ -30,7 +30,9 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise. A write call the permission mode refuses before the tool runs
+reference, the path otherwise. A path inside the workspace that is refused for not being named
+relative to its root is recorded with the remedy of naming it relative to the workspace root
+([TRUST-10](trust-map.md#TRUST-10)). A write call the permission mode refuses before the tool runs
 ([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
 refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
 sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under
@@ -64,6 +66,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::an_edit_whose_file_leaves_the_workspace_while_asked_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
 `verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_directory_inside_the_workspace_is_refused_as_inside_it`
+`verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
 `verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`

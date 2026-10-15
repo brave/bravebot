@@ -223,6 +223,14 @@ impl WorkspaceError {
                 remedy: Remedy::Nothing,
                 ..
             } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
+            Self::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            } => format!(
+                "'{named}' is inside the workspace, and a path there is named relative to the \
+                 workspace root; refusing to touch it as typed. Name it without the workspace's \
+                 own directory in front, or as '.' for the root itself"
+            ),
             // What the person can do is part of the sentence, since the planner cannot do it and has
             // otherwise been seen to reach the same file through `run` instead.
             Self::Escapes {
@@ -374,9 +382,14 @@ const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; it is inside the root, where a
-    /// directory cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// or to a place inside the root; a link carries it out; or what was refused is a command's
+    /// redirection or a rewind.
     Nothing,
+    /// The path lands inside the root and in no opened directory, where a directory cannot be
+    /// opened. It is named in some other way than relative to the root: from the top of the file
+    /// system, through a link to the root or through `~`. The relative spelling reaches the file,
+    /// so the planner is told that and not that the path leaves the workspace, which it does not.
+    Inside,
     /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
     /// the same path reach it, for whatever the call does to it.
     Open,
@@ -407,6 +420,7 @@ impl Remedy {
     pub fn offered(self) -> &'static str {
         match self {
             Self::Nothing => "none",
+            Self::Inside => "name it relative to the workspace root",
             Self::Open => "open its directory",
             Self::OpenOrDrop => "open its directory, or drop the file",
             Self::OpenEndsCheckouts => {
@@ -2228,7 +2242,7 @@ impl Workspace {
     /// directory.
     fn remedy_outside(&self, resolved: &Path) -> Remedy {
         if resolved.starts_with(&self.root) {
-            return Remedy::Nothing;
+            return Remedy::Inside;
         }
         if self.reads_stay_inside {
             return Remedy::Kept;
