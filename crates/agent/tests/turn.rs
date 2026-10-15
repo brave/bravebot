@@ -13050,6 +13050,58 @@ fn a_write_with_blank_references_beside_its_path_and_contents_goes_through() {
     );
 }
 
+/// WRITE-1: a blank `contents` is the body, not a missing one. Unlike the references beside it,
+/// an empty string for `contents` asks for an empty file, so it is put to the user and written,
+/// over a file that exists as well as where none does. Treated as left out it would be refused as
+/// "one of 'contents' or 'contents_ref' is required" and the planner could never empty a file.
+#[test]
+fn a_blank_contents_is_the_body_and_writes_an_empty_file() {
+    let scratch = Scratch::new("write-blank-contents");
+    std::fs::write(scratch.path.join("existing.txt"), "before").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("write_file", r#"{"path":"fresh.txt","contents":""}"#),
+        tool_request(
+            "write_file",
+            r#"{"path":"existing.txt","contents":"","contents_ref":""}"#,
+        ),
+        reply_with("emptied"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("empty both files"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("one of 'contents' or 'contents_ref' is required")),
+        "a blank contents was read as left out"
+    );
+    assert_eq!(confirmer.seen.len(), 2, "each write is put to the user");
+    for name in ["fresh.txt", "existing.txt"] {
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join(name))
+                .ok()
+                .as_deref(),
+            Some(""),
+            "{name} was not written empty"
+        );
+    }
+}
+
 /// A watch on a path arms with a blank `path_ref` beside it, and a real `path_ref` is still
 /// refused.
 ///
@@ -13095,6 +13147,58 @@ fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
         last.contains("watch_file takes 'path' and no reference"),
         "a real reference was not refused: {last}"
     );
+}
+
+/// ARM-5: a run that does not say it keeps watches, which is how a one-shot run and a planned run
+/// start, answers a call to arm one as an unknown name and arms nothing, though the same call arms
+/// where the surface keeps them. The first run is the control.
+#[test]
+fn a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name() {
+    let scratch = Scratch::new("watch-surface-without-watches");
+    std::fs::write(scratch.path.join("notes.txt"), "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (task, armed) in [
+        (
+            Task::new("watch the notes").arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
+            true,
+        ),
+        (Task::new("watch the notes"), false),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("watch_file", r#"{"path":"notes.txt"}"#),
+            reply_with("watching"),
+        ]);
+        let outcome = turns::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let bodies: Vec<String> = received.try_iter().collect();
+        let told = newest_tool_result(bodies.last().expect("a last round").clone());
+        assert_eq!(
+            outcome.watches,
+            if armed {
+                vec!["notes.txt".to_string()]
+            } else {
+                Vec::new()
+            },
+            "armed {armed}: {told}"
+        );
+        assert_eq!(
+            told.contains("no such tool 'watch_file'"),
+            !armed,
+            "armed {armed}: {told}"
+        );
+    }
 }
 
 /// A turn that changed files and ran nothing is asked about it, once, and the person is told.
@@ -37671,6 +37775,58 @@ fn a_fan_out_past_the_ceiling_is_refused_and_starts_nothing() {
     );
 }
 
+/// AGENT-5: an `each` that names no delegate is refused and starts nothing, and the planner is
+/// told it was empty. Read as if it had been left out it would start one delegate on the shared
+/// task, so the shared task has a route of its own and a delegate that started would finish.
+#[test]
+fn a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing() {
+    let scratch = Scratch::new("delegate-fanout-empty");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FAN-OUT-NAMING-NOBODY",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SHARED-BY-NOBODY","each":[]}"#,
+                ),
+                reply_with("that named nobody"),
+                reply_with("and nothing was waiting"),
+            ],
+        ),
+        ("SHARED-BY-NOBODY", vec![reply_with("a delegate answered")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FAN-OUT-NAMING-NOBODY"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        reporter.position("delegate d1 started").is_none(),
+        "a fan-out naming nobody started a delegate: {:?}",
+        reporter.lines()
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.iter().any(|body| body.contains("'each' was empty")),
+        "the planner was not told the list was empty: {bodies:?}"
+    );
+}
+
 /// DELEGATE-7: a fan-out that reaches the turn's ceiling part-way starts the delegates that fit,
 /// and the planner is told how many did not start and why, rather than losing the ones that did.
 #[test]
@@ -50100,6 +50256,62 @@ fn since_and_until_are_whole_days_and_anything_else_is_refused() {
     );
 }
 
+/// GIT-6. Both ends of a day are inside it: a commit made in the first second of the day `since`
+/// names, or in the last second of the day `until` names, is listed, and one made a second outside
+/// either is not. A bound that read `until` as the start of its day, or either end as exclusive,
+/// or a day as 86,400 seconds from its end, would list a different set of commits.
+#[test]
+fn since_and_until_include_the_first_and_last_second_of_their_day() {
+    // 2023-11-15 00:00:00 UTC.
+    const DAY_START: i64 = 1_700_006_400;
+    let scratch = Scratch::new("read-git-day-edges");
+    for (subject, time) in [
+        ("SUBJECT-BEFORE", DAY_START - 1),
+        ("SUBJECT-FIRST", DAY_START),
+        ("SUBJECT-LAST", DAY_START + 86_399),
+        ("SUBJECT-AFTER", DAY_START + 86_400),
+    ] {
+        repository::commit_files_at(&scratch.path, &[("README", "hello\n")], subject, time);
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            r#"{"query":"log","since":"2023-11-15","until":"2023-11-15"}"#,
+        ),
+        tool_request_2("read_git", r#"{"query":"log","since":"2023-11-15"}"#),
+        tool_request_2("read_git", r#"{"query":"log","until":"2023-11-15"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    for (asked, listed) in [
+        ("both ends", ["FIRST", "LAST"].as_slice()),
+        ("since", ["AFTER", "LAST", "FIRST"].as_slice()),
+        ("until", ["LAST", "FIRST", "BEFORE"].as_slice()),
+    ] {
+        let told = newest_tool_result(received.recv().expect("a later request"));
+        for subject in ["BEFORE", "FIRST", "LAST", "AFTER"] {
+            assert_eq!(
+                told.contains(&format!("SUBJECT-{subject}")),
+                listed.contains(&subject),
+                "{asked}: {subject} was listed or left out wrongly: {told}"
+            );
+        }
+    }
+}
+
 /// GIT-12. A log that stopped with commits left tells the planner the skip that lists the next of
 /// them, and asking with it lists them rather than the same page again. Asked for messages, a
 /// commit's body reaches the planner beneath its line, which is where a commit says what it closes.
@@ -54581,6 +54793,80 @@ fn a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one
             turn.results[0]
         );
     }
+}
+
+/// PATHREQ-1: `path` decides what programs may reach and `write` shapes the grant, so a call
+/// that names no path, or whose `write` is a string or a number rather than a JSON boolean, is
+/// answered with an error and asks nobody. The last call is the control: the same request made
+/// well is asked about. A `write` read leniently ("true" as a request to write, a number as a
+/// flag), a non-boolean read as false, or a blank path read as a path would put a question to the
+/// person that the planner never meant to ask, or answer with some other sentence.
+#[test]
+fn a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("malformed");
+    let beside = places.beside.display().to_string();
+    let malformed = [
+        (serde_json::json!({ "why": "x" }), "'path' is required"),
+        (
+            serde_json::json!({ "path": "  ", "why": "x" }),
+            "'path' is required",
+        ),
+        (
+            serde_json::json!({ "path": null, "why": "x" }),
+            "'path' is required",
+        ),
+        (
+            serde_json::json!({ "path": 7, "why": "x" }),
+            "'path' is required",
+        ),
+        (
+            serde_json::json!({ "path": beside, "write": "true", "why": "x" }),
+            "'write' must be true or false",
+        ),
+        (
+            serde_json::json!({ "path": beside, "write": 1, "why": "x" }),
+            "'write' must be true or false",
+        ),
+    ];
+    let mut calls: Vec<(&str, serde_json::Value)> = malformed
+        .iter()
+        .map(|(arguments, _)| ("request_path", arguments.clone()))
+        .collect();
+    calls.push((
+        "request_path",
+        serde_json::json!({ "path": beside, "write": true, "why": "x" }),
+    ));
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let paths = asked.paths.clone();
+    let turn = path_turn(
+        "path-malformed",
+        &places,
+        &calls,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+
+    let asked = paths.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "only the control is put to the person");
+    assert_eq!(asked[0].path, places.beside);
+    for (index, (arguments, told)) in malformed.iter().enumerate() {
+        let said = newest_tool_result(turn.results[index].clone());
+        assert!(said.contains(told), "{arguments}: {said}");
+    }
+    let control = newest_tool_result(turn.results[malformed.len()].clone());
+    assert!(control.contains("approved"), "{control}");
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "only the control is granted"
+    );
 }
 
 /// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `workspace-write` stage writes beside the session with no
