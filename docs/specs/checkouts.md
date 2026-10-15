@@ -50,7 +50,8 @@ time ([CHECKOUT-14](#CHECKOUT-14)), and `/checkouts apply` is the same operation
 person. A resume brings the kept checkouts back ([CHECKOUT-16](#CHECKOUT-16)); the opening sweep is
 not built. [background-sessions.md](background-sessions.md) proposes that a session started in the
 background be given a checkout the same way, for the session and not for a delegate
-([BG-14](background-sessions.md#BG-14)); nothing builds that either.
+([BG-14](background-sessions.md#BG-14)); nothing builds that either. [worktrees.md](worktrees.md)
+proposes that a person ask for one for the session itself with `--worktree`.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
