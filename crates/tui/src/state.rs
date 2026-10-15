@@ -1602,6 +1602,9 @@ pub struct Session {
     /// them decides nothing and needs no label. Cleared when a turn starts, so one turn's plan
     /// never appears beneath another's work.
     pub todos: Vec<bravebot_core::todo::Row>,
+    /// The last list the turn in flight reported that had rows, which an empty report leaves
+    /// standing. Cleared with `todos`.
+    reported: Vec<bravebot_core::todo::Row>,
     /// What the turn in flight is waiting on, when it is waiting on the model.
     ///
     /// Cleared between turns. `None` before the first request goes out, which is the only
@@ -2001,6 +2004,7 @@ impl Session {
             written: 0,
             progress: Default::default(),
             todos: Vec::new(),
+            reported: Vec::new(),
             phase: None,
             checking: None,
             hook: None,
@@ -2437,8 +2441,27 @@ impl Session {
     }
 
     /// Record the task list the turn just reported.
+    ///
+    /// A report with no rows empties the display but not the plan: the session record cannot tell
+    /// a turn that emptied its list from one that kept none, so the last list that had rows
+    /// stays what the panel shows ([PANEL-10](../../../docs/specs/info-panel.md#PANEL-10)).
     pub fn set_todos(&mut self, rows: Vec<bravebot_core::todo::Row>) {
+        if !rows.is_empty() {
+            self.reported = rows.clone();
+        }
         self.todos = rows;
+    }
+
+    /// Hand over the plan the turn ended with, for the entry that closes it.
+    fn take_todos(&mut self) -> Vec<bravebot_core::todo::Row> {
+        self.todos.clear();
+        std::mem::take(&mut self.reported)
+    }
+
+    /// Drop the live list and the plan kept beside it.
+    fn forget_todos(&mut self) {
+        self.todos.clear();
+        self.reported.clear();
     }
 
     /// Take on what an earlier session spent.
@@ -2611,7 +2634,7 @@ impl Session {
         self.occupancy = Occupancy::Unmeasured;
         self.written = 0;
         self.progress = Default::default();
-        self.todos.clear();
+        self.forget_todos();
         self.clear_in_progress();
         self.started = None;
         self.scroll = 0;
@@ -4662,7 +4685,7 @@ impl Session {
         self.turn_history.retain(|turn| turn.number <= self.turns);
         self.turn_places.retain(|turn, _| *turn <= self.turns);
         self.unplaced_todos.retain(|turn, _| *turn <= self.turns);
-        self.todos.clear();
+        self.forget_todos();
         self.progress = Default::default();
     }
 
@@ -5289,7 +5312,7 @@ impl Session {
             // line is what the person is looking at and keeps the box, so the prompt has nowhere
             // to be put back to, and popping it anyway would leave it in no transcript, no history
             // and no box, with nothing left to ask for it back with.
-            let todos = std::mem::take(&mut self.todos);
+            let todos = self.take_todos();
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
             return;
@@ -5311,7 +5334,7 @@ impl Session {
         self.pasted.append(&mut self.sent_pasted);
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
-        self.todos.clear();
+        self.forget_todos();
     }
 
     /// Put a rewound turn's prompt back in the box, for editing and sending again.
@@ -7161,7 +7184,7 @@ impl Session {
         self.copied = None;
         // The previous turn's plan is not this turn's. Leaving it would show finished work as
         // though the new turn had it outstanding.
-        self.todos.clear();
+        self.forget_todos();
         self.written = 0;
         self.progress = Default::default();
         self.clear_in_progress();
@@ -7237,7 +7260,7 @@ impl Session {
     ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
-        let todos = std::mem::take(&mut self.todos);
+        let todos = self.take_todos();
         let reply = reply.into();
         self.transcript.push(
             Entry::assistant(crate::reasoning::spoken(&reply), trail)
@@ -7303,7 +7326,7 @@ impl Session {
         self.finish_turn(tokens, bravebot_agent::Ending::Stopped { attempts });
         if self.is_quitting() {
             self.forget_cancelled_prompt();
-            let todos = std::mem::take(&mut self.todos);
+            let todos = self.take_todos();
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
         } else {
@@ -7317,7 +7340,7 @@ impl Session {
     /// five tasks done is more useful shown that way than blank.
     pub fn fail(&mut self, message: impl Into<String>, ending: bravebot_agent::Ending) {
         let tokens = self.charge_progress();
-        let todos = std::mem::take(&mut self.todos);
+        let todos = self.take_todos();
         self.transcript
             .push(Entry::failure(message).with_todos(todos));
         self.status = Status::Idle;
@@ -8042,11 +8065,15 @@ impl Session {
     /// The task list the panel shows: the one the turn in flight reported, or else the last one a
     /// turn finished with.
     ///
-    /// Read off the transcript rather than kept, so a resumed session shows the plan it was left
+    /// Past the turn in flight it is read off the transcript rather than kept, so a resumed session shows the plan it was left
     /// with and `/clear`, which empties the transcript, empties this too.
     pub fn plan(&self) -> &[bravebot_core::todo::Row] {
         if !self.todos.is_empty() {
             return &self.todos;
+        }
+        // An empty report in a turn that had already reported rows leaves those rows the plan.
+        if !self.reported.is_empty() {
+            return &self.reported;
         }
         self.transcript
             .iter()
