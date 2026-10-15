@@ -46,10 +46,7 @@ export async function showSessions(page) {
   await page.waitForTimeout(250)
 }
 
-/**
- * Launch against the real profile, wait for the first window, put the session list on screen and
- * log page errors and console errors. Each driver sets its own wait after this returns.
- */
+/** Each driver sets its own wait after this returns. */
 export async function launchLive(start = launch) {
   const app = await start()
   const page = await app.firstWindow()
