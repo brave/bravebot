@@ -488,7 +488,7 @@ pub fn judged_request(
         return Err(RequestRefusal::Rule(Reason::Climbs));
     }
     let path = resolved(&spelled);
-    if let Some(reason) = refused_for_adding_reach(&path, Some(&home)) {
+    if let Some(reason) = refused_for_adding_reach(&path, Some(&home), write) {
         return Err(RequestRefusal::Rule(reason));
     }
     if confines_nothing(&path, Some(&home)) {
@@ -496,7 +496,7 @@ pub fn judged_request(
     }
     // A location is compared where it stands and where its links lead: a credential directory
     // that is a link into a dotfiles repository resolves there, and so does `path`.
-    if credential_spellings(&home)
+    if credential_spellings_for(&home, reads_readable_state(&path, &home, write))
         .iter()
         .any(|location| path.starts_with(location) || location.starts_with(&path))
     {
@@ -571,9 +571,30 @@ fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
 
 /// Each [`credential_rows`] location in the spelling it has under `home` and where its links lead.
 fn credential_spellings(home: &Path) -> Vec<PathBuf> {
+    credential_spellings_for(home, false)
+}
+
+/// [`credential_spellings`], without the state directory where `reading_state` says the path being
+/// judged is a read of an entry of it that a stage reads.
+fn credential_spellings_for(home: &Path, reading_state: bool) -> Vec<PathBuf> {
+    let state = home.join(STATE_DIRECTORY);
     credential_rows(home)
+        .filter(|location| !(reading_state && *location == state))
         .flat_map(|location| [resolved(&location), location])
         .collect()
+}
+
+/// Whether `path`, already resolved, is a read of the state directory's entries that a stage reads
+/// ([`readable_state_locations`](crate::base::readable_state_locations)). Compared against the
+/// home as named and as resolved, and never against where an entry's own links lead, so a link
+/// named like an entry cannot make the rest of the directory read.
+pub(crate) fn reads_readable_state(path: &Path, home: &Path, write: bool) -> bool {
+    !write
+        && [home.to_path_buf(), resolved(home)].iter().any(|home| {
+            crate::base::readable_state_locations(home)
+                .iter()
+                .any(|place| path.starts_with(place))
+        })
 }
 
 /// The places under the home directory where a write becomes code that runs later as the account
@@ -631,7 +652,17 @@ fn persistence_spellings(home: &Path) -> Vec<PathBuf> {
 /// location, the home directory among them, is not inside one: the refusals beneath it still
 /// hold.
 pub fn inside_a_credential_location(path: &Path, home: &Path) -> bool {
+    inside_a_credential_location_for(path, home, true)
+}
+
+/// [`inside_a_credential_location`] for an access that is a write where `write` is set. A read of an
+/// entry of the state directory that a stage reads is not inside the state directory's location,
+/// and every other location still counts.
+pub fn inside_a_credential_location_for(path: &Path, home: &Path, write: bool) -> bool {
+    let state = home.join(STATE_DIRECTORY);
+    let reading_state = reads_readable_state(path, home, write);
     credential_rows(home)
+        .filter(|location| !(reading_state && *location == state))
         .any(|location| under(path, &location) || under(path, &resolved(&location)))
 }
 
@@ -747,7 +778,7 @@ fn one(
     let mut kept = Vec::new();
     for path in named {
         if matches!(list, List::AllowRead | List::AllowWrite)
-            && let Some(refusal) = refused_for_adding_reach(&path, home)
+            && let Some(refusal) = refused_for_adding_reach(&path, home, list.is_a_write())
         {
             if wildcard {
                 continue;
@@ -774,13 +805,15 @@ fn one(
 }
 
 /// The refusal that applies to a resolved path in a list that adds reach: `~/.ssh` and the state
-/// directory, or anything inside either.
-fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> {
+/// directory, or anything inside either. A read of an entry of the state directory that a stage
+/// reads ([`readable_state_locations`](crate::base::readable_state_locations)) is not refused.
+fn refused_for_adding_reach(path: &Path, home: Option<&Path>, write: bool) -> Option<Reason> {
     home.and_then(|home| {
         if path.starts_with(home.join(".ssh")) || path.starts_with(resolved(&home.join(".ssh"))) {
             Some(Reason::PrivateKey)
-        } else if path.starts_with(home.join(STATE_DIRECTORY))
-            || path.starts_with(resolved(&home.join(STATE_DIRECTORY)))
+        } else if (path.starts_with(home.join(STATE_DIRECTORY))
+            || path.starts_with(resolved(&home.join(STATE_DIRECTORY))))
+            && !reads_readable_state(path, home, write)
         {
             Some(Reason::StateDirectory)
         } else {
@@ -1262,28 +1295,55 @@ mod tests {
     }
 
     /// The state directory holds the gateway keys. No list that adds reach names it or a place in
-    /// it, written out, by a link or by a pattern, whether or not a link leads to it.
+    /// it, written out, by a link or by a pattern, whether or not a link leads to it. The session
+    /// records are the one part a read may be added for; a write there is refused like the rest.
     #[cfg(unix)]
     #[test]
     fn an_entry_that_adds_reach_inside_the_state_directory_is_refused() {
         let home = fresh("rules-state-home");
         let base = fresh("rules-state-base");
-        fs::create_dir_all(home.join(".bravebot")).unwrap();
-        fs::write(home.join(".bravebot/gateway-keys.json"), "").unwrap();
+        fs::create_dir_all(home.join(".bravebot/sessions/-repo")).unwrap();
+        for name in STATE_FILES {
+            fs::write(home.join(".bravebot").join(name), "").unwrap();
+        }
+        fs::write(home.join(".bravebot/sessions/-repo/1.json"), "").unwrap();
         std::os::unix::fs::symlink(home.join(".bravebot"), base.join("shortcut")).unwrap();
+        std::os::unix::fs::symlink(
+            home.join(".bravebot/sessions"),
+            base.join("sessions-shortcut"),
+        )
+        .unwrap();
         for list in [List::AllowRead, List::AllowWrite] {
-            for spelled in [
-                "~/.bravebot",
-                "~/.bravebot/gateway-keys.json",
-                "shortcut/gateway-keys.json",
-            ] {
-                let rules = resolve(&only(list, spelled), Some(&home), &base);
+            let mut spellings = vec!["~/.bravebot".to_string()];
+            for name in STATE_FILES {
+                spellings.push(format!("~/.bravebot/{name}"));
+                spellings.push(format!("shortcut/{name}"));
+            }
+            for spelled in spellings {
+                let rules = resolve(&only(list, &spelled), Some(&home), &base);
                 assert_eq!(
                     refusal_of(&rules),
                     Some(Reason::StateDirectory),
                     "{list:?} {spelled}"
                 );
             }
+        }
+        // The session records may be read and may not be written, spelled out or by a link.
+        for spelled in [
+            "~/.bravebot/sessions",
+            "~/.bravebot/sessions/-repo",
+            "~/.bravebot/sessions/-repo/1.json",
+            "shortcut/sessions/-repo",
+            "sessions-shortcut/-repo/1.json",
+        ] {
+            let rules = resolve(&only(List::AllowRead, spelled), Some(&home), &base);
+            assert_eq!(refusal_of(&rules), None, "read {spelled}");
+            let rules = resolve(&only(List::AllowWrite, spelled), Some(&home), &base);
+            assert_eq!(
+                refusal_of(&rules),
+                Some(Reason::StateDirectory),
+                "write {spelled}"
+            );
         }
         let rules = resolve(
             &only(List::AllowRead, "~/.bravebot/*.json"),
@@ -1316,6 +1376,156 @@ mod tests {
             &base,
         );
         assert_eq!(refusal_of(&rules), None);
+    }
+
+    /// Files the product keeps in the state directory, one of each kind: credentials, files read
+    /// back to decide what runs or what is allowed, and a name the product may start to write
+    /// later. None is among the entries a stage reads.
+    #[cfg(unix)]
+    const STATE_FILES: [&str; 12] = [
+        "gateway-keys.json",
+        "leo-premium.json",
+        "mcp.json",
+        "settings.json",
+        "hooks.json",
+        "reach.jsonl",
+        "vetting",
+        "history",
+        "AGENTS.md",
+        "sessions.json",
+        "sessionsx",
+        "a-file-the-product-writes-later",
+    ];
+
+    /// A stage is told it may read the session records and nothing else in the state directory:
+    /// not by `request_path`, not by an added directory, not by a path an environment variable
+    /// names, and never for writing. The regression it rejects: the whole directory lifted for a
+    /// read, which hands over the gateway keys to the first request, or a lift that does not stop
+    /// at a write, which lets a stage plant a hook the next session runs.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_read_of_the_session_records_is_granted_in_the_state_directory() {
+        use crate::scope::judged_directory;
+        let home = fresh("request-state-home");
+        let rules = Rules::none();
+        fs::create_dir_all(home.join(".bravebot/sessions/-repo")).unwrap();
+        fs::create_dir_all(home.join(".bravebot/logs")).unwrap();
+        for name in STATE_FILES {
+            fs::write(home.join(".bravebot").join(name), "").unwrap();
+        }
+        fs::write(home.join(".bravebot/sessions/-repo/1.json"), "").unwrap();
+        std::os::unix::fs::symlink(home.join(".bravebot"), home.join("to-state")).unwrap();
+        std::os::unix::fs::symlink(home.join(".bravebot/sessions"), home.join("to-sessions"))
+            .unwrap();
+        std::os::unix::fs::symlink(
+            home.join(".bravebot/gateway-keys.json"),
+            home.join("to-keys"),
+        )
+        .unwrap();
+        let sessions = resolved(&home.join(".bravebot/sessions"));
+
+        for spelled in [
+            home.join(".bravebot/sessions"),
+            home.join(".bravebot/sessions/-repo"),
+            home.join("to-sessions"),
+            home.join("to-sessions/-repo"),
+            home.join("to-state/sessions"),
+            Path::new("~/.bravebot/sessions/-repo").to_path_buf(),
+        ] {
+            let granted = judged_request(&spelled, false, Some(&home), &rules)
+                .unwrap_or_else(|why| panic!("{spelled:?} read: {why:?}"));
+            assert!(
+                granted.starts_with(&sessions),
+                "{spelled:?} led to {granted:?}"
+            );
+            assert_eq!(
+                judged_request(&spelled, true, Some(&home), &rules),
+                Err(RequestRefusal::Rule(Reason::StateDirectory)),
+                "{spelled:?} write"
+            );
+            let directory = home.join(".bravebot/sessions/-repo");
+            assert!(judged_directory(&directory, &home, false).is_some());
+            assert_eq!(judged_directory(&directory, &home, true), None);
+        }
+        // Every other place in the state directory is refused for a read and for a write,
+        // spelled out, through a link to the directory and through a link to the file.
+        let mut others = vec![
+            home.join(".bravebot"),
+            home.join(".bravebot/logs"),
+            home.join("to-state"),
+            home.join("to-keys"),
+            home.join("to-state/logs"),
+            Path::new("~/.bravebot").to_path_buf(),
+        ];
+        for name in STATE_FILES {
+            others.push(home.join(".bravebot").join(name));
+            others.push(home.join("to-state").join(name));
+        }
+        for spelled in others {
+            for write in [false, true] {
+                assert!(
+                    matches!(
+                        judged_request(&spelled, write, Some(&home), &rules),
+                        Err(RequestRefusal::Rule(_) | RequestRefusal::CredentialLocation)
+                    ),
+                    "{spelled:?} write={write} was granted"
+                );
+            }
+        }
+        // The browser relay's directory holds the secret that drives the browser.
+        fs::create_dir_all(home.join(".bravebot-browser")).unwrap();
+        for write in [false, true] {
+            assert_eq!(
+                judged_request(&home.join(".bravebot-browser"), write, Some(&home), &rules),
+                Err(RequestRefusal::CredentialLocation)
+            );
+        }
+        // The lift is for the session records and not for a name that begins like them.
+        for sibling in ["sessions-old", "sessions-copy"] {
+            fs::create_dir_all(home.join(".bravebot").join(sibling)).unwrap();
+            assert!(
+                judged_request(
+                    &home.join(".bravebot").join(sibling),
+                    false,
+                    Some(&home),
+                    &rules
+                )
+                .is_err(),
+                "{sibling}"
+            );
+        }
+        // A name that is not UTF-8 beside `sessions` is not the session records, and neither is
+        // the name its lossy rendering spells. A lift that compared the text of the names would
+        // grant one of them. The names are built in memory because macOS cannot hold the first.
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let invalid = home
+                .join(".bravebot")
+                .join(std::ffi::OsStr::from_bytes(b"sessions\xff"));
+            let lookalike = home.join(".bravebot/sessions\u{FFFD}");
+            assert_ne!(invalid, lookalike);
+            for name in [invalid, lookalike] {
+                assert!(!reads_readable_state(&name, &home, false), "{name:?}");
+                for write in [false, true] {
+                    assert!(
+                        matches!(
+                            judged_request(&name, write, Some(&home), &rules),
+                            Err(RequestRefusal::Rule(_) | RequestRefusal::CredentialLocation)
+                        ),
+                        "{name:?} write={write} was granted"
+                    );
+                }
+            }
+        }
+        // An access the caller says nothing about is judged as a write.
+        assert!(inside_a_credential_location(&sessions, &home));
+        assert!(!inside_a_credential_location_for(&sessions, &home, false));
+        assert!(inside_a_credential_location_for(&sessions, &home, true));
+        assert!(inside_a_credential_location_for(
+            &resolved(&home.join(".bravebot/logs")),
+            &home,
+            false
+        ));
     }
 
     /// A glob names what is on disk when the rules are resolved, matches nothing quietly, applies
