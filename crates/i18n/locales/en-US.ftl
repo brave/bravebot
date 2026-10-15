@@ -808,6 +808,12 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# The heading over a message another session sent, where it reaches the planner of this one. The
+# sender is named by the start of its id and by its name as the list of background sessions shows
+# them, and the label is the one the message was given on arrival, which is the sender's word only
+# where it was a label.
+session-message-heading = message from session { $from } ({ $name }) · { $label }
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.

@@ -34,6 +34,7 @@ pub mod lsp;
 pub mod manifest;
 pub mod mcp;
 pub mod memory;
+pub mod messages;
 pub mod mode;
 pub mod outcome;
 pub mod output_schema;

@@ -1399,6 +1399,106 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
     }
 }
 
+/// Put every message another session sent in front of the planner (MSG-6 to MSG-9, MSG-11).
+///
+/// Called at the top of a round, before the request is built, so a message that arrived while the
+/// last round ran is read by the planner before it is asked again, and one that waited for a
+/// session with no turn running is read with the prompt that began this one. Nothing here starts a
+/// turn: a session with no turn running is not asked.
+///
+/// A message is the sender's text under the label it was sent with, taken in by the policy layer
+/// and presented through the same gate as any other result. A trusted one reaches the planner
+/// quoted in a frame the driver wrote, and anything else is handed over as a reference, so a
+/// message that lost its label on the way is quarantined. Nothing here reads the text: it is
+/// carried to the planner or to a slot, and drawn on the screen.
+///
+/// A delegate asks for none. The inbox belongs to the session, and a message aimed at it is for the
+/// planner the person is talking to.
+fn take_session_messages<S: Sink, R: Reporter>(
+    task: &Task,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+) -> Result<(), TurnError> {
+    use crate::messages::{Arrived, Body, frame, shown_name};
+
+    if task.delegate.is_some() {
+        return Ok(());
+    }
+    let Some(inbox) = &task.inbox else {
+        return Ok(());
+    };
+    // Every message taken out of the inbox is dealt with before the turn can fail on one of them,
+    // because what is left in the batch is in no inbox any longer.
+    let mut refused = None;
+    for Arrived {
+        from,
+        name,
+        label,
+        text,
+    } in inbox.take()
+    {
+        let name = shown_name(&name);
+        let content = policy.admit_session_message(&label, text);
+        let slot = conversation.next_reference();
+        let presented = match policy.present(
+            "session_message",
+            slot,
+            "a message from another session",
+            &content,
+            conversation.quarantine(),
+        ) {
+            Ok(presented) => presented,
+            Err(denial) => {
+                refused.get_or_insert(denial.to_string());
+                continue;
+            }
+        };
+        let given = content.label();
+        let (told, drawn) = match &presented {
+            Presentation::Visible(text) => {
+                policy.heard_from_session(given);
+                (
+                    frame(&from, &name, given, Body::Said(text)),
+                    crate::report::Reported::Said(text.clone()),
+                )
+            }
+            Presentation::Quarantined(reference) => {
+                let shown = preview_for(policy, "session_message", &content);
+                (
+                    frame(&from, &name, given, Body::Kept(&reference.describe())),
+                    crate::report::Reported::Kept(crate::report::Shown {
+                        origin: "a message from another session".to_string(),
+                        reach: crate::report::Reach::NotThePlanner,
+                        label: given.to_string(),
+                        lines: shown.lines,
+                        preview: shown.preview,
+                    }),
+                )
+            }
+        };
+        reporter.session_message(crate::report::HeardMessage {
+            from,
+            name,
+            label: given.to_string(),
+            body: drawn,
+        });
+        // Written rather than a notice: a person resuming the session is shown the frame as it
+        // went to the planner, so the record says why it changed course, and the words of a
+        // message the planner was only given a reference to are not in it.
+        conversation.push_composed_from(
+            Message::user(told),
+            Composed::Written,
+            provenance_of(&presented, "session message"),
+        );
+        conversation.observed(policy.context_label());
+    }
+    match refused {
+        Some(refusal) => Err(TurnError::Precommit(refusal)),
+        None => Ok(()),
+    }
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -3098,6 +3198,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     if !std::mem::replace(&mut told_of_kept_jobs, true) {
                         tell_of_kept_jobs(jobs, conversation);
                     }
+
+                    // And whatever another session sent, in the same place and for the same reason: it
+                    // reaches the planner at the start of a request, so a session with no turn running
+                    // keeps it until a person starts one (MSG-6).
+                    take_session_messages(task, &mut policy, conversation, &mut reporter)?;
 
                     // Before anything new is sent, compaction included, since a summary is a request that
                     // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
@@ -5576,6 +5681,152 @@ mod tests {
                 _ => &[],
             };
             assert_eq!(servers, expected, "a {kind}'s server grants");
+        }
+    }
+
+    /// MSG-6, MSG-9: what `take_session_messages` does with a batch it cannot present, and with a
+    /// task that is a delegate's.
+    mod session_messages {
+        use super::*;
+        use crate::messages::{Arrived, Inbox};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// An inbox holding one batch, counting how often a turn asked for it.
+        #[derive(Debug)]
+        struct Waiting {
+            batch: std::sync::Mutex<Vec<Arrived>>,
+            asked: AtomicUsize,
+        }
+
+        impl Waiting {
+            fn holding(batch: Vec<Arrived>) -> std::sync::Arc<Self> {
+                std::sync::Arc::new(Self {
+                    batch: std::sync::Mutex::new(batch),
+                    asked: AtomicUsize::new(0),
+                })
+            }
+        }
+
+        impl Inbox for Waiting {
+            fn take(&self) -> Vec<Arrived> {
+                self.asked.fetch_add(1, Ordering::SeqCst);
+                std::mem::take(&mut *self.batch.lock().expect("the inbox is not poisoned"))
+            }
+        }
+
+        fn sent_as(label: &str, text: &str) -> Arrived {
+            Arrived {
+                from: "11111111-1111-4111-8111-111111111111".to_string(),
+                name: "fix the build".to_string(),
+                label: label.to_string(),
+                text: text.to_string(),
+            }
+        }
+
+        fn begun<'a>(
+            sink: &'a mut bravebot_core::event::RecordingSink,
+        ) -> Policy<'a, bravebot_core::event::RecordingSink> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "wait for news");
+            Policy::begin(routing, ReleasePlan::new(), CapabilitySet::default(), sink).unwrap()
+        }
+
+        fn what_the_planner_was_told(conversation: &Conversation) -> Vec<String> {
+            conversation
+                .messages()
+                .iter()
+                .map(|stored| stored.message.content.text())
+                .collect()
+        }
+
+        /// A message taken out of the inbox is in no inbox any longer, so a turn that failed on the
+        /// first one it could not present and dropped the rest would lose a trusted message for
+        /// good. A slot that is already written makes the quarantine write fail.
+        #[test]
+        fn a_message_that_cannot_be_quarantined_fails_the_turn_after_the_rest_of_the_batch_is_recorded()
+         {
+            use bravebot_core::{SlotId, label::Label};
+
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = begun(&mut sink);
+            let mut conversation = Conversation::new();
+            conversation
+                .quarantine()
+                .writer_for(SlotId::new("ref:0"), Label::untrusted_public())
+                .unwrap()
+                .write("AN-EARLIER-RESULT")
+                .unwrap();
+            let inbox = Waiting::holding(vec![
+                sent_as("(U,priv)", "THE-REFUSED-WORDS"),
+                sent_as("(T,pub)", "TRUSTED-BEHIND-THE-REFUSED"),
+            ]);
+            let task = Task::new("wait for news").with_inbox(Some(inbox.clone()));
+            let mut reporter = crate::report::RecordingReporter::default();
+
+            let outcome =
+                take_session_messages(&task, &mut policy, &mut conversation, &mut reporter);
+
+            let Err(TurnError::Precommit(refused)) = outcome else {
+                panic!("a message that could not be quarantined was presented anyway");
+            };
+            assert!(
+                refused.contains("could not quarantine a message from another session"),
+                "the turn failed for some other reason: {refused}"
+            );
+            let [heard] = reporter.heard.as_slice() else {
+                panic!(
+                    "the message behind the refused one was not recorded: {:?}",
+                    reporter.heard
+                );
+            };
+            assert_eq!(
+                heard.body,
+                crate::report::Reported::Said("TRUSTED-BEHIND-THE-REFUSED".to_string())
+            );
+            let told = what_the_planner_was_told(&conversation);
+            let [framed] = told.as_slice() else {
+                panic!("one frame for the one message presented: {told:?}");
+            };
+            assert!(framed.contains("> TRUSTED-BEHIND-THE-REFUSED"), "{framed}");
+            assert!(
+                !framed.contains("THE-REFUSED-WORDS"),
+                "the words of the refused message reached the planner: {framed}"
+            );
+        }
+
+        /// The inbox is the session's. A message aimed at it is for the planner the person is
+        /// talking to, and a delegate that took it would read what that planner never saw. The
+        /// session's own turn, given the same inbox afterwards, still has the message to take.
+        #[test]
+        fn a_delegates_turn_leaves_the_sessions_messages_in_the_inbox() {
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = begun(&mut sink);
+            let inbox = Waiting::holding(vec![sent_as("(T,pub)", "FOR-THE-SESSIONS-PLANNER")]);
+            let delegate = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()))
+                .with_inbox(Some(inbox.clone()));
+            let mut conversation = Conversation::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+
+            take_session_messages(&delegate, &mut policy, &mut conversation, &mut reporter)
+                .expect("a delegate's turn is not failed by its session's messages");
+
+            assert_eq!(
+                inbox.asked.load(Ordering::SeqCst),
+                0,
+                "a delegate's turn took from its session's inbox"
+            );
+            assert!(reporter.heard.is_empty(), "{:?}", reporter.heard);
+            assert!(conversation.messages().is_empty());
+
+            let session = Task::new("wait for news").with_inbox(Some(inbox.clone()));
+            take_session_messages(&session, &mut policy, &mut conversation, &mut reporter)
+                .expect("the session's own turn takes its messages");
+
+            let told = what_the_planner_was_told(&conversation);
+            let [framed] = told.as_slice() else {
+                panic!("one frame for the one message waiting: {told:?}");
+            };
+            assert!(framed.contains("> FOR-THE-SESSIONS-PLANNER"), "{framed}");
         }
     }
 

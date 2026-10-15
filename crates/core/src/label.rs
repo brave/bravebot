@@ -120,6 +120,21 @@ impl Label {
             && other.confidentiality == self.confidentiality.join(other.confidentiality)
     }
 
+    /// The label whose [`fmt::Display`] form is `word`, or `None` for any other word.
+    ///
+    /// The way a label is read back after it crossed a boundary as a word. Nothing else is
+    /// accepted: no case folding, no spaces, no label a reader would have to guess at.
+    pub fn named(word: &str) -> Option<Self> {
+        [
+            Self::trusted_public(),
+            Self::trusted_private(),
+            Self::untrusted_public(),
+            Self::untrusted_private(),
+        ]
+        .into_iter()
+        .find(|label| label.to_string() == word)
+    }
+
     pub fn is_trusted(self) -> bool {
         self.integrity == Integrity::Trusted
     }
@@ -178,6 +193,30 @@ mod tests {
     const T_PRIV: Label = Label::trusted_private();
     const U_PUB: Label = Label::untrusted_public();
     const U_PRIV: Label = Label::untrusted_private();
+
+    /// A label read back from the word it was written as is the label, and any other word names
+    /// none, so a boundary that carried a label as text cannot be made to read a better one.
+    #[test]
+    fn a_label_reads_back_from_its_word_and_from_nothing_else() {
+        for label in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
+            assert_eq!(Label::named(&label.to_string()), Some(label));
+        }
+        for word in [
+            "",
+            "T",
+            "(t,pub)",
+            "(T,Pub)",
+            "( T,pub)",
+            "(T, pub)",
+            "(T,pub) ",
+            "trusted",
+            "(T,pub)x",
+            "(T,public)",
+            "(X,pub)",
+        ] {
+            assert_eq!(Label::named(word), None, "{word:?}");
+        }
+    }
 
     #[test]
     fn integrity_meet_is_pessimistic() {

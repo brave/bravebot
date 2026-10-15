@@ -578,6 +578,23 @@ pub struct Delegation {
     pub stop: bravebot_core::cancel::DelegateStop,
 }
 
+/// A message from another session, as it reached the planner of this one (MSG-11).
+///
+/// Drawn apart from the person's own prompts. The sender's id and name are the roster's and the
+/// label is the one the policy layer gave the message, so none of the three is the sender's word;
+/// the text is the sender's, released for a screen only where the planner was given it, and kept
+/// in the marked block every quarantined thing is drawn in where it was not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeardMessage {
+    pub from: String,
+    /// The sender's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was given.
+    pub label: String,
+    /// The words, or the block that stands for them.
+    pub body: Reported,
+}
+
 pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
@@ -760,6 +777,12 @@ pub trait Reporter {
     /// its mind unprompted.
     fn interjected(&mut self, _said: String) {}
 
+    /// A message another session sent has reached the planner.
+    ///
+    /// Sent at the moment it goes in, for the reason [`Reporter::interjected`] is: a planner that
+    /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
+    fn session_message(&mut self, _heard: HeardMessage) {}
+
     /// Whose work the reports that follow describe: one delegate, or the turn itself.
     ///
     /// Set by the driver immediately before each report, and the only thing that says where a
@@ -849,6 +872,8 @@ pub struct RecordingReporter {
     pub landed: Vec<Landing>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
+    /// Every message from another session, in the order it reached the planner.
+    pub heard: Vec<HeardMessage>,
     /// Every delegate announced as starting, in order.
     pub delegated: Vec<Delegation>,
     /// How each delegate ended, in the order they finished.
@@ -956,6 +981,10 @@ impl Reporter for RecordingReporter {
 
     fn interjected(&mut self, said: String) {
         self.interjected.push(said);
+    }
+
+    fn session_message(&mut self, heard: HeardMessage) {
+        self.heard.push(heard);
     }
 
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {

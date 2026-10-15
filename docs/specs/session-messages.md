@@ -4,6 +4,8 @@ title: Messages between background sessions
 status: proposed
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/messages.rs
+  - crates/cli/src/host.rs
   - crates/session/src/jobs.rs
 documented-by:
   - none (gap: a page on one session sending text to another, owed until the design is built)
@@ -15,10 +17,20 @@ One background session sending text to another on the same machine: the tool tha
 decides where the text goes, what a person is asked, what the receiving planner is given, and what
 the text is never taken for.
 
-Nothing here is built. It depends on [background-sessions.md](background-sessions.md), whose roster,
-`bravebot sessions`, `bravebot --bg`, `bravebot attach` and `bravebot reply` are built, and whose
-supervisor and restarts are not. A clause in this spec reads `verified-by: none` until the work it
-describes lands.
+It depends on [background-sessions.md](background-sessions.md), whose roster, `bravebot sessions`,
+`bravebot --bg`, `bravebot attach` and `bravebot reply` are built, and whose supervisor and restarts
+are not.
+
+The receiving half is built: a background session's socket takes a message, holds up to eight for
+its planner, and puts each in front of the planner at the start of its next request in a frame the
+driver wrote, under the label it arrived with ([MSG-6](#MSG-6) to [MSG-9](#MSG-9)). The sending half
+is not: there is no `message_session` tool in `crates/agent/src/tools.rs`, no prompt, and no client
+that writes to another session's socket, so nothing in this program sends. A clause with a part still
+to build reads `verified-by: none` until all of it lands, and the parts not built are the tool and
+its refusals ([MSG-1](#MSG-1), [MSG-5](#MSG-5)), the sender's gate and label ([MSG-2](#MSG-2)), the
+prompt ([MSG-3](#MSG-3), [MSG-4](#MSG-4)), the bound on a sender ([MSG-10](#MSG-10)), the sender's
+transcript and trail, and a block marked as a message in a resumed transcript, which draws the frame
+as plain text today ([MSG-11](#MSG-11)), and the tool's absence from a delegate ([MSG-12](#MSG-12)).
 
 A **message** is text one session's planner wrote for another session's planner. It is not the
 sender's conversation, files, references or quarantined content, none of which cross. The **sender**
@@ -151,7 +163,9 @@ running. A receiver that is `idle` holds it until a person starts that session's
 into an attached terminal or by `bravebot reply`, and it is put in front of that turn's planner with
 the person's prompt. A receiver in `needs input` holds it until the turn that is waiting continues.
 
-At most eight messages wait for one receiver. A ninth is refused to its sender as full.
+At most eight messages wait for one receiver. A ninth is refused to its sender as full. A message of
+more than 4,000 characters is refused to its sender as too long and none of it is kept, because the
+receiver does not rely on the sender having kept to [MSG-1](#MSG-1).
 
 A message held by a process that ends is gone, and its sender is not told.
 
@@ -159,7 +173,13 @@ A message held by a process that ends is gone, and its sender is not told.
 anywhere, each turn asking the other for the next. Holding the message until a person starts a turn
 puts a person in every cycle, and bounds what an unwatched sender can cause to text that waits.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::a_message_is_queued_in_any_state_and_is_never_a_line`
+`verified-by: bravebot_cli::host::a_ninth_message_is_refused_as_full`
+`verified-by: bravebot_cli::host::a_message_over_the_bound_is_refused_whole_and_one_at_the_bound_is_taken`
+`verified-by: bravebot_cli::host::a_message_does_not_restart_the_idle_time_and_an_ending_session_takes_none`
+`verified-by: bravebot_cli::host::a_message_over_the_socket_needs_the_secret_and_is_answered_with_what_became_of_it`
+`verified-by: bravebot_agent::turn::a_trusted_message_reaches_the_planner_on_the_next_request_in_the_drivers_frame`
+`verified-by: bravebot_cli::plain_retention_tests::a_message_waiting_for_a_hosted_session_reaches_the_planner_of_its_next_turn_once`
 
 <a id="MSG-7"></a>
 ### MSG-7: the receiving planner is told what the text is, in words the driver wrote
@@ -178,7 +198,13 @@ position a person's prompt holds.
 **Why.** The receiving planner has to be able to tell this from the person, and the sender must not be
 able to choose how it is introduced. A sender that supplied its own name could call itself the person.
 
-`verified-by: none`
+`verified-by: bravebot_agent::messages::the_frame_says_what_the_text_is_and_who_sent_it`
+`verified-by: bravebot_agent::messages::a_name_cannot_end_its_quotation_or_start_a_line`
+`verified-by: bravebot_agent::messages::a_long_name_is_cut_as_the_list_cuts_it`
+`verified-by: bravebot_agent::messages::a_text_cannot_start_a_line_of_the_frame`
+`verified-by: bravebot_cli::host::the_sender_is_named_by_the_roster_and_an_unlisted_sender_is_refused`
+`verified-by: bravebot_agent::turn::a_message_is_its_own_message_and_none_of_its_text_is_read_as_the_persons`
+`verified-by: bravebot_agent::turn::a_trusted_message_reaches_the_planner_on_the_next_request_in_the_drivers_frame`
 
 <a id="MSG-8"></a>
 ### MSG-8: the receiver's driver decides nothing from a message, and a message is nothing a person types
@@ -202,7 +228,10 @@ and a call to a server's tool are each put to the person who is attached, with t
 driver. If the driver took it for the person, the sender would hold the person's authority over the
 receiver, which is the thing the sender's own gates were built to deny it.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::a_message_is_queued_in_any_state_and_is_never_a_line`
+`verified-by: bravebot_cli::host::a_message_text_crosses_the_socket_on_one_line_and_comes_back_whole`
+`verified-by: bravebot_agent::turn::a_message_is_its_own_message_and_none_of_its_text_is_read_as_the_persons`
+`verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference`
 
 <a id="MSG-9"></a>
 ### MSG-9: a message arrives with the label it was sent under, and the receiver can only lower it
@@ -221,7 +250,12 @@ makes its parent's, and a resumed session keeps that.
 does not rely on that, because the sender is a process the receiver cannot inspect, and a label that
 failed to cross would otherwise make the content trusted by moving it.
 
-`verified-by: none`
+`verified-by: bravebot_core::label::a_label_reads_back_from_its_word_and_from_nothing_else`
+`verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with`
+`verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private`
+`verified-by: bravebot_core::policy::a_private_message_from_another_session_is_held`
+`verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference`
+`verified-by: bravebot_agent::turn::a_private_message_makes_the_receiving_context_private_and_a_withheld_one_does_not`
 
 <a id="MSG-10"></a>
 ### MSG-10: a session sends a bounded number of messages

@@ -29,7 +29,8 @@ use crate::confirm::{
     WriteDecision, WriteRequest,
 };
 use crate::report::{
-    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
+    Activity, DelegateId, Delegation, HeardMessage, Landing, Phase, Printed, Reported, Reporter,
+    Returned, Shown,
 };
 use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_core::ask::{Answer, Asking};
@@ -323,6 +324,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn hook_started(&mut self, moment: &'static str, program: String);
         fn hook_finished(&mut self);
         fn interjected(&mut self, said: String);
+        fn session_message(&mut self, heard: HeardMessage);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
     }

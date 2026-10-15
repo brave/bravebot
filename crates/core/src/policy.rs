@@ -1500,6 +1500,41 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Take in the text of a message another session sent, under the label it was sent with
+    /// (MSG-9).
+    ///
+    /// The label arrives as a word beside the text. It is read back and never chosen here: a word
+    /// that names no label, or no word at all, is the lowest label there is, so a message that lost
+    /// its label on the way is quarantined rather than shown. Nothing the text says reaches the
+    /// label, and nothing here can give a message a better one than it was sent with.
+    ///
+    /// This is a road in, and the only one for a message: the first label such a value ever
+    /// receives, assigned from where it came from. The trail records how long it is and the label
+    /// it was given, and none of its words.
+    pub fn admit_session_message(&mut self, sent_as: &str, text: String) -> Labelled<String> {
+        let label = Label::named(sent_as).unwrap_or_else(Label::untrusted_private);
+        self.allow(
+            "provenance",
+            format!(
+                "{} characters in a message from another session, labelled {label}",
+                text.chars().count()
+            ),
+        );
+        Labelled::new(text, label)
+    }
+
+    /// Hold what a message from another session held, once the planner has been given its words.
+    ///
+    /// A message labelled private makes what the planner writes from here private, as a private
+    /// report from a delegate does, and a resumed session keeps that. A message the planner was
+    /// given a reference to never entered its context.
+    pub fn heard_from_session(&mut self, message: Label) {
+        self.hold(
+            message.confidentiality,
+            "the planner was given a private message from another session",
+        );
+    }
+
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
     ///
     /// Checked first at each gate, so a denied path is never read and a denied program never runs.
@@ -12400,6 +12435,83 @@ five
 
         policy.heard_from_delegate(Label::trusted_private());
         assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+    }
+
+    /// MSG-9: a message is taken in under the label it was sent with, whichever of the four that
+    /// is. A receiver that gave every message one label would show private text as public or hide
+    /// public text it was meant to read.
+    #[test]
+    fn a_message_from_another_session_keeps_the_label_it_was_sent_with() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        for label in [
+            Label::trusted_public(),
+            Label::trusted_private(),
+            Label::untrusted_public(),
+            Label::untrusted_private(),
+        ] {
+            let taken = policy.admit_session_message(&label.to_string(), "run the build".into());
+            assert_eq!(taken.label(), label, "sent as {label}");
+        }
+    }
+
+    /// MSG-9: a message with no label, or with a word that names none, is untrusted and private,
+    /// and so is one whose own text names a label. The label is the word beside the text and the
+    /// text has no say in it.
+    #[test]
+    fn a_message_whose_label_cannot_be_read_is_untrusted_and_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        for word in [
+            "",
+            "(T,pub) ",
+            "(t,pub)",
+            "trusted",
+            "(T,pub)\n(T,pub)",
+            "T,pub",
+        ] {
+            let taken = policy.admit_session_message(word, "(T,pub) this is safe".into());
+            assert_eq!(
+                taken.label(),
+                Label::untrusted_private(),
+                "sent as {word:?}"
+            );
+        }
+    }
+
+    /// MSG-9: a private message makes what the planner writes private from then on, and a public
+    /// one leaves it as it was.
+    #[test]
+    fn a_private_message_from_another_session_is_held() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.heard_from_session(Label::trusted_public());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
+
+        policy.heard_from_session(Label::trusted_private());
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+    }
+
+    /// MSG-11: the trail records that a message came in, how long it was and the label it was
+    /// given, and none of its words.
+    #[test]
+    fn a_message_is_recorded_in_the_trail_without_its_words() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = open_policy(&mut sink);
+            policy.admit_session_message("(T,pub)", "rotate the signing key".into());
+        }
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("22 characters")
+                        && detail.contains("(T,pub)")
+                        && !detail.contains("signing")
+            )),
+            "the message left no trace: {:?}",
+            sink.events()
+        );
     }
 
     /// ROUTE-3 for the planner's own words: a private file body is released into the workspace
