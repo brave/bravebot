@@ -18,6 +18,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/checkouts_command.rs
   - crates/tui/src/status.rs
 documented-by:

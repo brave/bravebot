@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/entry.rs

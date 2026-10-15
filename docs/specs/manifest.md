@@ -12,6 +12,7 @@ governs:
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs
 guards:

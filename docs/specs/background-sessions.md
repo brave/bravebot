@@ -6,6 +6,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs
