@@ -7217,7 +7217,10 @@ fn finish_turn(
     // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
 
-    // A stopped turn may already have learned that this model refuses the chosen level.
+    // A stopped turn may already have learned that this model refuses the chosen level. Asked of the
+    // model in force now, as is the budget below, even where a model was picked while the turn ran:
+    // the pick already recorded whether its model reads a level and moved the gauge to its budget,
+    // and both describe the model the next turn is sent to (`Session::update_budget`).
     let refused = bravebot_agent::backend::refused_a_level(
         config,
         session.model().unwrap_or(&config.default_model),
@@ -21632,6 +21635,47 @@ mod tests {
             "the running turn was handed /model"
         );
         assert_eq!(session.input(), "", "/model was left in the box");
+    }
+
+    /// `/model` typed mid-turn when the roster cannot be read opens no picker and says why under the
+    /// turn, as it does at rest, and is neither queued nor handed to the turn. The regressions it
+    /// rejects are an empty picker opened over a failed listing and a failure that goes unsaid, which
+    /// leaves the command looking dropped.
+    #[test]
+    fn the_model_command_whose_roster_cannot_be_read_opens_no_picker_mid_turn() {
+        use bravebot_config::env_var;
+        let (endpoint, _asked) = a_listing_server("this is not a roster");
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::ENDPOINT => Some(endpoint.clone()),
+            env_var::KEY_ID => Some("a-key-id".into()),
+            env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        let problem = list_models(&config, None).expect_err("an unreadable roster was listed");
+        let mut session = a_turn_running_on("first");
+
+        beside_holding(&mut config, |beside| {
+            typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside)
+        });
+
+        assert!(
+            session.picking().is_none(),
+            "a picker opened over a roster that could not be read: {:?}",
+            session.picking()
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            [t!(session_models_unavailable, problem = problem).to_string()],
+            "the failure was not said under the turn"
+        );
+        assert!(session.queued.is_empty(), "/model waited");
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed /model"
+        );
+        assert_eq!(session.model(), None, "the model changed without a pick");
     }
 
     /// A model picked mid-turn is the next turn's. The running turn keeps the model it was sent
