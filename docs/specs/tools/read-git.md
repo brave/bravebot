@@ -204,15 +204,39 @@ the calendar, written `YYYY-MM-DD`, is refused with the form it takes.
 <a id="GIT-7"></a>
 ### GIT-7: a git run whose output is sealed names read_git
 
-Where a stage of a `run` was git and its output could not be shown to the planner, the result says
-once that read_git reads history with nobody asked in a trusted repository. A run of any other
-program says nothing about it.
+Where a stage of a `run` was git, its output could not be shown to the planner, and read_git
+opens the repository git finds from the directory that stage worked in, for a question about
+history, the result says once that read_git reads history with nobody asked in a trusted
+repository. A stage works in the directory the line ran in, moved by each `-C` that leads its
+arguments. The repository git finds is in the nearest directory at or above that one, inside the
+session's directory or one the person added, that holds a `.git`. A stage that names its
+repository by `--git-dir`, `--work-tree` or `GIT_DIR` is judged by the directory it worked in.
+
+A run of any other program says nothing about it, and neither does a git run whose repository
+read_git declines: a `.git` that is a file ([GIT-8](#GIT-8)), which includes a directory below a
+linked worktree, a repository the map does not trust or a rule covers ([GIT-2](#GIT-2),
+[GIT-4](#GIT-4)), or a repository read_git cannot be asked for by name, because the name is not
+text or lies under a directory named `~`. A delegate's checkout, whose `.git` is also a file, is a
+repository read_git opens ([CHECKOUT-12](../checkouts.md#CHECKOUT-12)).
+
+Whether read_git opens the repository is decided by the opener a read_git call goes through. The
+checks a call makes on the name it was given before it reaches the opener are not made. Nothing
+under `.git` is read until the map has vouched for all of it ([GIT-2](#GIT-2)).
 
 **Why.** A planner that ran git and got a sealed result does not otherwise learn that the question
 has an answer it can read. Said after every run, the sentence would be noise the planner learns to
-skip.
+skip. Said after a run in a repository read_git declines, it names a call that is refused, and the
+planner then spends a round on that call before it asks `run` again.
 
 `verified-by: bravebot_agent::turn::a_sealed_git_run_names_read_git_and_another_programs_does_not`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_subdirectory_of_a_repository_names_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_linked_worktree_does_not_name_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_repository_nobody_vouched_for_does_not_name_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_is_judged_by_the_directory_dash_c_names`
+`verified-by: bravebot_agent::workspace::read_git_opens_the_directories_a_question_would_open`
+`verified-by: bravebot_agent::workspace::read_git_opens_a_repository_in_a_directory_that_was_added`
+`verified-by: bravebot_agent::workspace::read_git_opens_no_repository_whose_name_is_not_text`
+`verified-by: bravebot_agent::workspace::read_git_opens_no_repository_under_a_directory_named_tilde`
 
 <a id="GIT-8"></a>
 ### GIT-8: a repository whose files change what a read means is declined, not followed
@@ -233,6 +257,11 @@ quoting, line endings and continued lines.
 [CHECKOUT-12](../checkouts.md#CHECKOUT-12) opens one kind of linked worktree: a delegate's
 checkout, found from the driver's own record of it and never from its `.git` file.
 
+The description of read_git says that it declines the `.git` file a linked worktree or a submodule
+has, except at the root of a checkout the delegate was started in. A planner working in a linked
+worktree then goes to `run` first, or learns that no tool on its list reads that history where it
+holds none.
+
 **Why.** Each of these sends a read to files the list in [GIT-2](#GIT-2) does not hold, or answers
 with objects other than the ones stored. Past any of them this reader answers a different question
 from the one git would, and the rules were held against files it did not read.
@@ -244,6 +273,7 @@ from the one git would, and the rules were held against files it did not read.
 `verified-by: bravebot_agent::git::the_per_worktree_configuration_is_held_to_the_same_rules`
 `verified-by: bravebot_agent::git::a_ref_in_another_worktrees_directory_is_never_read`
 `verified-by: bravebot_agent::git::a_loop_of_symbolic_refs_is_declined`
+`verified-by: bravebot_agent::tools::read_git_says_a_dot_git_that_is_a_file_is_declined`
 
 <a id="GIT-9"></a>
 ### GIT-9: an answer is bounded, and one that stopped short says so

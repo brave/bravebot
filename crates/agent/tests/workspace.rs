@@ -9827,6 +9827,147 @@ fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
     assert!(log.contains("first"), "{log}");
 }
 
+/// GIT-7, GIT-8, CHECKOUT-12. A directory is one whose repository `read_git` opens as a question
+/// about its history would: a repository of its own below the root is, and so is a delegate's
+/// checkout, whose `.git` is a file; a linked worktree, whose `.git` is a file the driver has no
+/// record of, a repository the map does not trust and one a deny rule covers are not. A directory
+/// below a repository's root is judged by that repository, and below a linked worktree by the
+/// worktree's `.git` file rather than the repository above it.
+#[test]
+fn read_git_opens_the_directories_a_question_would_open() {
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("read-git-opens", &[("README", "hello\n")]);
+    let plain = workspace.root().join("plain");
+    std::fs::create_dir_all(plain.join("inner")).unwrap();
+    repository::commit_files(&plain, &[("README", "elsewhere\n")], "second");
+    let linked = workspace.root().join("linked");
+    std::fs::create_dir_all(linked.join("inner")).unwrap();
+    std::fs::write(linked.join(".git"), "gitdir: ../.git/worktrees/linked\n").unwrap();
+    let below = workspace.root().join("below");
+    std::fs::create_dir(&below).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    assert!(
+        workspace.read_git_opens(&policy, workspace.root()),
+        "the session's own repository was not opened"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &below),
+        "a directory below the root of a repository was judged by itself"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &plain)
+            && workspace.read_git_opens(&policy, &plain.join("inner")),
+        "a repository of its own below the root was not opened"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &linked),
+        "a linked worktree was opened although its .git is a file"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &linked.join("inner")),
+        "a directory in a linked worktree was judged by the repository above the worktree"
+    );
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+    std::fs::create_dir(made.root().join("inner")).unwrap();
+    assert!(
+        made.read_git_opens(&policy, made.root())
+            && made.read_git_opens(&policy, &made.root().join("inner")),
+        "a delegate's checkout was declined for a .git file it is never read through"
+    );
+
+    let mut sink = RecordingSink::new();
+    let untrusted = checkout_policy(&workspace, &mut sink, &["README"], &[]);
+    assert!(
+        !workspace.read_git_opens(&untrusted, workspace.root()),
+        "a repository the map does not trust was opened"
+    );
+    let mut sink = RecordingSink::new();
+    let fenced = checkout_policy(&workspace, &mut sink, &["."], &["Read(./.git)"]);
+    assert!(
+        !workspace.read_git_opens(&fenced, workspace.root()),
+        "a repository a deny rule covers was opened"
+    );
+}
+
+/// GIT-7. A directory in a directory the person added is judged by the repository above it inside
+/// that directory, as one in the session's own directory is, and a directory in an added tree no
+/// repository holds is not opened.
+#[test]
+fn read_git_opens_a_repository_in_a_directory_that_was_added() {
+    let (_scratch, _state, workspace) =
+        repository_with_a_state_directory("read-git-opens-added", &[("README", "hello\n")]);
+    let other = Scratch::new("read-git-opens-added-other");
+    repository::commit_files(&other.path, &[("README", "added\n")], "added");
+    let mut added = workspace.clone();
+    let opened = added
+        .add_directory(other.path.to_str().expect("utf-8"))
+        .expect("added");
+    std::fs::create_dir_all(opened.join("inner")).unwrap();
+    let bare = Scratch::new("read-git-opens-added-bare");
+    let bare_opened = added
+        .add_directory(bare.path.to_str().expect("utf-8"))
+        .expect("added");
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(
+        &added,
+        &mut sink,
+        &[".", opened.to_str().unwrap(), bare_opened.to_str().unwrap()],
+        &[],
+    );
+    assert!(
+        added.read_git_opens(&policy, &opened.join("inner")),
+        "a directory below the root of a repository in an added directory was not judged by it"
+    );
+    assert!(
+        !added.read_git_opens(&policy, &bare_opened),
+        "an added directory no repository holds was opened, perhaps as the one above it"
+    );
+}
+
+/// GIT-7. `read_git` is asked about a repository by a name that is text, so one whose directory
+/// name is not UTF-8 is not one it opens, although the name a lossy rendering of it spells holds a
+/// repository it does, while a directory with such a name inside a repository with a name that is
+/// text is judged by that repository. Linux only: other hosts' file systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_git_opens_no_repository_whose_name_is_not_text() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_scratch, _state, workspace) =
+        repository_with_a_state_directory("read-git-opens-bytes", &[("README", "hello\n")]);
+    let lookalike = workspace.root().join("repo-\u{FFFD}");
+    std::fs::create_dir(&lookalike).unwrap();
+    repository::commit_files(&lookalike, &[("README", "lookalike\n")], "lookalike");
+    let invalid = workspace
+        .root()
+        .join(std::ffi::OsStr::from_bytes(b"repo-\xff"));
+    std::fs::create_dir(&invalid).unwrap();
+    repository::commit_files(&invalid, &[("README", "invalid\n")], "invalid");
+    let inside = lookalike.join(std::ffi::OsStr::from_bytes(b"inner-\xff"));
+    std::fs::create_dir(&inside).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    assert!(
+        workspace.read_git_opens(&policy, &lookalike),
+        "the repository under the name that is text was not opened"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &invalid),
+        "a repository whose name is not text was judged by its lossy lookalike"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &inside),
+        "a directory whose name is not text was not judged by the repository above it"
+    );
+}
+
 /// CHECKOUT-13. The status over a session's checkout lists the files a program wrote there, which
 /// no tool recorded, and the ones it deleted apart from the rest, without reading `<checkout>/.git`.
 #[test]

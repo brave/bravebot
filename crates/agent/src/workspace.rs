@@ -4550,46 +4550,11 @@ impl Workspace {
             };
 
             let root = self.resolve(&named)?;
-            let git_dir = root.join(".git");
             let spelled = |inside: &str| in_repository(&named, inside);
-            // A question about a checkout's own repository is answered from the common directory
-            // and the entry the driver recorded, and the checkout's `.git` is never read
-            // (CHECKOUT-12).
-            let routed = self.checkout.as_deref().filter(|_| root == self.root);
-            let git_key = match routed {
-                Some(checkout) => checkout
-                    .source
-                    .trusted_git_dir(policy, ".")
-                    .map_err(declined)?,
-                None => self.trusted_git_dir(policy, &named).map_err(declined)?,
-            };
-            // Status compares every file in the working tree, so all of it is its read set.
-            let read_set = if query == crate::git::Query::Status {
-                let tree_key = self.trust_key(&named);
-                if !policy.trusts_beneath(&tree_key) {
-                    return Err(declined(crate::git::Declined::UntrustedTree));
-                }
-                tree_key
-            } else {
-                git_key.clone()
-            };
             let deadline = Instant::now() + self.search_time;
-            let opened = match routed {
-                Some(checkout) => {
-                    let entry = checkout.entry();
-                    checkout
-                        .source
-                        .surveyed_linked(policy, &checkout.made.git_dir, &entry, query, deadline)
-                        .map_err(declined)?;
-                    crate::git::Repository::open_linked(&checkout.made.git_dir, &entry, &root)
-                        .map_err(declined)?
-                }
-                None => {
-                    self.surveyed(policy, &named, &root, query, deadline)
-                        .map_err(declined)?;
-                    crate::git::Repository::open(&git_dir).map_err(declined)?
-                }
-            };
+            let (opened, read_set) = self
+                .open_for_git(policy, &named, &root, query, deadline)
+                .map_err(declined)?;
             let request = crate::git::Request {
                 query,
                 revision: revision.as_deref(),
@@ -4634,6 +4599,115 @@ impl Workspace {
             )?;
             Ok(Labelled::new(answer, label))
         })
+    }
+
+    /// Open the repository the planner called `named`, whose root is `root`, for `query`, with the
+    /// key its answer is read under.
+    ///
+    /// Everything that can decline a repository is here, in the order that keeps a repository
+    /// nobody vouched for from being decoded: the map and the rules are asked of the name alone,
+    /// then the directory listings are held against the rules, and only then is a file under `.git`
+    /// read (GIT-2). [`Workspace::read_git`] and [`Workspace::read_git_opens`] both go through it,
+    /// so what one opens the other does.
+    fn open_for_git<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+        root: &Path,
+        query: crate::git::Query,
+        deadline: Instant,
+    ) -> Result<(crate::git::Repository, String), crate::git::Declined> {
+        // A question about a checkout's own repository is answered from the common directory and
+        // the entry the driver recorded, and the checkout's `.git` is never read (CHECKOUT-12).
+        let routed = self.checkout.as_deref().filter(|_| root == self.root);
+        let git_key = match routed {
+            Some(checkout) => checkout.source.trusted_git_dir(policy, ".")?,
+            None => self.trusted_git_dir(policy, named)?,
+        };
+        // Status compares every file in the working tree, so all of it is its read set.
+        let read_set = if query == crate::git::Query::Status {
+            let tree_key = self.trust_key(named);
+            if !policy.trusts_beneath(&tree_key) {
+                return Err(crate::git::Declined::UntrustedTree);
+            }
+            tree_key
+        } else {
+            git_key
+        };
+        let opened = match routed {
+            Some(checkout) => {
+                let entry = checkout.entry();
+                checkout.source.surveyed_linked(
+                    policy,
+                    &checkout.made.git_dir,
+                    &entry,
+                    query,
+                    deadline,
+                )?;
+                crate::git::Repository::open_linked(&checkout.made.git_dir, &entry, root)?
+            }
+            None => {
+                self.surveyed(policy, named, root, query, deadline)?;
+                crate::git::Repository::open(&root.join(".git"))?
+            }
+        };
+        Ok((opened, read_set))
+    }
+
+    /// Whether `read_git` would open the repository git finds from `directory`, the nearest
+    /// directory at or above it that holds a `.git` and is inside an opened directory, for a
+    /// question about its history. A result sealed from the planner names the tool only where
+    /// this holds.
+    ///
+    /// A `.git` that is a file (a linked worktree or a submodule), a repository the map does not
+    /// trust and one a rule covers are each declined as `read_git` declines them, while a
+    /// delegate's checkout, whose `.git` is also a file, is opened as it is there (CHECKOUT-12).
+    /// Nothing under `.git` is read until the map has vouched for all of it, as for a question.
+    /// The checks a tool call makes on the name it was given, beyond the opener, are not made.
+    ///
+    /// A repository `read_git` cannot be asked for by its name is declined: one whose name is not
+    /// text, and one under a directory named `~`, which the tool reads as the home directory.
+    pub fn read_git_opens<S: Sink>(&self, policy: &Policy<'_, S>, directory: &Path) -> bool {
+        let Ok(directory) = directory.canonicalize() else {
+            return false;
+        };
+        let added = self.added_directories();
+        let Some(bound) = std::iter::once(self.root.as_path())
+            .chain(added.iter().map(PathBuf::as_path))
+            .find(|opened| directory.starts_with(opened))
+        else {
+            return false;
+        };
+        let mut holder = None;
+        for above in directory.ancestors() {
+            if !above.starts_with(bound) {
+                break;
+            }
+            match above.join(".git").symlink_metadata() {
+                Ok(_) => {
+                    holder = Some(above);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+        }
+        let Some(holder) = holder.filter(|holder| holder.to_str().is_some()) else {
+            return false;
+        };
+        let named = match self.relative_display(holder) {
+            named if named.is_empty() => ".".to_owned(),
+            named => named,
+        };
+        if named == "~" || named.starts_with("~/") {
+            return false;
+        }
+        let Ok(root) = self.resolve(&named) else {
+            return false;
+        };
+        let deadline = Instant::now() + self.search_time;
+        self.open_for_git(policy, &named, &root, crate::git::Query::Log, deadline)
+            .is_ok()
     }
 
     /// Whether a `deny` rule covers reading `inside` the repository the planner called `named`,
@@ -7061,6 +7135,51 @@ mod tests {
             .expect("a new file in the home");
         assert_eq!(resolved, home.join("notes.txt"));
         assert!(!project.join("~").exists());
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// GIT-7. A directory named `~` in the project is not the home directory the name stands for in
+    /// a tool's arguments, so a repository in it is not one `read_git` can be asked for by name, and
+    /// is not judged as the repository of the home directory that name would be read as.
+    #[test]
+    fn read_git_opens_no_repository_under_a_directory_named_tilde() {
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let (home, project) = home_and_project("read-git-opens-tilde");
+        let tilde = project.join("~");
+        for base in [&home, &tilde] {
+            std::fs::create_dir_all(base.join(".git/refs/heads")).expect("refs");
+            std::fs::create_dir_all(base.join(".git/objects")).expect("objects");
+            std::fs::write(base.join(".git/HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        }
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+        let mut trust = TrustStore::new(&project);
+        trust.trust(".");
+        trust.trust(home.to_str().expect("utf-8"));
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read");
+        let policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        assert!(
+            workspace.read_git_opens(&policy, &home),
+            "the home directory's own repository was not opened, so the control proves nothing"
+        );
+        assert!(
+            !workspace.read_git_opens(&policy, &tilde),
+            "a repository in a directory named ~ was judged as the home directory's"
+        );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
