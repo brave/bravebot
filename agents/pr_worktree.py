@@ -34,10 +34,25 @@ def die(message):
     sys.exit(1)
 
 
+def printed(done):
+    """A finished command's stderr, then its stdout with a JSON error object cut to `message` and `errors`."""
+    # gh api states the reason in that JSON and only a one-line status on stderr; a partial GraphQL response also carries `data`.
+    out = done.stdout.strip()
+    try:
+        body = json.loads(out)
+    except (ValueError, RecursionError):
+        body = None
+    if isinstance(body, dict):
+        reason = {key: body[key] for key in ("message", "errors") if body.get(key)}
+        if reason:
+            out = json.dumps(reason)
+    return "\n".join(part for part in (done.stderr.strip(), out) if part)
+
+
 def run(*args, cwd=None, check=True, env=None):
     done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=env)
     if check and done.returncode:
-        die(f"{' '.join(map(str, args))} failed:\n{(done.stderr or done.stdout).strip()}")
+        die(f"{' '.join(map(str, args))} failed:\n{printed(done)}")
     return done
 
 

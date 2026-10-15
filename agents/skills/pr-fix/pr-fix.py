@@ -334,7 +334,7 @@ def review(pr):
         check=False,
     )
     if done.returncode:
-        print(f"could not request {REVIEWER} on {pr.url}:\n{(done.stderr or done.stdout).strip()}", file=sys.stderr)
+        print(f"could not request {REVIEWER} on {pr.url}:\n{pr_worktree.printed(done)}", file=sys.stderr)
         return 1
     print(f"requested {REVIEWER} on {pr.url}")
     return 0
