@@ -1461,7 +1461,19 @@ impl Session {
                 count: recorded,
                 typed,
             } => {
+                // `d,` is recorded as the reversed jump, and measuring it again would record that
+                // jump as the one to repeat. A jump that is the reverse of the one held is that
+                // case, so the held one is put back, as it was when `d,` was typed.
+                let held = self.last_find;
+                let reversed_hold = matches!(
+                    (extent, held),
+                    (crate::vim::Extent::To(crate::vim::Motion::ToChar(f)), Some(h))
+                        if f == h.reversed()
+                );
                 self.change(operator, extent, count.or(recorded));
+                if reversed_hold {
+                    self.last_find = held;
+                }
                 self.type_again(&typed);
             }
             Change::Opened { opening, typed } => {
