@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """The decisions pr-fix.py makes without a model, against real repositories where git decides."""
 
+import contextlib
 import importlib.util
+import json
 import shutil
 import sys
 import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("pr_fix", HERE / "pr-fix.py")
@@ -387,7 +390,7 @@ def test_checks_are_split_into_failing_pending_and_passing():
 def test_ci_exits_by_what_is_left_to_do():
     def result(rollup):
         pr = SimpleNamespace(number=9, tree=Path("/nonexistent"), head_sha="abc", rollup=rollup)
-        return quietly(pr_fix.ci, pr, False)
+        return quietly(pr_fix.ci, pr, None)
 
     code, out = result([{"__typename": "StatusContext", "context": "ok", "state": "SUCCESS"}])
     assert code == 0 and "1 passed, 0 failed, 0 pending" in out, out
@@ -505,7 +508,7 @@ def test_pull_requests_are_named_by_commas_spaces_or_links_and_once_each():
     assert code == 1, "one bad name stops the run before any pull request is touched"
 
 
-def test_several_pull_requests_run_at_once_and_are_reported_in_order():
+def test_several_pull_requests_run_at_once_and_a_failure_outranks_one_still_running():
     with tempfile.TemporaryDirectory() as tmp:
         meet = Path(tmp)
         script = (
@@ -523,9 +526,123 @@ def test_several_pull_requests_run_at_once_and_are_reported_in_order():
             code, out = quietly(pr_fix.fan_out, "ci", [3, 1, 2], [])
         finally:
             pr_fix.child_command = real
-        assert out.index("== #3") < out.index("== #1") < out.index("== #2"), out
         assert out.count("saw 3 of 3") == 3, "each ran while the others were running"
         assert code == 1, "a failure outranks a check still running"
+
+
+def test_a_pull_request_that_settles_is_printed_and_flushed_before_the_others_have():
+    opened = threading.Event()
+    events = []
+
+    class Pipe:
+        def write(self, text):
+            events.append(("write", text))
+            if text.startswith("== #2"):
+                opened.set()
+            return len(text)
+
+        def flush(self):
+            events.append(("flush", ""))
+
+    def child(command, **kwargs):
+        if command[1] == "1":
+            return SimpleNamespace(returncode=0, stdout=f"released by #2 printed: {opened.wait(10)}\n")
+        return SimpleNamespace(returncode=1, stdout="failed: lint\n")
+
+    with mock.patch.object(pr_fix, "child_command", lambda step, number, flags: [step, str(number)]), \
+            mock.patch.object(pr_fix.subprocess, "run", child), contextlib.redirect_stdout(Pipe()):
+        code = pr_fix.fan_out("ci", [1, 2], ["--wait"], queued=False)
+    text = "".join(one for kind, one in events if kind == "write")
+    assert "released by #2 printed: True" in text, "#1 was held up until #2 reached stdout\n" + text
+    kinds = [(kind, one.split("\n")[0]) for kind, one in events]
+    second, first = kinds.index(("write", "== #2")), kinds.index(("write", "== #1"))
+    assert second < first and ("flush", "") in kinds[second:first], "#2 is flushed before #1 is printed\n" + text
+    assert code == 1
+
+
+def test_pull_requests_that_wait_are_not_queued_behind_each_other():
+    together = threading.Barrier(3, timeout=10)
+
+    def child(command, **kwargs):
+        try:
+            together.wait()
+        except threading.BrokenBarrierError:
+            return SimpleNamespace(returncode=1, stdout="never began beside the others\n")
+        return SimpleNamespace(returncode=2, stdout="pending\n")
+
+    with mock.patch.object(pr_fix, "MAX_PARALLEL", 2), \
+            mock.patch.object(pr_fix, "child_command", lambda step, number, flags: [step, str(number)]), \
+            mock.patch.object(pr_fix.subprocess, "run", child):
+        code, out = quietly(pr_fix.fan_out, "ci", [1, 2, 3], ["--wait"], False)
+    assert code == 2 and out.count("pending") == 3, "three waits began together under a cap of two\n" + out
+
+
+class Clock:
+    """Time that only the code under test moves: a sleep or a slow call advances it by what it took."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.time = SimpleNamespace(monotonic=lambda: self.now, sleep=self.sleep)
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+PENDING = [{"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "IN_PROGRESS", "detailsUrl": "u"}]
+
+
+def test_a_wait_ends_at_its_deadline_counting_the_start_up_and_every_poll():
+    clock, polls = Clock(), []
+
+    def look(number, create):
+        clock.now += 10
+        return SimpleNamespace(number=number, tree=Path("/nonexistent"), head_sha="abc", rollup=PENDING)
+
+    def poll(*args, **kwargs):
+        clock.now += 4
+        polls.append(clock.now)
+        return SimpleNamespace(stdout=json.dumps({"statusCheckRollup": PENDING}), returncode=0)
+
+    argv = ["pr-fix.py", "ci", "7", "--wait", "--wait-seconds", "95"]
+    with mock.patch.object(sys, "argv", argv), mock.patch.object(pr_fix, "time", clock.time), \
+            mock.patch.object(pr_fix, "git", lambda *a, **k: "/tmp"), \
+            mock.patch.object(pr_fix, "lookup", look), mock.patch.object(pr_fix, "run", poll):
+        code, out = quietly(pr_fix.main)
+    assert code == 2 and "0 passed, 0 failed, 1 pending" in out, out
+    assert 95 <= clock.now <= 95 + 4, f"stopped at {clock.now}s: the deadline plus the poll that was under way"
+    assert len(polls) == 3, polls
+
+
+def test_pull_requests_that_wait_share_what_is_left_of_one_wait():
+    calls = []
+
+    def fan_out(step, numbers, flags, queued=True):
+        calls.append((step, numbers, flags, queued))
+        return 0
+
+    def no_lookup(*args, **kwargs):
+        raise AssertionError("a single pull request reached GitHub")
+
+    def main(*argv):
+        clock = Clock()
+
+        def git(*args, **kwargs):
+            clock.now += 50
+            return "/tmp"
+
+        with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]), mock.patch.object(pr_fix, "fan_out", fan_out), \
+                mock.patch.object(pr_fix, "git", git), mock.patch.object(pr_fix, "lookup", no_lookup), \
+                mock.patch.object(pr_fix, "time", clock.time):
+            return quietly(pr_fix.main)[0]
+
+    assert main("ci", "1,2", "--wait", "--wait-seconds", "100") == 0
+    step, numbers, flags, queued = calls[-1]
+    left = int(flags[flags.index("--wait-seconds") + 1])
+    assert (step, numbers, queued) == ("ci", [1, 2], False) and "--wait" in flags, calls[-1]
+    assert left == 50, f"each process is given the 50 s left of the wait, not 100: {flags}"
+    main("ci", "1,2")
+    assert calls[-1] == ("ci", [1, 2], [], True), "a step that waits for nothing is still held to the cap"
+    assert main("ci", "1", "--wait-seconds", "30") == 2, "a wait length needs the wait it is for"
 
 
 def test_the_command_each_pull_request_runs_carries_the_step_and_its_flags():
