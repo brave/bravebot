@@ -24718,6 +24718,42 @@ mod tests {
         );
     }
 
+    /// PERM-10: a directory a settings file named and the person accepted is closed by `/clear` and
+    /// by a handoff, since the answer that opened it was given by the session being cleared. The
+    /// regression it rejects is a directory staying reachable, with no answer left behind it,
+    /// into a session that was never asked.
+    #[test]
+    fn clearing_closes_the_directories_a_file_named_and_opens_none() {
+        let root = crate::testutil::scratch_dir("bravebot-clear-named-dir-test");
+        let outside = root.join("shared");
+        let project = root.join("project");
+        std::fs::create_dir_all(&outside).expect("scratch");
+        std::fs::create_dir_all(&project).expect("scratch");
+        let canonical = outside.canonicalize().expect("canonical");
+
+        for handed_from in [None, Some("an-earlier-id")] {
+            let mut workspace = Workspace::new(&project).expect("workspace");
+            let mut session = Session::new("none");
+            let mut trust = TrustStore::new("/work");
+            let asked = named_to_open(&mut session, &workspace, &["../shared".to_string()]);
+            open_named(&mut session, &mut workspace, &mut trust, &asked);
+            assert!(
+                workspace.added_directories().contains(&canonical),
+                "the directory was not open to begin with"
+            );
+
+            let _ = clear_session(&mut session, &mut workspace, handed_from);
+
+            assert!(
+                workspace.added_directories().is_empty(),
+                "a directory the cleared session opened stayed open ({handed_from:?}): {:?}",
+                workspace.added_directories()
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// A handoff is a clear that links back to the session it came from, and ends the same grants.
     #[test]
     fn a_handoff_ends_the_reach_and_the_host_answers_too() {

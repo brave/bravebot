@@ -289,6 +289,44 @@ mod tests {
         );
     }
 
+    /// What the picker is drawn over survives around it: every cell outside the panel keeps what
+    /// was already in the frame, and the panel is smaller than the frame. A full-screen takeover
+    /// would overwrite the margins.
+    #[test]
+    fn the_session_stays_visible_around_a_list_sized_panel() {
+        let picker = Picker::new(offered(), theme::BRAVE);
+        let frame_area = Rect::new(0, 0, 80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                for y in 0..frame_area.height {
+                    for x in 0..frame_area.width {
+                        frame.buffer_mut()[(x, y)].set_symbol("~");
+                    }
+                }
+                draw(frame, &picker);
+            })
+            .expect("draw succeeds");
+
+        let panel_area = list_picker::centred(frame_area, picker.rows().len(), panel().width);
+        assert!(panel_area.width < frame_area.width, "{panel_area:?}");
+        assert!(panel_area.height < frame_area.height, "{panel_area:?}");
+        let buffer = terminal.backend().buffer();
+        for y in 0..frame_area.height {
+            for x in 0..frame_area.width {
+                let inside = x >= panel_area.x
+                    && x < panel_area.x + panel_area.width
+                    && y >= panel_area.y
+                    && y < panel_area.y + panel_area.height;
+                if !inside {
+                    assert_eq!(buffer[(x, y)].symbol(), "~", "({x},{y}) was overwritten");
+                }
+            }
+        }
+        // And the panel itself is drawn over the session, not beside it.
+        assert_eq!(buffer[(panel_area.x, panel_area.y)].symbol(), "╭");
+    }
+
     #[test]
     fn the_panel_stays_inside_a_tiny_terminal() {
         let picker = Picker::new(offered(), theme::BRAVE);

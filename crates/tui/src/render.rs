@@ -5595,6 +5595,60 @@ mod tests {
         );
     }
 
+    /// The theme picker opened mid-turn is a panel over the session, and the session behind it is
+    /// drawn again, in the theme under the cursor, each time the cursor moves (VIEW-12). The
+    /// regressions it rejects are a picker that blanks the transcript while it is open and one that
+    /// leaves the transcript painted in the theme the picker opened on.
+    #[test]
+    fn moving_the_theme_cursor_repaints_the_session_behind_the_panel() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let mut session = Session::new("none");
+        for c in "refactor the parser".chars() {
+            session.type_char(c);
+        }
+        session.submit().expect("the prompt is sent");
+        session.open_picking(crate::picking::Picking::Theme(crate::theme_prompt::opened(
+            crate::theme::builtins(),
+            crate::theme::BRAVE,
+        )));
+
+        // The cell of the first letter of the prompt, found in the frame rather than assumed.
+        let ink_of_the_prompt = |session: &Session| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+            let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+            assert!(
+                text.contains("refactor the parser"),
+                "the session was not drawn behind the panel: {text}"
+            );
+            assert!(text.contains(t!(theme_picker_title)), "{text}");
+            let at = buffer
+                .content()
+                .iter()
+                .position(|cell| cell.symbol() == "r")
+                .expect("the prompt is on screen");
+            buffer.content()[at].fg
+        };
+
+        let before = ink_of_the_prompt(&session);
+        session.press_in_picking(KeyCode::Down, KeyModifiers::NONE);
+        let after = ink_of_the_prompt(&session);
+        crate::theme::apply_brave();
+
+        assert_ne!(
+            before, after,
+            "the transcript was not repainted in the theme under the cursor"
+        );
+    }
+
     /// When keybindings are customized, the shortcut list reflects the configured chords rather
     /// than the defaults.
     #[test]
