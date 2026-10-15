@@ -93,6 +93,28 @@ pub const ROUNDS_AFTER_WRITING_BEFORE_RUNNING: usize = 6;
 /// mind about the task.
 const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 
+/// Who answers a `read_output` call, which decides what the planner is told about reading what a
+/// program printed (RUN-14).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadOutputIs {
+    /// Bypassing with no screening asked for, in a turn offered `read_output`: the answer is yes, with
+    /// nobody asked and no check made.
+    Unasked,
+    /// Bypassing with screening asked for, in a turn offered `read_output`: nobody is asked, a check's
+    /// word answers, and a word that is not `safe` keeps the output back.
+    ByACheck,
+    /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
+    /// the output and decides.
+    Asked,
+}
+
+/// What the planner is told of `read_output` where a check's word answers for the person (RUN-14).
+/// It follows "with the reference" and ends a sentence. The output comes back or is kept back, and
+/// nothing in it says what decides which: the planner is not told a check is made, as CHECK-9 keeps
+/// what it says from the planner.
+const READ_OUTPUT_MAY_BE_KEPT_BACK: &str =
+    ". It comes back as text you can read, or you are told it was kept back.";
+
 /// What the person is told when a reply reached the output ceiling and the planner is asked again
 /// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
 fn ceiling_stop_narration(cut_off: &bravebot_aichat::CutOff, may_call_tools: bool) -> String {
@@ -1702,7 +1724,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
-    reads_unasked: bool,
+    read_output_is: ReadOutputIs,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
@@ -1824,18 +1846,21 @@ fn collect_jobs<S: Sink, R: Reporter>(
             Some(Presentation::Quarantined(reference)) => {
                 policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
-                // the reason a run's result leaves it out. Where somebody is asked, the account
-                // says how to stop being asked, as a run's result does (RUN-14), unless a record
-                // already stops the asking for this exact line: no prompt will return there for a
-                // person to answer, and read_output is then the whole of what is said.
-                let then = if reads_unasked {
-                    " and it comes back as text you can read."
-                } else if ended.covered_by_record {
-                    ": the user is shown it and decides."
-                } else {
-                    ": the user is shown it and decides. To stop being asked, a person vouching \
-                     for every stage of the exact command makes what it prints visible from \
-                     then on."
+                // the reason a run's result leaves it out. Where a check's word answers in the
+                // person's place the output may be kept back, which is said without saying what
+                // decided it (RUN-14). Where somebody is asked, the account says how to stop being
+                // asked, as a run's result does (RUN-14), unless a record already stops the asking
+                // for this exact line: no prompt will return there for a person to answer, and
+                // read_output is then the whole of what is said.
+                let then = match (read_output_is, ended.covered_by_record) {
+                    (ReadOutputIs::Unasked, _) => " and it comes back as text you can read.",
+                    (ReadOutputIs::ByACheck, _) => READ_OUTPUT_MAY_BE_KEPT_BACK,
+                    (ReadOutputIs::Asked, true) => ": the user is shown it and decides.",
+                    (ReadOutputIs::Asked, false) => {
+                        ": the user is shown it and decides. To stop being asked, a person \
+                         vouching for every stage of the exact command makes what it prints \
+                         visible from then on."
+                    }
                 };
                 format!(
                     "{told} What it printed could not be shown to you: {}\n\nThis is about who \
@@ -2460,19 +2485,26 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
         tools::state_withheld_variables(&mut offered);
 
-        // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
-        // turn offered read_output at all. A definition or a delegate left without it has no release
-        // for `read` to make a round early, and making one would widen what it was confined to.
-        // Asked again wherever it is used, since the person can leave bypassing while the turn runs.
+        // Who answers a read of what a run printed: nobody in a bypass with no screening, a check in
+        // one with screening, and a person elsewhere. The first two hold only in a turn offered
+        // read_output: a definition or a delegate left without it has no release for `read` to make a
+        // round early, and making one would widen what it was confined to, and it has no tool to be
+        // pointed at. The mode is read once for each answer and asked again wherever it is used, since
+        // the person can leave bypassing while the turn runs.
         let offers_read_output = offered
             .iter()
             .any(|tool| tool.function.name == "read_output");
-        let reads_unasked = || {
-            !task
-                .permission_mode
-                .get()
-                .checks_before_promoting(task.auto_vetting)
-                && offers_read_output
+        let read_output_is = || {
+            let mode = task.permission_mode.get();
+            if !offers_read_output {
+                ReadOutputIs::Asked
+            } else if !mode.checks_before_promoting(task.auto_vetting) {
+                ReadOutputIs::Unasked
+            } else if mode.promotes_on_a_checks_word(task.auto_vetting) {
+                ReadOutputIs::ByACheck
+            } else {
+                ReadOutputIs::Asked
+            }
         };
 
         // The definition's model where an addressed one named a model, and no turn at all where that
@@ -3059,7 +3091,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     collect_jobs(
                         jobs,
                         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-                        reads_unasked(),
+                        read_output_is(),
                         &mut policy,
                         conversation,
                         &mut reporter,
@@ -4123,7 +4155,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             let read_from = match &presented {
                                 Presentation::Quarantined(reference)
                                     if output.read_asked
-                                        && reads_unasked()
+                                        && read_output_is() == ReadOutputIs::Unasked
                                         && reference
                                             .bytes
                                             .is_some_and(|bytes| bytes <= output_cap) =>
@@ -4481,6 +4513,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // plan mode tells the planner which one it is in, since a model told
                                     // nobody is watching has been handed a reason to be bolder.
                                     //
+                                    // Bypassing with screening asked for is neither of those. Nobody is
+                                    // shown the output and a run the mode approved vouches for nothing,
+                                    // so neither half above is said, but a check's word answers and a
+                                    // word that objects keeps the output back, so read_output is not a
+                                    // yes either. It is said to come back or be kept back, and nothing
+                                    // more about what decides which (CHECK-9). A `read` asked for there
+                                    // changed nothing, which is said, so the call does not read as a
+                                    // quarantined result with no explanation.
+                                    //
                                     // `read` is an argument of run alone, so it is offered on a run's
                                     // result and not on a job's. It is not offered again where it was
                                     // asked for: the output was then too long for one result, which is
@@ -4493,10 +4534,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     let advice = match (
                                         output.printed_by.is_some(),
                                         output.covered_by_record,
-                                        reads_unasked(),
+                                        read_output_is(),
                                     ) {
                                         (false, _, _) => String::new(),
-                                        (true, _, true) => {
+                                        (true, _, ReadOutputIs::Unasked) => {
                                             let in_the_result = match (
                                                 output.tool == "run",
                                                 output.read_asked,
@@ -4530,7 +4571,23 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                              read a file, use read_file."
                                             )
                                         }
-                                        (true, true, false) => {
+                                        (true, _, ReadOutputIs::ByACheck) => {
+                                            let not_applied =
+                                                if output.tool == "run" && output.read_asked {
+                                                    " Your read: true was not applied here, so \
+                                                     read_output is the way to see it."
+                                                } else {
+                                                    ""
+                                                };
+                                            format!(
+                                                "\n\nThis is about the command rather than about \
+                                             what it printed, and it is not the end of the road. \
+                                             To see this one, call read_output with the \
+                                             reference{READ_OUTPUT_MAY_BE_KEPT_BACK}{not_applied} \
+                                             To read a file, use read_file."
+                                            )
+                                        }
+                                        (true, true, ReadOutputIs::Asked) => {
                                             "\n\nThis is about the command rather \
                                          than about what it printed, and it is not the end of the \
                                          road. To see this one, call read_output with the \
@@ -4539,7 +4596,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                          use read_file."
                                                 .to_string()
                                         }
-                                        (true, false, false) => {
+                                        (true, false, ReadOutputIs::Asked) => {
                                             "\n\nThis is about the command rather \
                                          than about what it printed, and it is not the end of the \
                                          road. To see this one, call read_output with the \

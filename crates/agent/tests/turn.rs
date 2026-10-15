@@ -17518,6 +17518,71 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
     );
 }
 
+/// RUN-14, RUN-19: a record that stops the asking for a line does not bring back the advice about a
+/// person deciding where a check answers in the person's place. Which of the two is said follows who
+/// answers `read_output`, and a record only decides whether the vouching half is left out.
+#[test]
+fn a_quarantined_result_from_a_remembered_line_where_a_check_answers_says_it_may_be_kept_back() {
+    let scratch = Scratch::new("run-remembered-checked-advice");
+    let home = Scratch::new("run-remembered-checked-advice-home");
+    std::fs::write(scratch.path.join("notes.txt"), "some lines\n").unwrap();
+
+    let mut writing = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("the-first-session"),
+        r#"{"command":"sed -n p notes.txt"}"#,
+        &mut writing,
+    )
+    .expect("the turn runs");
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p notes.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut later, bravebot_agent::PermissionMode::Bypass, true);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it")
+            .with_home(Some(home.path.clone()))
+            .remembering(Some("a-later-session".to_string()))
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after the run"),
+        "Result of run could not be shown to you",
+    );
+    assert!(
+        told.contains("It comes back as text you can read, or you are told it was kept back."),
+        "the planner was not told read_output returns the output or reports it kept back: {told}"
+    );
+    assert!(
+        !told.contains("the user is shown it"),
+        "a remembered line brought back the advice about a person deciding: {told}"
+    );
+}
+
 /// The whole point of the gate: the user is asked before anything executes, and a refusal means
 /// nothing ran.
 #[test]
@@ -18692,6 +18757,233 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
     assert!(
         second.contains("read_file"),
         "the planner was not pointed at the tool that reads a file visibly: {second}"
+    );
+}
+
+/// What the result of a quarantined `run` tells the planner about seeing it, from the sentence that
+/// opens the advice to the end of that message, for a run made under `mode`. The advice alone, so an
+/// assertion about it is not answered by the tool descriptions or another result in the same body.
+fn the_advice_after_a_quarantined_run(
+    scratch_name: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    arguments: &str,
+) -> String {
+    let scratch = Scratch::new(scratch_name);
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(mode)
+            .with_auto_vetting(auto_vetting),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after the run"),
+        "Result of run could not be shown to you",
+    );
+    assert!(
+        !told.contains("SENTINEL-XYZZY"),
+        "{mode:?} with auto-vetting {auto_vetting}: output reached the planner in the result that \
+         ran it: {told}"
+    );
+    let advice = told
+        .find("This is about the command")
+        .unwrap_or_else(|| panic!("the result gave no advice: {told}"));
+    told[advice..].to_string()
+}
+
+/// RUN-14: where permissions are bypassed and auto-vetting is on, nobody is shown the output and a
+/// run the mode approved vouches for nothing, so the advice describes neither a user deciding nor
+/// a vouch. A check's word answers there, so `read_output` is not a sure yes either, and the advice
+/// says the output comes back or is kept back without saying what decides which (CHECK-9).
+///
+/// A planner told that a user decides takes the reference to be out of its reach until a prompt
+/// returns, and no prompt does: one left build output unread and told the person it could not
+/// read it.
+#[test]
+fn a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides() {
+    let advice = the_advice_after_a_quarantined_run(
+        "run-advice-checked-bypass",
+        bravebot_agent::PermissionMode::Bypass,
+        true,
+        r#"{"command":"sed -n p where.txt"}"#,
+    );
+
+    assert!(
+        advice.contains(
+            "call read_output with the reference. It comes back as text you can read, or you are \
+             told it was kept back."
+        ),
+        "the planner was not told read_output returns the output or reports it kept back: {advice}"
+    );
+    assert!(
+        !advice.contains("the user"),
+        "the planner was told a person is shown output nobody is shown: {advice}"
+    );
+    assert!(
+        !advice.contains("vouch"),
+        "the planner was offered vouching, which a run the mode approved cannot do: {advice}"
+    );
+    assert!(
+        advice.contains("To read a file, use read_file."),
+        "the planner was not pointed at the tool that reads a file visibly: {advice}"
+    );
+    for named in ["check", "bypass", "screen", "vet"] {
+        assert!(
+            !advice.to_lowercase().contains(named),
+            "the advice names what decides, or the mode ({named}): {advice}"
+        );
+    }
+    assert!(
+        !advice.contains("read: true"),
+        "a call that did not ask to read was told about an argument it did not pass: {advice}"
+    );
+}
+
+/// RUN-14, RUN-22: a `read` asked for where a check answers for the person changed nothing, so the
+/// result says so and names `read_output` as the route. Without it a call that passed `read: true`
+/// comes back looking like a quarantined result with no explanation, and a planner runs the same
+/// command again with `read: true` to try to see what it printed.
+#[test]
+fn a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied() {
+    let advice = the_advice_after_a_quarantined_run(
+        "run-advice-checked-bypass-read",
+        bravebot_agent::PermissionMode::Bypass,
+        true,
+        r#"{"command":"sed -n p where.txt","read":true}"#,
+    );
+
+    assert!(
+        advice
+            .contains("Your read: true was not applied here, so read_output is the way to see it."),
+        "the planner was not told its read changed nothing, or where to go instead: {advice}"
+    );
+    assert!(
+        advice.contains("call read_output with the reference. It comes back as text you can read"),
+        "the planner was not told how read_output answers: {advice}"
+    );
+    assert!(
+        !advice.contains("the user") && !advice.contains("vouch"),
+        "the planner was told a person decides, or offered a vouch: {advice}"
+    );
+}
+
+/// Where the mode draws prompts, a word other than `safe` still reaches a person (CHECK-12), with
+/// auto-vetting on or off, so the advice is the one RUN-14 has always given and a `read` that
+/// changed nothing is not remarked on. The wording above is for the mode where no prompt is drawn
+/// and a refusal is the only fallback.
+#[test]
+fn a_quarantined_run_where_a_person_is_still_asked_keeps_saying_the_user_decides() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Ask, false),
+        (bravebot_agent::PermissionMode::AcceptEdits, false),
+        (bravebot_agent::PermissionMode::Plan, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+    ] {
+        let advice = the_advice_after_a_quarantined_run(
+            &format!("run-advice-asked-{mode:?}-{auto_vetting}"),
+            mode,
+            auto_vetting,
+            r#"{"command":"sed -n p where.txt","read":true}"#,
+        );
+        assert!(
+            advice.contains("the user is shown it and decides"),
+            "{mode:?} with auto-vetting {auto_vetting}: the planner was not told a person decides: \
+             {advice}"
+        );
+        assert!(
+            advice.contains("vouching for every stage of the exact command"),
+            "{mode:?} with auto-vetting {auto_vetting}: the planner was not told what stops it \
+             being asked: {advice}"
+        );
+        assert!(
+            !advice.contains("was not applied here"),
+            "{mode:?} with auto-vetting {auto_vetting}: the wording for the mode where a check \
+             answers reached a mode where a person does: {advice}"
+        );
+    }
+}
+
+/// RUN-14, RUN-22: a turn left without `read_output` is not pointed at it by the wording for the mode
+/// where a check answers, and a `read` it passed is not remarked on as if `read_output` were the
+/// route. The definition has no such tool to call.
+#[test]
+fn a_turn_left_without_read_output_is_not_pointed_at_it_where_a_check_answers() {
+    let scratch = Scratch::new("run-advice-confined-checked");
+    let home = Scratch::new("run-advice-confined-checked-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("find out", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let asked_to_run = sent.first().expect("the request that asked to run");
+    assert!(
+        !asked_to_run.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {asked_to_run}"
+    );
+    let told = message_from(
+        sent.last().expect("the round after the run"),
+        "Result of run could not be shown to you",
+    );
+    assert!(
+        !told.contains("was not applied here"),
+        "a turn with no read_output was told read_output is the way to see the output: {told}"
+    );
+    assert!(
+        !told.contains("or you are told it was kept back"),
+        "a turn with no read_output was told what read_output returns: {told}"
     );
 }
 
@@ -24299,6 +24591,150 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
     assert!(
         !told.contains("the user is shown it"),
         "the planner was told a person will read output nobody is shown: {told}"
+    );
+}
+
+/// RUN-14: where a check answers for the person, a job's result says `read_output` returns the
+/// output or reports it kept back. It does not say a user is shown it, offer a vouch, or name `read`,
+/// which is an argument of run alone.
+#[test]
+fn what_a_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person() {
+    let scratch = Scratch::new("background-screened-bypass-advice");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "echo SENTINEL-BACKGROUND\nsleep 30\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh ./noisy","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after job_output"),
+        "Result of job_output could not be shown to you",
+    );
+    assert!(
+        told.contains(
+            "call read_output with the reference. It comes back as text you can read, or you are \
+             told it was kept back."
+        ),
+        "the planner was not told read_output returns what the job printed or reports it kept \
+         back: {told}"
+    );
+    assert!(
+        !told.contains("the user is shown it"),
+        "the planner was told a person will read output nobody is shown: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage"),
+        "the planner was offered a vouch the mode cannot make: {told}"
+    );
+    assert!(
+        !told.contains("read: true"),
+        "a job's result named an argument job_output does not take: {told}"
+    );
+}
+
+/// The same for a job whose end the turn reports without being asked.
+#[test]
+fn what_an_ended_job_printed_says_it_may_be_kept_back_where_a_check_answers_for_the_person() {
+    let scratch = Scratch::new("background-finish-screened-advice");
+    std::fs::write(scratch.path.join("notes.txt"), "SENTINEL-SCREENED-PLUGH\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .unwrap_or_else(|| {
+            let last = sent.last().map_or("", |body| body.as_str());
+            let tail: String = last
+                .chars()
+                .rev()
+                .take(1500)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            panic!(
+                "the turn was never told the job ended, in {} requests; the last ends: {tail}",
+                sent.len()
+            )
+        });
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains(
+            "call read_output with the reference. It comes back as text you can read, or you are \
+             told it was kept back. To read a file, use read_file."
+        ),
+        "the planner was not told read_output returns what the job printed or reports it kept \
+         back: {told}"
+    );
+    assert!(
+        !told.contains("the user is shown it"),
+        "the planner was told a person will read output nobody is shown: {told}"
+    );
+    assert!(
+        !told.contains("vouching for every stage"),
+        "the planner was offered a vouch the mode cannot make: {told}"
     );
 }
 
