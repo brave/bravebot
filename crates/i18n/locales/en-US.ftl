@@ -3492,8 +3492,6 @@ import-not-loaded = { $import } was not imported: it is outside this project, ca
 # request of the session. The source is its workspace-relative path, or ~/.bravebot/AGENTS.md, and
 # stays as it is; the sizes are numbers of bytes. The file still loaded.
 source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
-# The same file past the length at which it is left out of the prompt altogether.
-source-past-ceiling = { $source } was not loaded: it is { $bytes } bytes, past the { $ceiling } bytes an instructions file may be
 # Said once for the turn, about every instructions file together rather than any one of them.
 sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
 

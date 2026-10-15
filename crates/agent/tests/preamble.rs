@@ -1790,26 +1790,34 @@ fn a_long_instructions_file_loads_and_its_size_is_said() {
     );
 }
 
-/// INSTR-15: past the ceiling the file is not in the prompt and the person is told. A notice
-/// without the drop, or a drop without the notice, are both plausible and both wrong: the first
-/// pays for the file on every request anyway, the second leaves the planner working under rules
-/// nobody can see were discarded.
+/// INSTR-15: however large a file is, it still reaches the prompt. Dropping it, or truncating it,
+/// is worse than paying for it on every request: the planner cannot tell which rules a drop left
+/// out, and a rule cut off mid-sentence still reads as a rule.
 #[test]
-fn an_instructions_file_past_the_ceiling_is_left_out_and_said() {
+fn a_very_large_instructions_file_still_loads() {
     let huge = format!("HUGE-RULES {}", "padding ".repeat(20_000));
     assert!(huge.len() > 131_072, "{}", huge.len());
 
-    let preamble = composed_after_touching("size-ceiling", &[("AGENTS.md", &huge)], &[], &[]);
+    let preamble = composed_after_touching("size-huge", &[("AGENTS.md", &huge)], &[], &[]);
 
     assert!(
-        !preamble.text.contains("HUGE-RULES"),
-        "a file past the ceiling reached the prompt: {}",
+        preamble.text.contains("HUGE-RULES"),
+        "a large file was left out of the prompt: {}",
         preamble.text
     );
-    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
-    let said = preamble.notices[0].message.as_str();
-    assert!(said.contains("AGENTS.md"), "{said}");
-    assert!(said.contains("not loaded"), "{said}");
+    assert!(
+        !preamble.notices.is_empty(),
+        "a large file's size went unsaid: {:?}",
+        preamble.notices
+    );
+    assert!(
+        preamble
+            .notices
+            .iter()
+            .all(|notice| !notice.message.contains("not loaded")),
+        "a loaded file was reported as dropped: {:?}",
+        preamble.notices
+    );
 }
 
 /// INSTR-15: four sources each well under the per-file warning length still cost what they add up

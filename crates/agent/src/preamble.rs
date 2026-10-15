@@ -59,16 +59,9 @@ const POINTER_BYTES: usize = 500;
 /// How long one instruction file may be before its size is said out loud.
 ///
 /// About 200 lines of prose, which is the length Claude Code recommends staying under. The file is
-/// still loaded: a person who meant to write that much should not have it dropped, and the cost of
-/// it is worth a sentence rather than a refusal.
+/// always loaded, however long it is: a person who meant to write that much should not have it
+/// dropped or cut short, and the cost of it is worth a sentence rather than a refusal.
 const INSTRUCTIONS_WARN_BYTES: usize = 16_384;
-
-/// How long one instruction file may be and still reach the prompt at all.
-///
-/// Eight times the warning. A file this long is generated, pasted or a document dump rather than
-/// standing instructions, and INSTR-5 puts every source in front of every request of the session,
-/// so one of them is left out whole rather than shortening the conversation it crowds out.
-const INSTRUCTIONS_CEILING_BYTES: usize = 131_072;
 
 /// How long every instruction file together may be before the total is said out loud.
 ///
@@ -181,11 +174,10 @@ pub fn compose_in<S: Sink>(
         && let Some(text) = read_home_agents(policy, home)
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
-        if admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices) {
-            standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
-            standing.push(Provenance::TrustedFile(origin), text.trim());
-            standing.push(Provenance::Driver, "\n\n");
-        }
+        admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
+        standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
+        standing.push(Provenance::TrustedFile(origin), text.trim());
+        standing.push(Provenance::Driver, "\n\n");
     }
     let workspace_agents = match safe {
         true => Ok(None),
@@ -193,19 +185,18 @@ pub fn compose_in<S: Sink>(
     };
     match workspace_agents {
         Ok(Some(found)) => {
-            if admit_by_size(
+            admit_by_size(
                 &found.origin,
                 &found.text,
                 &mut standing_bytes,
                 &mut preamble.notices,
-            ) {
-                standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
-                standing.push(
-                    Provenance::TrustedFile(found.origin.to_string()),
-                    found.text.trim(),
-                );
-                standing.push(Provenance::Driver, "\n\n");
-            }
+            );
+            standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
+            standing.push(
+                Provenance::TrustedFile(found.origin.to_string()),
+                found.text.trim(),
+            );
+            standing.push(Provenance::Driver, "\n\n");
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
@@ -214,11 +205,10 @@ pub fn compose_in<S: Sink>(
         for relative in nested_agents_files(sources) {
             match read_nested_agents(policy, sources, &relative) {
                 Ok(Some(text)) => {
-                    if admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices) {
-                        standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
-                        standing.push(Provenance::TrustedFile(relative), text.trim());
-                        standing.push(Provenance::Driver, "\n\n");
-                    }
+                    admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices);
+                    standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
+                    standing.push(Provenance::TrustedFile(relative), text.trim());
+                    standing.push(Provenance::Driver, "\n\n");
                 }
                 Ok(None) => {}
                 Err(notice) => preamble.notices.push(notice),
@@ -663,27 +653,18 @@ pub(crate) fn today() -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// Whether one gate-passed source is short enough for the prompt, and what its size costs
-/// (INSTR-15).
+/// What one gate-passed source costs, said out loud where it is worth saying (INSTR-15).
 ///
-/// `false` where the file is past [`INSTRUCTIONS_CEILING_BYTES`] and is left out whole. `total` is
-/// what the sources admitted so far add up to, so the combined word is said at the one source that
-/// crosses the line and not again.
+/// Every source reaches the prompt whatever its size; this only decides what is said about it.
+/// `total` is what the sources admitted so far add up to, so the combined word is said at the one
+/// source that crosses the line and not again.
 ///
 /// **The only thing read here is the byte length of text that has already passed the trust gate**,
 /// which is the test [`pointer_target`] already rests on (INSTR-8). `origin` is a path from
 /// INSTR-1's fixed set, so a notice names a file and a number and never anything a file holds.
 /// An untrusted source never reaches this, because [`read_instructions`] has already refused it.
-fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<Notice>) -> bool {
+fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<Notice>) {
     let bytes = text.len();
-    if bytes > INSTRUCTIONS_CEILING_BYTES {
-        notices.push(Notice::source_past_ceiling(
-            origin,
-            bytes,
-            INSTRUCTIONS_CEILING_BYTES,
-        ));
-        return false;
-    }
     if bytes > INSTRUCTIONS_WARN_BYTES {
         notices.push(Notice::source_is_large(origin, bytes));
     }
@@ -695,7 +676,6 @@ fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<
             INSTRUCTIONS_COMBINED_WARN_BYTES,
         ));
     }
-    true
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.

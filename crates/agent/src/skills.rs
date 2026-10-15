@@ -473,16 +473,6 @@ impl Notice {
         Self::new(t!(source_is_large, source = source, bytes = bytes))
     }
 
-    /// That a standing instruction source was left out whole for its length (INSTR-15).
-    pub(crate) fn source_past_ceiling(source: &str, bytes: usize, ceiling: usize) -> Self {
-        Self::new(t!(
-            source_past_ceiling,
-            source = source,
-            bytes = bytes,
-            ceiling = ceiling
-        ))
-    }
-
     /// That the standing instructions together are long enough to be worth saying so (INSTR-15).
     ///
     /// Said once for the turn, at the source that crosses the line, since the total is one fact.

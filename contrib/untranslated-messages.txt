@@ -45,5 +45,4 @@ fr:sessions-list-row
 fr:sessions-list-unknown
 fr:sessions-list-usage
 fr:source-is-large
-fr:source-past-ceiling
 fr:sources-large-together
