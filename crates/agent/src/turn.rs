@@ -831,17 +831,11 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter.phase(Phase::Compacting);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat {
-        config,
-        egress,
-        subscription: subscription
-            .as_mut()
-            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-        model,
-        // `/compact` is one request with no round for a stop to land between, so there is nothing
-        // here that a stop could reach.
-        cancel: None,
-    };
+    // `/compact` is one request with no round for a stop to land between, so there is nothing
+    // here that a stop could reach.
+    let mut chat = crate::processor::Chat::new(config, egress)
+        .spending(subscription.as_mut())
+        .on(model);
 
     // Zero: `/compact` is asked for between rounds rather than during one, so there is no round
     // for it to have landed in the middle of.
@@ -910,13 +904,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             skills: &skills,
             slots: &mut slots,
             reads: &mut reads,
-            chat: crate::processor::Chat {
-                config,
-                egress,
-                subscription: None,
-                model: None,
-                cancel: None,
-            },
+            chat: crate::processor::Chat::new(config, egress),
             cancel: &cancel,
             scheduling: tools::Scheduling::NoLaterLook,
             arming: crate::watch::Arming::Unavailable,
@@ -988,17 +976,11 @@ pub fn aside<S: Sink, R: Reporter>(
         .resuming(question.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat {
-        config,
-        egress,
-        subscription: subscription
-            .as_mut()
-            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-        model,
-        // One request with no round for a stop to land between, so there is nothing here that a
-        // stop could reach.
-        cancel: None,
-    };
+    // One request with no round for a stop to land between, so there is nothing here that a
+    // stop could reach.
+    let mut chat = crate::processor::Chat::new(config, egress)
+        .spending(subscription.as_mut())
+        .on(model);
 
     let done = crate::aside::ask(&mut policy, &mut chat, question, watching);
     policy.finish();
@@ -1041,17 +1023,11 @@ pub fn goal<S: Sink, R: Reporter>(
         .resuming(check.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat {
-        config,
-        egress,
-        subscription: subscription
-            .as_mut()
-            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-        model,
-        // One request with no round for a stop to land between, so there is nothing here that a
-        // stop could reach.
-        cancel: None,
-    };
+    // One request with no round for a stop to land between, so there is nothing here that a
+    // stop could reach.
+    let mut chat = crate::processor::Chat::new(config, egress)
+        .spending(subscription.as_mut())
+        .on(model);
 
     let done = crate::goal::assess(&mut policy, &mut chat, check);
     policy.finish();
@@ -2918,15 +2894,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             (None, Some(session)) => {
                 let settled = session.settle(
                     &mut policy,
-                    &mut crate::processor::Chat {
-                        config,
-                        egress,
-                        subscription: subscription
-                            .as_mut()
-                            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                        model: task.model.as_deref(),
-                        cancel: Some(cancel),
-                    },
+                    &mut crate::processor::Chat::new(config, egress)
+                        .spending(subscription.as_mut())
+                        .on(task.model.as_deref())
+                        .stoppable_by(cancel),
                     &mut confirmer,
                     &mut reporter,
                     task.permission_mode.get(),
@@ -3155,15 +3126,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         || may_compact && account.context_tokens >= config.context_budget
                     {
                         reporter.phase(Phase::Compacting);
-                        let mut chat = crate::processor::Chat {
-                            config,
-                            egress,
-                            subscription: subscription
-                                .as_mut()
-                                .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                            model: turn_model.as_deref(),
-                            cancel: Some(cancel),
-                        };
+                        let mut chat = crate::processor::Chat::new(config, egress)
+                            .spending(subscription.as_mut())
+                            .on(turn_model.as_deref())
+                            .stoppable_by(cancel);
                         // A summary is a model call, so it belongs in the inference figure for the same reason
                         // its tokens belong in the total: the turn was waiting on the endpoint for it.
                         let summarising = Instant::now();
@@ -3789,15 +3755,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     skills: &catalogue,
                                     slots: quarantine,
                                     reads,
-                                    chat: crate::processor::Chat {
-                                        config,
-                                        egress,
-                                        subscription: subscription
-                                            .as_mut()
-                                            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                                        model: turn_model.as_deref(),
-                                        cancel: Some(cancel),
-                                    },
+                                    chat: crate::processor::Chat::new(config, egress)
+                                        .spending(subscription.as_mut())
+                                        .on(turn_model.as_deref())
+                                        .stoppable_by(cancel),
                                     cancel,
                                     scheduling,
                                     arming,
