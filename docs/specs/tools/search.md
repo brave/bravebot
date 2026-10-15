@@ -39,6 +39,15 @@ therefore the same group as `(...)`.
 `pattern` may be a list, and a line matching any of them matches. That is one more expression to
 try per line, so the work is the sum of the patterns rather than a power of anything.
 
+Most lines of a tree are nowhere near a match, so a line is looked through for literal text before
+the automaton runs. A pattern that is only an alternation of literal strings, with each escaped
+punctuation mark taken as itself, is answered by finding one of them in the line. Any other
+pattern that requires some text in every match, as `Command::new\([^)]*\)` requires
+`Command::new(`, rejects a line without it and runs the automaton on a line with it. Both give
+the answer the automaton gives and differ from it only in cost. Where the text looked for ignores
+case, a line holding a character that is not ASCII is handed to the automaton, because such a
+character can fold to an ASCII one.
+
 Case folding is done by the engine, never by lowercasing the pattern, which would rewrite `\D`,
 `\W` and `\S` into the classes they negate and invert what the search asked for.
 
@@ -67,6 +76,10 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 `verified-by: bravebot_agent::regex::a_pattern_beginning_with_a_literal_matches_only_where_the_whole_pattern_does`
 `verified-by: bravebot_agent::regex::a_branch_that_can_begin_with_something_else_is_still_matched`
 `verified-by: bravebot_agent::regex::a_character_that_folds_across_the_ascii_boundary_still_matches`
+`verified-by: bravebot_agent::regex::the_automaton_runs_only_for_lines_that_could_match`
+`verified-by: bravebot_agent::regex::the_literal_shortcuts_give_the_answer_the_automaton_gives`
+`verified-by: bravebot_agent::regex::a_literal_that_ignores_case_is_found_in_either_case_and_a_wider_line_goes_to_the_automaton`
+`verified-by: bravebot_agent::regex::a_pattern_of_literals_over_megabytes_of_text_finishes_promptly`
 `verified-by: bravebot_agent::turn::a_search_for_a_regular_expression_finds_what_it_describes`
 `verified-by: bravebot_agent::glob::a_brace_group_matches_each_alternative`
 `verified-by: bravebot_agent::glob::an_oversized_expansion_falls_back_to_the_literal`

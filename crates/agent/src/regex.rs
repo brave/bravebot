@@ -7,6 +7,12 @@
 //! character at a time, so a pattern is matched in time proportional to the length of the line
 //! times the size of the pattern and there is no input that makes it blow up.
 //!
+//! The NFA is the slow part, and most lines in a search are nowhere near a match, so a line is
+//! looked through for literal text first. A pattern that is only an alternation of literals is
+//! answered by finding one of them. Any other pattern that requires some text in every match
+//! rejects a line lacking it, and only a line that holds it is simulated. Both give the answer the
+//! NFA gives on every line, and a test holds them to it.
+//!
 //! Hand-written rather than a dependency, and deliberately small. Supported, and nothing else:
 //!
 //! - literal characters
@@ -32,6 +38,7 @@
 //! Captures are not extracted. `search` reports the line a match was found on, so whether a
 //! pattern matched is the whole question, and a boolean is all any of this has to answer.
 
+use std::cell::RefCell;
 use std::fmt;
 
 /// The longest pattern that will be compiled.
@@ -208,55 +215,218 @@ enum Inst {
 #[derive(Debug, Clone)]
 pub struct Regex {
     program: Vec<Inst>,
-    /// Characters of which every match must start with one, when the pattern is built so.
-    first: Option<FirstChars>,
+    /// Text a line must hold for the pattern to match it, when the pattern requires some.
+    required: Option<Required>,
 }
 
-/// The characters a match can begin with, for a pattern every branch of which begins with a
-/// literal. A line holding none of them cannot match, so it is rejected without running the NFA.
+/// Literal text of which every match holds at least one, found in a line as a substring.
+///
+/// A line holding none of them cannot match and is rejected without running the NFA. Where the
+/// pattern is nothing but an alternation of literals, a line holding one of them is a match, and
+/// the NFA is not needed for it either, so a search for several spellings of a name does not run
+/// the NFA on every line.
 #[derive(Debug, Clone)]
-struct FirstChars {
-    /// Which ASCII bytes begin a match, indexed by the byte.
-    ascii: [bool; 128],
+struct Required {
+    literals: Vec<Literal>,
+    /// Whether holding one of `literals` is itself a match.
+    whole: bool,
+    /// Whether any of `literals` ignores case, which is when a line is lowercased to be searched.
+    folded: bool,
 }
 
-impl FirstChars {
-    /// The first characters of `node`, or `None` where it can match without consuming one or can
-    /// begin with something that is not a literal character.
-    fn of(node: &Node) -> Option<Vec<(char, bool)>> {
+/// Characters that a match holds in order and in a row.
+#[derive(Debug, Clone)]
+struct Literal {
+    /// The characters, lowercased where `folded`, so a comparison is between two lowercase forms.
+    text: String,
+    folded: bool,
+}
+
+/// Whether a line holds a literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Presence {
+    Absent,
+    Present,
+    /// Only the NFA can say. A non-ASCII character in the line can fold to an ASCII one (U+212A,
+    /// the Kelvin sign, folds to `k`), which a comparison of bytes does not see.
+    Unknown,
+}
+
+impl Literal {
+    /// The literal spelled by `run`, every character of which ignores case or none does.
+    fn new(run: &[(char, bool)]) -> Self {
+        let folded = run.first().is_some_and(|&(_, folded)| folded);
+        Self {
+            text: run
+                .iter()
+                .map(|&(want, _)| if folded { lower(want) } else { want })
+                .collect(),
+            folded,
+        }
+    }
+
+    /// How many characters a line has to hold in a row to pass this literal.
+    fn len(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    /// Whether `line` holds this literal. `lowered` is `line` lowercased where it is ASCII
+    /// throughout, and is only read for a literal that ignores case.
+    fn presence_in(&self, line: &str, lowered: Option<&str>) -> Presence {
+        if !self.folded {
+            // Equal characters have equal UTF-8, and valid UTF-8 found in valid UTF-8 starts on a
+            // character boundary, so this finds what the NFA's comparison of characters finds.
+            return if line.contains(self.text.as_str()) {
+                Presence::Present
+            } else {
+                Presence::Absent
+            };
+        }
+        let Some(lowered) = lowered else {
+            return Presence::Unknown;
+        };
+        // The NFA compares `lower` of both sides, so on an ASCII line a character that does not
+        // lowercase to ASCII has nothing to match.
+        if lowered.contains(self.text.as_str()) {
+            Presence::Present
+        } else {
+            Presence::Absent
+        }
+    }
+}
+
+impl Required {
+    fn of(node: &Node) -> Option<Self> {
+        let (literals, whole) = match Self::exactly(node) {
+            Some(literals) => (literals, true),
+            None => (Self::within(node)?, false),
+        };
+        let folded = literals.iter().any(|literal| literal.folded);
+        Some(Self {
+            literals,
+            whole,
+            folded,
+        })
+    }
+
+    /// The literals `node` is an alternation of, or `None` where it is anything else.
+    fn exactly(node: &Node) -> Option<Vec<Literal>> {
         match node {
-            Node::Char { want, folded } => Some(vec![(*want, *folded)]),
-            Node::Plus(inner) => Self::of(inner),
             Node::Alt(branches) => {
                 let mut all = Vec::new();
                 for branch in branches {
-                    all.extend(Self::of(branch)?);
+                    all.extend(Self::exactly(branch)?);
                 }
                 Some(all)
             }
-            // `(?i)` compiles to an `Empty` that consumes nothing, so what follows it decides.
-            Node::Concat(nodes) => Self::of(nodes.iter().find(|n| **n != Node::Empty)?),
+            Node::Char { .. } => Self::spelled(std::slice::from_ref(node)).map(|only| vec![only]),
+            Node::Concat(nodes) => Self::spelled(nodes).map(|only| vec![only]),
             _ => None,
         }
     }
 
-    fn new(node: &Node) -> Option<Self> {
-        let starts = Self::of(node)?;
-        let mut ascii = [false; 128];
-        for (byte, slot) in ascii.iter_mut().enumerate() {
-            let c = char::from(byte as u8);
-            *slot = starts
-                .iter()
-                .any(|&(want, folded)| want == c || (folded && lower(want) == lower(c)));
+    /// The one literal `nodes` consist of, or `None` where they hold anything else or spell more
+    /// than one, as `a(?i)b` does.
+    fn spelled(nodes: &[Node]) -> Option<Literal> {
+        let (mut runs, rest) = Self::runs(nodes);
+        match (runs.pop(), runs.is_empty(), rest.is_empty()) {
+            (Some(only), true, true) => Some(only),
+            _ => None,
         }
-        Some(Self { ascii })
     }
 
-    /// Whether `text` could hold a match. A non-ASCII character is always allowed through, since
-    /// it can fold to an ASCII one (U+212A, the Kelvin sign, folds to `k`) and the NFA decides.
-    fn allows(&self, text: &str) -> bool {
-        text.bytes()
-            .any(|byte| !byte.is_ascii() || self.ascii[usize::from(byte)])
+    /// A set of literals one of which every match of `node` holds, or `None` where none is
+    /// known. Of the sets a sequence offers, the one whose shortest literal is longest wins,
+    /// since a longer literal is found in fewer lines, and then the one with the fewest, and then
+    /// the one found first, a run of characters before the nodes between runs.
+    fn within(node: &Node) -> Option<Vec<Literal>> {
+        match node {
+            Node::Char { .. } => Self::spelled(std::slice::from_ref(node)).map(|only| vec![only]),
+            Node::Plus(inner) => Self::within(inner),
+            Node::Alt(branches) => {
+                let mut all = Vec::new();
+                for branch in branches {
+                    all.extend(Self::within(branch)?);
+                }
+                Some(all)
+            }
+            Node::Concat(nodes) => {
+                let (runs, rest) = Self::runs(nodes);
+                let mut candidates: Vec<Vec<Literal>> =
+                    runs.into_iter().map(|run| vec![run]).collect();
+                candidates.extend(rest.into_iter().filter_map(Self::within));
+                // `max_by_key` keeps the last of equal keys, so the order is reversed to keep the
+                // first. The first is the character a pattern begins with where it begins with one.
+                candidates.into_iter().rev().max_by_key(|set| {
+                    (
+                        set.iter().map(Literal::len).min(),
+                        std::cmp::Reverse(set.len()),
+                    )
+                })
+            }
+            // A repeat that may run zero times, a class, `.` and the anchors require no text.
+            _ => None,
+        }
+    }
+
+    /// Split a sequence into the literals it spells and the nodes between them. Characters that
+    /// ignore case and ones that do not make separate literals, and `Empty`, which a `(?i)`
+    /// compiles to and which consumes nothing, does not separate two characters.
+    fn runs(nodes: &[Node]) -> (Vec<Literal>, Vec<&Node>) {
+        let mut runs = Vec::new();
+        let mut rest = Vec::new();
+        let mut current: Vec<(char, bool)> = Vec::new();
+        for node in nodes {
+            match node {
+                Node::Char { want, folded } => {
+                    if current.first().is_some_and(|first| first.1 != *folded) {
+                        runs.push(Literal::new(&current));
+                        current.clear();
+                    }
+                    current.push((*want, *folded));
+                }
+                Node::Empty => {}
+                other => {
+                    if !current.is_empty() {
+                        runs.push(Literal::new(&current));
+                        current.clear();
+                    }
+                    rest.push(other);
+                }
+            }
+        }
+        if !current.is_empty() {
+            runs.push(Literal::new(&current));
+        }
+        (runs, rest)
+    }
+
+    fn presence_in(&self, line: &str) -> Presence {
+        if self.folded && line.is_ascii() {
+            // Lowercased once for every literal rather than compared a byte at a time.
+            return SCRATCH.with_borrow_mut(|scratch| {
+                let found = self.scan(line, Some(scratch.lowercase(line)));
+                scratch.release();
+                found
+            });
+        }
+        self.scan(line, None)
+    }
+
+    fn scan(&self, line: &str, lowered: Option<&str>) -> Presence {
+        let mut unknown = false;
+        for literal in &self.literals {
+            match literal.presence_in(line, lowered) {
+                Presence::Present => return Presence::Present,
+                Presence::Unknown => unknown = true,
+                Presence::Absent => {}
+            }
+        }
+        if unknown {
+            Presence::Unknown
+        } else {
+            Presence::Absent
+        }
     }
 }
 
@@ -296,24 +466,44 @@ impl Regex {
         program.push(Inst::Match);
         Ok(Self {
             program,
-            first: FirstChars::new(&node),
+            required: Required::of(&node),
         })
     }
 
     /// Whether `text` holds a match anywhere in it.
     ///
+    /// A line is first looked through for the literal text the pattern requires, which rejects
+    /// most lines for a pattern that has some and accepts one outright for a pattern that is
+    /// nothing else. What is left goes to the NFA.
+    pub fn matches(&self, text: &str) -> bool {
+        if let Some(required) = &self.required {
+            match required.presence_in(text) {
+                Presence::Absent => return false,
+                Presence::Present if required.whole => return true,
+                Presence::Present | Presence::Unknown => {}
+            }
+        }
+        self.simulate(text)
+    }
+
+    /// Run the NFA over `text`, with no regard to the literals.
+    ///
     /// Unanchored, so a thread starts at every position unless `^` says otherwise. The state set
     /// is deduplicated at each position, so the work is bounded by the line's length times the
     /// program's size however many threads the pattern would like to spawn.
-    pub fn matches(&self, text: &str) -> bool {
-        if let Some(first) = &self.first
-            && !first.allows(text)
-        {
-            return false;
-        }
+    fn simulate(&self, text: &str) -> bool {
+        #[cfg(test)]
+        SIMULATIONS.with(|runs| runs.set(runs.get() + 1));
 
-        let mut scratch = Scratch::new(self.program.len());
-        scratch.chars.extend(text.chars());
+        SCRATCH.with_borrow_mut(|scratch| {
+            scratch.load(self.program.len(), text);
+            let found = self.run(scratch);
+            scratch.release();
+            found
+        })
+    }
+
+    fn run(&self, scratch: &mut Scratch) -> bool {
         let Scratch {
             chars,
             current,
@@ -321,7 +511,8 @@ impl Regex {
             on_current,
             on_next,
             pending,
-        } = &mut scratch;
+            ..
+        } = scratch;
 
         for position in 0..=chars.len() {
             // A fresh attempt beginning here, which is what makes the search unanchored. Where
@@ -414,8 +605,26 @@ impl Regex {
     }
 }
 
-/// The buffers one call to `matches` works in.
+/// The most characters of a line that the buffers keep room for between calls.
+const RETAINED_CHARS: usize = 64 * 1024;
+
+thread_local! {
+    static SCRATCH: RefCell<Scratch> = const { RefCell::new(Scratch::empty()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times the NFA has run on this thread.
+    static SIMULATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The buffers a line is matched in: the line lowercased for the literals, and what the NFA works
+/// in.
+///
+/// Kept for the thread rather than built per line: a search runs the NFA on lines that are a few
+/// dozen characters long, and building these costs more than running over them.
 struct Scratch {
+    lowered: String,
     chars: Vec<char>,
     current: Vec<usize>,
     next: Vec<usize>,
@@ -425,14 +634,50 @@ struct Scratch {
 }
 
 impl Scratch {
-    fn new(states: usize) -> Self {
+    const fn empty() -> Self {
         Self {
+            lowered: String::new(),
             chars: Vec::new(),
-            current: Vec::with_capacity(states),
-            next: Vec::with_capacity(states),
-            on_current: vec![false; states],
-            on_next: vec![false; states],
-            pending: Vec::with_capacity(states),
+            current: Vec::new(),
+            next: Vec::new(),
+            on_current: Vec::new(),
+            on_next: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// `line` lowercased where it is ASCII, which is the only place a byte comparison can tell
+    /// that two cases are one character.
+    fn lowercase(&mut self, line: &str) -> &str {
+        self.lowered.clear();
+        self.lowered.push_str(line);
+        self.lowered.make_ascii_lowercase();
+        &self.lowered
+    }
+
+    /// Ready the buffers for `text` and a program of `states` instructions.
+    fn load(&mut self, states: usize, text: &str) {
+        self.chars.clear();
+        self.chars.extend(text.chars());
+        self.current.clear();
+        self.next.clear();
+        self.pending.clear();
+        // Both start with no state in them, which `matches` relies on at the first position.
+        self.on_current.clear();
+        self.on_current.resize(states, false);
+        self.on_next.clear();
+        self.on_next.resize(states, false);
+    }
+
+    /// Give back the room a very long line took, so one minified file does not leave the buffers
+    /// for it, four bytes per character in the largest, held by the thread for the rest of the
+    /// search.
+    fn release(&mut self) {
+        if self.lowered.capacity() > RETAINED_CHARS {
+            self.lowered = String::new();
+        }
+        if self.chars.capacity() > RETAINED_CHARS {
+            self.chars = Vec::new();
         }
     }
 }
@@ -849,6 +1094,18 @@ mod tests {
             .matches(text)
     }
 
+    fn simulations() -> usize {
+        SIMULATIONS.with(std::cell::Cell::get)
+    }
+
+    /// The NFA over `text` in buffers built for the call, which no shortcut and no earlier line
+    /// has touched.
+    fn by_automaton_alone(regex: &Regex, text: &str) -> bool {
+        let mut scratch = Scratch::empty();
+        scratch.load(regex.program.len(), text);
+        regex.run(&mut scratch)
+    }
+
     #[test]
     fn a_literal_pattern_matches_the_substring_it_spells() {
         assert!(matches("needle", "a needle in a haystack"));
@@ -1144,13 +1401,23 @@ mod tests {
 
     /// The property the whole engine exists for. A backtracking implementation takes
     /// exponential time on this, and the test would not finish rather than fail.
+    ///
+    /// Each subject holds the literal its pattern requires and fails at the anchor after it, so
+    /// the line reaches the NFA. A subject without the literal is rejected before the NFA runs and
+    /// shows nothing about it.
     #[test]
     fn a_pattern_built_to_backtrack_catastrophically_still_returns_promptly() {
         let started = std::time::Instant::now();
-        let subject = "a".repeat(60);
+        let before = simulations();
+        let subject = format!("{}b", "a".repeat(60));
         assert!(!matches("(a+)+$b", &subject));
-        assert!(!matches("(a|aa)*c", &subject));
-        assert!(!matches("(x+x+)+y", &"x".repeat(60)));
+        assert!(!matches("(a|aa)*c$", &format!("{}cb", "a".repeat(60))));
+        assert!(!matches("(x+x+)+y$", &format!("{}yz", "x".repeat(60))));
+        assert_eq!(
+            simulations() - before,
+            3,
+            "each subject has to reach the NFA for this to bound it"
+        );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "matching took {:?}, which is the backtracking blowup this engine rules out",
@@ -1163,6 +1430,9 @@ mod tests {
         assert!(matches("(a*)*b", "aaab"));
         assert!(matches("(a*)*", ""));
         assert!(!matches("(a*)*b", "ccc"));
+        let before = simulations();
+        assert!(!matches("(a*)*b$", "aaabc"));
+        assert_eq!(simulations() - before, 1);
     }
 
     #[test]
@@ -1264,8 +1534,8 @@ mod tests {
         assert!(matches("[a-]", "a"));
     }
 
-    /// A line holding none of the characters a match can begin with is rejected before the NFA
-    /// runs, so a line holding one of them but not the rest still has to be tried and refused.
+    /// A line holding the literal text a pattern requires is not thereby a match, so a line
+    /// holding that text and not the rest still has to be tried and refused.
     #[test]
     fn a_pattern_beginning_with_a_literal_matches_only_where_the_whole_pattern_does() {
         assert!(matches("needle|haystack", "xx haystack"));
@@ -1285,11 +1555,14 @@ mod tests {
         assert!(!matches("dead code|unused", "An UNUSED import"));
     }
 
-    /// Only a pattern every branch of which must consume a literal first may be filtered by its
-    /// first characters. Each pattern here has a branch that can match without that character.
+    /// A literal stands for a branch only where every match of the branch holds it. Each pattern
+    /// here has a branch that can match without the literal a neighbouring branch spells.
     #[test]
     fn a_branch_that_can_begin_with_something_else_is_still_matched() {
         assert!(matches("abc|x*y", "y"));
+        // The repeated text is longer than the text after it, so a repeat taken to require it
+        // would make it the literal looked for.
+        assert!(matches("abc|(xyz)*y", "y"));
         assert!(matches("abc|.d", "zd"));
         assert!(matches(r"abc|\bd", "d"));
         assert!(matches("a?b", "b"));
@@ -1301,29 +1574,222 @@ mod tests {
         assert!(matches("abc|[xy]z", "yz"));
     }
 
+    /// The automaton is told apart from the substring search by counting its runs, which a result
+    /// cannot show: both give the same answer. Each row is a pattern, a line, whether the pattern
+    /// matches it, and whether the automaton had to run to say so.
     #[test]
-    fn only_a_pattern_that_must_begin_with_a_literal_is_filtered_by_its_first_characters() {
-        for pattern in [
-            "needle",
-            "ab+c",
-            "cat|dog",
-            "(?i)dead code|unused",
-            "(?:ab)+c",
-            "(a|b)c",
-        ] {
+    fn the_automaton_runs_only_for_lines_that_could_match() {
+        let rows: [(&str, &str, bool, bool); 27] = [
+            // Nothing but literals: finding one is the answer.
+            (
+                r"Command::new|\.spawn\(",
+                "let c = Command::new(x);",
+                true,
+                false,
+            ),
+            (r"Command::new|\.spawn\(", "child.spawn()?;", true, false),
+            (
+                r"Command::new|\.spawn\(",
+                "Command::ne and spawn(",
+                false,
+                false,
+            ),
+            // An escaped dot is a dot, so a line with another character there is not a match.
+            (r"Command::new|\.spawn\(", "xspawn(", false, false),
+            (r"Command::new|\.spawn\(", "command::new", false, false),
+            ("(?i)foo|bar", "a FOO b", true, false),
+            ("(?i)foo|bar", "a fo b", false, false),
+            // A literal alongside other constructs rejects a line lacking it and decides nothing
+            // for a line holding it.
+            (r"Command::new\([^)]*\)", "Cargo::new(x)", false, false),
+            (r"Command::new\([^)]*\)", "Command::new(x)", true, true),
+            (r"Command::new\([^)]*\)", "Command::new(x", false, true),
+            // The longer literal is the one looked for, not the one the pattern begins with.
+            (r"a[0-9]*Command::new", "a1 Commands", false, false),
+            (r"fn +[a-z_]+ *=", "let value = 1;", false, false),
+            // Of two literals as long as each other, the one a pattern begins with is looked for,
+            // not the space after it that nearly every line holds.
+            (r"Z +[a-z]", "a b c d", false, false),
+            (r"Z +[a-z]", "xx Z q", true, true),
+            (r"fn +[a-z_]+ *=", "fn value = 1;", true, true),
+            // A repeat that may run no times requires nothing of its own.
+            ("x*y", "aaa", false, false),
+            ("x*y", "y", true, true),
+            ("(a|b)c", "bd", false, false),
+            ("(a|b)c", "bc", true, true),
+            // Zero-width assertions are checked by the automaton once the literal is there.
+            (r"\bfoo\b", "bar", false, false),
+            (r"\bfoo\b", "afoob", false, true),
+            (r"\bfoo\b", "a foo b", true, true),
+            ("^abc|def", "xdef", true, true),
+            ("^abc|def", "xabc", false, true),
+            // A branch that can match without a literal leaves no literal to require.
+            ("abc|", "zzz", true, true),
+            ("a|b*", "zzz", true, true),
+            ("[ab]", "zzz", false, true),
+        ];
+        for (pattern, line, wanted, ran) in rows {
             let regex = Regex::compile(pattern).expect("compiles");
-            assert!(regex.first.is_some(), "{pattern}");
-        }
-        for pattern in [
-            "x*y", "a?b", "abc|x*y", ".a", "[ab]c", "^a", "a|", r"\ba", r"\wa", "(a|b*)c", "$",
-        ] {
-            let regex = Regex::compile(pattern).expect("compiles");
-            assert!(regex.first.is_none(), "{pattern}");
+            let before = simulations();
+            assert_eq!(regex.matches(line), wanted, "{pattern} on {line:?}");
+            assert_eq!(
+                simulations() > before,
+                ran,
+                "whether the automaton ran for {pattern} on {line:?}"
+            );
         }
     }
 
-    /// The filter reads bytes, and a non-ASCII character folds to an ASCII one in one direction
-    /// (U+212A, the Kelvin sign, to `k`) and the other.
+    /// Every shortcut is checked against the automaton run alone, on a fresh set of buffers, over
+    /// every short line of characters that fold into one another or sit on either side of the
+    /// ASCII boundary. The patterns are chosen so that each way of finding the required text is
+    /// used: a whole branch, a run in a sequence, a repeat, an alternation inside a sequence, a
+    /// flag partway through, and an empty branch.
+    #[test]
+    fn the_literal_shortcuts_give_the_answer_the_automaton_gives() {
+        let patterns = [
+            "ab",
+            "ab|ba",
+            "abk|\u{e9}",
+            "a+b",
+            "ab+",
+            "(ab)+",
+            "(ab)+k",
+            "a(b|k)",
+            "(a|b)k",
+            "a|b*",
+            "a*b",
+            "a?b",
+            "ab?",
+            "^ab|ba",
+            "ab$",
+            r"\bab",
+            "[ab]k",
+            "k.a",
+            "a.|bk",
+            "(a|b)(k|\u{e9})",
+            "ab|",
+            "(?i)ab",
+            "(?i)ab|k",
+            "a(?i)b",
+            "(?i)a(?-i)b",
+            "k(?i)b|a",
+            "(?i)\u{e9}",
+            "(?i)k",
+            "\u{212A}a|ab",
+            "a(b)",
+            "(?:ab|k)+a",
+        ];
+        let alphabet = ['a', 'b', 'A', 'B', 'k', '\u{212A}', '\u{e9}', '\u{c9}'];
+        let mut lines = vec![String::new()];
+        let mut shortest = 0;
+        for _ in 0..4 {
+            let end = lines.len();
+            for at in shortest..end {
+                for letter in alphabet {
+                    lines.push(format!("{}{letter}", lines[at]));
+                }
+            }
+            shortest = end;
+        }
+
+        for folded in [false, true] {
+            for pattern in patterns {
+                let regex = if folded {
+                    Regex::compile_folded(pattern)
+                } else {
+                    Regex::compile(pattern)
+                }
+                .expect("compiles");
+                for line in &lines {
+                    assert_eq!(
+                        regex.matches(line),
+                        by_automaton_alone(&regex, line),
+                        "{pattern} (folded: {folded}) on {line:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A pattern that ignores case finds its text in either case without the automaton while the
+    /// line is ASCII, and leaves a line with any other character to it, because such a character
+    /// can fold to an ASCII one.
+    #[test]
+    fn a_literal_that_ignores_case_is_found_in_either_case_and_a_wider_line_goes_to_the_automaton()
+    {
+        let regex = Regex::compile_folded("kelvin|celsius").expect("compiles");
+        let before = simulations();
+        assert!(regex.matches("the KELVIN scale"));
+        assert!(regex.matches("Celsius"));
+        assert!(!regex.matches("the kelvi scale"));
+        assert_eq!(simulations(), before);
+
+        assert!(regex.matches("the \u{212A}elvin scale"));
+        assert!(!regex.matches("the \u{e9}lvin scale"));
+        assert_eq!(simulations() - before, 2);
+    }
+
+    #[test]
+    fn a_pattern_of_literals_over_megabytes_of_text_finishes_promptly() {
+        let source = [
+            "use std::collections::HashMap;",
+            "pub fn load(path: &Path) -> Result<Config, Error> {",
+            "    let text = std::fs::read_to_string(path)?;",
+            "    let mut child = Command::new(\"git\");",
+            "    child.args([\"status\"]).spawn()?;",
+            "    // lines like these begin with the common letters l, p, u, c and s",
+            "    for (index, line) in text.lines().enumerate() {",
+            "        if line.starts_with('#') { continue; }",
+            "    }",
+        ];
+        let mut text = String::new();
+        while text.len() < 4 * 1024 * 1024 {
+            for line in source {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        let regex = Regex::compile(
+            r"Command::new|\.spawn\(|std::process::Command|webbrowser::open|open::that",
+        )
+        .expect("compiles");
+
+        let started = std::time::Instant::now();
+        let before = simulations();
+        let hits = text.lines().filter(|line| regex.matches(line)).count();
+        let elapsed = started.elapsed();
+        assert_eq!(simulations(), before, "no line of this text needs the NFA");
+
+        assert_eq!(hits, 2 * text.lines().count() / source.len());
+        // The NFA takes more than ten seconds over this text in a debug build and over a second
+        // in a release one, and finding the literals takes a fraction of a second in either.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "{hits} lines of {} bytes took {elapsed:?}",
+            text.len()
+        );
+    }
+
+    /// The buffers are kept between lines so they are not built for each, and a long line must
+    /// not leave its share of them behind for the rest of the search.
+    #[test]
+    fn a_very_long_line_does_not_leave_its_buffers_held() {
+        let long = "a".repeat(4 * RETAINED_CHARS);
+        // Holds the literal the pattern requires, so the line reaches the automaton.
+        let automaton = Regex::compile("(a|b)+c$").expect("compiles");
+        let before = simulations();
+        assert!(!automaton.matches(&format!("{long}cd")));
+        assert_eq!(simulations() - before, 1);
+        assert!(SCRATCH.with_borrow(|scratch| scratch.chars.capacity()) <= RETAINED_CHARS);
+
+        let folded = Regex::compile_folded("needle").expect("compiles");
+        assert!(!folded.matches(&long));
+        assert!(SCRATCH.with_borrow(|scratch| scratch.lowered.capacity()) <= RETAINED_CHARS);
+    }
+
+    /// Literals that ignore case are compared in lowercase, and the Kelvin sign (U+212A) lowercases
+    /// to `k`, so it matches `k` whether the pattern or the line holds it.
     #[test]
     fn a_character_that_folds_across_the_ascii_boundary_still_matches() {
         let ascii = Regex::compile_folded("kelvin").expect("compiles");
