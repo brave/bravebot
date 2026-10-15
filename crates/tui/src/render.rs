@@ -51,7 +51,7 @@ use self::prompt::input_text_width;
 #[cfg(test)]
 use self::scroller::needle_that_fits;
 #[cfg(test)]
-use self::transcript::{lay_out, transcript_lines};
+use self::transcript::{counted, lay_out, transcript_lines};
 #[cfg(test)]
 use self::watching::padded;
 #[cfg(test)]
@@ -2315,48 +2315,60 @@ mod tests {
         /// scroller is open. It has to stay in proportion to the drawing the interface already does,
         /// since the alternative is a mode that gets slower the more there is to read back through.
         ///
-        /// A ratio rather than a wall clock, because what matters is that the pass is of the same
-        /// order as the one beside it and not that either takes a particular number of milliseconds.
+        /// Drawing wraps every line of the transcript once. The pass is in proportion to that when
+        /// it asks about each line once and wraps only the lines that do not fit on a row, since a
+        /// line that fits is answered from its width. The test counts exactly those two things.
+        /// Elapsed time includes the load on the machine during each pass, so a bound on the ratio
+        /// of two passes fails on a busy machine with code that did no more work.
         ///
-        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
-        /// something else on the machine only ever reads long, so one sample of each compares the
-        /// contention of one moment against that of another, and a loaded machine fails this on the
-        /// draw it happened to interrupt. Three passes because the load measured here stalled about
-        /// one sample in fifteen, and each pass costs laying the transcript out twice.
+        /// The rows measured are also held to the rows the drawing counts, since a pass that
+        /// answered without wrapping would pass the counts.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
 
-            let mut drawing = std::time::Duration::MAX;
-            let mut measuring = std::time::Duration::MAX;
-            let mut rows = 0;
-            let mut measured = 0;
+            let ((_, plain), idle) = counted::during(|| lay_out(&at_rest, 90, 24));
+            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+            assert_eq!(
+                idle,
+                counted::Work::default(),
+                "a line was measured with nobody asking"
+            );
 
-            for _ in 0..3 {
-                let started = std::time::Instant::now();
-                let (lines, plain) = lay_out(&at_rest, 90, 24);
-                // The wrap a frame at rest already pays for, and the one this is in proportion to.
-                // Laying the lines out is the cheaper half of drawing them, and measuring against it
-                // alone compares the new pass with something no frame has ever consisted of.
-                rows = Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .line_count(90);
-                drawing = drawing.min(started.elapsed());
-                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-
-                let started = std::time::Instant::now();
-                let (_, laid) = lay_out(&scrolling, 90, 24);
-                measuring = measuring.min(started.elapsed());
-                measured = laid.rows;
-            }
+            let ((lines, laid), work) = counted::during(|| lay_out(&scrolling, 90, 24));
+            let too_wide = lines.iter().filter(|line| line.width() > 90).count();
+            let rows = Paragraph::new(lines.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(90);
 
             assert!(rows > 2000, "the transcript is not long: {rows}");
-            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                measuring < drawing * 4,
-                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
+                laid.rows > 2000,
+                "the transcript is not long: {}",
+                laid.rows
+            );
+            assert!(
+                too_wide > 0,
+                "no line needs wrapping, so the count of wraps proves nothing"
+            );
+            assert_eq!(
+                usize::from(laid.rows),
+                rows,
+                "the rows measured are not the rows drawn"
+            );
+            assert_eq!(
+                work.asked,
+                lines.len(),
+                "{} lines were measured in a transcript of {}",
+                work.asked,
+                lines.len()
+            );
+            assert_eq!(
+                work.wrapped, too_wide,
+                "{} lines were wrapped to measure them, and {too_wide} do not fit on a row",
+                work.wrapped
             );
         }
 

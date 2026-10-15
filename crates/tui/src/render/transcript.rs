@@ -506,9 +506,13 @@ fn highlight(lines: &mut [Line<'static>], needle: &str) -> Vec<usize> {
 /// alone, which is nearly all of them.
 pub(crate) fn rows_of(line: &Line<'_>, width: u16) -> u16 {
     let width = width.max(1);
+    #[cfg(test)]
+    counted::asked();
     if line.width() <= width as usize {
         return 1;
     }
+    #[cfg(test)]
+    counted::wrapped();
     let borrowed: Vec<Span<'_>> = line
         .spans
         .iter()
@@ -611,4 +615,44 @@ fn trail_line(recorded: &TrailLine) -> Line<'static> {
         format!("  {DETAIL_MARKER} {}", recorded.text),
         style,
     ))
+}
+
+/// What [`rows_of`] did on this thread, for a test that bounds the work of laying a transcript
+/// out. A clock reading includes whatever else the machine was running, so a bound on elapsed
+/// time fails under load on code that did no more work.
+#[cfg(test)]
+pub(super) mod counted {
+    use std::cell::Cell;
+
+    /// Lines [`super::rows_of`] was asked about, and how many of them it wrapped to answer.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Work {
+        pub(crate) asked: usize,
+        pub(crate) wrapped: usize,
+    }
+
+    thread_local! {
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+        static WRAPPED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn asked() {
+        ASKED.set(ASKED.get() + 1);
+    }
+
+    pub(super) fn wrapped() {
+        WRAPPED.set(WRAPPED.get() + 1);
+    }
+
+    /// Runs `body` and returns what it did, counting from nothing on this thread.
+    pub(crate) fn during<R>(body: impl FnOnce() -> R) -> (R, Work) {
+        ASKED.set(0);
+        WRAPPED.set(0);
+        let result = body();
+        let work = Work {
+            asked: ASKED.get(),
+            wrapped: WRAPPED.get(),
+        };
+        (result, work)
+    }
 }
