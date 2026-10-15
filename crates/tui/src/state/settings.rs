@@ -650,7 +650,6 @@ impl Session {
     /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
     /// figures and still in the session's total, as an aside is.
     pub fn charge_suggestion(&mut self, tokens: u64) {
-        self.tokens += tokens;
-        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        self.charge(tokens);
     }
 }

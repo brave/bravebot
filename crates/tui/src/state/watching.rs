@@ -42,16 +42,40 @@ impl Session {
     /// bounded, and the bound is enforced where a line enters rather than by every caller
     /// remembering: [`Session::hold`] is that entrance.
     pub(super) fn working_lines(&mut self) -> &mut [Entry] {
-        match self.attributed_to.and_then(|id| self.at(id)) {
-            Some(at) => {
-                &mut self.transcript[at]
-                    .delegate
-                    .as_mut()
-                    .expect("a delegate entry holds its delegate")
-                    .lines
-            }
+        match self.attributed_at() {
+            Some(at) => &mut self.delegate_mut(at).lines,
             None => &mut self.transcript,
         }
+    }
+
+    /// Where the delegate the current report is attributed to has its block, if there is one.
+    pub(super) fn attributed_at(&self) -> Option<usize> {
+        self.attributed_to.and_then(|id| self.at(id))
+    }
+
+    /// The delegate held by the transcript entry at `at`, a position [`Session::at`] returned.
+    ///
+    /// Takes a position rather than returning an option, because a caller that falls back to the
+    /// transcript in the `None` arm cannot hold the borrow this would return.
+    pub(super) fn delegate_mut(&mut self, at: usize) -> &mut Delegate {
+        self.transcript[at]
+            .delegate
+            .as_mut()
+            .expect("a delegate entry holds its delegate")
+    }
+
+    /// The last tool call of the current block that satisfies `keep`.
+    ///
+    /// Looks only through the trailing run of delegate and tool entries, so a call from before the
+    /// latest thing the person or the session said is never the one a report lands on.
+    pub(super) fn call_where(&mut self, keep: impl Fn(&Entry) -> bool) -> Option<&mut Entry> {
+        self.working_lines()
+            .iter_mut()
+            .rev()
+            .take_while(|entry| {
+                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
+            })
+            .find(|entry| entry.speaker == Speaker::Tool && keep(entry))
     }
 
     /// Hold a line that is not a call: under the delegate whose work it is, to the same bound its
@@ -60,12 +84,8 @@ impl Session {
     /// Not [`Session::working_lines`] and a push, which reaches the delegate's lines around the
     /// only thing that bounds them.
     pub(super) fn hold(&mut self, entry: Entry) {
-        match self.attributed_to.and_then(|id| self.at(id)) {
-            Some(at) => self.transcript[at]
-                .delegate
-                .as_mut()
-                .expect("a delegate entry holds its delegate")
-                .hold(entry),
+        match self.attributed_at() {
+            Some(at) => self.delegate_mut(at).hold(entry),
             None => self.transcript.push(entry),
         }
     }
@@ -93,9 +113,7 @@ impl Session {
         {
             watching.at += 1;
         }
-        let mut entry = Entry::system("");
-        entry.speaker = Speaker::Delegate;
-        entry.delegate = Some(Delegate {
+        self.transcript.push(Entry::delegate(Delegate {
             id: delegation.id,
             kind: delegation.kind,
             task: delegation.task,
@@ -105,8 +123,7 @@ impl Session {
             reported: None,
             failed: false,
             stop: delegation.stop,
-        });
-        self.transcript.push(entry);
+        }));
     }
 
     /// One delegate has finished, with what the turn was told about it and what it reported.
