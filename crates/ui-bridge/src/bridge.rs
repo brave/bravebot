@@ -102,6 +102,24 @@ impl Open {
             sandbox: None,
         }
     }
+
+    /// Whether the session can take a turn or a manifest run now: the trust question is answered
+    /// and nothing is running.
+    fn ready_for_work(&self) -> Result<(), Failure> {
+        if !self.answered_trust {
+            return Err(Failure::bad_request(
+                "this session has not been asked whether the directory is trusted; \
+                 send trust.reply first",
+            ));
+        }
+        if self.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "a turn is already running in this session",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Drives the agent for a front-end.
@@ -1098,18 +1116,7 @@ impl Bridge {
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
-        if !open.answered_trust {
-            return Err(Failure::bad_request(
-                "this session has not been asked whether the directory is trusted; \
-                 send trust.reply first",
-            ));
-        }
-        if open.running.is_some() {
-            return Err(Failure::new(
-                ErrorCode::TurnInFlight,
-                "a turn is already running in this session",
-            ));
-        }
+        open.ready_for_work()?;
         // The name the session was given, kept so a turn with no request behind it is addressed
         // too.
         let addressing = named.or_else(|| open.definition.clone());
@@ -1166,21 +1173,14 @@ impl Bridge {
         let watches = Arc::clone(&open.watches);
         let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
-        // A fresh token and a fresh channel per turn. Reusing either could cancel a turn
-        // before it started, or deliver yesterday's answer to today's question.
-        let cancel = Cancel::new();
-        let (answers_tx, answers_rx) = mpsc::channel();
-        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
-
-        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let target = crate::running::next_target();
-        let running = Running {
-            cancel: cancel.clone(),
-            answers: answers_tx,
-            pending: Arc::clone(&pending),
+        let crate::running::Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
             target,
-            finished: Arc::clone(&finished),
-        };
+        } = Running::start();
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -1288,18 +1288,7 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        if !open.answered_trust {
-            return Err(Failure::bad_request(
-                "this session has not been asked whether the directory is trusted; \
-                 send trust.reply first",
-            ));
-        }
-        if open.running.is_some() {
-            return Err(Failure::new(
-                ErrorCode::TurnInFlight,
-                "a turn is already running in this session",
-            ));
-        }
+        open.ready_for_work()?;
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
@@ -1335,18 +1324,14 @@ impl Bridge {
             })
             .unwrap_or(1);
 
-        let cancel = Cancel::new();
-        let (answers_tx, answers_rx) = mpsc::channel();
-        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
-        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let target = crate::running::next_target();
-        let running = Running {
-            cancel: cancel.clone(),
-            answers: answers_tx,
-            pending: Arc::clone(&pending),
+        let crate::running::Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
             target,
-            finished: Arc::clone(&finished),
-        };
+        } = Running::start();
 
         self.emitter.send(Event::new(
             "manifest.started",

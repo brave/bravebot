@@ -694,6 +694,10 @@ fn a_session_is_busy_until_its_run_ends() {
             refused["error"]["code"], "turn_in_flight",
             "{method} was taken while a run was waiting: {refused}"
         );
+        assert_eq!(
+            refused["error"]["message"], "a turn is already running in this session",
+            "{method} was refused for another reason: {refused}"
+        );
     }
 
     front.reply("manifest.reply", &session, &question, "reject");
@@ -742,6 +746,12 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     let unanswered = opened["session"].as_str().expect("a handle");
     let refused = front.answered("manifest.run", json!({"session": unanswered, "task": TASK}));
     assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("send trust.reply first")),
+        "a run in an unasked session was refused for another reason: {refused}"
+    );
 
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
 }

@@ -19,9 +19,9 @@ use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::Handle;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 /// Everything a session carries between turns.
 ///
@@ -333,7 +333,49 @@ pub fn next_target() -> u64 {
     NEXT.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// A [`Running`] together with the halves of it the worker thread keeps.
+pub struct Started {
+    /// What the session holds while the work runs.
+    pub running: Running,
+    /// The worker's end of the stop.
+    pub cancel: Cancel,
+    /// The worker's view of the question slot.
+    pub pending: crate::turn::Pending,
+    /// Where the worker receives answers.
+    pub answers: Receiver<Reply>,
+    /// The flag the worker sets on its way out.
+    pub finished: Arc<AtomicBool>,
+    /// What a cancel names to stop this work, the same number [`Running::target`] holds.
+    pub target: u64,
+}
+
 impl Running {
+    /// A turn or run beginning: a fresh stop, answer channel, question slot, finished flag and
+    /// target. Nothing is reused from earlier work, since a reused stop could cancel work before
+    /// it started and a reused channel could deliver yesterday's answer to today's question.
+    pub fn start() -> Started {
+        let cancel = Cancel::new();
+        let (answers_tx, answers_rx) = mpsc::channel();
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
+        let finished = Arc::new(AtomicBool::new(false));
+        let target = next_target();
+        let running = Running {
+            cancel: cancel.clone(),
+            answers: answers_tx,
+            pending: Arc::clone(&pending),
+            target,
+            finished: Arc::clone(&finished),
+        };
+        Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
+            target,
+        }
+    }
+
     /// Answer the question that is waiting, if this is an answer to that question.
     ///
     /// Both halves have to match. The id makes an approval single-use, and the kind makes
