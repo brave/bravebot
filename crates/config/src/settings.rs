@@ -1069,11 +1069,6 @@ impl Settings {
         settings
     }
 
-    /// Read one layer, for a home directory and nothing beside it.
-    pub fn from_home(home: Option<PathBuf>) -> Self {
-        Self::layered(home, None, None)
-    }
-
     /// Read the `env` block, the `model` key and the scrub list out of settings JSON.
     ///
     /// Only string values are taken. JSON allows a number or a boolean where a variable wants a
@@ -3635,14 +3630,14 @@ mod tests {
     /// A machine with no home directory has no settings file, and that is not an error.
     #[test]
     fn no_home_directory_is_not_an_error() {
-        assert!(Settings::from_home(None).is_empty());
+        assert!(Settings::layered(None, None, None).is_empty());
     }
 
     /// Nothing is there to read on a fresh machine, which is the common case and must be quiet.
     #[test]
     fn a_missing_file_is_not_an_error() {
         let missing = crate::testutil::scratch_dir("bravebot-settings-absent");
-        assert!(Settings::from_home(Some(missing)).is_empty());
+        assert!(Settings::layered(Some(missing), None, None).is_empty());
     }
 
     /// The escape hatch for a setup that needs a variable the built-in set removes: a person names
