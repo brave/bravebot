@@ -21933,6 +21933,138 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
     );
 }
 
+/// `sed` and a link to it in the workspace, for a run started through a link.
+///
+/// `None` where `sed` is not a file of that name: a multi-call binary picks its tool from the name it
+/// is started by, so a link named otherwise would not run that tool.
+#[cfg(unix)]
+fn sed_and_a_link_to_it(workspace: &Workspace) -> Option<(PathBuf, PathBuf)> {
+    let sed = bravebot_agent::programs::resolve("sed", workspace.root()).expect("sed is installed");
+    if sed.file_name() != Some(std::ffi::OsStr::new("sed")) {
+        eprintln!(
+            "skipped: sed is {}, which is not a file named sed",
+            sed.display()
+        );
+        return None;
+    }
+    let link = workspace.root().join("stream-edit");
+    std::os::unix::fs::symlink(&sed, &link).unwrap();
+    Some((sed, link))
+}
+
+/// RUN-2: a result names a program started through a link as the prompt does, by the link and the
+/// file it leads to. Naming the file alone reads as another program: `cargo` served by rustup would
+/// read `rustup test`. A stage started by its own file is named by that file, with no arrow drawn
+/// from a path to itself.
+///
+/// Unix only, because making the link is: a symlink needs a privilege on Windows that a test cannot
+/// assume.
+#[cfg(unix)]
+#[test]
+fn a_result_names_a_program_started_through_a_link_by_the_link_and_its_file() {
+    let scratch = Scratch::new("run-named-through-a-link");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
+        return;
+    };
+
+    let line = format!("./stream-edit -n p where.txt | '{}' -n p", sed.display());
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", &serde_json::json!({ "command": line }).to_string()),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("print the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let second = received.recv().expect("the round after the run");
+    let result = message_from(&second, "Result of run");
+    let named = format!(
+        "what `{} -> {} -n p where.txt | {} -n p` printed",
+        link.display(),
+        sed.display(),
+        sed.display()
+    );
+    assert!(
+        result.contains(&named),
+        "the planner was not told the run by the link and the file it leads to: {result}"
+    );
+}
+
+/// RUN-2: a job is named as a result is, so the line the person watching is shown for a program
+/// started in the background carries the link and the file.
+#[cfg(unix)]
+#[test]
+fn a_job_names_a_program_started_through_a_link_by_the_link_and_its_file() {
+    use bravebot_agent::report::JobEvent;
+
+    let scratch = Scratch::new("job-named-through-a-link");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
+        return;
+    };
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"./stream-edit -n p where.txt","background":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("print the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let Some(JobEvent::Started { line, .. }) = reporter.jobs.first() else {
+        panic!("no job was reported as started: {:?}", reporter.jobs);
+    };
+    assert_eq!(
+        line,
+        &format!("{} -> {} -n p where.txt", link.display(), sed.display()),
+        "the person was shown the job by another name"
+    );
+}
+
 /// The check reads the content and the planner never does, whatever the person answers. A refusal
 /// tells the planner so rather than leaving it to guess, and nothing the check said goes to it.
 #[test]

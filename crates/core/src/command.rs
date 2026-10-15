@@ -359,16 +359,19 @@ pub struct Step {
 impl Step {
     /// The step as a person should read it before approving.
     ///
-    /// The resolved binary rather than the name, because that is what will run, and every argument
-    /// quoted so that no two argument lists can render alike.
+    /// The binary rather than the name, because that is what will run: the path it is started by
+    /// and the file that leads to, as [`Step::binary`] draws them. The file alone names another
+    /// program wherever a link leads to a multi-call binary: `cargo` served by rustup would read
+    /// `rustup test`. Every argument is quoted so that no two argument lists can render alike.
     pub fn display(&self) -> String {
-        self.render(&self.resolved.to_string_lossy())
+        self.render(&self.binary())
     }
 
     /// The file this step runs, after the path that starts it where that is another path.
     ///
     /// What a prompt shows under [`Step::as_written`], so the person answering sees both paths an
-    /// entry for the step is keyed on.
+    /// entry for the step is keyed on. It is also the program of [`Step::display`], so a result, a
+    /// job's line and a remembered line name the program as the prompt did.
     pub fn binary(&self) -> String {
         started_through(&self.started_as, &self.resolved)
     }
@@ -389,7 +392,7 @@ impl Step {
     /// [`Step::display`] with the arguments already rendered, for a caller whose arguments are not
     /// all text. The caller owns the quoting of what it passes.
     pub(crate) fn display_args(&self, args: Vec<String>) -> String {
-        self.render_args(&self.resolved.to_string_lossy(), args)
+        self.render_args(&self.binary(), args)
     }
 
     fn render_args(&self, program: &str, args: Vec<String>) -> String {
@@ -619,7 +622,7 @@ impl Plan {
             && self.stdin.is_none()
     }
 
-    /// The plan as a person should read it before approving.
+    /// The plan as a person should read it, in a prompt, in a result and in a job's line.
     ///
     /// Not the line. The line is shown beside this as context, and an endorsement binds here.
     pub fn display(&self) -> String {
@@ -1108,6 +1111,37 @@ mod tests {
         assert_eq!(
             shown,
             "/usr/bin/git commit -m 'two words' | /usr/bin/head -3"
+        );
+    }
+
+    /// A program started through a link is shown by the link and the file it leads to, as the
+    /// prompt shows it. The file alone names a different program: `cargo` served by rustup would
+    /// read `rustup test`, a command that does not exist.
+    #[test]
+    fn a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file() {
+        let mut cargo = step("cargo", &["test", "-p", "bravebot-core"]);
+        cargo.started_as = PathBuf::from("/home/me/.cargo/bin/cargo");
+        cargo.resolved = PathBuf::from("/home/me/.cargo/bin/rustup");
+        let shown = plan(Steps::Pipeline(vec![cargo, step("tail", &["-n", "5"])])).display();
+        assert_eq!(
+            shown,
+            "/home/me/.cargo/bin/cargo -> /home/me/.cargo/bin/rustup test -p bravebot-core \
+             | /usr/bin/tail -n 5"
+        );
+    }
+
+    /// The arrow separates a link from its file, so arguments that spell one cannot be drawn as
+    /// one: a person reading the first line could otherwise be reading the second.
+    #[test]
+    fn arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan() {
+        let mut link = step("b", &[]);
+        link.started_as = PathBuf::from("/work/a");
+        let mut spelled = step("a", &["->", "/usr/bin/b"]);
+        spelled.resolved = PathBuf::from("/work/a");
+        spelled.started_as = PathBuf::from("/work/a");
+        assert_ne!(
+            plan(Steps::Pipeline(vec![link])).display(),
+            plan(Steps::Pipeline(vec![spelled])).display()
         );
     }
 

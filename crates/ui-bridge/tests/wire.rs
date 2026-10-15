@@ -729,6 +729,11 @@ fn a_stage_started_through_a_link_sends_the_link() {
         value["stages"][0]["binary"],
         "/w/.venv/bin/python -> /usr/bin/python3.12"
     );
+    // The execution plan the desktop app shows names the program as the stage list does.
+    assert_eq!(
+        value["plan"],
+        "/w/.venv/bin/python -> /usr/bin/python3.12 -V"
+    );
     assert!(value["confinement"].is_null());
     // The sentence for that null is the catalog's, not one a front end copies.
     assert_eq!(value["notSandboxed"], bravebot_approval::not_sandboxed());
