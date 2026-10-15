@@ -29,20 +29,14 @@
 // Run it the way `drive-bot-turn.mjs` is run. It costs two turns. Like the other drivers it
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
-
-const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const { check, problems } = checker()
 
 const naming = await launch()
 const userData = await naming.evaluate(({ app }) => app.getPath('userData'))

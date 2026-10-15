@@ -11,17 +11,13 @@
 //
 // Costs nothing: it never sends a prompt. It does drive the fold commands, which share the
 // persisted layout with every other driver, so it puts the columns back before it leaves.
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { checker, launch } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 // The left column has two tabs and remembers which was last open, so a run after somebody left it
 // on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
@@ -43,7 +39,7 @@ async function showSessions(page) {
   await page.waitForTimeout(250)
 }
 
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const app = await launch()
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 await showSessions(page)

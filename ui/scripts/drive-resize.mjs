@@ -3,16 +3,12 @@
 // The positive case is easy to eyeball; the interesting assertions are the limits. A
 // divider that can be dragged past its clamp, or that forgets its position on relaunch,
 // looks fine in a screenshot and is wrong.
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { mkdirSync } from 'node:fs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 const widths = async (page) => ({
   left: (await page.locator('.sessions').boundingBox()).width,
@@ -31,8 +27,6 @@ async function drag(page, which, dx) {
   await page.mouse.up()
   await page.waitForTimeout(150)
 }
-
-const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
 
 let app = await launch()
 let page = await app.firstWindow()

@@ -1,16 +1,12 @@
 // That System / Light / Dark can be chosen and remembered.
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const shots = '/tmp/bravebot-ui'
 mkdirSync(shots, { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 const exportHtmlPath = join(process.cwd(), 'out/renderer/export.html')
 const exportHtml = readFileSync(exportHtmlPath, 'utf8')
@@ -23,7 +19,7 @@ if (exportScript) {
 }
 check(/\bcolor-scheme:\s*light\b/.test(readFileSync(join(process.cwd(), 'src/renderer/export.css'), 'utf8')), 'export pins native controls to light')
 
-const naming = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const naming = await launch()
 const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
 await naming.close()
 
@@ -62,7 +58,7 @@ process.on('exit', restore)
 putTheme(undefined)
 
 const open = async () => {
-  const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+  const app = await launch()
   const page = await app.firstWindow({ timeout: 40000 })
   await page.waitForSelector('.app', { timeout: 40000 })
   return { app, page }
