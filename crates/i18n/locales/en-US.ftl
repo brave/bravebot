@@ -2958,9 +2958,6 @@ goal-spent =
     the goal has sent the work back { $rounds } times without being met, and has stopped rather
     than carrying on
 goal-failed = the goal could not be checked ({ $problem }), so it is cleared
-goal-uninterruptible =
-    the check already in flight is one request and cannot be stopped part way, but nothing
-    more will be sent
 goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
@@ -3146,7 +3143,7 @@ command-reported-a-failure = the command reported a failure
 
 ## Shortening a long conversation
 
-compact-uninterruptible = summarising cannot be interrupted; it takes one request
+compact-stopped = summarising was stopped; the conversation is as it was
 compact-ended-unexpectedly = the summary ended unexpectedly
 compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
@@ -3158,7 +3155,7 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 ## Asking something beside the work
 
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
-btw-uninterruptible = the question cannot be interrupted; it takes one request
+btw-stopped = the question was stopped
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
 
@@ -3167,6 +3164,7 @@ handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record
 handoff-ready = the brief is in the box. Edit it, then Enter starts a new session from it, or Esc drops it. The file decisions and permissions given here do not carry over
 handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
 handoff-failed = the brief could not be written: { $problem }
+handoff-stopped = the brief was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are

@@ -805,6 +805,9 @@ pub(crate) fn delegated(
 /// anybody anything: the whole of it is one model call over an exchange the planner has already
 /// seen. So [`Capability::WebFetch`] is granted, because reaching the model is egress and the
 /// gate asks, and nothing else is, because there is nothing else to do.
+///
+/// `cancel` is the person's stop. The request is walked away from when it lands, the error says it
+/// was cancelled, and the conversation is left as it was.
 #[allow(clippy::too_many_arguments)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
@@ -815,6 +818,7 @@ pub fn compact<S: Sink, R: Reporter>(
     sink: &mut S,
     trust: TrustStore,
     focus: Option<&str>,
+    cancel: &Cancel,
 ) -> Result<Option<crate::compact::Compacted>, crate::compact::CompactError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "summarise the conversation so far");
@@ -831,11 +835,10 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter.phase(Phase::Compacting);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    // `/compact` is one request with no round for a stop to land between, so there is nothing
-    // here that a stop could reach.
     let mut chat = crate::processor::Chat::new(config, egress)
         .spending(subscription.as_mut())
-        .on(model);
+        .on(model)
+        .stoppable_by(cancel);
 
     // Zero: `/compact` is asked for between rounds rather than during one, so there is no round
     // for it to have landed in the middle of.
@@ -956,6 +959,8 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 /// The integrity is inherited, because a fresh policy is not a fresh context: the answer is a
 /// function of everything the exchange has held, and it is that inheritance that decides whether
 /// the answer may be written down.
+///
+/// `cancel` is the person's stop, and it reaches the request as it does a summary's.
 #[allow(clippy::too_many_arguments)]
 pub fn aside<S: Sink, R: Reporter>(
     config: &Config,
@@ -966,6 +971,7 @@ pub fn aside<S: Sink, R: Reporter>(
     sink: &mut S,
     trust: TrustStore,
     watching: impl FnMut(&str),
+    cancel: &Cancel,
 ) -> Result<crate::aside::Answered, crate::aside::AsideError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "answer a question asked beside the work");
@@ -976,11 +982,10 @@ pub fn aside<S: Sink, R: Reporter>(
         .resuming(question.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    // One request with no round for a stop to land between, so there is nothing here that a
-    // stop could reach.
     let mut chat = crate::processor::Chat::new(config, egress)
         .spending(subscription.as_mut())
-        .on(model);
+        .on(model)
+        .stoppable_by(cancel);
 
     let done = crate::aside::ask(&mut policy, &mut chat, question, watching);
     policy.finish();
@@ -1002,6 +1007,9 @@ pub fn aside<S: Sink, R: Reporter>(
 /// The integrity is inherited, because a fresh policy is not a fresh context. Here that decides
 /// more than whether the verdict may be written down: it decides whether the driver may read the
 /// verdict at all, since acting on one is a branch.
+///
+/// `cancel` is the person's stop, and it reaches the request as it does a summary's.
+#[allow(clippy::too_many_arguments)]
 pub fn goal<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1010,6 +1018,7 @@ pub fn goal<S: Sink, R: Reporter>(
     reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
+    cancel: &Cancel,
 ) -> Result<crate::goal::Assessed, crate::goal::GoalError> {
     let mut routing = Routing::new();
     routing.insert_trusted(
@@ -1023,11 +1032,10 @@ pub fn goal<S: Sink, R: Reporter>(
         .resuming(check.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    // One request with no round for a stop to land between, so there is nothing here that a
-    // stop could reach.
     let mut chat = crate::processor::Chat::new(config, egress)
         .spending(subscription.as_mut())
-        .on(model);
+        .on(model)
+        .stoppable_by(cancel);
 
     let done = crate::goal::assess(&mut policy, &mut chat, check);
     policy.finish();

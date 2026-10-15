@@ -248,10 +248,11 @@ A cancelled prompt drops out of the history you walk back through even where its
 stays: see [Sessions](sessions.md).
 
 Escape and Ctrl-C reach an open mode before they reach anything else. A scroller, a delegate's view or
-a prompt search closes on that press, and the press that reaches the turn is the next one. A summary,
-an [aside](#watching-a-delegate-reading-a-command-and-asking-something-aside) and the check a goal is
-judged by are each a single request with no round for a stop to land between, so nothing stops those
-and Ctrl-C leaves once one comes back.
+a prompt search closes on that press, and the press that reaches the turn is the next one. Either key
+also stops a summary, an
+[aside](#watching-a-delegate-reading-a-command-and-asking-something-aside) or the check a goal is
+judged by: the request is dropped and the conversation stays as it was. Stopping a goal check takes
+the goal off too.
 
 ## Sending while a turn runs
 

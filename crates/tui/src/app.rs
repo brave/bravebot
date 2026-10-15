@@ -3281,6 +3281,7 @@ fn suggest_next(
                         &mut sink,
                         trust,
                         |_written| {},
+                        &Cancel::new(),
                     )
                     .ok()
                 });
@@ -4574,21 +4575,20 @@ fn shell_result(
     }
 }
 
-/// Interpret a key press while a single request is out.
+/// Interpret a key press while a summary or an aside is out.
 ///
-/// A summary and an aside are one request each, with no round for a stop to land between, so
-/// nothing here can stop the work: Ctrl-C leaves, since leaving is all the press can mean, and
-/// Escape says so in the words the caller passes. Said once, because a key that does nothing and
-/// says nothing reads as the interface having hung at the one moment it is working hardest.
+/// Both stop keys stop the request (INPUT-4), the way they stop a turn: it is walked away from, the
+/// conversation stays as it was, and the session stays open. Leaving is the press made with nothing
+/// running, so no press here leaves.
 ///
 /// Both keys are read against [`stops_the_turn`], as the turn's own loop reads them, so a scroller,
 /// a view or a search opened while the request was out answers the press and the press that reaches
 /// the request behind it is the next one. Without that, the key that closes those modes everywhere
-/// else ended the session from inside them.
-fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) {
+/// else stopped the request from inside them.
+fn one_request_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     // Presses only, for the reason the outer loop ignores releases, and for one this function
     // brings with it: the press that closes a mode leaves nothing open, so its own release would
-    // read as a second press with the way out ahead of it and end the session on the way up.
+    // read as a second press and stop a request the first never reached.
     if key.kind == KeyEventKind::Release {
         return;
     }
@@ -4599,15 +4599,7 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
         return;
     }
 
-    // The press is answered here rather than by the ladder that would have taken it down, so this
-    // does: as in [`stop_what_is_running`], the offer to leave lives for one press.
-    session.cleared_by_interrupt = false;
-
-    if is_ctrl_c(key) {
-        session.quit();
-    } else {
-        session.note_once(uninterruptible);
-    }
+    stop_what_is_running(session, cancel);
 }
 
 /// What a compaction won back, in tokens.
@@ -4635,9 +4627,9 @@ fn room_won_back(usage: &bravebot_aichat::protocol::Usage) -> u64 {
 /// nothing lands in the workspace. What is left is a model call that takes as long as a round, and
 /// a loop that keeps the screen alive while it does.
 ///
-/// Not cancellable, deliberately. The call is one round with nothing to interrupt part way, and a
-/// cancel would leave the same conversation it started with, which is what happens anyway if it
-/// fails.
+/// Either stop key walks away from the request and leaves the conversation as it was, as a failed
+/// summary does (INPUT-4). A summary that has already come back is kept: the stop landed too late
+/// to be one.
 fn compact_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -4656,6 +4648,8 @@ fn compact_animated(
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
     let focus = (!focus.is_empty()).then(|| focus.to_string());
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
 
     session.begin_aside();
 
@@ -4675,6 +4669,7 @@ fn compact_animated(
             &mut sink,
             worker_trust,
             focus.as_deref(),
+            &worker_cancel,
         )
         .map_err(|error| error.category().name().to_string());
         (done, conversation, sink)
@@ -4687,9 +4682,9 @@ fn compact_animated(
         // frame's waiting is done here for the reason the turn loop does it here: a key press
         // has to wake the loop rather than queue behind it.
         pump_terminal(terminal, session, |session, key| {
-            // The one place Ctrl-C still leaves with something in flight, and what a mode
-            // standing over the session takes ahead of it, are both that function's.
-            one_request_key(session, key, t!(compact_uninterruptible));
+            // Which of a mode standing over the session and the request a stop key is asking
+            // about is that function's to say.
+            one_request_key(session, key, &cancel);
         })?;
 
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
@@ -4715,10 +4710,27 @@ fn compact_animated(
         )
     });
 
-    match &done {
+    compact_ended(session, config.context_budget, &done, cancel.is_cancelled());
+
+    Ok((conversation, sink.events().to_vec()))
+}
+
+/// Take what a summary came back with, and say what the person needs to know of it.
+///
+/// `stopped` is whether a stop key was pressed, and it only matters to a summary that did not
+/// come back: one that did is kept, the stop having landed too late to be one. Apart from
+/// [`compact_animated`], which needs a terminal and a backend to reach, so that what the end does
+/// to the session is somewhere a test can call.
+fn compact_ended(
+    session: &mut Session,
+    budget: u64,
+    done: &Result<Option<bravebot_agent::compact::Compacted>, String>,
+    stopped: bool,
+) {
+    match done {
         Ok(Some(summary)) => {
             session.end_aside(summary.usage.total());
-            session.compacted(room_won_back(&summary.usage), config.context_budget);
+            session.compacted(room_won_back(&summary.usage), budget);
             session.note(t!(
                 compact_done,
                 summarised = summary.summarised,
@@ -4729,13 +4741,15 @@ fn compact_animated(
             session.end_aside(0);
             session.note(t!(compact_nothing_to_do));
         }
+        Err(_) if stopped => {
+            session.end_aside(0);
+            session.note(t!(compact_stopped));
+        }
         Err(message) => {
             session.end_aside(0);
             session.note(t!(compact_failed, problem = message));
         }
     }
-
-    Ok((conversation, sink.events().to_vec()))
 }
 
 /// Ask one question beside the work, redrawing while it is answered.
@@ -4783,18 +4797,24 @@ fn aside_animated(
     )?;
     match done {
         Ok(answered) => aside_answered(session, asked, answered),
-        Err(message) => {
-            session.end_aside(0);
-            session.note(t!(btw_failed, problem = message));
-        }
+        Err(unanswered) => aside_unanswered(session, unanswered),
     }
     Ok(events)
+}
+
+/// Why a request asked beside the work brought nothing back.
+enum Unanswered {
+    /// The person stopped it (INPUT-4).
+    Stopped,
+    /// It failed, in a sentence a person can be told.
+    Failed(String),
 }
 
 /// The request an aside and a handoff's brief share, drawn while it is answered.
 ///
 /// Hands back what came of it and leaves what that means to the caller: a question's answer is a
-/// row beside the transcript, and a brief goes into the box. `handoff` is the goal the brief is for,
+/// row beside the transcript, and a brief goes into the box. A stop key walks away from the request
+/// and comes back as [`Unanswered::Stopped`] (INPUT-4). `handoff` is the goal the brief is for,
 /// which makes the request the brief's and not a question or a recap.
 #[allow(clippy::too_many_arguments)]
 fn ask_animated(
@@ -4810,7 +4830,7 @@ fn ask_animated(
     attached: &[crate::state::Attached],
     workspace: &Workspace,
 ) -> io::Result<(
-    Result<bravebot_agent::aside::Answered, String>,
+    Result<bravebot_agent::aside::Answered, Unanswered>,
     Vec<Stamped>,
 )> {
     // For the reason a turn and a summary both do it: this is one request to the same backend,
@@ -4823,6 +4843,8 @@ fn ask_animated(
     let mut worker_trust = trust.clone();
     let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again, so there
     // is no path by which an aside could add anything to it.
@@ -4899,6 +4921,7 @@ fn ask_animated(
             // this side could draw it as it arrives is the tail the turn's own half-written reply
             // fills, which is among the turn's own lines.
             |_written| {},
+            &worker_cancel,
         )
         .map_err(|e| e.to_string());
         (done, sink, Some(worker_trust))
@@ -4912,7 +4935,7 @@ fn ask_animated(
         // rather than queueing behind the worker.
         pump_terminal(terminal, session, |session, key| {
             // The same shape as a summary's keys, and the same function reads them.
-            one_request_key(session, key, t!(btw_uninterruptible));
+            one_request_key(session, key, &cancel);
         })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
@@ -4940,6 +4963,14 @@ fn ask_animated(
     if let Some(vouched) = vouched {
         *trust = vouched;
     }
+
+    let done = done.map_err(|message| {
+        if cancel.is_cancelled() {
+            Unanswered::Stopped
+        } else {
+            Unanswered::Failed(message)
+        }
+    });
 
     Ok((done, sink.events().to_vec()))
 }
@@ -4970,7 +5001,7 @@ fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static 
 fn handoff_answered(
     session: &mut Session,
     goal: &str,
-    done: Result<bravebot_agent::aside::Answered, String>,
+    done: Result<bravebot_agent::aside::Answered, Unanswered>,
 ) {
     match done {
         Ok(answered) if answered.kept.is_some() => {
@@ -4985,10 +5016,25 @@ fn handoff_answered(
             session.end_aside(answered.usage.total());
             session.note(t!(handoff_untrusted));
         }
-        Err(message) => {
+        Err(Unanswered::Stopped) => {
+            session.end_aside(0);
+            session.note(t!(handoff_stopped));
+        }
+        Err(Unanswered::Failed(message)) => {
             session.end_aside(0);
             session.note(t!(handoff_failed, problem = message));
         }
+    }
+}
+
+/// Take what a question asked beside the work came back without.
+///
+/// Apart from [`aside_animated`] for the reason [`aside_answered`] is.
+fn aside_unanswered(session: &mut Session, why: Unanswered) {
+    session.end_aside(0);
+    match why {
+        Unanswered::Stopped => session.note(t!(btw_stopped)),
+        Unanswered::Failed(message) => session.note(t!(btw_failed, problem = message)),
     }
 }
 
@@ -5331,12 +5377,11 @@ fn was_stopped(
 /// the likelier of the two to be open: nothing closes a view when a turn ends, so one opened while
 /// the turn ran is still standing over the session when the goal goes to the judge.
 ///
-/// Past that, both keys mean stop and there is something here to stop. The request in flight is one
-/// round with nothing to cancel between, but the goal behind it is the thing a person watching this
-/// actually wants off: without that, the key pressed at the ninth round would leave the session
-/// rather than end the goal, and the tenth would go out anyway. With the goal already off Ctrl-C
-/// means what it means everywhere else, and Escape has nothing left to ask for.
-fn goal_check_key(session: &mut Session, key: KeyEvent) {
+/// Past that, both keys stop the check and the goal behind it with it (INPUT-4, GOAL-10). The goal
+/// is the thing a person watching this actually wants off: without that, the key pressed at the
+/// ninth round would stop only the request and the tenth would go out anyway. With the goal
+/// already off there is only the request left to stop, and no press here leaves.
+fn goal_check_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     // Presses only, as in [`one_request_key`]: the release of the press that closed a mode arrives
     // with nothing open and would clear the goal the press was never about.
     if key.kind == KeyEventKind::Release {
@@ -5349,19 +5394,10 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
         return;
     }
 
-    // For the reason [`one_request_key`] does it: the press is answered here, and the offer to
-    // leave lives for one press wherever that press lands.
-    session.cleared_by_interrupt = false;
-    // The press that stops a turn is not a character, so an instruction still waiting for a key
-    // does not survive it (INPUT-24), as in [`stop_what_is_running`].
-    session.abandon_half_typed();
-
     if session.goal().is_some() {
         session.clear_goal();
-        session.note_once(t!(goal_uninterruptible));
-    } else if is_ctrl_c(key) {
-        session.quit();
     }
+    stop_what_is_running(session, cancel);
 }
 
 /// Whether a queued command line ends the goal, or sets, pauses or clears one: `/exit`, `/clear`
@@ -5446,6 +5482,8 @@ fn goal_check_animated(
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again.
     let check = bravebot_agent::goal::Check::of(conversation, &condition);
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
 
     session.begin_aside();
 
@@ -5463,6 +5501,7 @@ fn goal_check_animated(
             &mut reporter,
             &mut sink,
             worker_trust,
+            &worker_cancel,
         )
         .map_err(|e| e.to_string());
         (done, sink)
@@ -5475,9 +5514,9 @@ fn goal_check_animated(
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
         pump_terminal(terminal, session, |session, key| {
-            // Which of the goal, a mode over the session, and the session itself a stop
-            // key is asking about is that function's to say.
-            goal_check_key(session, key);
+            // Which of the goal, a mode over the session, and the request a stop key is asking
+            // about is that function's to say.
+            goal_check_key(session, key, &cancel);
         })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
@@ -5495,11 +5534,31 @@ fn goal_check_animated(
         .join()
         .unwrap_or_else(|_| (Err(t!(goal_ended_unexpectedly).to_string()), Trail::new()));
 
-    session.end_aside(done.as_ref().map_or(0, |assessed| assessed.usage.total()));
     Ok((
-        session.goal_judged(done.map(|assessed| assessed.verdict)),
+        goal_checked(session, done, cancel.is_cancelled()),
         sink.events().to_vec(),
     ))
+}
+
+/// Take what the goal check came back with, and give back the prompt that carries the work on
+/// where there is one.
+///
+/// A check that failed after a stop key was pressed says nothing about the goal: the key took it
+/// off, so the failure is the request being walked away from and is neither reported nor held
+/// against anything. One that failed with no stop pressed is the goal's own failure, and a verdict
+/// that arrives anyway is [`Session::goal_judged`]'s to drop. Apart from [`goal_check_animated`],
+/// which needs a terminal and a backend to reach, so that what the end does to the session is
+/// somewhere a test can call.
+fn goal_checked(
+    session: &mut Session,
+    done: Result<bravebot_agent::goal::Assessed, String>,
+    stopped: bool,
+) -> Option<String> {
+    session.end_aside(done.as_ref().map_or(0, |assessed| assessed.usage.total()));
+    match done {
+        Err(_) if stopped => None,
+        done => session.goal_judged(done.map(|assessed| assessed.verdict)),
+    }
 }
 
 /// The record of lines remembered past a session for this workspace, and what it holds now.
@@ -8388,38 +8447,37 @@ mod tests {
 
         /// A summary and an aside read the stop keys themselves rather than through the turn's
         /// loop, and the view is open across them: it is opened mid-turn and nothing closes it when
-        /// the turn ends. Answered by the request instead, Ctrl-C ended the session from inside the
-        /// view and Escape wrote a notice into the transcript behind it.
+        /// the turn ends. Answered by the request instead, either key stopped the request from
+        /// inside the view.
         #[test]
         fn the_view_answers_the_stop_keys_before_a_single_request_does() {
             for stopping in [ctrl('c'), key(KeyCode::Esc)] {
                 let mut session = Session::new("kernel-enforced");
                 spawn(&mut session, "checker", "run the build");
                 session.begin_aside();
+                let cancel = Cancel::new();
 
-                one_request_key(&mut session, ctrl('l'), "nothing to interrupt");
+                one_request_key(&mut session, ctrl('l'), &cancel);
                 assert!(session.watching().is_some(), "the view did not open");
-                let said = session.transcript.len();
 
-                one_request_key(&mut session, stopping, "nothing to interrupt");
+                one_request_key(&mut session, stopping, &cancel);
 
                 assert!(
                     session.watching().is_none(),
                     "{stopping:?} left the view open"
                 );
                 assert!(!session.is_quitting(), "{stopping:?} ended the session");
-                assert_eq!(
-                    session.transcript.len(),
-                    said,
-                    "{stopping:?} reported the request from inside the view"
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{stopping:?} stopped the request from inside the view"
                 );
             }
         }
 
         /// The goal check goes out as a turn ends, which is exactly when a view opened during that
         /// turn is still standing over the session, so it is the loop most likely to be asked one
-        /// of these keys with the view open. The goal is not what the press is about there, and
-        /// Ctrl-C is not a request to leave.
+        /// of these keys with the view open. The goal and the check are not what the press is about
+        /// there.
         #[test]
         fn the_view_answers_the_stop_keys_before_the_goal_check_does() {
             for stopping in [ctrl('c'), key(KeyCode::Esc)] {
@@ -8427,12 +8485,13 @@ mod tests {
                 spawn(&mut session, "checker", "run the build");
                 session.begin_aside();
                 session.start_goal("cargo test exits 0".to_string());
+                let cancel = Cancel::new();
 
-                goal_check_key(&mut session, ctrl('l'));
+                goal_check_key(&mut session, ctrl('l'), &cancel);
                 assert!(session.watching().is_some(), "the view did not open");
                 let said = session.transcript.len();
 
-                goal_check_key(&mut session, stopping);
+                goal_check_key(&mut session, stopping, &cancel);
 
                 assert!(
                     session.watching().is_none(),
@@ -8441,6 +8500,10 @@ mod tests {
                 assert!(
                     session.goal().is_some(),
                     "{stopping:?} cleared the goal from inside the view"
+                );
+                assert!(
+                    !cancel.is_cancelled(),
+                    "{stopping:?} stopped the check from inside the view"
                 );
                 assert!(!session.is_quitting(), "{stopping:?} ended the session");
                 assert_eq!(
@@ -8453,32 +8516,42 @@ mod tests {
 
         /// Reading the mode first is what makes a release worth telling from a press here: the press
         /// closes the view, so the release of that same chord arrives with nothing open and reaches
-        /// the request behind it. Handled as a press it ends the session, or takes the goal off, on
-        /// the way up from the press that did neither.
+        /// the request behind it. Handled as a press it stops the request, or takes the goal off,
+        /// on the way up from the press that did neither.
         #[test]
         fn the_release_of_the_press_that_closed_the_view_is_not_a_second_press() {
             let mut session = Session::new("kernel-enforced");
             spawn(&mut session, "checker", "run the build");
             session.begin_aside();
+            let cancel = Cancel::new();
 
-            one_request_key(&mut session, ctrl('l'), "nothing to interrupt");
-            one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
+            one_request_key(&mut session, ctrl('l'), &cancel);
+            one_request_key(&mut session, ctrl('c'), &cancel);
             assert!(session.watching().is_none(), "the view did not close");
 
-            one_request_key(&mut session, released(ctrl('c')), "nothing to interrupt");
+            one_request_key(&mut session, released(ctrl('c')), &cancel);
+            assert!(
+                !cancel.is_cancelled(),
+                "the release stopped the request the press never reached"
+            );
             assert!(!session.is_quitting(), "the release ended the session");
 
             let mut session = Session::new("kernel-enforced");
             spawn(&mut session, "checker", "run the build");
             session.begin_aside();
             session.start_goal("cargo test exits 0".to_string());
+            let cancel = Cancel::new();
 
-            goal_check_key(&mut session, ctrl('l'));
-            goal_check_key(&mut session, ctrl('c'));
+            goal_check_key(&mut session, ctrl('l'), &cancel);
+            goal_check_key(&mut session, ctrl('c'), &cancel);
             assert!(session.watching().is_none(), "the view did not close");
 
-            goal_check_key(&mut session, released(ctrl('c')));
+            goal_check_key(&mut session, released(ctrl('c')), &cancel);
             assert!(session.goal().is_some(), "the release took the goal off");
+            assert!(
+                !cancel.is_cancelled(),
+                "the release stopped the check the press never reached"
+            );
             assert!(!session.is_quitting(), "the release ended the session");
         }
 
@@ -11778,37 +11851,46 @@ mod tests {
     }
 
     /// A summary, an aside and a goal check read the stop keys against the same gate as a turn, so
-    /// from INSERT Escape is the box's there too. The notice that nothing can be stopped, and the
-    /// goal coming off, wait for the Escape that is not.
+    /// from INSERT Escape is the box's there too. The request stopping, and the goal coming off,
+    /// wait for the Escape that is not.
     #[test]
     fn escape_from_insert_mode_reaches_the_box_during_a_single_request() {
         let mut session = having_sent(&["first question"]);
         session.choose_editing(crate::vim::Editing::Vi);
         session.begin_aside();
-        let said = session.transcript.len();
+        let cancel = Cancel::new();
 
-        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        one_request_key(&mut session, key(KeyCode::Esc), &cancel);
         assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
-        assert_eq!(session.transcript.len(), said, "escape from INSERT said so");
+        assert!(!cancel.is_cancelled(), "escape from INSERT stopped it");
 
-        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
-        assert_eq!(session.transcript.len(), said + 1);
+        one_request_key(&mut session, key(KeyCode::Esc), &cancel);
+        assert!(cancel.is_cancelled(), "escape in NORMAL did not stop it");
 
         let mut session = having_sent(&["first question"]);
         session.choose_editing(crate::vim::Editing::Vi);
         session.begin_aside();
         session.start_goal("cargo test exits 0".to_string());
+        let cancel = Cancel::new();
 
-        goal_check_key(&mut session, key(KeyCode::Esc));
+        goal_check_key(&mut session, key(KeyCode::Esc), &cancel);
         assert!(
             session.goal().is_some(),
             "escape from INSERT took the goal off"
         );
+        assert!(
+            !cancel.is_cancelled(),
+            "escape from INSERT stopped the check"
+        );
 
-        goal_check_key(&mut session, key(KeyCode::Esc));
+        goal_check_key(&mut session, key(KeyCode::Esc), &cancel);
         assert!(
             session.goal().is_none(),
             "escape in NORMAL left the goal armed"
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "escape in NORMAL did not stop the check"
         );
     }
 
@@ -11940,12 +12022,13 @@ mod tests {
                 if goal {
                     session.start_goal("cargo test exits 0".to_string());
                 }
+                let cancel = Cancel::new();
                 // Escape leaves INSERT, and `d` then waits for a motion.
-                goal_check_key(&mut session, key(KeyCode::Esc));
-                goal_check_key(&mut session, key(KeyCode::Char('d')));
+                goal_check_key(&mut session, key(KeyCode::Esc), &cancel);
+                goal_check_key(&mut session, key(KeyCode::Char('d')), &cancel);
                 assert_eq!(session.half_typed(), Some("d"), "{stopping:?}");
 
-                goal_check_key(&mut session, stopping);
+                goal_check_key(&mut session, stopping, &cancel);
 
                 assert_eq!(
                     session.half_typed(),
@@ -15105,7 +15188,11 @@ mod tests {
 
         let mut session = Session::new("none");
         session.begin_aside();
-        handoff_answered(&mut session, "port the parser", Err("offline".to_string()));
+        handoff_answered(
+            &mut session,
+            "port the parser",
+            Err(Unanswered::Failed("offline".to_string())),
+        );
         assert!(!session.handoff_pending());
         assert!(session.input().is_empty());
         assert_eq!(last_note(&session), t!(handoff_failed, problem = "offline"));
@@ -15304,9 +15391,9 @@ mod tests {
         );
     }
 
-    /// A person who has just typed /compact will reach for one of these, and nothing here can
-    /// stop the one request a summary takes. Both are answered rather than swallowed: a key that
-    /// does nothing and says nothing reads as an interface that has hung.
+    /// A person who has just typed /compact will reach for one of these, and both are answered
+    /// rather than swallowed: a key that does nothing and says nothing reads as an interface that
+    /// has hung.
     #[test]
     fn a_key_that_would_stop_a_turn_is_answered_during_a_summary() {
         assert!(wants_cancel(key(KeyCode::Esc)));
@@ -18868,10 +18955,10 @@ mod tests {
         );
     }
 
-    /// A summary and an aside answer the press themselves as well, and nothing there can be
-    /// stopped, so the offer would otherwise still be up after a press that only said so. One of
-    /// those requests can be out with an offer standing over it for the reason a turn can: the
-    /// exchange that led to it was begun by a tick rather than by a key.
+    /// A summary and an aside answer the press themselves as well, so the offer would otherwise
+    /// still be up after the press that stopped them. One of those requests can be out with an
+    /// offer standing over it for the reason a turn can: the exchange that led to it was begun by a
+    /// tick rather than by a key.
     #[test]
     fn stopping_a_single_request_takes_the_offer_to_leave_down() {
         let mut session = having_sent(&["first question"]);
@@ -18880,8 +18967,10 @@ mod tests {
         assert!(session.cleared_by_interrupt);
 
         session.begin_aside();
-        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        let cancel = Cancel::new();
+        one_request_key(&mut session, key(KeyCode::Esc), &cancel);
 
+        assert!(cancel.is_cancelled(), "the press did not stop the request");
         assert!(
             !session.cleared_by_interrupt,
             "the hint outstayed the press the request answered"
@@ -18889,8 +18978,8 @@ mod tests {
         assert!(!session.is_quitting(), "escape ended the session");
     }
 
-    /// The goal check is the third of those, and the press there takes the goal off rather than
-    /// leaving, so what the hint says about the next press is wrong for as long as it stands.
+    /// The goal check is the third of those, and the press there takes the goal off and stops the
+    /// check, so what the hint says about the next press is wrong for as long as it stands.
     #[test]
     fn stopping_a_goal_check_takes_the_offer_to_leave_down() {
         let mut session = having_sent(&["first question"]);
@@ -18900,9 +18989,11 @@ mod tests {
 
         session.begin_aside();
         session.start_goal("cargo test exits 0".to_string());
-        goal_check_key(&mut session, key(KeyCode::Esc));
+        let cancel = Cancel::new();
+        goal_check_key(&mut session, key(KeyCode::Esc), &cancel);
 
         assert!(session.goal().is_none(), "escape left the goal armed");
+        assert!(cancel.is_cancelled(), "escape did not stop the check");
         assert!(
             !session.cleared_by_interrupt,
             "the hint outstayed the press the goal check answered"
@@ -21783,49 +21874,47 @@ mod tests {
     }
 
     /// A summary and an aside answer the stop keys themselves, so the search opened while one of
-    /// them was out has to be asked before the request is: answered by the request instead, Escape
-    /// reported work that cannot be interrupted and Ctrl-C ended the session, and the search a
-    /// person was trying to leave was still open behind both.
+    /// them was out has to be asked before the request is: answered by the request instead, either
+    /// key stopped it and the search a person was trying to leave was still open behind.
     #[test]
     fn the_search_answers_the_stop_keys_before_a_single_request_does() {
         for stopping in [ctrl('c'), key(KeyCode::Esc)] {
             let mut session = having_sent(&["first question"]);
             session.begin_aside();
+            let cancel = Cancel::new();
 
-            one_request_key(&mut session, ctrl('r'), "nothing to interrupt");
+            one_request_key(&mut session, ctrl('r'), &cancel);
             assert!(session.searching_history(), "the search did not open");
-            let said = session.transcript.len();
 
-            one_request_key(&mut session, stopping, "nothing to interrupt");
+            one_request_key(&mut session, stopping, &cancel);
 
             assert!(
                 !session.searching_history(),
                 "{stopping:?} left the search open"
             );
             assert!(!session.is_quitting(), "{stopping:?} ended the session");
-            assert_eq!(
-                session.transcript.len(),
-                said,
-                "{stopping:?} reported the request from inside the search"
+            assert!(
+                !cancel.is_cancelled(),
+                "{stopping:?} stopped the request from inside the search"
             );
         }
     }
 
     /// The goal check is one request too, and the goal behind it is what its stop keys are for.
-    /// Neither key is about the goal while the search is open, and Ctrl-C there took the session
-    /// with it.
+    /// Neither key is about the goal or the check while the search is open.
     #[test]
     fn the_search_answers_the_stop_keys_before_the_goal_check_does() {
         for stopping in [ctrl('c'), key(KeyCode::Esc)] {
             let mut session = having_sent(&["first question"]);
             session.begin_aside();
             session.start_goal("cargo test exits 0".to_string());
+            let cancel = Cancel::new();
 
-            goal_check_key(&mut session, ctrl('r'));
+            goal_check_key(&mut session, ctrl('r'), &cancel);
             assert!(session.searching_history(), "the search did not open");
             let said = session.transcript.len();
 
-            goal_check_key(&mut session, stopping);
+            goal_check_key(&mut session, stopping, &cancel);
 
             assert!(
                 !session.searching_history(),
@@ -21834,6 +21923,10 @@ mod tests {
             assert!(
                 session.goal().is_some(),
                 "{stopping:?} cleared the goal from inside the search"
+            );
+            assert!(
+                !cancel.is_cancelled(),
+                "{stopping:?} stopped the check from inside the search"
             );
             assert!(!session.is_quitting(), "{stopping:?} ended the session");
             assert_eq!(
@@ -21844,51 +21937,109 @@ mod tests {
         }
     }
 
-    /// What the same keys mean with nothing standing over the request. There is no round for a stop
-    /// to land between, so Escape can only report that and Ctrl-C can only be about leaving. The
-    /// report is made once: pressing again is asking the same question, and answering it every time
-    /// fills the transcript with the news that nothing happened.
+    /// What the stop keys mean with nothing standing over the request: either one stops it, as it
+    /// stops a turn, and no press leaves however many are made. Leaving is the press made with
+    /// nothing running, and a person asking for the request to stop twice is not asking for the
+    /// session to end.
     #[test]
-    fn a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c() {
-        let mut session = having_sent(&["first question"]);
-        session.begin_aside();
-        let said = session.transcript.len();
+    fn a_stop_key_stops_a_summary_or_an_aside_and_never_leaves() {
+        for stopping in [ctrl('c'), key(KeyCode::Esc)] {
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+            let cancel = Cancel::new();
+            let said = session.transcript.len();
 
-        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+            one_request_key(&mut session, stopping, &cancel);
 
-        assert_eq!(
-            session.transcript.len(),
-            said + 1,
-            "escape said nothing about a request that cannot be stopped"
-        );
-        assert!(!session.is_quitting(), "escape ended the session");
+            assert!(cancel.is_cancelled(), "{stopping:?} did not stop it");
+            assert!(!session.is_quitting(), "{stopping:?} ended the session");
+            assert_eq!(
+                session.transcript.len(),
+                said,
+                "{stopping:?} wrote into the transcript before the request had ended"
+            );
 
-        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
-        assert_eq!(
-            session.transcript.len(),
-            said + 1,
-            "pressing again said it a second time"
-        );
-
-        one_request_key(&mut session, ctrl('c'), "nothing to interrupt");
-        assert!(session.is_quitting(), "ctrl-c did not leave");
+            one_request_key(&mut session, stopping, &cancel);
+            one_request_key(&mut session, stopping, &cancel);
+            assert!(
+                !session.is_quitting(),
+                "{stopping:?} pressed again ended the session"
+            );
+        }
     }
 
-    /// The goal check is one request as well, but there is something behind it worth stopping: the
-    /// goal that keeps putting turns out. Both keys take it off and say so, since a person pressing
-    /// either at the ninth round is asking for the tenth not to go. Only with the goal already off
-    /// does Ctrl-C mean leaving, and Escape has nothing left to ask for.
+    /// A request the person stopped says it was stopped. Reported as a failure it would read as the
+    /// model or the network having let them down, and silence would read as a press nobody heard.
+    /// The session is idle again either way, so the next prompt is not refused.
     #[test]
-    fn the_goal_check_takes_the_goal_off_before_ctrl_c_means_leaving() {
+    fn a_stopped_summary_question_or_brief_says_so_and_is_not_reported_as_a_failure() {
+        let mut session = having_sent(&["first question"]);
+
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &Err("offline".to_string()), true);
+        assert_eq!(last_note(&session), t!(compact_stopped));
+        assert_eq!(session.status, Status::Idle);
+
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &Err("offline".to_string()), false);
+        assert_eq!(last_note(&session), t!(compact_failed, problem = "offline"));
+
+        session.begin_aside();
+        aside_unanswered(&mut session, Unanswered::Stopped);
+        assert_eq!(last_note(&session), t!(btw_stopped));
+        assert_eq!(session.status, Status::Idle);
+
+        session.begin_aside();
+        aside_unanswered(&mut session, Unanswered::Failed("offline".to_string()));
+        assert_eq!(last_note(&session), t!(btw_failed, problem = "offline"));
+
+        session.begin_aside();
+        handoff_answered(&mut session, "port the parser", Err(Unanswered::Stopped));
+        assert_eq!(last_note(&session), t!(handoff_stopped));
+        assert_eq!(session.status, Status::Idle);
+        assert!(!session.handoff_pending(), "a stopped brief was offered");
+        assert!(session.input().is_empty());
+    }
+
+    /// A summary that came back is kept however late the stop landed: the worker has already
+    /// shortened the conversation, so reporting the request as stopped would leave a conversation
+    /// that is shorter than the screen says.
+    #[test]
+    fn a_summary_that_came_back_is_kept_though_a_stop_landed_with_it() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        let summary = bravebot_agent::compact::Compacted {
+            summarised: 4,
+            kept: 2,
+            model: "a-model".to_string(),
+            usage: Default::default(),
+        };
+
+        compact_ended(&mut session, 100_000, &Ok(Some(summary)), true);
+
+        assert_eq!(
+            last_note(&session),
+            t!(compact_done, summarised = 4, kept = 2)
+        );
+    }
+
+    /// The goal check is one request as well, and there is something behind it worth stopping: the
+    /// goal that keeps putting turns out. Both keys take it off, say so, and stop the check with
+    /// it, since a person pressing either at the ninth round is asking for the tenth not to go. No
+    /// press leaves, however many are made.
+    #[test]
+    fn a_stop_key_takes_the_goal_off_and_stops_the_check() {
         for stopping in [ctrl('c'), key(KeyCode::Esc)] {
             let mut session = having_sent(&["first question"]);
             session.begin_aside();
             session.start_goal("cargo test exits 0".to_string());
+            let cancel = Cancel::new();
             let said = session.transcript.len();
 
-            goal_check_key(&mut session, stopping);
+            goal_check_key(&mut session, stopping, &cancel);
 
             assert!(session.goal().is_none(), "{stopping:?} left the goal armed");
+            assert!(cancel.is_cancelled(), "{stopping:?} did not stop the check");
             let after = session.transcript[said..]
                 .iter()
                 .map(|entry| entry.text.as_str())
@@ -21898,31 +22049,102 @@ mod tests {
                 after.contains(t!(goal_cleared)),
                 "{stopping:?} took the goal off without saying so: {after}"
             );
-            assert!(
-                after.contains(t!(goal_uninterruptible)),
-                "{stopping:?} said nothing of the check still in flight: {after}"
-            );
             assert!(!session.is_quitting(), "{stopping:?} ended the session");
+
+            goal_check_key(&mut session, stopping, &cancel);
+            goal_check_key(&mut session, stopping, &cancel);
+            assert!(
+                !session.is_quitting(),
+                "{stopping:?} pressed again ended the session"
+            );
         }
 
         let mut session = having_sent(&["first question"]);
         session.begin_aside();
+        let cancel = Cancel::new();
         let said = session.transcript.len();
 
-        goal_check_key(&mut session, key(KeyCode::Esc));
+        goal_check_key(&mut session, key(KeyCode::Esc), &cancel);
 
+        assert!(
+            cancel.is_cancelled(),
+            "escape did not stop a check with no goal"
+        );
         assert_eq!(
             session.transcript.len(),
             said,
             "escape reported something with no goal to take off"
         );
-        assert!(!session.is_quitting(), "escape ended the session");
 
-        goal_check_key(&mut session, ctrl('c'));
+        for _ in 0..3 {
+            goal_check_key(&mut session, ctrl('c'), &cancel);
+        }
         assert!(
-            session.is_quitting(),
-            "ctrl-c did not leave with the goal already off"
+            !session.is_quitting(),
+            "ctrl-c left with the goal already off"
         );
+    }
+
+    /// A check the person stopped is the request being walked away from, and the key already took
+    /// the goal off, so reporting it as a check that failed would tell them the goal could not be
+    /// checked a moment after they cleared it. One that failed with no stop pressed is the goal's
+    /// own failure, and a verdict that crosses a stop on its way back is dropped.
+    #[test]
+    fn a_stopped_goal_check_is_not_reported_as_a_failure() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+        session.clear_goal();
+        let said = session.transcript.len();
+
+        let carried_on = goal_checked(&mut session, Err("offline".to_string()), true);
+
+        assert!(carried_on.is_none());
+        assert_eq!(session.status, Status::Idle);
+        assert_eq!(
+            session.transcript.len(),
+            said,
+            "the stopped check was reported: {}",
+            last_note(&session)
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+
+        let carried_on = goal_checked(&mut session, Err("offline".to_string()), false);
+
+        assert!(carried_on.is_none());
+        assert_eq!(
+            last_note(&session),
+            t!(goal_failed, problem = "offline"),
+            "a check that failed with no stop pressed was not reported"
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+        session.clear_goal();
+        let turns = session.turns;
+        let said = session.transcript.len();
+
+        let carried_on = goal_checked(
+            &mut session,
+            Ok(bravebot_agent::goal::Assessed {
+                verdict: bravebot_agent::goal::Verdict::NotMet {
+                    reason: "nothing above runs the tests".to_string(),
+                },
+                usage: Default::default(),
+            }),
+            true,
+        );
+
+        assert!(
+            carried_on.is_none(),
+            "a verdict after the stop sent work back"
+        );
+        assert_eq!(session.turns, turns);
+        assert_eq!(session.transcript.len(), said);
     }
 
     /// With nothing sent there is nothing to search, and a panel saying so is a mode a person then
