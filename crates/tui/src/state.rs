@@ -19409,6 +19409,33 @@ mod tests {
         s.input
     }
 
+    /// `;` and `,` are motions to an operator, the last jump again and the last jump the other way
+    /// round, so `d;` takes the stretch up to and including the next match. With no jump to repeat
+    /// the pair changes nothing and ends the wait.
+    #[test]
+    fn an_operator_takes_the_repeated_jump_as_its_stretch() {
+        assert_eq!(edited("a-b-c-d", 0, "f-d;"), "ac-d");
+        assert_eq!(edited("a-b-c-d", 5, "F-d;"), "a-c-d");
+        assert_eq!(edited("a-b-c-d", 3, "f-d,"), "a-b-d");
+        assert_eq!(edited("a-b-c-d", 0, "f-c;X"), "aXc-d");
+        assert_eq!(edited("a-b-c-d", 0, "d;"), "a-b-c-d");
+        assert_eq!(edited("a-b-c-d", 0, "d,x"), "-b-c-d");
+    }
+
+    /// `d,` goes the other way round for one stretch only: the jump a later `;` repeats is still the
+    /// one `f` made, so it goes forward rather than back.
+    #[test]
+    fn an_operator_taking_the_reversed_jump_leaves_the_jump_to_repeat_alone() {
+        assert_eq!(edited("a-b-c-d-e", 3, "f-d,;x"), "a-b-de");
+    }
+
+    /// `.` after `d,` measures the reversed jump again, and that must leave the jump to repeat
+    /// alone as the first `d,` did.
+    #[test]
+    fn repeating_an_operator_that_took_the_reversed_jump_leaves_the_jump_to_repeat_alone() {
+        assert_eq!(edited("a-b-c-d-e-f-g", 3, "f-d,.;x"), "a-de-f-g");
+    }
+
     /// A count in front of a motion is how many times over it is meant, and `0` stays the key for
     /// the first column: it continues a count that has begun and begins none of its own, so `10l`
     /// is ten characters rather than a jump to column zero and then one step.

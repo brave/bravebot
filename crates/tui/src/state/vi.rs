@@ -317,6 +317,22 @@ impl Session {
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
         if let Some(pending) = self.half_typed.take() {
+            // `;` and `,` after an operator are the repeated jump as a motion (INPUT-26), which is
+            // state the session holds and the pair of keys alone cannot name. With nothing to
+            // repeat the pair means nothing, as any other key that is not a motion does.
+            if let (crate::vim::Pending::Operate(operator), ';' | ',', Some(find)) =
+                (pending, c, self.last_find)
+            {
+                let repeated = if c == ';' { find } else { find.reversed() };
+                self.carry_out(crate::vim::Command::Change(
+                    operator,
+                    crate::vim::Extent::To(crate::vim::Motion::ToChar(repeated)),
+                ));
+                // Measuring the stretch recorded the jump as made, which for `,` is the reversed
+                // one: the jump to repeat stays the one the person made, as it does for a bare `,`.
+                self.last_find = Some(find);
+                return;
+            }
             self.carry_out(pending.then(c));
             return;
         }
@@ -1445,7 +1461,19 @@ impl Session {
                 count: recorded,
                 typed,
             } => {
+                // `d,` is recorded as the reversed jump, and measuring it again would record that
+                // jump as the one to repeat. A jump that is the reverse of the one held is that
+                // case, so the held one is put back, as it was when `d,` was typed.
+                let held = self.last_find;
+                let reversed_hold = matches!(
+                    (extent, held),
+                    (crate::vim::Extent::To(crate::vim::Motion::ToChar(f)), Some(h))
+                        if f == h.reversed()
+                );
                 self.change(operator, extent, count.or(recorded));
+                if reversed_hold {
+                    self.last_find = held;
+                }
                 self.type_again(&typed);
             }
             Change::Opened { opening, typed } => {
