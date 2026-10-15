@@ -1101,6 +1101,14 @@ pub struct Session {
     ///
     /// Mirrors `queued`, minus whatever the turn has already taken.
     pending: crate::remote_confirm::Interjections,
+    /// The resolved copies of the newest waiting prompts, kept out of `pending` while the turn in
+    /// flight must not take them.
+    ///
+    /// Where Ctrl-Enter began a turn for the prompts it hurried, what waits behind a command, and
+    /// what was typed after the press, belongs to a later turn: left in `pending`, the turn begun
+    /// now would take it at its first round boundary ahead of the command. Oldest first, and always
+    /// the tail of the prompts waiting, so `pending` plus this mirrors `queued`.
+    held: std::collections::VecDeque<String>,
     /// The reply the model is writing right now, as far as it has got.
     ///
     /// Not in the transcript, because it is not a thing that happened yet: it is drawn at the
@@ -1399,6 +1407,7 @@ impl Session {
             rewind: Default::default(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
+            held: std::collections::VecDeque::new(),
             streaming: String::new(),
             said_while_working: Vec::new(),
             composing: None,
@@ -3242,8 +3251,15 @@ impl Session {
         // here, and handing it a command is how one used to be answered as a question about
         // itself, while handing it a command line is how `echo pwned` used to reach the planner as
         // something a person had said. Both wait in the queue below and nowhere else.
+        //
+        // Behind a copy being held back it is held too: the turn taking it ahead of the older one
+        // would send what was typed last first.
         if waiting.is_sent() {
-            self.pending.push(resolved);
+            if self.held.is_empty() {
+                self.pending.push(resolved);
+            } else {
+                self.held.push_back(resolved);
+            }
         }
         self.queued.push(Queued {
             prompt,
@@ -3295,12 +3311,22 @@ impl Session {
         match self.queued[at].waiting {
             Waiting::Command => Bound::CarriedOut,
             Waiting::Shell | Waiting::ShellPrivate => Bound::Run,
-            Waiting::Prompt if self.a_turn_is_running() && !self.stopping => Bound::IntoThisTurn,
+            Waiting::Prompt if self.a_turn_is_running() && !self.stopping && !self.is_held(at) => {
+                Bound::IntoThisTurn
+            }
             Waiting::Prompt if self.queued[..at].iter().any(|line| line.waiting.is_sent()) => {
                 Bound::IntoTheNextTurn
             }
             Waiting::Prompt => Bound::ItsOwnTurn,
         }
+    }
+
+    /// Whether the prompt waiting at `at` is one whose copy is held back from the turn in flight.
+    fn is_held(&self, at: usize) -> bool {
+        let sent = |line: &&Queued| line.waiting.is_sent();
+        let total = self.queued.iter().filter(sent).count();
+        let before = self.queued[..at].iter().filter(sent).count();
+        before >= total.saturating_sub(self.held.len())
     }
 
     /// Record that the person asked for what is running to stop.
@@ -3407,15 +3433,30 @@ impl Session {
         let mut attached = Vec::new();
         let mut pasted = Vec::new();
         let mut recall = Vec::new();
+        // The copies of the prompts still waiting, in queue order, with those of the ones going now
+        // in front of them.
+        let mut copies: std::collections::VecDeque<String> = self.pending.drain().into();
+        copies.extend(self.held.drain(..));
+        let hurried = self.queued[0].hurried;
         for next in self.queued.drain(..together) {
             // The copy left for the running turn goes: this prompt is becoming part of a turn of its
             // own, and a copy still in the buffer would reach the planner a second time, as an
             // interjection into the very turn this line started.
-            self.pending.take();
+            copies.pop_front();
             prompts.push(next.prompt);
             attached.extend(next.attached);
             pasted.extend(next.pasted);
             recall.push(next.recall);
+        }
+        // What waits behind a hurried batch goes after whatever stops it, a command or a turn of
+        // its own, so the turn begun now may not take it. Behind a prompt sent alone, the rest is
+        // for that turn to take, as it always was.
+        if hurried {
+            self.held = copies;
+        } else {
+            for copy in copies {
+                self.pending.push(copy);
+            }
         }
         Some(self.begin_turn(prompts.join("\n"), (attached, pasted), recall))
     }
@@ -4020,7 +4061,7 @@ impl Session {
         // has already gone.
         let mut reclaimed = Vec::new();
         while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
-            if waiting.is_sent() && !self.pending.forget_last() {
+            if waiting.is_sent() && self.held.pop_back().is_none() && !self.pending.forget_last() {
                 break;
             }
             reclaimed.push(self.queued.pop().expect("the queue was not empty"));
@@ -11802,6 +11843,81 @@ mod tests {
             Some("/clear".to_string())
         );
         assert_eq!(s.send_queued().as_deref(), Some("two"));
+    }
+
+    /// The turn begun for the hurried prompts reads the interjection buffer at its first round
+    /// boundary, so a prompt behind a command must not be in it: it goes after the command.
+    #[test]
+    fn a_prompt_behind_a_command_is_kept_out_of_the_turn_begun_for_the_hurried_ones() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "/clear", "two"]);
+        assert!(s.hurry());
+        stop(&mut s, "a");
+
+        assert_eq!(s.send_queued().as_deref(), Some("one"));
+        assert_eq!(
+            s.interjections().take(),
+            None,
+            "the turn for `one` could take `two` ahead of /clear"
+        );
+        assert_eq!(s.where_it_goes(1), Bound::ItsOwnTurn);
+        s.complete("an answer", Vec::new(), 0);
+        assert!(s.take_queued_command().is_some());
+        assert_eq!(s.send_queued().as_deref(), Some("two"));
+        assert_eq!(s.interjections().take(), None, "`two` was sent twice");
+    }
+
+    /// A prompt typed after the press waits for a turn of its own, and a prompt typed behind that
+    /// one goes into it as it would have before.
+    #[test]
+    fn a_prompt_queued_after_the_press_is_not_taken_by_the_hurried_turn() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one"]);
+        assert!(s.hurry());
+        s.stop_asked();
+        queue_lines(&mut s, &["late", "later"]);
+        stop(&mut s, "a");
+
+        assert_eq!(s.send_queued().as_deref(), Some("one"));
+        assert_eq!(
+            s.interjections().take(),
+            None,
+            "`late` joined the turn for `one`"
+        );
+        s.complete("an answer", Vec::new(), 0);
+        assert_eq!(s.send_queued().as_deref(), Some("late"));
+        assert_eq!(
+            s.interjections().take().as_deref(),
+            Some("later"),
+            "the prompt behind a lone prompt no longer reaches that turn"
+        );
+        assert_eq!(s.interjections().take(), None);
+    }
+
+    /// What is typed while the hurried turn runs queues behind the held prompts, and Up takes the
+    /// newest back first.
+    #[test]
+    fn a_prompt_typed_behind_a_held_one_stays_behind_it() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "/clear", "two"]);
+        assert!(s.hurry());
+        stop(&mut s, "a");
+        assert_eq!(s.send_queued().as_deref(), Some("one"));
+
+        queue_lines(&mut s, &["three"]);
+        assert_eq!(s.interjections().take(), None);
+        assert_eq!(s.where_it_goes(1), Bound::ItsOwnTurn);
+        assert_eq!(s.where_it_goes(2), Bound::IntoTheNextTurn);
+        assert!(s.unqueue());
+        assert_eq!(s.queued.len(), 0);
+        s.complete("an answer", Vec::new(), 0);
+        assert_eq!(s.queued.len(), 0);
     }
 
     /// Nothing is hurried where there is no turn to stop: at rest Enter sends, and during a request
