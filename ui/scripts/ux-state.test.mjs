@@ -566,3 +566,26 @@ test('a turn the output limit ended says the limit and what the reply was writin
   // The fields describe a stop at the limit and nothing else, so they move no other card.
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
+
+test('Send is allowed once the trust question has been answered', () => {
+  const { canSend } = load('src/renderer/can-send.ts')
+  const asking = { running: false, askingTrust: '/work/project' }
+  const answered = { ...asking, askingTrust: null }
+  assert.equal(canSend(asking, true, 'hello'), false, 'the trust question blocks Send')
+  assert.equal(canSend(answered, true, 'hello'), true, 'answering it releases Send with the draft unchanged')
+  assert.equal(canSend(answered, true, '  \n'), false, 'a blank draft is not sent')
+  assert.equal(canSend({ ...answered, running: true }, true, 'hello'), false, 'a running turn blocks Send')
+  assert.equal(canSend(answered, false, 'hello'), false, 'a backend known unready blocks Send')
+  assert.equal(canSend(answered, undefined, 'hello'), true, 'an unknown backend does not')
+  assert.equal(canSend(null, true, 'hello'), false, 'no open session')
+})
+
+test('submit and the run-plan callback list every field they test', () => {
+  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  for (const name of ['submit', 'submitPlan']) {
+    const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
+    const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
+    assert.match(deps, /live\?\.askingTrust/, `${name} must depend on live?.askingTrust`)
+    assert.match(deps, /live\?\.running/, `${name} must depend on live?.running`)
+  }
+})
