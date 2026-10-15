@@ -5552,6 +5552,16 @@ fn search_summary(
     workspace: &Workspace,
     output: bravebot_agent::workspace::SearchOutput,
 ) -> bravebot_agent::workspace::Matches {
+    search_shaped(workspace, output, 1, 0)
+}
+
+/// [`search_summary`] for any output, from the match at `offset` and with `context` lines around each.
+fn search_shaped(
+    workspace: &Workspace,
+    output: bravebot_agent::workspace::SearchOutput,
+    offset: usize,
+    context: usize,
+) -> bravebot_agent::workspace::Matches {
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
         routing(),
@@ -5567,8 +5577,8 @@ fn search_summary(
             &Labelled::trusted(".".to_string()),
             None,
             true,
-            1,
-            0,
+            offset,
+            context,
             output,
         )
         .expect("grep succeeds");
@@ -5730,6 +5740,44 @@ fn a_search_says_when_its_include_selected_no_files() {
     assert_eq!(found.searched, 1);
 }
 
+/// SEARCH-4: the pattern is compiled before any file is opened. A search whose `include` selects no
+/// file opens none, so a pattern compiled when a file is first read would never be compiled and the
+/// search would report an empty result for a pattern that never ran. A list of patterns is compiled
+/// whole, so a good pattern ahead of a bad one does not hide it.
+#[test]
+fn a_pattern_that_will_not_compile_is_reported_when_no_file_is_opened() {
+    let scratch = Scratch::new("grep-bad-pattern-no-files");
+    std::fs::write(scratch.path.join("a.rs"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for patterns in [&["(unclosed"][..], &["needle", "(unclosed"][..]] {
+        for case_sensitive in [true, false] {
+            let needles: Vec<Labelled<String>> = patterns.iter().map(|p| trusted_text(p)).collect();
+            let refused = workspace.grep(
+                &mut policy,
+                &needles,
+                &trusted_text("."),
+                Some(&trusted_text("*.py")),
+                case_sensitive,
+                1,
+            );
+            assert!(
+                matches!(refused, Err(WorkspaceError::Pattern { .. })),
+                "{patterns:?} with case_sensitive={case_sensitive} was not reported: {:?}",
+                refused.as_ref().map(|_| ())
+            );
+        }
+    }
+}
+
 /// A search aimed at `directory` under `permissions`, for the tests that name a path other than the
 /// root.
 fn search_at(
@@ -5875,6 +5923,41 @@ fn a_search_cannot_name_a_file_outside_the_workspace() {
         );
     }
     let _ = std::fs::remove_file(&outside);
+}
+
+/// SEARCH-11: a file named outright is searched even where a walk from above would skip its
+/// directory. A skip applied to the names along a named file's path would make `vendor/pkg/lib.rs`
+/// unsearchable by name. The walk from the root is the control: it reaches none of these files, so
+/// the matches below come from naming them.
+#[test]
+fn a_file_named_outright_is_searched_where_a_walk_from_above_would_skip_its_directory() {
+    let scratch = Scratch::new("grep-one-file-in-skipped-directory");
+    let named = [
+        "vendor/pkg/lib.rs",
+        "node_modules/dep/index.js",
+        ".worktrees/feature/mine.rs",
+        ".claude/worktrees/pr-fix/mine.rs",
+    ];
+    for file in named {
+        let path = scratch.path.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "a needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let walked = search_at(&workspace, denying(&[]), ".", None).expect("grep");
+    assert!(
+        walked.matches.is_empty(),
+        "a walk from above entered a skipped directory: {:?}",
+        walked.matches
+    );
+
+    for file in named {
+        let found = search_at(&workspace, denying(&[]), file, None).expect("grep");
+        let hits: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(hits, [file], "{file} was named and not searched");
+        assert_eq!(found.considered, 1, "{file}");
+    }
 }
 
 /// Brace groups are the spelling everybody writes. Matched literally they select nothing,
@@ -6025,6 +6108,74 @@ fn a_search_skips_a_linked_worktree_under_dot_worktrees() {
         1,
     );
     assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
+}
+
+/// SEARCH-7: a search that names a directory with a skipped name reads it, and only a walk from
+/// above steps over it. The skip applies to the entries a walk meets below its start, so a named
+/// directory is read whatever it is called and whatever skipped directory sits above it. The walk
+/// from the root is the control: it reaches none of these directories.
+#[test]
+fn a_search_that_names_a_skipped_directory_reads_it() {
+    let scratch = Scratch::new("grep-names-a-skipped-directory");
+    for dir in [
+        "vendor/pkg",
+        "build",
+        ".worktrees/feature",
+        ".claude/worktrees/pr-fix",
+    ] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+        std::fs::write(scratch.path.join(dir).join("hit.rs"), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let walked = search_at(&workspace, denying(&[]), ".", None).expect("grep");
+    assert!(
+        walked.matches.is_empty(),
+        "a walk from above entered a skipped directory: {:?}",
+        walked.matches
+    );
+
+    for (named, reached) in [
+        ("vendor", "vendor/pkg/hit.rs"),
+        ("vendor/pkg", "vendor/pkg/hit.rs"),
+        ("build", "build/hit.rs"),
+        (".worktrees", ".worktrees/feature/hit.rs"),
+        (".claude/worktrees", ".claude/worktrees/pr-fix/hit.rs"),
+    ] {
+        let found = search_at(&workspace, denying(&[]), named, None).expect("grep");
+        let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, [reached], "naming {named} did not read it");
+    }
+}
+
+/// SEARCH-7: `.claude/worktrees` is a two-segment name. A directory called `worktrees` anywhere else
+/// holds a project's own files, and a sibling of `worktrees` under `.claude` is not a linked
+/// worktree, so a skip decided by one segment alone drops matches the search was asked for.
+#[test]
+fn a_directory_called_worktrees_is_skipped_only_beneath_dot_claude() {
+    let scratch = Scratch::new("grep-worktrees-name");
+    for file in [
+        "top.md",
+        "docs/worktrees/guide.md",
+        ".claude/other/notes.md",
+        ".claude/worktrees/pr-fix/copy.md",
+    ] {
+        let path = scratch.path.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "needle\n").unwrap();
+    }
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    let mut paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            ".claude/other/notes.md",
+            "docs/worktrees/guide.md",
+            "top.md"
+        ]
+    );
 }
 
 /// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
@@ -10711,6 +10862,67 @@ fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
         found.matched, 500,
         "the total stopped where the listing did"
     );
+}
+
+/// SEARCH-12: the offset and `context` do not apply to a `files` or a `count` result, since no line
+/// is returned. An offset applied to a survey leaves the first files and matches out of it, and the
+/// survey then reads as the whole tree. Lines are the control. The same offset and context cut a
+/// lines result, so a whole survey shows the arguments are read and set aside for a survey.
+#[test]
+fn a_files_or_count_result_is_not_cut_by_an_offset_or_context() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-summary-offset-context");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "needle\nbetween\nneedle\nneedle\nneedle\nneedle\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "needle\nneedle\nafter\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let tallied = |found: &bravebot_agent::workspace::Matches| {
+        found
+            .tallies
+            .iter()
+            .map(|t| (t.path.clone(), t.lines))
+            .collect::<Vec<_>>()
+    };
+
+    let lines = search_shaped(&workspace, SearchOutput::Lines, 6, 2);
+    assert_eq!(
+        lines.matches.len(),
+        2,
+        "an offset of 6 into 7 matches leaves 2, so the offset is honoured for lines"
+    );
+    assert!(!lines.context.is_empty(), "context is honoured for lines");
+
+    let files = search_shaped(&workspace, SearchOutput::Files, 6, 2);
+    assert_eq!(
+        tallied(&files)
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>(),
+        ["a.txt", "b.txt"],
+        "an offset dropped files from the list"
+    );
+
+    let count = search_shaped(&workspace, SearchOutput::Count, 6, 2);
+    assert_eq!(
+        tallied(&count),
+        [("a.txt".to_string(), 5), ("b.txt".to_string(), 2)],
+        "an offset left matches out of the count"
+    );
+    assert_eq!(count.matched, 7);
+
+    for (output, found) in [("files", &files), ("count", &count)] {
+        assert!(found.matches.is_empty(), "{output} returned lines");
+        assert!(found.context.is_empty(), "{output} returned context lines");
+        assert!(!found.context_truncated, "{output}");
+        assert_eq!(
+            found.paging(),
+            None,
+            "{output} offered a page to continue from"
+        );
+    }
 }
 
 /// A repository map of `directory`, with `trust` as the trust map and `permissions` as the rules.

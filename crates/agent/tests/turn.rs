@@ -8026,6 +8026,111 @@ fn a_search_whose_pattern_cannot_be_compiled_says_why() {
     );
 }
 
+/// The request that carries the result of one `search` call over `scratch`, with the workspace
+/// vouched for so the planner is shown the result's text.
+fn what_the_planner_is_told_of_a_search(scratch: &Scratch, arguments: &str) -> String {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trusting_the_workspace(),
+        &[("search", arguments)],
+    )
+    .pop()
+    .expect("the planner was sent the result")
+}
+
+/// SEARCH-5: an empty search says why it is empty. A glob that selected no file says nothing was
+/// searched and that this is no evidence about the tree. A glob leaning on a character class says
+/// that too and names the syntax. A search that read a file and did not find the pattern says no
+/// matches, and so does a search that named no glob over an empty tree. Rendered alike, they let the
+/// planner take a broken glob for proof the pattern is absent.
+#[test]
+fn an_empty_search_says_whether_the_glob_or_the_pattern_is_why() {
+    const NOTHING_SEARCHED: &str = "the include glob matched no files, so nothing was searched";
+    const NOT_EVIDENCE: &str = "this says nothing about whether the pattern is in the tree";
+    const CLASS_ADVICE: &str = "write the alternatives as a brace group";
+
+    let scratch = Scratch::new("search-empty-three-ways");
+    std::fs::write(scratch.path.join("a.rs"), "some text\n").unwrap();
+
+    let selected_nothing = what_the_planner_is_told_of_a_search(
+        &scratch,
+        r#"{"pattern":"needle","directory":".","include":"*.py"}"#,
+    );
+    assert!(
+        selected_nothing.contains(NOTHING_SEARCHED) && selected_nothing.contains(NOT_EVIDENCE),
+        "a glob that selected no file was not said to have searched nothing: {selected_nothing}"
+    );
+    assert!(
+        !selected_nothing.contains("(no matches)"),
+        "a glob that selected no file was reported as a search that found nothing: {selected_nothing}"
+    );
+    assert!(
+        !selected_nothing.contains(CLASS_ADVICE),
+        "a glob the matcher reads was lectured at: {selected_nothing}"
+    );
+
+    let unreadable = what_the_planner_is_told_of_a_search(
+        &scratch,
+        r#"{"pattern":"needle","directory":".","include":"*.[rp]s"}"#,
+    );
+    assert!(
+        unreadable.contains(NOTHING_SEARCHED) && unreadable.contains(CLASS_ADVICE),
+        "a glob leaning on a character class was not named as the reason: {unreadable}"
+    );
+
+    let absent = what_the_planner_is_told_of_a_search(
+        &scratch,
+        r#"{"pattern":"needle","directory":".","include":"*.rs"}"#,
+    );
+    assert!(
+        absent.contains("(no matches)") && !absent.contains(NOTHING_SEARCHED),
+        "a search that read a file and found nothing was blamed on its glob: {absent}"
+    );
+
+    let empty_tree = Scratch::new("search-empty-tree-no-glob");
+    let no_glob = what_the_planner_is_told_of_a_search(
+        &empty_tree,
+        r#"{"pattern":"needle","directory":"."}"#,
+    );
+    assert!(
+        no_glob.contains("(no matches)") && !no_glob.contains(NOTHING_SEARCHED),
+        "a search with no glob was blamed on one: {no_glob}"
+    );
+}
+
+/// SEARCH-6: the tool reads `case_sensitive` as the request and defaults to exact case. The pattern
+/// is all lowercase and the line is not. A search that decided for itself (a smart-case rule that
+/// folds a lowercase pattern) or read an absent flag as false matches the line unasked, and one that
+/// ignored the flag never matches it when asked.
+#[test]
+fn the_search_tool_matches_case_exactly_unless_it_is_asked_not_to() {
+    let scratch = Scratch::new("search-tool-case");
+    std::fs::write(scratch.path.join("a.txt"), "EmailAliasesEnabled\n").unwrap();
+    let line = "a.txt:1: EmailAliasesEnabled";
+
+    for (arguments, finds) in [
+        (r#"{"pattern":"emailaliases","directory":"."}"#, false),
+        (
+            r#"{"pattern":"emailaliases","directory":".","case_sensitive":true}"#,
+            false,
+        ),
+        (
+            r#"{"pattern":"emailaliases","directory":".","case_sensitive":false}"#,
+            true,
+        ),
+    ] {
+        let told = what_the_planner_is_told_of_a_search(&scratch, arguments);
+        assert_eq!(
+            told.contains(line),
+            finds,
+            "{arguments} gave the wrong answer: {told}"
+        );
+        assert_eq!(told.contains("(no matches)"), !finds, "{arguments}: {told}");
+    }
+}
+
 /// The default footing is quarantine, so this is the case that matters: the notice a search
 /// writes into its own body reaches nobody when the body is the thing being withheld.
 #[test]
