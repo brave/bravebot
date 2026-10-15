@@ -2252,6 +2252,8 @@ session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
 session-note-added = note ajoutée au tour { $turn }, dans le dossier seulement : le planificateur ne la reçoit pas
 session-note-needs-text = /note demande la note, comme /note le mauvais fichier a été modifié ici
+session-note-not-recorded = note non ajoutée : cette session n'écrit aucun dossier, la note ne serait gardée nulle part
+session-note-listed = tour { $turn } : { $text }
 # Ce que répondent /issue et /pr. Une valeur refusée n'est pas répétée, car elle peut contenir un
 # caractère de contrôle.
 session-issue-is = cette session est pour { $url }. /issue clear l'enlève

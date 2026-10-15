@@ -1421,7 +1421,10 @@ A process that owns its sessions, and must keep them apart from the ones a termi
 turn the session is on: the running turn, or the last finished one when none runs. It is written to
 the record at once, as an entry of its own with the turn, the author and the text. The author is
 `person`: the only way to add a note is the person typing the command, and nothing a tool, a file or
-a model produced is written as one. Text with nothing in it is not a note and records nothing.
+a model produced is written as one. Text with nothing in it is not a note and records nothing;
+`/note` with nothing after it lists the notes the session holds instead, one line each with its turn,
+and adds none. A session that writes no record, as an incognito one does, holds the note in the
+session only, and says that it reached no record rather than saying it was kept.
 
 A note is not part of the conversation. It is not a prompt, is not queued, is not offered to the
 turn in flight, and is not in the snapshot a resume restores, so adding one changes nothing the
@@ -1456,4 +1459,7 @@ as data.
 `verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
 `verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`
+`verified-by: bravebot_tui::app::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
+`verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
+`verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
 `verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker)`

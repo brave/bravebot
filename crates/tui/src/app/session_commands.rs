@@ -309,20 +309,39 @@ pub(super) fn rename_session(
     }
 }
 
-/// Add a note a person typed to the session record, and say so (SESSION-36).
+/// Add a note a person typed to the session record, or list the session's notes, and say so
+/// (SESSION-36).
 ///
 /// The note goes to the record and nowhere else: it is not a prompt, is not queued, and gives up no
 /// rewind point, since no point holds a note. It belongs to the turn the session is on, which is
-/// the running turn when one is. The text is not repeated back, as it may hold an escape.
+/// the running turn when one is. The text just typed is not repeated back, as it may hold an escape.
+/// With nothing typed, the notes the session holds are listed instead, and `printable` is what
+/// stands between a note's bytes and the screen.
 pub(super) fn note_session(
     session: &mut Session,
     stored: &mut bravebot_session::sessions::Handle,
     text: &str,
 ) {
-    if stored.add_note(session.turns, text) {
-        session.note(t!(session_note_added, turn = session.turns));
-    } else {
-        session.note(t!(session_note_needs_text));
+    match stored.add_note(session.turns, text) {
+        bravebot_session::sessions::Noted::Kept => {
+            session.note(t!(session_note_added, turn = session.turns))
+        }
+        bravebot_session::sessions::Noted::Unwritable => {
+            session.note(t!(session_note_not_recorded))
+        }
+        // Nothing typed asks for the notes the session holds. They are drawn, so the text goes
+        // through `printable`: a note the person typed may hold an escape.
+        bravebot_session::sessions::Noted::Empty if !stored.notes().is_empty() => {
+            for note in stored.notes() {
+                let text = crate::render::printable(&note.text);
+                session.note(t!(
+                    session_note_listed,
+                    turn = note.turn,
+                    text = text.as_str()
+                ));
+            }
+        }
+        bravebot_session::sessions::Noted::Empty => session.note(t!(session_note_needs_text)),
     }
 }
 

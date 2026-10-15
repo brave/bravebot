@@ -252,6 +252,8 @@ part of the conversation: the model is never given it, so it changes nothing abo
 while a turn runs with nothing waiting, it is carried out at once. A resume, a `/branch` and a
 continued session keep the notes, and a record from before notes existed has none. The resume list
 and `bravebot sessions search` find a session by the words of its notes.
+`/note` on its own lists the notes the session holds, one line each with its turn. A session that writes
+no record, as an incognito one does, says a note reached none.
 
 A note is for whoever reviews the session later. `/session-review` reads the notes of the sessions it
 reviews and treats each as a lead from you: it checks the note against the session's audit trail and

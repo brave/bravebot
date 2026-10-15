@@ -337,7 +337,7 @@ does not read:
   with no name renames nothing and gives up none.
 - **`/note`.** The note is written to the record at once, on the turn that is running, and the turn
   is handed nothing ([SESSION-36](sessions.md#SESSION-36)). It gives up no rewind point, since no
-  point holds a note. `/note` with no text records nothing and says what it needs.
+  point holds a note. `/note` with no text records nothing: it lists the notes the session holds, or says what it needs when it holds none.
 - **`/issue` and `/pr`.** The record is written after the turn with whatever links the session has
   by then, and no turn reads them ([PANEL-12](info-panel.md#PANEL-12)).
 - **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory

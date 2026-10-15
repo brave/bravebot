@@ -871,7 +871,7 @@ Adds a note to the session record, on the turn the session is on: the running tu
 that finished. The record is rewritten at once, and the note is kept with the turn number and the
 fact that you typed it. It is not part of the conversation: it is not a prompt, nothing waiting
 moves, and nothing a turn sends to the model includes it. `/undo` is not affected. A resume, a
-`/branch` and a continued session keep the notes. An empty note is refused. Typed while a turn runs
+`/branch` and a continued session keep the notes. `/note` with nothing after it lists the notes the session holds, one line each with its turn. Where the session writes no record, as an incognito one does, it says the note reached none. Typed while a turn runs
 with nothing waiting, it is carried out at once. `/session-review` reads the notes of a session it
 reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-on-a-session).
 

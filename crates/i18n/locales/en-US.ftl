@@ -2608,6 +2608,8 @@ session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
 session-note-added = noted on turn { $turn }, in the record only: the planner is not given it
 session-note-needs-text = /note needs the note, as in /note the wrong file was edited here
+session-note-not-recorded = not noted: this session writes no record, so a note would be kept nowhere
+session-note-listed = turn { $turn }: { $text }
 # What /issue and /pr say back. A refused value is not repeated, since it may hold a control
 # character.
 session-issue-is = this session is for { $url }. /issue clear removes it

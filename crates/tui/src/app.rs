@@ -19805,6 +19805,76 @@ mod tests {
         );
     }
 
+    /// SESSION-36: a note typed at an idle prompt, which reaches `note_session` from the event loop
+    /// and not through `typed_during_a_turn`, belongs to the last turn that finished.
+    #[test]
+    fn a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        note_session(&mut session, &mut stored, "it should have asked first");
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(
+            notes[0].turn, 2,
+            "the note is not on the last finished turn"
+        );
+        assert_eq!(notes[0].text, "it should have asked first");
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some(t!(session_note_added, turn = 2).as_str())
+        );
+    }
+
+    /// SESSION-36: `/note` with nothing after it brings the session's notes up, one line each with
+    /// its turn, and a control character in one is not drawn as one.
+    #[test]
+    fn a_note_with_no_text_lists_the_notes_the_session_holds() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        note_session(&mut session, &mut stored, "first\u{1b}[31m");
+        session.turns = 3;
+        note_session(&mut session, &mut stored, "second");
+        let before = session.transcript.len();
+
+        note_session(&mut session, &mut stored, "");
+
+        let listed: Vec<_> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(listed.len(), 2, "one line per note");
+        assert!(
+            listed[0]
+                .starts_with(&t!(session_note_listed, turn = 2, text = "first").to_string()[..8])
+        );
+        assert!(listed[0].contains("first") && !listed[0].contains('\u{1b}'));
+        assert_eq!(
+            listed[1],
+            t!(session_note_listed, turn = 3, text = "second")
+        );
+        assert_eq!(stored.notes().len(), 2, "listing added a note");
+    }
+
     /// Ctrl-Enter on `/rename` stops nothing, as on any command carried out as it is typed: the
     /// rename is done as it is typed, so there is nothing to stop the turn for.
     #[test]
