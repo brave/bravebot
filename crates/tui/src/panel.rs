@@ -1729,6 +1729,43 @@ mod tests {
         );
     }
 
+    /// The session record cannot tell a turn that emptied its list from one that kept none, so a
+    /// report with no rows must leave the plan as the report before it in the turn set it, not
+    /// fall back to an earlier turn's plan or to nothing.
+    #[test]
+    fn an_empty_report_after_one_with_rows_keeps_that_plan() {
+        let shown = |session: &Session| texts(&lines(session, WIDTH, 30));
+        let mut session = working_on(plan(&[("Earlier turn", Status::Done)]));
+        session.complete("done", Vec::new(), 0);
+
+        session.type_char('b');
+        session.submit();
+        session.set_todos(plan(&[("Later turn", Status::Active)]));
+        session.set_todos(Vec::new());
+        let during = shown(&session);
+        assert!(
+            during.iter().any(|row| row.ends_with("Later turn"))
+                && !during.iter().any(|row| row.ends_with("Earlier turn")),
+            "the empty report changed the plan mid-turn: {during:#?}"
+        );
+
+        session.complete("done", Vec::new(), 0);
+        let after = shown(&session);
+        assert!(
+            after.iter().any(|row| row.ends_with("Later turn"))
+                && !after.iter().any(|row| row.ends_with("Earlier turn")),
+            "the plan fell back once the turn ended: {after:#?}"
+        );
+
+        let mut first = working_on(plan(&[("Only plan", Status::Active)]));
+        first.set_todos(Vec::new());
+        first.complete("done", Vec::new(), 0);
+        assert!(
+            shown(&first).iter().any(|row| row.ends_with("Only plan")),
+            "the plan went when its turn was the first"
+        );
+    }
+
     /// TODO-3 in the panel, which draws the plan a second time and from its own branch. The
     /// transcript test beside this one draws neither, so without this the panel could show a
     /// cancelled task with the finished tick and nothing would fail.
