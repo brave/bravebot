@@ -12079,8 +12079,9 @@ mod tests {
     }
 
     /// A list left up over a line that arrived under it belongs to a press two prompts ago. Every
-    /// path that writes a whole line takes it down, and these two are the ones a person reaches
-    /// while a turn is in flight: asking for the keys, then recalling a prompt or stopping the turn.
+    /// path that writes a whole line takes it down: recalling a prompt, stopping a turn, yanking
+    /// killed or vi-deleted text back, a stashed line coming back, the queue coming back, and a
+    /// line handed back by an editor.
     #[test]
     fn a_line_that_arrives_under_the_list_takes_the_list_down() {
         let mut recalled = session();
@@ -12106,6 +12107,76 @@ mod tests {
         stopped.restore("first".to_string());
         assert_eq!(stopped.input, "first");
         assert!(!stopped.shortcuts, "the list stands over a stopped prompt");
+
+        // Ctrl-Y, with an empty box and the list up: the kill it puts back is the line that
+        // arrives, exactly as a paste or a recalled prompt would (#2147).
+        let mut yanked = session();
+        for c in "first".chars() {
+            yanked.type_char(c);
+        }
+        yanked.delete_word_before();
+        assert_eq!(yanked.input, "", "the kill left something behind");
+        yanked.type_char('?');
+        assert!(yanked.shortcuts, "the list did not come up");
+
+        yanked.yank();
+        assert_eq!(yanked.input, "first");
+        assert!(!yanked.shortcuts, "the list stands over a yanked line");
+
+        // A stashed line coming back.
+        let mut stashed = session();
+        for c in "first".chars() {
+            stashed.type_char(c);
+        }
+        assert!(stashed.stash(), "the line was not stashed");
+        assert_eq!(stashed.input, "");
+        stashed.type_char('?');
+        assert!(stashed.shortcuts, "the list did not come up");
+
+        assert!(stashed.stash(), "the stashed line did not come back");
+        assert_eq!(stashed.input, "first");
+        assert!(
+            !stashed.shortcuts,
+            "the list stands over a stashed line coming back"
+        );
+
+        // The queue coming back.
+        let mut queued = session();
+        for c in "first".chars() {
+            queued.type_char(c);
+        }
+        queued.submit().expect("submitted");
+        for c in "second".chars() {
+            queued.type_char(c);
+        }
+        assert!(queued.queue(), "the line was not queued");
+        assert_eq!(queued.input, "");
+        queued.type_char('?');
+        assert!(queued.shortcuts, "the list did not come up");
+
+        assert!(queued.unqueue(), "nothing came back out of the queue");
+        assert_eq!(queued.input, "second");
+        assert!(
+            !queued.shortcuts,
+            "the list stands over the queue coming back"
+        );
+
+        // A line handed back by an editor.
+        let mut edited = session();
+        for c in "first".chars() {
+            edited.type_char(c);
+        }
+        edited.submit().expect("submitted");
+        edited.status = Status::Idle;
+        edited.type_char('?');
+        assert!(edited.shortcuts, "the list did not come up");
+
+        edited.take_edited("edited line");
+        assert_eq!(edited.input, "edited line");
+        assert!(
+            !edited.shortcuts,
+            "the list stands over a line handed back by an editor"
+        );
     }
 
     mod todos {
