@@ -333,6 +333,7 @@ again, as in COMPACT-8.
 `verified-by: bravebot_agent::turn::a_request_refused_as_too_large_is_sent_again_after_one_compaction`
 `verified-by: bravebot_agent::turn::a_second_refusal_is_reported_and_compacts_nothing_more`
 `verified-by: bravebot_agent::turn::a_refusal_with_nothing_to_cut_is_reported_without_a_summary`
+`verified-by: bravebot_agent::backend::only_a_400_or_a_422_is_a_refusal_of_the_body`
 
 <a id="COMPACT-15"></a>
 ### COMPACT-15: the `summaryModel` setting names the model a summary runs on

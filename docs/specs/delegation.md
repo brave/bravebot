@@ -815,6 +815,7 @@ question and not this one. The name of a definition that keeps a memory also nam
 [MEMORY-3](definition-memory.md#MEMORY-3) holds it to a slug.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
+`verified-by: bravebot_agent::agents::a_refused_name_is_reported_by_the_files_path_and_never_by_the_name`
 
 <a id="DELEGATE-22"></a>
 ### DELEGATE-22: a definition may name the model its delegate runs on

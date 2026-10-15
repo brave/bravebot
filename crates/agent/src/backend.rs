@@ -1945,4 +1945,41 @@ mod tests {
         assert_eq!(failure.diagnosis().category, Category::Transport);
         assert_eq!(failure.diagnosis().attempts, Some(3));
     }
+
+    /// COMPACT-14: only 400 and 422 say the body was refused, on either backend and through the
+    /// attempt count, so a turn does not spend a summary on a refusal that a shorter conversation
+    /// cannot cure.
+    #[test]
+    fn only_a_400_or_a_422_is_a_refusal_of_the_body() {
+        let status = |status: u16| bravebot_net::EgressError::Status {
+            url: "https://service.example/v1".to_string(),
+            status,
+        };
+        for refused in [400, 422] {
+            assert!(
+                BackendError::from(ChatError::Egress(status(refused))).refused_the_body(),
+                "{refused} from the chat backend"
+            );
+            assert!(
+                BackendError::from(BedrockError::Egress(status(refused))).refused_the_body(),
+                "{refused} from Bedrock"
+            );
+            assert!(
+                BackendError::from(ChatError::Egress(status(refused)))
+                    .counted(2, None, None)
+                    .refused_the_body(),
+                "{refused} after attempts were counted"
+            );
+        }
+        for other in [200, 401, 403, 404, 413, 429, 500, 502, 503] {
+            assert!(
+                !BackendError::from(ChatError::Egress(status(other))).refused_the_body(),
+                "{other} from the chat backend was read as a refused body"
+            );
+            assert!(
+                !BackendError::from(BedrockError::Egress(status(other))).refused_the_body(),
+                "{other} from Bedrock was read as a refused body"
+            );
+        }
+    }
 }

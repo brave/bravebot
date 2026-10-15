@@ -145,6 +145,7 @@ and [tools/read-file.md](tools/read-file.md) states them for the read that share
 `verified-by: bravebot_agent::watch::a_path_that_is_gone_fires_with_the_removal_and_does_not_end_its_watch`
 `verified-by: bravebot_agent::watch::a_delete_and_recreate_between_two_fires_is_one_write`
 `verified-by: bravebot_agent::watch::a_file_that_came_and_went_unreported_fires_nothing`
+`verified-by: bravebot_agent::workspace::a_look_observes_size_time_and_presence_and_nothing_inside_the_file`
 
 ## What a firing does
 
