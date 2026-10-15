@@ -14937,6 +14937,78 @@ mod tests {
         );
     }
 
+    /// A turn that reported rows and then an empty list keeps those rows as its plan whichever way
+    /// it ends. `take_todos` is what hands them to the closing entry, so a failure or a stop that
+    /// left `reported` behind would show nothing, or the turn before's plan, with `todos` empty
+    /// either way.
+    #[test]
+    fn a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan() {
+        let rows = || {
+            bravebot_core::todo::rows(&bravebot_core::todo::List::new(vec![
+                bravebot_core::todo::Item::new("the plan", bravebot_core::todo::Status::Active),
+            ]))
+        };
+        // The closing entry is what keeps the plan: `plan()` also reads the live copy, which
+        // stays whether or not the entry got it.
+        let texts = |s: &Session| -> Vec<String> {
+            let entry = s.transcript.last().expect("the turn closed with an entry");
+            entry.todos.iter().map(|row| row.content.clone()).collect()
+        };
+
+        let mut failed = session();
+        failed.type_char('a');
+        failed.submit();
+        failed.set_todos(rows());
+        failed.set_todos(Vec::new());
+        failed.fail("went wrong", went_wrong());
+        assert_eq!(texts(&failed), ["the plan"], "a failed turn lost its plan");
+
+        let mut stopped = session();
+        stopped.type_char('a');
+        stopped.submit();
+        stopped.set_todos(rows());
+        stopped.set_todos(Vec::new());
+        // Something queued behind the turn keeps its prompt sent, so the stop is recorded.
+        stopped.type_char('b');
+        assert!(stopped.queue());
+        stopped.stopped(Some(0));
+        stopped.restore("a");
+        assert_eq!(
+            texts(&stopped),
+            ["the plan"],
+            "a stopped turn lost its plan"
+        );
+    }
+
+    /// A plan is discarded where its turn is: a rewind removes the turns it described, and an
+    /// un-sent prompt was never a turn. Neither may leave the plan the empty report kept, or the
+    /// panel would show work no transcript has.
+    #[test]
+    fn a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report() {
+        let rows = || {
+            bravebot_core::todo::rows(&bravebot_core::todo::List::new(vec![
+                bravebot_core::todo::Item::new("the plan", bravebot_core::todo::Status::Active),
+            ]))
+        };
+
+        let mut rewound = session();
+        rewound.type_char('a');
+        rewound.submit();
+        rewound.set_todos(rows());
+        rewound.set_todos(Vec::new());
+        rewound.rewind_history();
+        assert!(rewound.plan().is_empty(), "a rewind left the plan");
+
+        let mut unsent = session();
+        unsent.type_char('a');
+        unsent.submit();
+        unsent.set_todos(rows());
+        unsent.set_todos(Vec::new());
+        unsent.stopped(Some(0));
+        unsent.restore("a");
+        assert!(unsent.plan().is_empty(), "an un-sent prompt left a plan");
+    }
+
     /// A report reads as a block, so both columns line up: an aside starting wherever its value
     /// happened to end is harder to read than no column at all.
     #[test]

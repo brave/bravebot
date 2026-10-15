@@ -226,6 +226,9 @@ last row counts the rows left out above the ones shown apart from those below th
 `+15 earlier, +7 more`, `+3 more`).
 
 `verified-by: bravebot_tui::panel::the_plan_stays_after_the_turn_and_clear_empties_it`
+`verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
+`verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
+`verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
 `verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
 
 <a id="PANEL-11"></a>
