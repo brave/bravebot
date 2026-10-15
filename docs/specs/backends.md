@@ -2413,8 +2413,11 @@ credential into wherever the output goes.
 `verified-by: bravebot_config::provider::an_aws_block_sends_no_configured_header`
 `verified-by: bravebot_config::provider::printing_a_block_does_not_print_a_header_value`
 `verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_the_request`
+`verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_the_roster_request`
 `verified-by: bravebot_agent::backend::a_header_naming_a_variable_is_read_where_the_token_is`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_add_a_request_header`
+`verified-by: bravebot_config::provider::a_stored_key_refuses_a_written_authorization_once_it_is_known`
+`verified-by: bravebot_config::lib::a_stored_key_reaches_through_from_sources_refuses_the_authorization_it_names`
 `verified-by: bravebot_cli::doctor::a_refused_header_is_reported_with_its_name_and_reason_and_never_its_value`
 `verified-by: bravebot_cli::running::doctor_names_a_refused_header_without_its_value`
 
