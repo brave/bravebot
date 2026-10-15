@@ -1897,11 +1897,55 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
     }
 }
 
+/// What the settings say a run of anything may spend or do, read once where the settings are and
+/// kept beside them. A turn and a manifest run build the same base [`Task`] out of it, so the two
+/// cannot drift apart on which layer named a cap.
+struct RunSettings {
+    attribution: Attribution,
+    /// What a command's output may spend of the conversation, where the settings said anything.
+    output_cap: Option<usize>,
+    /// What one download may write to a file.
+    download_cap: Option<usize>,
+    /// How long a command may run, resolved where the settings were read (RUN-23).
+    deadlines: bravebot_agent::exec::Deadlines,
+}
+
+impl RunSettings {
+    fn from_settings(settings: &bravebot_config::Settings) -> Self {
+        Self {
+            attribution: settings.attribution().clone(),
+            output_cap: settings.run_output_cap(),
+            download_cap: settings.download_max_bytes(),
+            deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
+        }
+    }
+
+    /// The task a turn or a manifest run starts from.
+    fn task(&self, prompt: &str, session: &Session, permissions: &Permissions) -> Task {
+        Task::new(prompt)
+            .with_home(bravebot_agent::home::directory())
+            .with_profile(bravebot_agent::home::profile())
+            .with_cache(bravebot_agent::home::cache())
+            .with_model(session.model().map(str::to_string))
+            .with_effort(session.effort_in_force())
+            .with_permissions(permissions.clone())
+            .with_permission_mode(session.live_permission_mode())
+            .with_attribution(self.attribution.clone())
+            .with_output_cap(self.output_cap)
+            .with_download_cap(self.download_cap)
+            .with_deadlines(self.deadlines)
+            .with_confined_runs(true)
+            .asking_about_unconfined(true)
+            .with_sandbox_mode(session.sandbox_mode())
+    }
+}
+
 /// The locals `event_loop` keeps from its startup. `event_loop` binds them in the order of these
 /// fields, which is the order the startup creates them, so they drop in the reverse of it.
 struct Begun {
     workspace: Workspace,
     settings: bravebot_config::Settings,
+    run_settings: RunSettings,
     session: Session,
     conversation: Conversation,
     stored: bravebot_session::sessions::Handle,
@@ -2263,9 +2307,11 @@ fn begin_session(
         session.hand_over_from_the_command_line(&prompt);
     }
 
+    let run_settings = RunSettings::from_settings(&settings);
     Ok(Begun {
         workspace,
         settings,
+        run_settings,
         session,
         conversation,
         stored,
@@ -2296,6 +2342,7 @@ fn event_loop(
     let Begun {
         mut workspace,
         settings,
+        run_settings,
         mut session,
         mut conversation,
         mut stored,
@@ -2900,10 +2947,7 @@ fn event_loop(
                         &attached,
                         &mut answers.trust,
                         &answers.rules.permissions,
-                        settings.attribution(),
-                        settings.run_output_cap(),
-                        settings.download_max_bytes(),
-                        bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
+                        &run_settings,
                     )?;
 
                     // Taken off the workspace rather than kept for anything: a run is not a turn of
@@ -3073,10 +3117,7 @@ fn event_loop(
                         answers.asked_about,
                         answers.exposed,
                         &answers.rules.permissions,
-                        settings.attribution(),
-                        settings.run_output_cap(),
-                        settings.download_max_bytes(),
-                        bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
+                        &run_settings,
                         &mut stored,
                     )?;
                     // Taken apart with no `..`, so an answer a turn learns to remember does not
@@ -5024,16 +5065,7 @@ fn manifest_animated(
     attached: &[crate::state::Attached],
     trust: &mut TrustStore,
     permissions: &Permissions,
-    attribution: &Attribution,
-    // What the settings say a command's output may spend of the conversation, where they said
-    // anything. Passed in beside the attribution and for the same reason: which layer named it is
-    // settled where the settings were read.
-    output_cap: Option<usize>,
-    // And what one download may write to a file, for the same reason.
-    download_cap: Option<usize>,
-    // And how long a command may run, resolved where those settings were read and for the same
-    // reason (RUN-23).
-    deadlines: bravebot_agent::exec::Deadlines,
+    run: &RunSettings,
 ) -> io::Result<Vec<Stamped>> {
     // For the reason a turn does it: a sign-in needs the terminal, and this is the thread that has
     // it. Left to the worker, the URL and code the AWS CLI prints would land nowhere anyone reads.
@@ -5064,21 +5096,7 @@ fn manifest_animated(
     // dragged that file onto the window and let the line go, so its path was fixed by their gesture
     // before any request went out (DROP-2). It is read before the planner's policy exists, which is
     // what keeps a planner that cannot read from having read something.
-    let mut worker_task = Task::new(task)
-        .with_home(bravebot_agent::home::directory())
-        .with_profile(bravebot_agent::home::profile())
-        .with_cache(bravebot_agent::home::cache())
-        .with_model(session.model().map(str::to_string))
-        .with_effort(session.effort_in_force())
-        .with_permissions(permissions.clone())
-        .with_permission_mode(permission_mode.clone())
-        .with_attribution(attribution.clone())
-        .with_output_cap(output_cap)
-        .with_download_cap(download_cap)
-        .with_deadlines(deadlines)
-        .with_confined_runs(true)
-        .asking_about_unconfined(true)
-        .with_sandbox_mode(session.sandbox_mode());
+    let mut worker_task = run.task(task, session, permissions);
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -5568,16 +5586,7 @@ fn run_turn_animated(
     asked_about: AskedAbout,
     exposed: bravebot_core::credentials::Exposed,
     permissions: &Permissions,
-    attribution: &Attribution,
-    // What the settings say a command's output may spend of the conversation, where they said
-    // anything. Passed in beside the attribution and for the same reason: which layer named it is
-    // settled where the settings were read.
-    output_cap: Option<usize>,
-    // And what one download may write to a file, for the same reason.
-    download_cap: Option<usize>,
-    // And how long a command may run, resolved where those settings were read and for the same
-    // reason (RUN-23).
-    deadlines: bravebot_agent::exec::Deadlines,
+    run: &RunSettings,
     // The session's record. Its id travels with the task because a run prompt may be answered with
     // the key whose grant outlives the session, and the record of that says which session pressed
     // it so that `/status` can tell a person which answers they are still carrying. The record
@@ -5651,29 +5660,16 @@ fn run_turn_animated(
     // The worker starts the language servers, and the info panel on this thread names them.
     let language_servers = session.language_servers().clone();
     let kept_jobs = session.kept_jobs().cloned();
-    let mut task = Task::new(prompt)
+    let mut task = run
+        .task(prompt, session, permissions)
         .with_rounds(None)
-        .with_home(bravebot_agent::home::directory())
-        .with_profile(bravebot_agent::home::profile())
-        .with_cache(bravebot_agent::home::cache())
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(stored.id().to_string()))
-        .with_model(session.model().map(str::to_string))
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
-        .with_effort(session.effort_in_force())
-        .with_permissions(permissions.clone())
-        .with_permission_mode(permission_mode.clone())
-        .with_attribution(attribution.clone())
         // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
         // sends, ticks and goal rounds included (CLI-19).
         .with_system_prompts(session.system_prompts().clone())
-        .with_output_cap(output_cap)
-        .with_download_cap(download_cap)
-        .with_deadlines(deadlines)
-        .with_confined_runs(true)
-        .asking_about_unconfined(true)
-        .with_sandbox_mode(session.sandbox_mode())
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.
