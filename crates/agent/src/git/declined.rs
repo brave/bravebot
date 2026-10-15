@@ -21,6 +21,7 @@ pub enum Declined {
     Worktree,
     Format,
     Unreadable,
+    AnotherWorktree(String),
     NoCommits,
     TooSlow,
     Unknown(String),
@@ -102,6 +103,10 @@ impl Declined {
             Declined::Unreadable => format!(
                 "{named}/.git could not be read as a repository: something it names is missing \
                  or damaged."
+            ),
+            Declined::AnotherWorktree(revision) => format!(
+                "{revision} lives under worktrees/ or main-worktree/ in another worktree's \
+                 directory, which this reader never lists for {named}."
             ),
             Declined::NoCommits => format!("{named} has no commits yet."),
             Declined::TooSlow => {
@@ -212,6 +217,7 @@ impl Declined {
             | Declined::Worktree
             | Declined::Format
             | Declined::Unreadable
+            | Declined::AnotherWorktree(_)
             | Declined::TooSlow
             | Declined::UntrustedTree
             | Declined::SplitIndex
