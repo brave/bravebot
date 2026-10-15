@@ -2351,10 +2351,10 @@ as the `model` key is, and the switch is decided by a category the driver derive
 ### BACKEND-54: an API key is the whole of what reaches Brave's relay, and holding none changes nothing
 
 Brave's endpoint answers a chat request with one of two handlers, and `BRAVE_AI_CHAT_API_KEY` is what
-decides which. Holding no key, a request is signed as BACKEND-25's always has been, and this is what
-every build ships and every environment configured before the variable existed does. Holding one, the
-request presents the key instead of a signature and is answered by the handler that relays the
-parameter list, so the level BACKEND-20 carried reaches the model rather than being dropped.
+decides which. A request from an environment that exports no key, or a blank one, is signed as
+BACKEND-25 describes, and no build ships a key. Holding one, the request presents the key instead of
+a signature and is answered by the handler that relays the parameter list, so the level BACKEND-20
+carried reaches the model rather than being dropped.
 
 Presenting the key means presenting it *instead of* a signature, never alongside one. The key is
 never sent to a gateway, whose own credential BACKEND-16 names. No subscription credential is spent
