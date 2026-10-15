@@ -297,6 +297,8 @@ list cannot carry, which is why it is the one the row does.
 `verified-by: bravebot_tui::theme_prompt::a_theme_that_paints_every_ink_itself_has_nothing_to_add`
 `verified-by: bravebot_tui::theme_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::theme_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::theme_prompt::the_session_stays_visible_around_a_list_sized_panel`
+`verified-by: bravebot_tui::render::moving_the_theme_cursor_repaints_the_session_behind_the_panel`
 `verified-by: bravebot_tui::theme_prompt::the_list_shows_names_a_person_reads`
 
 <a id="VIEW-13"></a>
