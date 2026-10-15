@@ -10,6 +10,7 @@ governs:
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs
+  - crates/tui/src/sessions_view.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---
@@ -26,7 +27,8 @@ clause that is built whole names its tests. A clause with a part still to build 
 `verified-by: none` until all of it lands, and the part not built is the checkout ([BG-14](#BG-14)).
 The supervisor and the restart of a process that ends between turns ([BG-11](#BG-11),
 [BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
-no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
+no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built.
+`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
 resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
@@ -178,8 +180,8 @@ was nearest.
 <a id="BG-5"></a>
 ### BG-5: the list shows labels and states, never content
 
-`bravebot sessions` prints one line per background session, across every project: the first eight
-characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
+`bravebot sessions` prints one line per background session, across every project, wherever it does
+not open the list of [BG-16](#BG-16): the first eight characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
 cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
 a word for each kind a foreground session puts, and shows nothing of what the prompt is about.
@@ -471,6 +473,66 @@ passes it. Only a thing the confined program cannot read can tell the person's t
 `verified-by: bravebot_session::jobs::the_secret_of_a_process_is_random_private_and_replaced_each_time`
 `verified-by: bravebot_session::jobs::only_the_whole_secret_is_the_secret`
 
+<a id="BG-16"></a>
+### BG-16: on a terminal, `bravebot sessions` is a list grouped by state, and a row attaches
+
+Where standard input, standard output and standard error are all terminals, `bravebot sessions`
+with no other word opens a full-screen list of the roster. It groups sessions under a heading for their state
+([BG-6](#BG-6)), in the order `needs input`, `working`, `idle`, `interrupted`, `stopped`. A heading
+carries the number of sessions under it, and a state no session is in has none. Within a state the
+most recently used session is first. When the roster is empty nothing opens, and the line
+[BG-5](#BG-5) prints is printed. Anywhere else, and with `--json`, `bravebot sessions` prints as
+[BG-5](#BG-5) says. Standard error is among the three because `attach` says on it why a session
+cannot be started.
+
+A row shows the start of the session's id, its name, how long since its last turn, and its state
+with the word for the kind of prompt held where one is. A name of more than 28 columns is cut with an
+ellipsis. On a screen too narrow for the rest of the row the name is cut further, to no fewer than 8 columns, so
+the time and the state after it stay on the screen. Below the list, the working directory and the
+last prompt the person typed are shown for the session under the cursor. These are fields of a
+[BG-5](#BG-5) line and the list draws no others: no reply, tool result, file content, command output
+or question text. Control characters are pictured as they are in a line.
+
+The list reads the roster again once a second, whatever keys arrive in between. A session whose state changed moves under the
+heading for its new state, and the cursor stays on that session. If the cursor's session has left
+the roster, the cursor goes to the row now in its place, or to the last row.
+
+Up and Down, and `k` and `j`, move the cursor and stop at the ends. Enter leaves the list and
+attaches to the session under the cursor as `bravebot attach` does ([BG-9](#BG-9)), starting a
+`stopped` or `interrupted` session again as `attach` does. Escape, `q` and Ctrl-C leave and do
+nothing else. No other key does anything, and a key with a modifier is not the key without it, so no
+key in the list answers a held prompt, sends a reply or stops a process ([BG-7](#BG-7),
+[BG-10](#BG-10), [BG-11](#BG-11)). A terminal that cannot be taken, or fails while the list is open,
+gets a line on standard error saying why, and then the lines of [BG-5](#BG-5).
+
+**Why.** Many sessions are listed at once, and the ones waiting on the person are the ones to find
+first. The state of the process ([BG-6](#BG-6)) is a fact, so grouping by it reads no content. The
+cursor follows the session because the list changes under it, and Enter has to attach to the session
+the person was looking at. The list starts no process and answers nothing: `attach` is the one way
+in, so the mode ([BG-8](#BG-8)) and a held prompt ([BG-7](#BG-7)) are as they are for any attach.
+
+`verified-by: bravebot_tui::sessions_view::sessions_are_drawn_under_a_heading_for_their_state_in_a_fixed_order`
+`verified-by: bravebot_tui::sessions_view::a_state_no_session_is_in_has_no_heading`
+`verified-by: bravebot_tui::sessions_view::the_cursor_and_enter_follow_the_drawn_order_and_not_the_roster_order`
+`verified-by: bravebot_tui::sessions_view::the_directory_and_prompt_shown_are_those_of_the_row_under_the_cursor`
+`verified-by: bravebot_tui::sessions_view::a_refresh_keeps_the_cursor_on_its_session_when_the_session_changes_group`
+`verified-by: bravebot_tui::sessions_view::a_session_gone_from_the_roster_leaves_the_cursor_on_a_row`
+`verified-by: bravebot_tui::sessions_view::only_enter_attaches_and_only_escape_q_and_ctrl_c_leave`
+`verified-by: bravebot_tui::sessions_view::the_arrows_and_j_and_k_each_move_the_cursor_and_stop_at_the_ends`
+`verified-by: bravebot_tui::sessions_view::a_list_longer_than_the_screen_scrolls_to_keep_the_cursor_row_drawn`
+`verified-by: bravebot_tui::sessions_view::moving_up_a_long_list_moves_the_cursor_before_it_scrolls`
+`verified-by: bravebot_tui::sessions_view_theme::a_theme_that_paints_the_frame_paints_the_whole_list`
+`verified-by: bravebot_tui::sessions_view::an_empty_roster_says_there_are_no_sessions`
+`verified-by: bravebot_tui::sessions_view::a_list_that_fits_again_is_drawn_from_its_top`
+`verified-by: bravebot_tui::sessions_view::moving_up_to_the_first_row_of_a_group_shows_its_heading`
+`verified-by: bravebot_tui::sessions_view::a_name_of_more_than_28_columns_is_cut_so_the_columns_after_it_stay_on_the_screen`
+`verified-by: bravebot_tui::sessions_view::a_screen_too_narrow_for_the_row_cuts_the_name_further_and_then_stops_at_8_columns`
+`verified-by: bravebot_cli::background::the_list_opens_only_for_no_other_word_on_three_terminals`
+`verified-by: bravebot_cli::background::a_session_is_grouped_by_the_state_of_its_process_and_not_the_one_it_last_wrote`
+`verified-by: bravebot_cli::background::a_row_holds_the_whole_id_and_the_start_of_it_and_names_the_kind_of_a_held_prompt`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
+`verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
+
 ## What this changes in other specs
 
 None of the following is true of a build that has no background sessions, and each is marked where
@@ -506,8 +568,9 @@ it is stated.
 - **Whether the checkout is made at the first edit rather than at the start.** A checkout at the
   start is made for sessions that never edit. One at the first edit moves the working directory
   during a session.
-- **Whether `bravebot sessions` has an interactive view.** [BG-5](#BG-5) specifies lines. Replying
-  from a row is not specified.
+- **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
+  Replying from a row and stopping from one are not specified. Showing what a session last wrote
+  would put bytes a session produced in the list, which [BG-5](#BG-5) keeps out.
 
 ## Known costs
 
@@ -531,6 +594,10 @@ it is stated.
   where git can.
 - **Unix first.** The attach channel is a socket in a directory only its owner can enter. Where that
   cannot be restricted, [BG-1](#BG-1) refuses a background session.
+- **Lines need a pipe on a terminal.** `bravebot sessions` draws the list there, so a person who
+  wants lines passes the output through a pipe, and a script reads `--json`.
+- **The list attaches and does nothing else.** A person who wants to reply or stop leaves it and
+  runs `bravebot reply` or `bravebot sessions stop`.
 - **The list says a prompt is held and not what it is.** A person must attach to see whether it is
   one they would approve. The alternative is drawing the prompt's subject in the list, which is the
   text [BG-5](#BG-5) keeps out.
