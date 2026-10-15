@@ -17,6 +17,7 @@
 pub mod ambient;
 pub mod ask;
 pub mod cancel;
+mod canonical;
 pub mod capability;
 pub mod command;
 pub mod credentials;

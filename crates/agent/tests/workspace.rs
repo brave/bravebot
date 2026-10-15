@@ -449,6 +449,115 @@ fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_g
     }
 }
 
+/// One file in two Unicode forms of its name: `cafe` followed by a combining acute accent, and
+/// `caf` followed by the precomposed letter. APFS stores a name as it was created and opens it
+/// under any canonically equivalent form, and so does a Linux directory with `casefold` set.
+const DECOMPOSED_NAME: &str = "cafe\u{301}.md";
+const PRECOMPOSED_NAME: &str = "caf\u{e9}.md";
+
+/// On a volume that opens a file under any canonically equivalent form of its name, the distrust
+/// rule written about `cafe\u{301}.md` is about the file read as `caf\u{e9}.md`. Whichever form the
+/// planner types, the fetched page the rule was written for has to come back untrusted, or naming
+/// the file in the other form launders it into trusted content. A volume that holds the two forms
+/// apart has two files, and the rule reaches the second one as well (TRUST-2), so the test writes
+/// both names and asserts the same thing on either kind of volume.
+#[test]
+fn a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted() {
+    let scratch = Scratch::new("equivalent-spelled-past-a-rule");
+    std::fs::write(scratch.path.join(DECOMPOSED_NAME), "a fetched page").unwrap();
+    std::fs::write(scratch.path.join(PRECOMPOSED_NAME), "a fetched page").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (refused, read_as) in [
+        (DECOMPOSED_NAME, PRECOMPOSED_NAME),
+        (PRECOMPOSED_NAME, DECOMPOSED_NAME),
+    ] {
+        // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
+        // workspace is trusted, and the file that page landed in is not.
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        trust.distrust(refused);
+
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let contents = workspace
+            .read(&mut policy, &Labelled::trusted(read_as.to_string()))
+            .expect("the same file opens under either form");
+        assert_eq!(
+            contents.label().integrity,
+            Integrity::Untrusted,
+            "a rule about {refused:?} did not reach the file read as {read_as:?}"
+        );
+        assert!(policy.finish());
+    }
+}
+
+/// The same file through its write: fetched bytes written under one form of the name are what both
+/// forms read, whichever form an earlier trusted write used, so the second spelling must not keep
+/// the trust the first write recorded. A volume that holds the forms apart has two files, and the
+/// trusted one is still read as untrusted because the weakest rule among equivalent spellings
+/// decides each (TRUST-2), so the assertion is the same on either kind of volume.
+#[test]
+fn an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either()
+ {
+    for (trusted_form, untrusted_form) in [
+        (DECOMPOSED_NAME, PRECOMPOSED_NAME),
+        (PRECOMPOSED_NAME, DECOMPOSED_NAME),
+    ] {
+        let scratch = Scratch::new("equivalent-spelled-rewrite");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust)
+        .with_root(workspace.root());
+
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(trusted_form.to_string()),
+                &Labelled::trusted("ours".to_string()),
+            )
+            .expect("trusted bytes are written");
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(untrusted_form.to_string()),
+                &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+            )
+            .expect("the fetched page is written");
+
+        for spelling in [trusted_form, untrusted_form] {
+            let contents = workspace
+                .read(&mut policy, &Labelled::trusted(spelling.to_string()))
+                .expect("the file is read");
+            assert_eq!(
+                contents.label().integrity,
+                Integrity::Untrusted,
+                "{spelling:?} read the fetched page as trusted content after it was written as \
+                 {untrusted_form:?} over a trusted write as {trusted_form:?}"
+            );
+        }
+        assert!(policy.finish());
+    }
+}
+
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
 /// directory the project sits inside, so from then on a project file has an absolute name that
 /// resolves through a directory other than the project. Asked under that name as written, a file
