@@ -127,6 +127,47 @@ impl fmt::Display for Denial {
 
 impl std::error::Error for Denial {}
 
+/// Why a session refused a `run` call's request for reach past its profile (SANDBOX-26,
+/// SANDBOX-29).
+///
+/// A fixed set of facts about the session, chosen by the driver where it refuses, so the trail can
+/// say which setting withheld a request that the planner is told no setting for. The one piece of
+/// text carried is a sandbox mode's own name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunRequestCause {
+    /// The sandbox mode does not take the request, named by its own name.
+    SandboxMode(&'static str),
+    /// The turn confines none of its runs, so no mode is in force.
+    NoConfinement,
+    /// The platform has no sandbox to confine a run with, whatever the turn asked for.
+    NoPlatformSandbox,
+    /// The workspace is one the person has not trusted
+    /// ([TRUST-7](../../../docs/specs/trust-map.md#TRUST-7)).
+    UntrustedWorkspace,
+    /// The administrator's file closed the network the runs have.
+    ManagedClosedNetwork,
+    /// The call came from a delegate.
+    Delegate,
+    /// The session names no profile directory for a request to be recorded under.
+    NoProfileDirectory,
+}
+
+impl fmt::Display for RunRequestCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SandboxMode(mode) => write!(f, "the {mode} sandbox mode does not take it"),
+            Self::NoConfinement => f.write_str("this turn confines none of its runs"),
+            Self::NoPlatformSandbox => {
+                f.write_str("this platform has no sandbox to confine runs with")
+            }
+            Self::UntrustedWorkspace => f.write_str("the workspace is not trusted"),
+            Self::ManagedClosedNetwork => f.write_str("a managed setting closes the network"),
+            Self::Delegate => f.write_str("a delegate may not ask"),
+            Self::NoProfileDirectory => f.write_str("the session has no profile directory"),
+        }
+    }
+}
+
 type Gated<T> = Result<T, Denial>;
 
 /// The routing block for one turn: trusted key/value pairs that decide where effects
@@ -6861,6 +6902,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "sandbox",
             Principle::Confinement,
             format!("{call}: the {mode} sandbox mode refuses a write, so nothing was written"),
+        );
+    }
+
+    /// Record that a `run` call asked for reach past the session's profile and the session
+    /// refused it (SANDBOX-26, SANDBOX-29).
+    ///
+    /// The planner is told one sentence that names no setting, so without this the trail holds
+    /// nothing that says which setting withheld the request (TRACE-1), and the turn reads as clean.
+    /// `argument` is the `run` argument, `unconfined` or `scopes`, and `causes` is every reason that
+    /// held, in the fixed order the caller lists them. Each is a fact about the session and none is
+    /// text a call or a tool produced (TRACE-2).
+    pub fn refuse_run_request(&mut self, argument: &'static str, causes: &[RunRequestCause]) {
+        debug_assert!(!causes.is_empty(), "a refusal with no cause names nothing");
+        let causes: Vec<String> = causes.iter().map(RunRequestCause::to_string).collect();
+        let _ = self.deny(
+            "sandbox",
+            Principle::Confinement,
+            format!(
+                "run.{argument}: the request was refused and the line did not run: {}",
+                causes.join("; ")
+            ),
         );
     }
 
@@ -16143,6 +16205,77 @@ five
                 reasons[0]
             );
             assert!(sink.events().iter().any(Event::is_refusal));
+        }
+
+        /// TRACE-1: a `run` request for reach past the profile that the session refuses is a refusal
+        /// under `sandbox`, naming the argument and each cause that held, in the order given. The
+        /// planner is told no setting, so this record is the only place to read which one withheld
+        /// it. The turn does not end as clean, and the entry holds the mode's name and fixed words
+        /// and nothing else (TRACE-2).
+        #[test]
+        fn a_refused_run_request_names_its_argument_and_every_cause_that_held() {
+            use super::RunRequestCause::{
+                Delegate, ManagedClosedNetwork, NoConfinement, NoPlatformSandbox,
+                NoProfileDirectory, SandboxMode, UntrustedWorkspace,
+            };
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_run_request(
+                "unconfined",
+                &[
+                    SandboxMode("strict"),
+                    UntrustedWorkspace,
+                    ManagedClosedNetwork,
+                    Delegate,
+                ],
+            );
+            turn.refuse_run_request("scopes", &[NoConfinement]);
+            turn.refuse_run_request("scopes", &[NoProfileDirectory]);
+            turn.refuse_run_request("scopes", &[NoPlatformSandbox]);
+            assert!(!turn.finish(), "a turn that refused a request ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.unconfined: the request was refused and the line did not run: the \
+                         strict sandbox mode does not take it; the workspace is not trusted; a \
+                         managed setting closes the network; a delegate may not ask"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: this turn \
+                         confines none of its runs"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: the \
+                         session has no profile directory"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: this \
+                         platform has no sandbox to confine runs with"
+                    ),
+                ]
+            );
         }
 
         /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds

@@ -39,6 +39,13 @@ sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded th
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
 that writes, and a `run` line it refuses for redirecting output into a file.
 
+A `run` call that asks for no sandbox (`unconfined`, [SANDBOX-29](sandboxing.md#SANDBOX-29)) or for
+credential scopes (`scopes`, [SANDBOX-26](sandboxing.md#SANDBOX-26)) and is refused is recorded as a
+refusal under `sandbox`. The entry names the argument and each cause that held: the sandbox mode by
+its name, a turn that confines none of its runs, a workspace not trusted, a managed closed network,
+a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
+sentence the planner reads names none of them.
+
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
 isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
@@ -75,6 +82,14 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
 `verified-by: bravebot_agent::turn::under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs`
+`verified-by: bravebot_core::policy::a_refused_run_request_names_its_argument_and_every_cause_that_held`
+`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
+`verified-by: bravebot_agent::tools::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
+`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
+`verified-by: bravebot_agent::turn::a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

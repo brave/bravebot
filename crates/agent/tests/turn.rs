@@ -21100,6 +21100,76 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     assert!(wrote, "the control did not run");
 }
 
+/// TRACE-1, SANDBOX-26, SANDBOX-29: in a session whose sandbox mode is `off`, a `run` call that asks
+/// for no sandbox and the next one that asks for a credential scope are each refused with the
+/// sentence the planner always got, which names no setting, and the trail holds a refusal under
+/// `sandbox` for each that names the argument and the mode. The control is the same turn under
+/// `workspace-write` with a person approving, which leaves no such refusal. The regression it
+/// rejects is a refusal the planner is told of and the trail omits, which leaves nobody able to say
+/// whether the mode, the trust, a managed network or a delegate withheld it.
+#[test]
+fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
+    let name = "refused-request-recorded";
+    let refused = two_runs(
+        name,
+        serde_json::json!({ "command": "true", "unconfined": true }),
+        serde_json::json!({ "command": "true", "scopes": ["remote"] }),
+        bravebot_sandbox::SandboxMode::Off,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    for entry in [
+        "run.unconfined: the request was refused and the line did not run: the off sandbox mode \
+         does not take it",
+        "run.scopes: the request was refused and the line did not run: the off sandbox mode does \
+         not take it",
+    ] {
+        assert!(
+            refused.trail.contains(entry),
+            "the trail holds no `{entry}`: {}",
+            refused.trail
+        );
+    }
+    assert!(
+        refused
+            .third
+            .contains("does not accept a request to run a line with no sandbox")
+            && refused
+                .third
+                .contains("does not accept a request for a credential scope"),
+        "the planner was not told the sentences it always was: {}",
+        refused.third
+    );
+
+    // The control needs a sandbox to lend a scope to, which the refusals above do not.
+    if cannot_confine_here() {
+        return;
+    }
+    let mut person = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let accepted = two_runs(
+        name,
+        serde_json::json!({ "command": "true", "unconfined": true }),
+        serde_json::json!({ "command": "true", "scopes": ["remote"] }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut person,
+    );
+    assert!(
+        !accepted.trail.contains("the request was refused"),
+        "an accepted request was recorded as refused: {}",
+        accepted.trail
+    );
+    assert!(
+        accepted.third.contains("It exited 0."),
+        "the control did not run: {}",
+        accepted.third
+    );
+}
+
 /// SANDBOX-29: a value that is not a boolean is an error and nothing runs, so a planner that
 /// believed it had asked is not handed the profile's failure as a fault of the program.
 #[test]
