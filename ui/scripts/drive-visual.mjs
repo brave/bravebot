@@ -88,7 +88,7 @@ try {
           if (el.shadowRoot) visit(el.shadowRoot)
           const host = el.getRootNode() instanceof ShadowRoot ? null : el
           if (!host || seen.has(host)) continue
-          const interactive = host.matches('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], leo-button, leo-checkbox, leo-radiobutton') && !host.matches('a, .local-file-link') && !host.closest('[inert], [hidden]')
+          const interactive = host.matches('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], leo-button') && !host.matches('a, .local-file-link') && !host.closest('[inert], [hidden]')
           if (!interactive) continue
           seen.add(host)
           const box = host.getBoundingClientRect()
