@@ -91,6 +91,7 @@ working directory or a directory opened for the session.
 `verified-by: bravebot_tui::references::a_reference_cannot_climb_out_of_the_workspace`
 `verified-by: bravebot_mentions::lib::a_reference_cannot_climb_out_of_the_workspace`
 `verified-by: bravebot_mentions::lib::dots_and_an_absolute_path_are_not_finished_names`
+`verified-by: bravebot_agent::turn::a_named_file_outside_the_workspace_is_refused_and_never_sent`
 
 <a id="NAME-6"></a>
 ### NAME-6: a directory names nothing, and neither does prose

@@ -2433,6 +2433,128 @@ done
         assert_ne!(unconfigured, missing);
     }
 
+    #[cfg(unix)]
+    const CANNOT_BE_RUN: &str = "bravebot-lsp-cannot-be-run";
+
+    #[cfg(unix)]
+    fn a_program_that_cannot_be_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(CANNOT_BE_RUN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn no_program_anywhere(_: &str) -> Option<PathBuf> {
+        None
+    }
+
+    /// LSP-6: a question put to `Servers::ask` fails with the sentence for the case it is in, and
+    /// never with an empty answer or a search over the tree. A planner that read any of the three
+    /// as "nothing calls this" would delete a function that is called.
+    ///
+    /// Through the entry point the tool calls rather than the error values: the three sentences
+    /// are only distinct if `ask` reaches the right one for the right cause. The program that
+    /// cannot be run is a file without the execute bit, so the failure is the launch's and the
+    /// server never reaches the protocol.
+    #[cfg(unix)]
+    #[test]
+    fn asking_with_no_server_says_which_of_the_three_cases_it_is() {
+        let scratch = crate::testutil::Scratch::new(CANNOT_BE_RUN);
+        std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
+        std::fs::write(scratch.join("src").join("a.rs"), "pub struct Held;\n").expect("write");
+        std::fs::write(scratch.join("notes.txt"), "Held\n").expect("write");
+        std::fs::write(scratch.join("server"), "#!/bin/sh\nexit 0\n").expect("write the server");
+
+        let asked_about = |servers: &mut Servers, path: &str| {
+            let started_asking = std::cell::Cell::new(false);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = bravebot_core::policy::Routing::new();
+            routing.insert_trusted("task", "look up");
+            let mut policy = Policy::begin(
+                routing,
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+                &mut sink,
+            )
+            .expect("policy");
+            let result = servers.ask(
+                &mut policy,
+                &Question {
+                    operation: Operation::References,
+                    path,
+                    line: 1,
+                    character: 12,
+                    query: None,
+                },
+                &mut |_| {
+                    started_asking.set(true);
+                    true
+                },
+            );
+            (result, started_asking.get())
+        };
+
+        let mut cannot_run = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            a_program_that_cannot_be_run,
+            false,
+            Vec::new,
+        );
+        let mut absent = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            no_program_anywhere,
+            false,
+            Vec::new,
+        );
+
+        let (unconfigured, asked) = asked_about(&mut absent, "notes.txt");
+        let unconfigured =
+            unconfigured.expect_err("a file no server is configured for is no answer");
+        assert!(
+            matches!(&unconfigured, LspError::NoServerFor { path } if path == "notes.txt"),
+            "{unconfigured:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that cannot exist"
+        );
+
+        let (missing, asked) = asked_about(&mut absent, "src/a.rs");
+        let missing = missing.expect_err("a server that is not installed is no answer");
+        assert!(
+            matches!(&missing, LspError::NoBinary { program, .. } if program == "rust-analyzer"),
+            "{missing:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that is not there"
+        );
+
+        let (failed, asked) = asked_about(&mut cannot_run, "src/a.rs");
+        let failed = failed.expect_err("a server that did not start is no answer");
+        assert!(matches!(&failed, LspError::Start { .. }), "{failed:?}");
+        assert!(
+            asked,
+            "the person was not asked before the launch was tried"
+        );
+
+        let said = [
+            unconfigured.to_string(),
+            missing.to_string(),
+            failed.to_string(),
+        ];
+        assert!(
+            said[0].contains("no language server is configured"),
+            "{}",
+            said[0]
+        );
+        assert!(said[1].contains("is not installed"), "{}", said[1]);
+        assert!(said[2].contains("did not start"), "{}", said[2]);
+        for sentence in &said {
+            assert!(!sentence.contains("no references"), "{sentence}");
+        }
+    }
+
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
     #[cfg(unix)]
     #[test]
