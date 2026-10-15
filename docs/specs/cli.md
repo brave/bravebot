@@ -4,6 +4,11 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/model.rs
+  - crates/cli/src/one_shot.rs
+  - crates/cli/src/usage.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs

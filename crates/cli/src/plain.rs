@@ -156,15 +156,15 @@ fn run(
     }
 
     let settings = bravebot_config::Settings::load();
-    let mut workspace = match crate::current_workspace(&settings, &bravebot_config::Managed::load())
-    {
-        Ok(workspace) => workspace,
-        Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
-    };
+    let mut workspace =
+        match crate::workspace::current_workspace(&settings, &bravebot_config::Managed::load()) {
+            Ok(workspace) => workspace,
+            Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
+        };
 
     // Somewhere of its own to write what is not part of the project, for the length of the
     // session. Held in a binding because dropping it is what removes it.
-    let _scratch = crate::scratch_for_this_run(&mut workspace);
+    let _scratch = crate::workspace::scratch_for_this_run(&mut workspace);
 
     // There is somebody here, so the rules a settings file wrote hold as they do in a session: an
     // allow rule says which prompts to stop raising, and this is a surface that raises them. The
@@ -520,22 +520,26 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
         // a moment ago is worth another prompt, and the conversation is still here.
         if let Some(failure) = &said.failure {
             let _ = writeln!(beside, "{failure}");
-            crate::say_notices(beside, &said.notices);
+            crate::finish::say_notices(beside, &said.notices);
             continue;
         }
 
         // The same division a one-shot run's ending goes through, and the same function, so the
         // two surfaces cannot come to disagree about which stream a notice belongs on.
-        crate::report(
+        crate::finish::report(
             reply,
             beside,
-            &crate::Finished {
+            &crate::finish::Finished {
                 reply: &said.reply,
                 notices: &said.notices,
                 attempt: None,
                 trail: None,
                 clean: said.clean,
-                ending: crate::ending_of_a_turn(said.clean, false, said.not_served.is_some()),
+                ending: crate::finish::ending_of_a_turn(
+                    said.clean,
+                    false,
+                    said.not_served.is_some(),
+                ),
                 not_served: said.not_served.as_deref(),
             },
         );
@@ -892,7 +896,7 @@ impl Running<'_> {
             self.config,
             &self.in_force,
         );
-        let complaint = crate::model_not_served(&asked, comparable, answered);
+        let complaint = crate::model::model_not_served(&asked, comparable, answered);
         match complaint == self.complained {
             true => None,
             false => {

@@ -20,6 +20,7 @@ governs:
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs

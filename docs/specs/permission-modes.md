@@ -7,6 +7,8 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/one_shot.rs
+  - crates/cli/src/workspace.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/settings.rs
   - crates/ui-bridge/src/bridge.rs
