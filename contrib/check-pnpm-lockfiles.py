@@ -13,7 +13,8 @@ npm lockfiles and cannot read pnpm's, so this holds the same rules for pnpm-lock
   and the lockfile together and nothing else needs editing;
 - no entry resolves to a directory or a link, and no version is a file, link, workspace or URL
   reference, except that a project's own package.json may name a link to a package in this tree
-  listed in ALLOWED_LINKS, and that link may then appear as an importer's version;
+  listed in ALLOWED_LINKS under the same name, and that link may then appear as that dependency's
+  version;
 - the file has packages, so a lockfile that lost its entries fails instead of passing empty.
 
 The file is machine-written and regular, so it is read line by line. Standard library only, like
@@ -38,8 +39,9 @@ LOCKFILES = (
 
 ALLOWED_GIT_REPOS = ("brave/leo",)
 
-# Packages in this tree a project may link to rather than install, spelled as its manifest spells them.
-ALLOWED_LINKS = ("link:../packages/agent-client",)
+# Packages in this tree a project may link to rather than install, by the name it depends on them
+# under and the specifier its manifest spells.
+ALLOWED_LINKS = {"@brave/agent-client": "link:../packages/agent-client"}
 
 INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 REGISTRY_RESOLUTION = re.compile(r"\{integrity: (" + INTEGRITY.pattern + r")\}")
@@ -96,9 +98,9 @@ def allowed_git_sources(manifest):
 
 
 def allowed_links(manifest):
-    """The links the manifest names that this tree allows."""
+    """The dependency names whose link the manifest spells as this tree allows."""
     names = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
-    return {specifier for specifier in names.values() if specifier in ALLOWED_LINKS}
+    return {name: spec for name, spec in names.items() if ALLOWED_LINKS.get(name) == spec}
 
 
 def lint(text, manifest):
@@ -131,10 +133,14 @@ def lint(text, manifest):
                 problems.append(f"{key}: resolution is not an sha512 integrity alone: {resolution}")
         else:
             problems.append(f"{key}: not a registry version or an allowed git source")
+    dependency = None
     for line in top.get("importers", []):
+        named = re.match(r"^      (\S.*):$", line)
+        if named:
+            dependency = named.group(1).strip("'\"")
         match = re.match(r"^\s+version: (\S+)$", line)
         if match and FOREIGN_VERSION.match(match.group(1)):
-            if match.group(1) not in links and not any(match.group(1).startswith(url) for url in git_sources):
+            if links.get(dependency) != match.group(1) and not any(match.group(1).startswith(url) for url in git_sources):
                 problems.append(f"importers: version {match.group(1)} is not a registry version")
     for line in top.get("snapshots", []):
         match = re.match(r"^      \S.*: (.+)$", line)
@@ -290,6 +296,12 @@ def selftest():
         "link to an allowed package that the manifest does not name",
         linked,
         MANIFEST,
+        "importers: version link:../packages/agent-client",
+    )
+    expect(
+        "link to an allowed directory under a name this tree does not allow",
+        linked.replace("'@brave/agent-client'", "other"),
+        {**MANIFEST, "dependencies": {**MANIFEST["dependencies"], "other": "link:../packages/agent-client"}},
         "importers: version link:../packages/agent-client",
     )
     expect(
