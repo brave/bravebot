@@ -2939,10 +2939,59 @@ def test_the_manifest_is_read_from_the_work_directory():
         )
 
 
+def audit_programs(files):
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_programs_are_resolved(audit.mechanics.load_sources())),
+    )
+
+
+def test_programs_are_resolved():
+    spawn = 'fn go() {\n    let _ = std::process::Command::new("ssh-keygen").status();\n}\n'
+    found = audit_programs({"crates/cli/src/identity.rs": spawn})
+    check(
+        "a bare name in production code is an error naming the file, line and program",
+        kinds(found) == ["program-started-by-bare-name"]
+        and found[0]["severity"] == audit.ERROR
+        and "crates/cli/src/identity.rs:2" in found[0]["summary"]
+        and "ssh-keygen" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": 'fn go() { Command::new("/usr/bin/ssh-keygen"); }\n'}
+    )
+    check("an absolute path is not a finding", found == [], str(found))
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": 'fn go() { Command::new(resolved); }\n'}
+    )
+    check("a name held in a variable is left to review", found == [], str(found))
+
+    for name, body in {
+        "a test module": 'fn go() {}\n#[cfg(test)]\nmod t {\n    fn x() { Command::new("sh"); }\n}\n',
+        "a platform test module": 'fn go() {}\n#[cfg(all(test, target_os = "macos"))]\nmod t {\n'
+        '    fn x() { Command::new("cc"); }\n}\n',
+    }.items():
+        found = audit_programs({"crates/cli/src/identity.rs": body})
+        check(f"a bare name inside {name} is not a finding", found == [], str(found))
+
+    for path in ("crates/cli/tests/run.rs", "crates/cli/src/identity_tests.rs"):
+        found = audit_programs({path: 'fn x() { Command::new("sh"); }\n'})
+        check(f"a bare name in {path} is not a finding", found == [], str(found))
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": '// Command::new("sh") was the old way\nfn go() {}\n'}
+    )
+    check("a bare name in a comment is not a finding", found == [], str(found))
+
+
 def main():
     for test in (
         test_exception_counts,
         test_network_clients_are_recorded,
+        test_programs_are_resolved,
         test_prompt_split,
         test_exhaustive_reader_docs,
         test_labelled_impls,

@@ -106,3 +106,19 @@ leaves the next one to be found by another report.
 **Why:** a rule is read under the name a call used, and a filesystem gives one file more names than
 any one report finds. A fix confined to the reported name closes one of them and says nothing about
 the rest.
+
+---
+
+<a id="PATH-005"></a>
+
+## A program bravebot starts itself names the test that skips a file a stage could have written
+
+**A change that starts a program bravebot runs for itself names, for that program, the test that
+shows a file in a writable `PATH` directory is skipped, and whether `own_credentials()` is removed
+from its environment ([CRED-14](../specs/credential-protection.md#CRED-14)).** `make check-security`
+fails on `Command::new("name")` in production code, so what a reviewer reads for is what it cannot
+see: a program named by a variable, and a started program that looks up a second one through the
+`PATH` it inherited ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
+
+**Why:** the check reads literals. A name held in a variable and a program started by another
+program each reach the same unconfined lookup, and each shipped before being asked about.
