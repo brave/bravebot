@@ -2967,12 +2967,19 @@ a new spawn is added to the list here, in the same change, or resolved first.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **A program named in a started program's arguments is resolved first.** A started program keeps bravebot's own
-  `PATH`, which can hold those directories, so an argument that names a program for it to start is
-  that program's absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux
-  is given `cat` that way ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a
-  directory the inhibitor is not started, and `/caffeinate` reports it as it does an inhibitor that
-  is not installed.
+- **The editor's own lookups search only those entries.** A started program looks up the names it
+  starts itself through the `PATH` it inherits. The editor Ctrl-G opens is started with bravebot's
+  `PATH` reduced to the entries the lookup searches, in the order they were written, so a `#!/usr/bin/env`
+  shebang in the editor, a launcher script, or an `$EDITOR` of `env vim` finds the program it starts
+  only among them. Where no entry is searched the editor is started with no `PATH` variable. An empty
+  `PATH` would be read as the current directory. A program the editor starts by name that is found
+  only in a directory left out is not found by it.
+- **A program named in another started program's arguments is resolved first.** A started program
+  other than the editor keeps bravebot's own `PATH`, which can hold those directories, so an argument
+  that names a program for it to start is that program's absolute path, found the same way. The
+  inhibitor `/caffeinate` starts on Linux is given `cat` that way ([CMD-12](commands.md#CMD-12)).
+  Where `cat` is found only in such a directory the inhibitor is not started, and `/caffeinate`
+  reports it as it does an inhibitor that is not installed.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -2982,6 +2989,8 @@ confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen 
 the person's access, which the confinement exists to deny it. A started program looks up a name in
 its own arguments through the `PATH` it inherited from bravebot, not through the lookup above.
 `systemd-inhibit` starts `cat` that way, so its argument is the resolved path and not the bare name.
+An editor that is a script starts its interpreter the same way, so the editor is given the `PATH`
+the lookup would have searched.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -2999,6 +3008,9 @@ its own arguments through the `PATH` it inherited from bravebot, not through the
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_holds_exactly_the_entries_the_lookup_searches`
+`verified-by: bravebot_sandbox::programs::a_started_program_with_no_searched_entry_is_given_no_path_at_all`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_carries_an_entry_that_is_not_utf8_as_its_bytes`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
@@ -3008,6 +3020,9 @@ its own arguments through the `PATH` it inherited from bravebot, not through the
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::editor::an_editor_named_only_by_a_planted_file_is_not_found`
+`verified-by: bravebot_tui::editor::an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::editor::an_editor_configured_as_env_and_a_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::editor::an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory`
 `verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
 `verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
