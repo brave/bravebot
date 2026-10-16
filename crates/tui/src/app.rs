@@ -5097,12 +5097,15 @@ struct FinishedTurn {
     servers: Option<LanguageServers>,
 }
 
-/// Decisions retained outside the worker when it cannot return an outcome.
+/// What the session keeps of a turn's inputs while the worker holds them: the decisions, for a
+/// worker that cannot return an outcome, and where the conversation stood, for a stop that takes
+/// the prompt back.
 struct RetainedTurn {
     files: bravebot_core::file_authority::FileAuthority,
     programs: TrustedPrograms,
     asked: AskedAbout,
     exposed: bravebot_core::credentials::Exposed,
+    began: bravebot_agent::conversation::Mark,
 }
 
 /// Run a turn on a worker thread, redrawing while it works.
@@ -5265,6 +5268,7 @@ fn run_turn_animated(
         programs: programs.clone(),
         asked: asked_about.clone(),
         exposed: exposed.clone(),
+        began: conversation.mark(),
     };
 
     let worker = thread::spawn(move || {
@@ -5710,7 +5714,7 @@ fn finish_turn(
     let FinishedTurn {
         decisions,
         outcome,
-        conversation,
+        mut conversation,
         sink,
         servers,
     } = finished;
@@ -5749,7 +5753,15 @@ fn finish_turn(
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
         let typed = line.as_typed(session.standing_definition());
-        finish_cancelled_turn(session, &typed, *attempts);
+        // A prompt that is back in the box is sent again from there, so its copy in the
+        // conversation goes too: left in, every later request carries it once for each send and
+        // compaction counts each as an exchange of its own. Only the turn's opening goes, and only
+        // while the planner has done nothing.
+        if finish_cancelled_turn(session, &typed, *attempts)
+            && conversation.forget_since(retained.began)
+        {
+            session.prompt_withdrawn();
+        }
         carried
     } else {
         // The backend decides how to compare the requested and reported model names.
@@ -6241,7 +6253,10 @@ struct Carried {
 }
 
 /// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
-fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) {
+///
+/// Whether the prompt went back to the box, which is when the turn is also taken out of the
+/// conversation (INPUT-4).
+fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) -> bool {
     // Stopping a turn stops the loop it was part of, and stops one the person was not part way
     // through: the key means "stop what is happening", and a schedule that survived it would send
     // the next prompt as though nothing had been said (LOOP-11).
@@ -6258,9 +6273,7 @@ fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u
     session.stopped(attempts);
     // A fire is a whole turn, so the gap to the next fire is measured from here.
     session.watch_turn_ended();
-    if !session.is_quitting() {
-        session.restore(prompt);
-    }
+    !session.is_quitting() && session.restore(prompt)
 }
 
 /// Take a round's report of what the turn has spent into the session, what its request came to
@@ -15892,6 +15905,7 @@ mod tests {
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
                 exposed: bravebot_core::credentials::Exposed::new(),
+                began: Conversation::new().mark(),
             },
         );
 
@@ -19501,6 +19515,7 @@ mod tests {
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
                 exposed: bravebot_core::credentials::Exposed::new(),
+                began: Conversation::new().mark(),
             },
         );
 
@@ -27572,6 +27587,57 @@ mod tests {
         );
     }
 
+    /// A message that was kept moves into the place the prompt was, so the record has to say the
+    /// prompt is not in the conversation, or its offset names the message that took its place.
+    #[test]
+    fn a_prompt_taken_out_of_the_conversation_is_recorded_without_an_offset() {
+        use bravebot_aichat::protocol::Message;
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        session.submit().unwrap();
+        let mut conversation = Conversation::new();
+        let began = conversation.mark();
+        conversation.push(Message::user("first"));
+        session.prompt_recorded(0);
+        conversation.opening_done();
+        conversation.push(Message::user("a message from another session"));
+
+        let continued = finish_turn(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text: "first",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
+                conversation,
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+                began,
+            },
+        );
+        session.record_turn(0, &continued.conversation);
+
+        assert_eq!(session.input(), "first", "the prompt did not go back");
+        assert_eq!(continued.conversation.len(), 1);
+        let recorded = session.turn_history().last().expect("the turn is recorded");
+        assert_eq!(recorded.prompt, None);
+        assert_eq!(
+            recorded.prompt_offset, None,
+            "the record points at the message that took the prompt's place"
+        );
+    }
+
     /// Cancel the turn in flight the way the program does: through `finish_turn`, which is where a
     /// stopped turn goes, and not through the fold a finished one goes to.
     fn stop_through_finish_turn(session: &mut Session, text: &str) {
@@ -27596,6 +27662,7 @@ mod tests {
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
                 exposed: bravebot_core::credentials::Exposed::new(),
+                began: Conversation::new().mark(),
             },
         );
     }
@@ -28382,7 +28449,9 @@ mod tests {
                         bravebot_agent::Category::Transport,
                     )),
                 ),
-                _ => finish_cancelled_turn(&mut session, prompt, Some(1)),
+                _ => {
+                    finish_cancelled_turn(&mut session, prompt, Some(1));
+                }
             }
             session.record_turn(start, &conversation);
             save(&mut stored, &session, &conversation, &root);

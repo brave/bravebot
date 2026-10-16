@@ -2630,6 +2630,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         if conversation.recounted().len() > prompt_at {
             reporter.prompt_recorded(prompt_at);
         }
+        // So a front end that hands the prompt back to its box can take this much out of the
+        // conversation, and not what the turn goes on to do.
+        conversation.opening_done();
 
         // Premium is used when a subscription has been imported and this build knows the premium
         // host. Discovery happens per turn so an import mid-session takes effect on the next one, and

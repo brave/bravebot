@@ -2197,6 +2197,12 @@ impl Session {
         self.prompt_at = Some(at);
     }
 
+    /// The prompt has been taken out of the conversation, so the position it was recorded at holds
+    /// nothing of this turn's. Another message may have moved into it.
+    pub fn prompt_withdrawn(&mut self) {
+        self.prompt_at = None;
+    }
+
     /// Record one ended turn without copying model output out of the display.
     /// Conversation offsets refer to the archive plus current messages, so compaction keeps them.
     pub fn record_turn(&mut self, start: usize, conversation: &bravebot_agent::Conversation) {
@@ -2780,7 +2786,11 @@ impl Session {
     /// retype it, which is the whole point of cancelling rather than waiting. Three things stop
     /// that, and each means the prompt stays sent: work that is already on the screen, prompts
     /// waiting behind this one, and a box that is not empty.
-    pub fn restore(&mut self, prompt: impl Into<String>) {
+    ///
+    /// Returns whether the prompt was un-sent. The caller then takes it out of the conversation as
+    /// well, since a prompt out of the transcript that the planner still reads is sent again with
+    /// every request.
+    pub fn restore(&mut self, prompt: impl Into<String>) -> bool {
         self.status = Status::Idle;
         self.started = None;
         self.clear_in_progress();
@@ -2831,7 +2841,7 @@ impl Session {
             let todos = self.take_todos();
             self.transcript
                 .push(Entry::stopped(t!(turn_cancelled, turn = self.turns)).with_todos(todos));
-            return;
+            return false;
         }
 
         self.transcript.pop();
@@ -2851,6 +2861,7 @@ impl Session {
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
         self.forget_todos();
+        true
     }
 
     /// Put a rewound turn's prompt back in the box, for editing and sending again.
@@ -11570,7 +11581,10 @@ mod tests {
         }
         s.queue();
 
-        s.restore("first");
+        assert!(
+            !s.restore("first"),
+            "a prompt that stayed sent was reported as un-sent"
+        );
 
         assert_eq!(s.input(), "", "the stopped prompt went back into the box");
         assert!(
@@ -11597,7 +11611,10 @@ mod tests {
         }
         s.submit().expect("submitted");
 
-        s.restore("first");
+        assert!(
+            s.restore("first"),
+            "a prompt that went back to the box was reported as still sent"
+        );
 
         assert_eq!(s.input(), "first");
     }
@@ -11620,7 +11637,10 @@ mod tests {
         s.interjected();
         assert!(s.queued.is_empty(), "the turn did not take the prompt");
 
-        s.restore("first");
+        assert!(
+            !s.restore("first"),
+            "an opening prompt over an interjection was reported as un-sent"
+        );
 
         assert_eq!(s.input(), "", "the stopped prompt went back into the box");
         assert_eq!(

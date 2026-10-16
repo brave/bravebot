@@ -97,6 +97,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         (ending == "cancel").then(|| (2, cancel.clone())),
     );
     let start = conversation.recounted().len();
+    let began = conversation.mark();
     let mut sink = Trail::new();
     let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let completed = turn::resume(
@@ -143,6 +144,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
             programs,
             asked: AskedAbout::new(),
             exposed: Default::default(),
+            began,
         },
     );
     trust = continued.trust;
@@ -1390,6 +1392,7 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
                     programs: TrustedPrograms::new(),
                     asked: AskedAbout::new(),
                     exposed: Default::default(),
+                    began: Conversation::new().mark(),
                 },
             );
             let mut stored = sessions::Handle::begin(
@@ -2113,4 +2116,235 @@ fn a_hunk_that_only_removes_lines_is_placed_by_the_line_before_it() {
         assert_eq!(rows.len(), 1, "{}", wrote.said());
         assert_eq!(rows[0].note.as_deref(), Some(said));
     }
+}
+
+/// Run one turn against an endpoint that answers `replies` in order and stops the turn when the
+/// request numbered `stop_at` arrives, which is a stop before the reply to it. Finish the turn the
+/// way the event loop does. Returns the conversation the turn ended with, and the one the session
+/// carries into the next turn.
+fn sent_and_stopped(
+    session: &mut Session,
+    workspace: &Workspace,
+    mut conversation: Conversation,
+    prompt: &str,
+    replies: Vec<String>,
+    stop_at: usize,
+) -> (usize, Conversation) {
+    let began = conversation.mark();
+    let cancel = Cancel::new();
+    let (config, _requests, server) = endpoint::endpoint(replies, Some((stop_at, cancel.clone())));
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let mut sink = Trail::new();
+    let completed = turn::resume(
+        &config,
+        &Egress::new(),
+        workspace,
+        &Task::new(prompt).with_file_authority(authority.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &cancel,
+    );
+    server.join().unwrap();
+    assert!(
+        matches!(completed.outcome, Err(turn::TurnError::Cancelled { .. })),
+        "the stop did not land"
+    );
+    let held = conversation.len();
+    let continued = finish_turn(
+        session,
+        &config,
+        workspace,
+        Line {
+            text: prompt,
+            addressed: None,
+            offered_a_later_look: false,
+        },
+        FinishedTurn {
+            decisions: Some(completed.decisions),
+            outcome: completed.outcome,
+            conversation,
+            sink,
+            servers: None,
+        },
+        RetainedTurn {
+            files: authority,
+            programs: TrustedPrograms::new(),
+            asked: AskedAbout::new(),
+            exposed: Default::default(),
+            began,
+        },
+    );
+    (held, continued.conversation)
+}
+
+/// A prompt stopped before any reply goes back to the box and is sent again from there. The model
+/// reads the conversation, so the first copy has to leave it with the transcript: otherwise every
+/// resend adds one more identical message and the request carries all of them.
+#[test]
+fn a_prompt_stopped_before_any_reply_is_sent_once_when_it_is_sent_again() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let root = scratch_dir("stopped-before-any-reply");
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut session = Session::new("test");
+    let mut conversation = Conversation::new();
+    session.paste("summarise the readme");
+    for _ in 0..3 {
+        session.submit().unwrap();
+        let (held, carried) = sent_and_stopped(
+            &mut session,
+            &workspace,
+            conversation,
+            "summarise the readme",
+            vec!["hold".into()],
+            0,
+        );
+        conversation = carried;
+        assert_eq!(held, 1, "the stopped turn did not hold its prompt");
+        assert_eq!(
+            session.input(),
+            "summarise the readme",
+            "the prompt did not come back to the box"
+        );
+        assert!(
+            conversation.is_empty(),
+            "the prompt went back to the box and is still in the conversation: {:?}",
+            conversation.recounted()
+        );
+    }
+
+    session.submit().unwrap();
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &Task::new("summarise the readme"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut Trail::new(),
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    server.join().unwrap();
+
+    let sent: serde_json::Value = serde_json::from_str(&requests.recv().unwrap()).unwrap();
+    let prompts = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .or_else(|| message["content"][0]["text"].as_str())
+                .is_some_and(|text| text.contains("summarise the readme"))
+        })
+        .count();
+    assert_eq!(prompts, 1, "{sent}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Where the prompt stays sent, marked stopped, the planner has still read it and the next request
+/// still carries it. Taking it out of the conversation there would leave a transcript that shows a
+/// prompt the model no longer has.
+#[test]
+fn a_stopped_prompt_that_stays_sent_stays_in_the_conversation() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let root = scratch_dir("stopped-prompt-stays-sent");
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut session = Session::new("test");
+    session.paste("summarise the readme");
+    session.submit().unwrap();
+    session.paste("and the changelog");
+    assert!(session.queue(), "the second prompt did not wait");
+
+    let (_, conversation) = sent_and_stopped(
+        &mut session,
+        &workspace,
+        Conversation::new(),
+        "summarise the readme",
+        vec!["hold".into()],
+        0,
+    );
+
+    assert!(
+        session
+            .transcript
+            .iter()
+            .any(|entry| entry.speaker == crate::state::Speaker::User
+                && entry.text == "summarise the readme"),
+        "the prompt left the transcript"
+    );
+    assert_eq!(
+        conversation.len(),
+        1,
+        "the prompt stayed in the transcript and left the conversation"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A stop after a round of tool calls hands the prompt back too, since the transcript has nothing
+/// of the round to show. The planner did the round, though, and a command it ran or a file it read
+/// is not undone by taking the prompt back. The next request has to keep saying it happened, so the
+/// round stays and the prompt stays above it.
+#[test]
+fn a_prompt_stopped_after_a_round_of_tool_calls_keeps_the_round_in_the_conversation() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let root = scratch_dir("stopped-after-a-round");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("README.md"), "# demo\n").unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut session = Session::new("test");
+    session.paste("summarise the readme");
+    session.submit().unwrap();
+
+    let (held, conversation) = sent_and_stopped(
+        &mut session,
+        &workspace,
+        Conversation::new(),
+        "summarise the readme",
+        vec![
+            endpoint::tool("read_file", json!({"path":"README.md"})),
+            "hold".into(),
+        ],
+        1,
+    );
+
+    assert_eq!(
+        held, 3,
+        "the turn did not get as far as a round of tool calls"
+    );
+    assert_eq!(
+        conversation.len(),
+        held,
+        "the round the planner did was taken out of the conversation"
+    );
+    assert_eq!(
+        conversation.messages()[0].message.role,
+        bravebot_aichat::protocol::Role::User,
+        "the round no longer follows the prompt that asked for it"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
