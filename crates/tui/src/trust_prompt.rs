@@ -232,6 +232,27 @@ pub fn trusting_the_workspace(directory: &Path) -> TrustStore {
 fn ask_one<B: Backend>(
     terminal: &mut Terminal<B>,
     carried: &mut String,
+    draw_it: impl FnMut(&mut ratatui::Frame, bool, u16) -> Drawn,
+) -> Answer {
+    ask_one_from(
+        terminal,
+        carried,
+        || {
+            let taken = input::read()?;
+            // Asked of the event just handed out, so it is read before the next one replaces it.
+            Ok((taken, input::the_last_event_arrived_alone()))
+        },
+        draw_it,
+    )
+}
+
+/// [`ask_one`] with the reader handed in, so the loop that joins the key-arrived-alone fact, the
+/// offer's withdrawal and the carried words can be driven by a script of events without a terminal.
+/// `read` gives the next event and whether it arrived alone.
+fn ask_one_from<B: Backend>(
+    terminal: &mut Terminal<B>,
+    carried: &mut String,
+    mut read: impl FnMut() -> std::io::Result<(event::Event, bool)>,
     mut draw_it: impl FnMut(&mut ratatui::Frame, bool, u16) -> Drawn,
 ) -> Answer {
     let mut offered_to_leave = false;
@@ -255,12 +276,10 @@ fn ask_one<B: Backend>(
             return Answer::Decline;
         }
 
-        match input::read() {
+        match read() {
             // A paste answers nothing, and neither do words another program typed: both arrive as
             // one event whatever they carry, and nothing in either is a key somebody pressed.
-            Ok(taken) => {
-                // Asked of the event just handed out, so it is read before the next one replaces it.
-                let arrived_alone = input::the_last_event_arrived_alone();
+            Ok((taken, arrived_alone)) => {
                 if withdraws_the_offer(&taken) {
                     offered_to_leave = false;
                 }
@@ -2212,5 +2231,114 @@ mod tests {
         assert!(trust.is_empty());
         assert!(!trust.is_trusted("src/main.rs"));
         assert!(!trust.is_trusted("."));
+    }
+
+    /// A terminal to draw the question on, and a drawing of it that offers every answer.
+    fn driven(script: Vec<(event::Event, bool)>, carried: &mut String) -> (Answer, usize) {
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let mut script = script.into_iter();
+        let answer = ask_one_from(
+            &mut terminal,
+            carried,
+            || {
+                script.next().map(Ok).unwrap_or_else(|| {
+                    // A script that ran out is a terminal that went away, which declines.
+                    Err(std::io::Error::other("script ended"))
+                })
+            },
+            |_, _, _| Drawn {
+                furthest: 0,
+                page: 1,
+                answerable: true,
+            },
+        );
+        (answer, script.len())
+    }
+
+    fn ctrl_c() -> event::Event {
+        event::Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+    }
+
+    fn typed(c: char) -> event::Event {
+        event::Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+    }
+
+    /// The loop, not its helpers: two interrupts that each arrived alone leave, and anything that is
+    /// not the interrupt between them takes the offer back, so a byte written later arms it again
+    /// instead of taking it. Against a loop that never withdrew, the second script would leave.
+    #[test]
+    fn the_loop_leaves_on_two_lone_interrupts_and_not_across_a_resize() {
+        let (answer, _) = driven(vec![(ctrl_c(), true), (ctrl_c(), true)], &mut String::new());
+        assert_eq!(answer, Answer::Leave);
+
+        let (answer, _) = driven(
+            vec![
+                (ctrl_c(), true),
+                (event::Event::Resize(80, 24), true),
+                (ctrl_c(), true),
+                (typed('y'), true),
+            ],
+            &mut String::new(),
+        );
+        assert_eq!(
+            answer,
+            Answer::Trust,
+            "an interrupt after a resize took an offer the resize had withdrawn"
+        );
+    }
+
+    /// Words another program typed answer nothing at the loop, and are carried to the box. A loop
+    /// that read the arrived-alone fact as true for every event would take the first `n`, and one
+    /// that dropped the refused characters would carry nothing.
+    #[test]
+    fn the_loop_carries_words_that_arrived_together_and_answers_a_key_of_its_own() {
+        let mut carried = String::new();
+        let script = " nyc"
+            .chars()
+            .map(|c| (typed(c), false))
+            .chain([(typed('n'), true)])
+            .collect();
+        let (answer, left) = driven(script, &mut carried);
+        assert_eq!(answer, Answer::Decline);
+        assert_eq!(left, 0, "the loop stopped before the key of its own");
+        assert_eq!(carried, " nyc");
+    }
+
+    /// A key that arrived with others cannot arm or take the offer to leave either: two interrupts
+    /// from one write close nothing, even with the loop in between them.
+    #[test]
+    fn the_loop_takes_no_interrupt_that_arrived_with_others() {
+        let mut carried = String::new();
+        let (answer, left) = driven(
+            vec![(ctrl_c(), false), (ctrl_c(), false), (typed('y'), true)],
+            &mut carried,
+        );
+        assert_eq!(answer, Answer::Trust);
+        assert_eq!(left, 0);
+        assert_eq!(carried, "", "an interrupt that was refused became words");
+    }
+
+    /// A release answers nothing at the loop, and does not take the offer back: a `y` let go of is
+    /// the tail of a press already answered, and counting it would grant on one keystroke twice.
+    #[test]
+    fn the_loop_answers_presses_only_and_keeps_the_offer_through_a_release() {
+        let released = |code| {
+            event::Event::Key(KeyEvent::new_with_kind(
+                code,
+                KeyModifiers::NONE,
+                event::KeyEventKind::Release,
+            ))
+        };
+        let (answer, left) = driven(
+            vec![
+                (released(KeyCode::Char('y')), true),
+                (ctrl_c(), true),
+                (released(KeyCode::Char('c')), true),
+                (ctrl_c(), true),
+            ],
+            &mut String::new(),
+        );
+        assert_eq!(answer, Answer::Leave);
+        assert_eq!(left, 0);
     }
 }

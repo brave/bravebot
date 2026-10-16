@@ -402,6 +402,10 @@ the way out of the first screen of a session cannot depend on the order somebody
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_one_of_the_questions_opens_nothing`
+`verified-by: bravebot_tui::trust_prompt::the_loop_leaves_on_two_lone_interrupts_and_not_across_a_resize`
+`verified-by: bravebot_tui::trust_prompt::the_loop_carries_words_that_arrived_together_and_answers_a_key_of_its_own`
+`verified-by: bravebot_tui::trust_prompt::the_loop_takes_no_interrupt_that_arrived_with_others`
+`verified-by: bravebot_tui::trust_prompt::the_loop_answers_presses_only_and_keeps_the_offer_through_a_release`
 
 <a id="PROMPT-8"></a>
 ### PROMPT-8: a resume restores standing permissions, and nothing else

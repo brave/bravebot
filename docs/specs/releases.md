@@ -289,6 +289,7 @@ serve an older release's binary, checksum and signature together, and they verif
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_signed_by_the_release_key_installs`
 `verified-by: bravebot_cli::installer_signature::a_checksum_replaced_after_it_was_signed_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_checksum_signed_by_any_key_but_the_release_key_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_signature_that_verifies_but_was_made_by_a_key_the_installer_does_not_name_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
 `verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
