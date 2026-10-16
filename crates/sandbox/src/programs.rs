@@ -193,8 +193,9 @@ fn kept_out(writable: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-/// Whether a `PATH` entry is one the lookup searches, which is the only thing that decides what a
-/// started program's own lookups may search either.
+/// Whether a `PATH` entry is one the lookup searches. [`restrict_path`] keeps the same entries for a
+/// started program's own lookups, so the two cannot differ on which entries are left out. A `PATH`
+/// names directories, so the check on the file a lookup resolves to has no counterpart there.
 fn is_searched(entry: &Path, out: &[PathBuf], where_the_account_can: &[PathBuf]) -> bool {
     entry.is_absolute() && !within_any(entry, out) && !planted(entry, where_the_account_can)
 }
@@ -688,12 +689,22 @@ mod tests {
         let session = parent.join("work");
         let held = parent.join("held");
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary = std::env::temp_dir().join("bravebot-programs-restrict");
+        let temporary =
+            std::env::temp_dir().join(format!("bravebot-programs-restrict-{}", std::process::id()));
         let elsewhere = scratch_dir("programs-restrict-elsewhere");
         let linked = elsewhere.join("bin");
         std::fs::create_dir_all(session.join("bin")).unwrap();
         std::os::unix::fs::symlink(session.join("bin"), &linked).unwrap();
+        executable(
+            &scratch_dir("programs-restrict-relative"),
+            "bravebot-restrict-probe",
+        );
+        // Tests run from the crate's directory, two below the workspace's `target`.
         let relative = Path::new("../../target/test-scratch/programs-restrict-relative");
+        assert!(
+            relative.join("bravebot-restrict-probe").exists(),
+            "the relative entry reaches the probe, so only the rule leaves it out"
+        );
 
         // (the entry, whether the lookup searches it, why)
         let entries: Vec<(PathBuf, bool, &str)> = vec![
@@ -718,10 +729,8 @@ mod tests {
             ),
             (parent.join("tools"), true, "a directory outside every one"),
         ];
-        for (entry, _, _) in &entries {
-            if !entry.as_os_str().is_empty() {
-                executable(entry, "bravebot-restrict-probe");
-            }
+        for (entry, _, _) in entries.iter().filter(|(entry, _, _)| entry.is_absolute()) {
+            executable(entry, "bravebot-restrict-probe");
         }
 
         let all = std::env::join_paths(entries.iter().map(|(entry, _, _)| entry)).unwrap();
