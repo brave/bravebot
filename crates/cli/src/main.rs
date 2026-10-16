@@ -1270,6 +1270,12 @@ fn manifest_conflict(
     })
 }
 
+/// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
+/// terminal, since either one piped or redirected is nobody (CLI-8).
+fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
+    stdin_is_terminal && stderr_is_terminal
+}
+
 fn run_task(
     args: &[String],
     skip_permissions: bool,
@@ -1774,7 +1780,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // Unless the flag was given, which is the one way a run nobody is watching may write: the
     // person accepted that when they typed it, and this is the only path where the refusal above
     // is what stands between the flag and an effect.
-    let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let attended = a_plan_is_put(
+        std::io::stdin().is_terminal(),
+        std::io::stderr().is_terminal(),
+    );
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
@@ -3120,6 +3129,16 @@ mod tests {
 
         assert_eq!(decision, Decision::Reject);
         assert!(shown.is_empty(), "a plan was shown to nobody: {shown:?}");
+    }
+
+    /// Both ends have to be a terminal: a plan put to a redirected stderr is a plan nobody read, and
+    /// a piped stdin would be read for an answer from whatever fed it.
+    #[test]
+    fn a_plan_is_put_only_where_stdin_and_stderr_are_both_a_terminal() {
+        assert!(a_plan_is_put(true, true));
+        assert!(!a_plan_is_put(true, false), "a redirected stderr is nobody");
+        assert!(!a_plan_is_put(false, true), "a piped stdin is nobody");
+        assert!(!a_plan_is_put(false, false));
     }
 
     /// The affirmative is the only line that runs a program. End of input is not one, and neither is

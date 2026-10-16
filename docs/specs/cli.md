@@ -407,6 +407,7 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
 `verified-by: bravebot_cli::main::the_question_does_not_reprint_the_narrated_plan`
 `verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
+`verified-by: bravebot_cli::main::a_plan_is_put_only_where_stdin_and_stderr_are_both_a_terminal`
 `verified-by: bravebot_cli::main::anything_but_yes_declines_a_plan`
 `verified-by: bravebot_cli::main::a_one_shot_answers_the_plan_and_nothing_else`
 

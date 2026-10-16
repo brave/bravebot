@@ -692,6 +692,7 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
 `verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_the_title_the_length_the_five_areas_and_the_tools`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
 <a id="CMD-18"></a>
