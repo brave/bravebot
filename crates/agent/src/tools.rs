@@ -20924,6 +20924,25 @@ mod tests {
         assert_eq!(files.len(), 3, "{files:?}");
     }
 
+    /// The regression it rejects: a skill directory that has had its scripts run listing the
+    /// bytecode cache first, so a `.pyc` is the file the result offers as the example (LOAD-4).
+    #[test]
+    fn the_listing_leaves_out_generated_directories_and_compiled_files() {
+        let fixture = SkillFixture::new("skill-files-generated");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        std::fs::create_dir_all(beside.join("__pycache__")).unwrap();
+        std::fs::create_dir_all(beside.join("node_modules/dep")).unwrap();
+        std::fs::write(beside.join("__pycache__/demo.cpython-312.pyc"), "x").unwrap();
+        std::fs::write(beside.join("node_modules/dep/index.js"), "x").unwrap();
+        std::fs::write(beside.join("stray.pyc"), "x").unwrap();
+        std::fs::write(beside.join("demo.py"), "x").unwrap();
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(files, &["demo.py", "reference.md", "scripts/helper.sh"]);
+    }
+
     /// The regression it rejects: a project's skill naming a file the trust map does not vouch
     /// for (a name is content), or being handed the provenance reach that is for the user's own.
     #[cfg(unix)]

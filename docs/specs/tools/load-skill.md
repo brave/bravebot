@@ -59,8 +59,9 @@ is trusted by provenance ([SKILL-3](../skills.md#SKILL-3)), so its files are nam
 rule covers one. A project's skill is named file by file through the trust map and the
 rules, since a file name is content ([SKILL-4](../skills.md#SKILL-4)). A link is left out whatever it
 points at, and the directory is searched where it lands, so a link out of it is never followed and
-never named. A name that is not text or holds a control character is left out, and the list is capped
-in count and in depth.
+never named. A name that is not text or holds a control character is left out, and so is a directory
+`list_files` skips (`__pycache__`, `node_modules`) and a compiled `.pyc`: they are generated, and would
+fill the cap and become the example file offered. The list is capped in count and in depth.
 
 **Why.** Without it the planner cannot tell what a skill keeps beside its instructions, and the
 author has to fold every reference into the one body, which defeats loading it only when asked.
@@ -68,6 +69,7 @@ Running a bundled script is not part of this: `run` keeps its own gate.
 
 `verified-by: bravebot_agent::tools::a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before`
 `verified-by: bravebot_agent::tools::the_listing_names_regular_files_inside_the_directory_and_nothing_a_rule_covers`
+`verified-by: bravebot_agent::tools::the_listing_leaves_out_generated_directories_and_compiled_files`
 `verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
 
 <a id="LOAD-5"></a>
