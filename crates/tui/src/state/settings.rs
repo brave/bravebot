@@ -203,6 +203,38 @@ impl Session {
         self.style.as_ref()
     }
 
+    /// The names of the project's styles offered after the others, as last read.
+    pub fn project_styles(&self) -> &[String] {
+        &self.project_styles
+    }
+
+    /// Hold the names of the project's styles, read once each time a line starts with `/style`.
+    ///
+    /// Read where the trust map is in hand, which the command that takes the name is not, and not
+    /// while a turn runs, which holds it. `resolve` is called once per such line rather than once
+    /// per key, and a name held from earlier is what a pick made during a turn is taken on.
+    pub fn settle_styles(&mut self, resolve: impl FnOnce() -> Vec<String>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && crate::command_table::command_typed(&self.input)
+                == Some(crate::command_table::STYLE_COMMAND);
+        match (typing, self.project_styles_read) {
+            (true, false) => {
+                self.project_styles = resolve();
+                self.project_styles_read = true;
+            }
+            (false, true) if self.status != Status::Working => self.project_styles_read = false,
+            _ => {}
+        }
+    }
+
+    /// A session that holds `names` as its project's styles, for a test of what takes them.
+    #[cfg(test)]
+    pub(crate) fn holding_project_styles(mut self, names: &[&str]) -> Self {
+        self.project_styles = names.iter().map(|name| name.to_string()).collect();
+        self
+    }
+
     /// Open every later turn's system prompt with this style, or `None` to clear the pick.
     pub fn choose_style(&mut self, style: Option<bravebot_agent::styles::Style>) {
         self.style = style;

@@ -2451,6 +2451,16 @@ fn event_loop(
                 answers.rules.permissions.clone(),
             )
         });
+        // The project's styles a `/style` could name, read where the trust map is in hand.
+        session.settle_styles(|| {
+            bravebot_agent::styles::offered_from_project(
+                &workspace,
+                bravebot_agent::home::directory().as_deref(),
+                answers.trust.clone(),
+                answers.rules.permissions.clone(),
+                &mut Trail::new(),
+            )
+        });
         // The same for the sessions an `@` offers after the files.
         session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
@@ -13725,8 +13735,12 @@ mod tests {
         let task = with_session_style(Task::new("p"), &session);
         let style = task.style.expect("the file's style reaches the task");
         assert_eq!(
-            (style.name.as_ref(), style.words.as_ref(), style.from_file),
-            ("terse", "Answer in one line.", true)
+            (style.name.as_ref(), style.words.as_ref(), style.origin),
+            (
+                "terse",
+                "Answer in one line.",
+                bravebot_agent::styles::Origin::Home
+            )
         );
         set_style_in(&mut session, "../terse", Some(&home));
         set_style_in(&mut session, "other", Some(&home));
@@ -13745,6 +13759,41 @@ mod tests {
             said.contains("available: concise, explanatory, proactive, terse"),
             "{said}"
         );
+    }
+
+    /// INSTR-12. A name the project's vouched-for list holds is offered and picked by name alone,
+    /// carrying no words for the turn to take from a stale read, and a name it does not hold is not
+    /// a style, whatever the project's directory holds.
+    #[test]
+    fn a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for() {
+        let mut session = Session::new("none").holding_project_styles(&["house"]);
+        set_style_in(&mut session, "", None);
+        set_style_in(&mut session, "house", None);
+        let task = with_session_style(Task::new("p"), &session);
+        let style = task.style.expect("the pick reaches the task");
+        assert_eq!(
+            (style.name.as_ref(), style.words.as_ref(), style.origin),
+            ("house", "", bravebot_agent::styles::Origin::Project)
+        );
+        set_style_in(&mut session, "unvouched", None);
+        assert_eq!(
+            session.style().map(|style| style.name.to_string()),
+            Some("house".to_string()),
+            "a name nothing vouched for replaced the style in force"
+        );
+        let said = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            said.contains("available: concise, explanatory, proactive, house"),
+            "{said}"
+        );
+        let mut none = Session::new("none");
+        set_style_in(&mut none, "house", None);
+        assert!(none.style().is_none(), "no vouched list, no project style");
     }
 
     /// A run given `--system-prompt` keeps its own opening, so `/style` says the pick does not show

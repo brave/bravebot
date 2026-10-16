@@ -386,8 +386,8 @@ gate and reads each import through it, so nothing untrusted decides what is read
 <a id="INSTR-12"></a>
 ### INSTR-12: an output style stands where `--system-prompt` stands, and yields to it
 
-`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
-or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
+one of the person's own or one of the project's, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
 pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
 compared whole against the built-in list and the person's own files, and nothing a person types after
 `/style` reaches the prompt.
@@ -398,8 +398,21 @@ never joined to a path before it has been checked as one, so nothing typed can n
 that directory. A file is a style only where it is a regular file, not a symbolic link, of at most
 4096 bytes of UTF-8 with some words in it. A file called by a built-in name is ignored, so a file
 cannot take the place of one this build ships. Its words are the person's own configuration and
-trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is. A style a project holds is
-not read: nothing under the workspace is looked at for one.
+trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is.
+
+A project's own style is a file `<workspace>/.bravebot/styles/<name>.md`, of the same shape, and it
+is read only where the trust map vouches for it ([TRUST-1](trust-map.md#TRUST-1)). Neither the
+directory nor the file is opened until the map has been asked, a deny rule covering the file leaves
+it out, and its bytes arrive through the read and the gate the project's `AGENTS.md` goes through,
+so a file that is not trusted is no style and nothing of it is looked at, listed or counted. A name
+a built-in style or one of the person's own files already has is not offered from the project, so a
+project cannot take the place of either. `/style` lists the project's names after the others, from
+what the map vouched for when the line was typed, and picks one by its name alone: the words are not
+held. A turn reads the file again when it begins, under its own map, so vouching withdrawn after
+the pick, or a file an earlier turn wrote and so distrusted ([TRUST-4](trust-map.md#TRUST-4)),
+takes the style out of that turn. That turn opens with the usual words, records no style, and says
+in its notices that the style was not used. A project's style is not a `style` setting's to name:
+the setting is read before the map is, so it names a built-in style or one of the person's own.
 
 A style's words stand in for the opening of the system prompt, as `--system-prompt` does
 ([CLI-19](cli.md#CLI-19), [INSTR-10](#INSTR-10)), and for nothing after it. Where both are present
@@ -415,14 +428,17 @@ refuses it, and the guidance on reading a tool's output is not in the opening, s
 remove it. `proactive` says so in its own words and does not change the mode.
 
 **Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
-`--system-prompt` can only be given when the program starts. Taking a style only from this build or
-from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the opening are written by
-this program or by the person, typed or kept in the person's own configuration, and that nothing
-read from a project reaches that place.
+`--system-prompt` can only be given when the program starts. A project's style is the one source
+that is not the person's own, so it has the standing the project's `AGENTS.md` has and no more:
+vouched for by the map or not read at all, and read again at each turn so the vouching is not one
+the pick outlives. The rule INSTR-10 relies on, that nothing read from a project reaches the opening
+without the trust map saying so, is the one that holds.
 
-**Known costs.** Only the terminal interface has `/style` and reads the `style` setting. Styles are
-not read from a project: that needs the trust map to say who may put words in the opening, and none
-is built.
+**Known costs.** Only the terminal interface has `/style` and reads the `style` setting. A project's
+styles are offered from a list read when a `/style` line is typed, so one picked while a turn runs
+is taken on the list last read, and a name that list never held is refused. The trail names a
+project's style and not its file, so a reader cannot tell two files of one name apart across a
+change of the file.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
@@ -432,6 +448,12 @@ is built.
 `verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`
 `verified-by: bravebot_agent::styles::a_link_an_empty_file_and_a_long_file_are_not_styles`
 `verified-by: bravebot_agent::styles::the_offered_names_are_the_built_ins_then_the_accepted_files_in_order`
+`verified-by: bravebot_agent::styles::a_project_style_is_read_only_where_the_trust_map_vouches`
+`verified-by: bravebot_agent::styles::a_project_file_cannot_take_the_place_of_a_built_in_or_a_home_style`
+`verified-by: bravebot_agent::styles::a_project_link_an_empty_file_a_long_file_and_a_bad_name_are_not_styles`
+`verified-by: bravebot_agent::turn::a_project_style_opens_the_prompt_only_where_the_trust_map_vouches`
+`verified-by: bravebot_tui::app::a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for`
+`verified-by: bravebot_tui::state::the_project_styles_are_read_once_per_style_line_and_held_after_it`
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`

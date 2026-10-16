@@ -1238,6 +1238,13 @@ pub struct Session {
     ///
     /// Kept for the session only, as `advisor` is.
     style: Option<bravebot_agent::styles::Style>,
+    /// The names of the project's styles the trust map vouched for when `/style` was last typed.
+    ///
+    /// A pick of one of them is taken on this list, and the turn reads the file again under its own
+    /// map (INSTR-12), so a name that has gone stale costs a notice and no more.
+    project_styles: Vec<String>,
+    /// Whether `project_styles` has been read since the line last held something other than `/style`.
+    project_styles_read: bool,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1449,6 +1456,8 @@ impl Session {
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),
             skills: None,
+            project_styles: Vec::new(),
+            project_styles_read: false,
             past_sessions: None,
             offered_memo: Kept::default(),
             offered_epoch: 0,
@@ -4576,6 +4585,34 @@ fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// INSTR-12. The project's styles are read once each time a line starts with `/style`, not on
+    /// every pass and not while a turn runs, and the names stay held after the line goes.
+    #[test]
+    fn the_project_styles_are_read_once_per_style_line_and_held_after_it() {
+        let mut session = Session::new("none");
+        let reads = std::cell::Cell::new(0);
+        let pass = |session: &mut Session, line: &str, status: Status| {
+            session.input = line.to_string();
+            session.status = status;
+            session.settle_styles(|| {
+                reads.set(reads.get() + 1);
+                vec!["house".to_string()]
+            });
+        };
+        pass(&mut session, "hello", Status::Idle);
+        assert_eq!(reads.get(), 0, "a prompt is not a style line");
+        pass(&mut session, "/style ", Status::Working);
+        assert_eq!(reads.get(), 0, "a turn is running and holds the map");
+        pass(&mut session, "/style ", Status::Idle);
+        pass(&mut session, "/style ho", Status::Idle);
+        assert_eq!(reads.get(), 1, "read again for the same line");
+        assert_eq!(session.project_styles(), ["house"]);
+        pass(&mut session, "", Status::Idle);
+        assert_eq!(session.project_styles(), ["house"], "dropped with the line");
+        pass(&mut session, "/style", Status::Idle);
+        assert_eq!(reads.get(), 2, "a second style line reads again");
+    }
+
     use super::*;
     use bravebot_core::ask::Answer;
 

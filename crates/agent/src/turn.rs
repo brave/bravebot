@@ -31,6 +31,7 @@ use crate::confirm::Confirmer;
 use crate::conversation::{Composed, Conversation, TOOL_RESULT_PREFIX};
 use crate::report::{DelegateId, Phase, Reporter};
 use crate::request_view::{Prompt, Provenance, RequestView};
+use crate::styles;
 use crate::timing::{Elapsed, Timing};
 use crate::tools;
 use crate::workspace::{Paging, Workspace, WorkspaceError};
@@ -2253,14 +2254,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     policy.record_permission_mode(started_in.name());
     // The opening a style takes the place of is the one a person's own turn gets, and
     // `--system-prompt` outranks it, so only a style that reaches the prompt is recorded.
-    if let (None, None, Some(style)) = (
-        task.delegate.as_ref(),
-        task.system_prompts.replacing.as_deref(),
-        &task.style,
-    ) {
-        policy.record_output_style(style.name.as_ref(), style.from_file);
-    }
-
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
     // A checkout reads what it is told from the working directory it was made from, by the names
@@ -2272,6 +2265,31 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     crate::memory::distrust_recorded(&mut policy, sources, task.home.as_deref());
     if let Some(rooted) = checkout_authority {
         policy.exchange_file_authority(rooted);
+    }
+
+    // The opening a style takes the place of is the one a person's own turn gets, and
+    // `--system-prompt` outranks it, so only a style that reaches the prompt is recorded. A
+    // project's style is read now, under this turn's trust map and after the paths an earlier turn
+    // wrote were distrusted, so a pick made while the file was vouched for does not carry words
+    // the map would refuse today (INSTR-12).
+    let mut style = task.style.clone();
+    let mut style_notice = None;
+    if let Some(picked) = style
+        .as_ref()
+        .filter(|s| s.origin == styles::Origin::Project)
+    {
+        let name = picked.name.to_string();
+        style = styles::resolve_project(&mut policy, sources, &name);
+        if style.is_none() {
+            style_notice = Some(t!(agent_style_not_used, style = name).to_string());
+        }
+    }
+    if let (None, None, Some(style)) = (
+        task.delegate.as_ref(),
+        task.system_prompts.replacing.as_deref(),
+        &style,
+    ) {
+        policy.record_output_style(style.name.as_ref(), style.origin);
     }
 
     // Keep the policy outside all fallible context loading and execution. Locals in this
@@ -2325,6 +2343,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             .map(|mcp| mcp.aliases())
             .unwrap_or_default();
         notices.extend(crate::agents::servers_not_found(&delegates, &reached));
+        notices.extend(style_notice.take().map(crate::skills::Notice::from_message));
         policy.install_delegates(delegates.clone());
 
         // The tool that says when this turn is asked again is offered to every turn except a tick the
@@ -2631,15 +2650,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
             // the quarantine, the goal and the modes rest on.
             None => {
-                match (task.system_prompts.replacing.as_deref(), &task.style) {
+                match (task.system_prompts.replacing.as_deref(), &style) {
                     (Some(replacing), _) => {
                         system.push(Provenance::Trusted("command line"), replacing.trim())
                     }
                     // A file's words are the person's own configuration, trusted for sitting in
                     // `~/.bravebot`; a built-in style's are this program's.
-                    (None, Some(style)) if style.from_file => {
+                    (None, Some(style)) if style.origin == styles::Origin::Home => {
                         system.push(Provenance::Trusted("output style"), style.words.as_ref())
                     }
+                    // A project's file the trust map vouched for, as its `AGENTS.md` is.
+                    (None, Some(style)) if style.origin == styles::Origin::Project => system.push(
+                        Provenance::Trusted("project output style"),
+                        style.words.as_ref(),
+                    ),
                     (None, Some(style)) => system.push(Provenance::Driver, style.words.as_ref()),
                     (None, None) => system.push(Provenance::Driver, OPENING),
                 }

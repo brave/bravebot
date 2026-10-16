@@ -3277,6 +3277,11 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } asked for { $model }, and --model outranks it, so this run asked for the model
     the command line named
+# Said where a project's output style was picked and the turn could not read it: the trust map no
+# longer vouches for the file, or it is no longer a style. The name is what the person typed.
+agent-style-not-used =
+    the { $style } style was not used: its file is not trusted or is no longer a style, so this turn
+    opened with the usual words
 # Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
 # own. Only a delegate is given one, so the person's own turn works in their working directory. The
 # definition's name is the word of a vouched-for file.

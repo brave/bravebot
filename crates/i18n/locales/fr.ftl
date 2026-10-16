@@ -2768,6 +2768,9 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } a demandé { $model }, et --model l'emporte, donc cette exécution a demandé le
     modèle nommé par la ligne de commande
+agent-style-not-used =
+    le style { $style } n'a pas été utilisé : son fichier n'est pas de confiance ou n'est plus un
+    style, donc ce tour s'est ouvert avec les mots habituels
 agent-checkout-not-applied =
     { $definition } demande une copie de travail à part, que seuls ses délégués reçoivent, donc ce
     tour travaille dans votre répertoire de travail
