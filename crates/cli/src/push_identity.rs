@@ -194,11 +194,47 @@ impl Ssh for Machine {
     }
 }
 
+/// The directories a confined stage opened here could have written: the one this command ran in
+/// and the checkout holding it, which is the nearest ancestor with a `.git`.
+///
+/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
+/// `bin` first on `PATH` would otherwise be searched for the programs started below.
+fn checkout(cwd: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![cwd.to_path_buf()];
+    if let Some(root) = cwd
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        && root != cwd
+    {
+        directories.push(root.to_path_buf());
+    }
+    directories
+}
+
+/// A command for `program`, with this agent's own credentials taken off it.
+///
+/// Every program this file starts is built here: they run unconfined with the person's access to
+/// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
+/// agent authenticates with out of reach of such a program.
+fn started(program: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    for name in bravebot_config::scrub::own_credentials() {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// Standard output and standard error of `program`, run to completion within [`WAIT`].
+///
+/// `program` is found as [SANDBOX-30] says, and one found only where a stage could have written is
+/// not started: it reads as absent.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
     use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    use std::process::Stdio;
+    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))?;
+    let mut child = started(&found)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -286,6 +322,11 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
+    if let Ok(cwd) = std::env::current_dir() {
+        for directory in checkout(&cwd) {
+            bravebot_sandbox::programs::keep_out(&directory);
+        }
+    }
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
@@ -500,6 +541,53 @@ mod tests {
             !shown.contains(&t!(doctor_push_chosen_by).to_string()),
             "{shown}"
         );
+    }
+
+    /// What a command was told to unset, which is how `env_remove` reads back: a name a child will
+    /// not be handed is present here with no value, and one left alone is absent altogether.
+    fn withheld_from(command: &std::process::Command) -> Vec<String> {
+        let mut names: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Every program this command starts is built by [`started`], so the one place that removes this
+    /// agent's own credentials covers all three. Rejects a command built without `env_remove`,
+    /// which hands the signing key to whatever `ssh-keygen` resolves to.
+    #[test]
+    fn a_program_started_here_is_not_handed_this_agents_own_credentials() {
+        let mut expected = bravebot_config::scrub::own_credentials();
+        expected.sort();
+
+        assert_eq!(withheld_from(&started(Path::new("/usr/bin/ssh"))), expected);
+    }
+
+    /// The directory the command ran in and the checkout holding it are both left out of the lookup.
+    /// Rejects a lookup that leaves out only the directory itself, which finds a repository's
+    /// `bin` when the command runs in a subdirectory.
+    #[test]
+    fn the_checkout_holding_the_directory_is_left_out_with_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/push-identity-checkout");
+        let _ = std::fs::remove_dir_all(&root);
+        let here = root.join("crates").join("cli");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert_eq!(checkout(&here), [here.clone(), root]);
+    }
+
+    /// A directory under no checkout is left out by itself. Rejects a lookup that leaves out the
+    /// checkout alone, which finds the `bin` of a project that has no `.git`.
+    #[test]
+    fn a_directory_under_no_checkout_is_left_out_by_itself() {
+        let here = Path::new("/bravebot-no-such-directory/project");
+
+        assert_eq!(checkout(here), [here.to_path_buf()]);
     }
 
     /// The argument is `<host>/<owner>` and nothing else.
