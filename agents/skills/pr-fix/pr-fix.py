@@ -6,7 +6,11 @@
     pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure;
                                         --wait polls until one fails or --wait-seconds N (default 540)
                                         have passed since the script started, counting every poll
-    pr-fix.py comments <pr>             the review threads and reviews still waiting on a change
+    pr-fix.py comments <pr>             the review threads and reviews still waiting on a change, each
+                                        thread with the id `reply` takes
+    pr-fix.py reply <pr> --body-file F [--thread ID]
+                                        post the text of F under review thread ID, or as a comment on
+                                        the pull request without --thread
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
                                         targets named, printing only a failure
     pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
@@ -127,7 +131,7 @@ query($owner: String!, $name: String!, $number: Int!) {
         pageInfo { hasNextPage }
         nodes {
           isResolved isOutdated path line originalLine
-          comments(first: 20) { nodes { author { login } authorAssociation body } }
+          comments(first: 20) { nodes { databaseId author { login } authorAssociation body } }
         }
       }
       reviews(last: 50) { nodes { author { login } authorAssociation state body } }
@@ -335,7 +339,9 @@ def open_comments(data):
         if thread["isResolved"]:
             continue
         where = thread["path"] + (f":{thread['line'] or thread['originalLine']}" if thread["line"] or thread["originalLine"] else "")
-        lines.append(f"thread on {where}" + (" (outdated: the code it was on has changed)" if thread["isOutdated"] else ""))
+        started = thread["comments"]["nodes"][0]["databaseId"]
+        outdated = " (outdated: the code it was on has changed)" if thread["isOutdated"] else ""
+        lines.append(f"thread {started} on {where}{outdated}")
         lines.extend(quoted(c) for c in thread["comments"]["nodes"])
     latest = {}
     for review in request["reviews"]["nodes"]:
@@ -361,6 +367,29 @@ def comments(pr):
         return 0
     print("\n".join(lines))
     return 1
+
+
+def reply(pr, thread, body_file):
+    """Post the text of `body_file` under review thread `thread`, or on the pull request without one."""
+    try:
+        body = Path(body_file).read_text(encoding="utf-8").strip()
+    except OSError as error:
+        die(f"cannot read {body_file}: {error}")
+    if not body:
+        die(f"{body_file} is empty, so there is nothing to post")
+    if EM_DASH in body:
+        die(f"{body_file} has an em-dash")
+    path = (
+        f"repos/{BASE_REPO}/pulls/{pr.number}/comments/{thread}/replies"
+        if thread is not None
+        else f"repos/{BASE_REPO}/issues/{pr.number}/comments"
+    )
+    done = run("gh", "api", "--method", "POST", path, "-f", f"body={body}", "--jq", ".html_url", check=False)
+    if done.returncode:
+        print(f"could not post on {pr.url}:\n{pr_worktree.printed(done)}", file=sys.stderr)
+        return 1
+    print(done.stdout.strip())
+    return 0
 
 
 def my_pulls(here):
@@ -681,12 +710,14 @@ def fan_out(step, numbers, flags, queued=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
-        "step", choices=["start", "continue", "ci", "comments", "check", "push", "review", "kind", *ISSUE_STEPS]
+        "step",
+        choices=["start", "continue", "ci", "comments", "check", "push", "review", "reply", "kind", *ISSUE_STEPS],
     )
     parser.add_argument("prs", nargs="+", metavar="pr")
     parser.add_argument("--branch", help="the branch an issue is worked on: fix-<name>; open reads it from the issue's worktree without it")
     parser.add_argument("--title", help="the title of the pull request open creates")
-    parser.add_argument("--body-file", help="the body of the pull request open creates")
+    parser.add_argument("--body-file", help="the body of the pull request open creates, or the text reply posts")
+    parser.add_argument("--thread", type=int, metavar="ID", help="the review thread reply answers, as comments prints it")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument(
@@ -708,10 +739,16 @@ def main():
     seconds = WAIT_SECONDS if args.wait_seconds is None else args.wait_seconds
     if args.branch and args.step not in ISSUE_STEPS:
         parser.error("only issue and open take --branch")
-    if (args.title or args.body_file) and args.step != "open":
-        parser.error("only open takes --title and --body-file")
+    if args.title and args.step != "open":
+        parser.error("only open takes --title")
+    if args.body_file and args.step not in ("open", "reply"):
+        parser.error("only open and reply take --body-file")
+    if args.thread is not None and args.step != "reply":
+        parser.error("only reply takes --thread")
     if args.step == "open" and not (args.title and args.body_file):
         parser.error("open needs --title and --body-file")
+    if args.step == "reply" and not args.body_file:
+        parser.error("reply needs --body-file")
     if args.step in ISSUE_STEPS and (len(args.prs) != 1 or re.search(r"[,\s]", args.prs[0].strip())):
         parser.error(f"{args.step} takes one issue")
     if args.step == "kind":
@@ -723,6 +760,8 @@ def main():
     numbers = pr_numbers(args.prs, here)
     if not numbers:
         sys.exit(0)
+    if args.step == "reply" and len(numbers) > 1:
+        parser.error("reply takes one pull request")
     if args.use_locked and len(numbers) > 1:
         parser.error("--use-locked takes the one pull request whose locked worktree the person agreed to")
     if len(numbers) > 1:
@@ -739,6 +778,7 @@ def main():
         "check": lambda pr: check(pr, args.target),
         "push": push,
         "review": review,
+        "reply": lambda pr: reply(pr, args.thread, args.body_file),
     }
     try:
         if args.step == "start":

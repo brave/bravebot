@@ -403,11 +403,12 @@ def test_a_job_log_is_cut_to_its_last_lines():
     assert pr_fix.tail(raw) == "error: cannot find `unix`", pr_fix.tail(raw)
 
 
-def thread(resolved, outdated, path, line, *texts):
+def thread(started, resolved, outdated, path, line, *texts):
     return {
         "isResolved": resolved, "isOutdated": outdated, "path": path, "line": line, "originalLine": line,
         "comments": {"nodes": [
-            {"author": {"login": who}, "authorAssociation": "MEMBER", "body": body} for who, body in texts
+            {"databaseId": started + at, "author": {"login": who}, "authorAssociation": "MEMBER", "body": body}
+            for at, (who, body) in enumerate(texts)
         ]},
     }
 
@@ -415,9 +416,9 @@ def thread(resolved, outdated, path, line, *texts):
 def test_only_a_review_comment_still_waiting_on_a_change_is_shown():
     data = {"data": {"repository": {"pullRequest": {
         "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": [
-            thread(True, False, "done.rs", 1, ("ann", "already fixed")),
-            thread(False, False, "src/a.rs", 12, ("ann", "rename this"), ("bob", "agreed")),
-            thread(False, True, "src/b.rs", 3, ("ann", "x" * 2000)),
+            thread(100, True, False, "done.rs", 1, ("ann", "already fixed")),
+            thread(200, False, False, "src/a.rs", 12, ("ann", "rename this"), ("bob", "agreed")),
+            thread(300, False, True, "src/b.rs", 3, ("ann", "x" * 2000)),
         ]},
         "reviews": {"nodes": [
             {"author": {"login": "ann"}, "authorAssociation": "MEMBER", "state": "CHANGES_REQUESTED", "body": "split this"},
@@ -428,8 +429,9 @@ def test_only_a_review_comment_still_waiting_on_a_change_is_shown():
     }}}}
     text = "\n".join(pr_fix.open_comments(data))
     assert "done.rs" not in text and "already fixed" not in text, text
-    assert "thread on src/a.rs:12\n" in text and "ann, member" in text and "agreed" in text, text
-    assert "thread on src/b.rs:3 (outdated" in text and "[cut]" in text, text
+    assert "thread 200 on src/a.rs:12\n" in text and "ann, member" in text and "agreed" in text, text
+    assert "thread 300 on src/b.rs:3 (outdated" in text and "[cut]" in text, text
+    assert "201" not in text, "a thread is answered through the comment that started it, not a later one"
     assert "split this" in text, "the latest review of a reviewer who has not approved since"
     assert "first thoughts" not in text and "looks good" not in text, "an approval is not a request"
 
@@ -476,6 +478,71 @@ def test_review_asks_netzenbot_reviewer_through_the_requested_reviewers_api():
             "-f", "reviewers[]=netzenbot-reviewer",
         )
     ], (calls, out)
+
+
+def reply_with(text, thread, runner):
+    with tempfile.TemporaryDirectory() as tmp:
+        file = Path(tmp) / "reply.md"
+        if text is not None:
+            file.write_text(text, encoding="utf-8")
+        real = pr_fix.run
+        pr_fix.run = runner
+        try:
+            return quietly(pr_fix.reply, SimpleNamespace(number=12, url="https://github.com/brave/bravebot/pull/12"), thread, str(file))
+        finally:
+            pr_fix.run = real
+
+
+def test_a_reply_goes_under_the_thread_it_names_and_otherwise_on_the_pull_request():
+    calls = []
+
+    def posted(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout="https://github.com/brave/bravebot/pull/12#discussion_r5\n", stderr="", returncode=0)
+
+    code, out = reply_with("Added a note to the description.\n", 4298960416, posted)
+    assert code == 0 and out.strip() == "https://github.com/brave/bravebot/pull/12#discussion_r5", out
+    code, _ = reply_with("Nothing changed.", None, posted)
+    assert code == 0
+    assert calls == [
+        (
+            "gh", "api", "--method", "POST", "repos/brave/bravebot/pulls/12/comments/4298960416/replies",
+            "-f", "body=Added a note to the description.", "--jq", ".html_url",
+        ),
+        (
+            "gh", "api", "--method", "POST", "repos/brave/bravebot/issues/12/comments",
+            "-f", "body=Nothing changed.", "--jq", ".html_url",
+        ),
+    ], calls
+
+
+def test_a_reply_that_is_empty_or_has_an_em_dash_is_not_posted():
+    def never(*args, **kwargs):
+        raise AssertionError(f"posted {args}")
+
+    for text, said in (("  \n", "is empty"), (f"Left as is {pr_fix.EM_DASH} on purpose.", "has an em-dash"), (None, "cannot read")):
+        code, out = reply_with(text, 5, never)
+        assert code == 1 and said in out, (text, out)
+
+
+def test_a_refused_reply_fails_the_step_with_the_reason():
+    code, out = reply_with(
+        "Fixed.", 5, lambda *args, **kwargs: SimpleNamespace(stdout="", stderr="gh: Not Found (HTTP 404)", returncode=1)
+    )
+    assert code == 1 and "could not post on https://github.com/brave/bravebot/pull/12" in out and "HTTP 404" in out, out
+
+
+def test_reply_takes_a_file_and_one_pull_request_and_only_it_takes_a_thread():
+    with in_a_git_directory():
+        for argv, said in (
+            (["reply", "9"], "reply needs --body-file"),
+            (["reply", "12,13", "--body-file", "f"], "reply takes one pull request"),
+            (["ci", "9", "--thread", "5"], "only reply takes --thread"),
+            (["ci", "9", "--body-file", "f"], "only open and reply take --body-file"),
+        ):
+            with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
+                code, out = quietly(pr_fix.main)
+            assert code == 2 and said in out, (argv, out)
 
 
 def test_a_refused_review_request_fails_the_step():
@@ -1103,7 +1170,7 @@ def test_the_issue_steps_take_one_issue_and_only_open_takes_a_title_and_a_body()
             (["issue", "1,2"], "issue takes one issue"),
             (["open", "1", "--branch", "fix-a"], "open needs --title and --body-file"),
             (["ci", "1", "--branch", "fix-a"], "only issue and open take --branch"),
-            (["issue", "1", "--title", "t"], "only open takes --title and --body-file"),
+            (["issue", "1", "--title", "t"], "only open takes --title"),
         ):
             with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
                 code, out = quietly(pr_fix.main)
