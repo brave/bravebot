@@ -28,8 +28,17 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+/// Locks `lock`, reading on past a poisoned one.
+///
+/// The values guarded here are lists of records, lists of names and counters, which a panic in
+/// another thread cannot leave inconsistent, so stopping a session over one would cost more than
+/// reading on.
+fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[path = "../../ui-files/src/names.rs"]
 mod names;
@@ -708,8 +717,7 @@ impl KeptBetweenTurns {
 
 /// The checkouts in `made` whose directories are still there, oldest first.
 fn listed(made: &Mutex<Vec<Made>>) -> Vec<SessionCheckout> {
-    made.lock()
-        .unwrap_or_else(|e| e.into_inner())
+    locked(made)
         .iter()
         .filter(|made| made.path.exists())
         .map(Made::listed)
@@ -750,14 +758,9 @@ impl Made {
             commit: self.commit.clone(),
             delegate: self.delegate,
             worked_in: self.record.worked_in.load(Ordering::SeqCst),
-            candidates: self
-                .record
-                .written
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
+            candidates: locked(&self.record.written).clone(),
             repository: self.git_dir.clone(),
-            size: *self.record.size.lock().unwrap_or_else(|e| e.into_inner()),
+            size: *locked(&self.record.size),
         }
     }
 
@@ -771,10 +774,7 @@ impl Made {
         session_checkouts: &Mutex<Vec<Made>>,
     ) -> Result<(), crate::git::checkout::Refused> {
         crate::git::checkout::remove(&self.git_dir, &self.path, &self.id)?;
-        session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|made| made.path != self.path);
+        locked(session_checkouts).retain(|made| made.path != self.path);
         if !withdraw(&self.key)
             && let Ok(mut listed) = listed.lock()
         {
@@ -981,22 +981,13 @@ impl CheckoutInfo {
     }
 
     fn written(&self) -> std::sync::MutexGuard<'_, Candidates> {
-        self.made
-            .record
-            .written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        locked(&self.made.record.written)
     }
 
     /// What it took on disk as its delegate ended, measured by [`CheckoutInfo::retire`] where the
     /// checkout stayed (CHECKOUT-15). `None` before then.
     pub fn size(&self) -> Option<crate::git::checkout::Size> {
-        *self
-            .made
-            .record
-            .size
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        *locked(&self.made.record.size)
     }
 
     /// End the checkout: remove it unless the record shows something was done in it. Its rules go
@@ -1028,12 +1019,7 @@ impl CheckoutInfo {
             }
         };
         let measured = size(&self.made.path, deadline).and(admin);
-        *self
-            .made
-            .record
-            .size
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(measured);
+        *locked(&self.made.record.size) = Some(measured);
         retired
     }
 }
@@ -1628,7 +1614,7 @@ impl Workspace {
         let canonical = self.resolve_directory(directory)?;
 
         bravebot_sandbox::programs::keep_out(&canonical);
-        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+        let mut added = locked(&self.added);
         if !added.contains(&canonical) {
             added.push(canonical.clone());
         }
@@ -1720,13 +1706,13 @@ impl Workspace {
 
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> Vec<PathBuf> {
-        self.added.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        locked(&self.added).clone()
     }
 
     /// Let programs reach `path` for the rest of the session. A second grant of a path already
     /// held keeps one row, writable if either grant was.
     pub fn grant_path_reach(&self, path: PathBuf, write: bool, why: String) {
-        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = locked(&self.path_reach);
         match held.iter_mut().find(|row| row.path == path) {
             Some(row) => {
                 row.write |= write;
@@ -1738,10 +1724,7 @@ impl Workspace {
 
     /// The paths programs may reach by the person's leave, oldest first.
     pub fn path_reach(&self) -> Vec<PathReach> {
-        self.path_reach
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        locked(&self.path_reach).clone()
     }
 
     /// Let programs reach `hosts` for the rest of the session, on top of the allowed-hosts list.
@@ -1749,7 +1732,7 @@ impl Workspace {
     /// Each is a name the sandbox crate accepted for a record. A host held already is not added
     /// twice. A host both declined and granted is not asked about, since a grant outranks a decline.
     pub fn grant_hosts(&self, hosts: &[String]) {
-        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = locked(&self.host_grants);
         for host in hosts {
             if !held.allowed.contains(host) {
                 held.allowed.push(host.clone());
@@ -1759,22 +1742,18 @@ impl Workspace {
 
     /// Remember that the person declined `hosts`, so they are not asked about them again.
     pub fn decline_hosts(&self, hosts: &[String]) {
-        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = locked(&self.host_grants);
         held.declined.extend(hosts.iter().cloned());
     }
 
     /// The hosts programs may reach by the person's leave, oldest first.
     pub fn granted_hosts(&self) -> Vec<String> {
-        self.host_grants
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .allowed
-            .clone()
+        locked(&self.host_grants).allowed.clone()
     }
 
     /// Of `hosts`, those the person has neither allowed nor declined this session.
     pub fn unanswered_hosts(&self, hosts: &[String]) -> Vec<String> {
-        let held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        let held = locked(&self.host_grants);
         hosts
             .iter()
             .filter(|host| !held.allowed.contains(host) && !held.declined.contains(*host))
@@ -1795,16 +1774,13 @@ impl Workspace {
     /// record holds them. A clone shares them, which is why a session handed on by `/resume` has to
     /// be cleared of them as well.
     pub fn forget_reach_and_hosts(&self) {
-        self.path_reach
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        *self.host_grants.lock().unwrap_or_else(|e| e.into_inner()) = HostGrants::default();
+        locked(&self.path_reach).clear();
+        *locked(&self.host_grants) = HostGrants::default();
     }
 
     /// End the grant numbered `number`, counting from one in `path_reach` order.
     pub fn end_path_reach(&self, number: usize) -> Option<PathReach> {
-        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = locked(&self.path_reach);
         (number >= 1 && number <= held.len()).then(|| held.remove(number - 1))
     }
 
@@ -1893,7 +1869,7 @@ impl Workspace {
         // Names relative to the root left behind mean nothing under the new one (INSTR-14).
         self.touched = Arc::default();
         {
-            let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+            let mut added = locked(&self.added);
             let (overlapping, kept) = std::mem::take(&mut *added)
                 .into_iter()
                 .partition(|open| overlaps(open, &canonical));
@@ -1915,7 +1891,7 @@ impl Workspace {
     /// grants do. Leaving them open while the trust map that vouched for them was discarded would
     /// leave a tree reachable that nobody had vouched for.
     pub fn close_added_directories(&mut self) {
-        self.added.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        locked(&self.added).clear();
     }
 
     /// Close one directory added by name, and return the name it was open under (TRUST-9).
@@ -1937,7 +1913,7 @@ impl Workspace {
                 reason: "must be an absolute path",
             });
         }
-        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+        let mut added = locked(&self.added);
         let open = added
             .iter()
             .position(|open| open == candidate)
@@ -3160,17 +3136,12 @@ impl Workspace {
     /// Run `hook` with the directory, inside the capture of every listing and search from here on.
     #[cfg(test)]
     pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
-        *self.while_reading.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(ReadingHook(Arc::new(hook)));
+        *locked(&self.while_reading) = Some(ReadingHook(Arc::new(hook)));
     }
 
     #[cfg(test)]
     fn hold_while_reading(&self, directory: &str) {
-        let hook = self
-            .while_reading
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let hook = locked(&self.while_reading).clone();
         if let Some(ReadingHook(hook)) = hook {
             hook(directory);
         }
@@ -3253,10 +3224,7 @@ impl Workspace {
     /// discarded with the delegate, and a rewind of the parent's turn puts back nothing there
     /// (CHECKOUT-17).
     pub fn mark_rewind_gap(&self, gap: CoverageGap) {
-        self.rewind
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .mark(gap);
+        locked(&self.rewind).mark(gap);
         self.mark_checkout_gap();
     }
 
@@ -3264,12 +3232,7 @@ impl Workspace {
     /// workspace is one.
     fn mark_checkout_gap(&self) {
         if let Some(checkout) = &self.checkout {
-            checkout
-                .source
-                .rewind
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .mark(CoverageGap::Checkout);
+            locked(&checkout.source.rewind).mark(CoverageGap::Checkout);
         }
     }
 
@@ -4939,10 +4902,7 @@ impl Workspace {
         id: &str,
         trust: &mut bravebot_core::trust::TrustStore,
     ) -> Result<(), Unremoved> {
-        let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let made = locked(&self.session_checkouts)
             .iter()
             .find(|made| made.id == id && made.path.exists())
             .cloned()
@@ -4967,19 +4927,14 @@ impl Workspace {
     /// The driver's own record of its writes. Whether the file differs from the checkout's is a
     /// comparison of bytes, which is the person's to make from the difference they are shown.
     pub fn written_since_checkout(&self, id: &str, relative: &str) -> bool {
-        let Some(after) = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let Some(after) = locked(&self.session_checkouts)
             .iter()
             .find(|made| made.id == id)
             .map(|made| made.after)
         else {
             return false;
         };
-        self.working_writes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        locked(&self.working_writes)
             .last
             .get(relative)
             .is_some_and(|last| *last > after)
@@ -4998,10 +4953,7 @@ impl Workspace {
         id: &str,
     ) -> Result<crate::git::Listing, crate::git::Declined> {
         use crate::git::Declined;
-        let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let made = locked(&self.session_checkouts)
             .iter()
             .find(|made| made.id == id && made.path.exists())
             .cloned()
@@ -5074,22 +5026,13 @@ impl Workspace {
         relative: &str,
         listed: &std::collections::BTreeSet<String>,
     ) -> Result<Labelled<String>, CheckoutRead> {
-        let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let made = locked(&self.session_checkouts)
             .iter()
             .find(|made| made.id == id && made.path.exists())
             .cloned()
             .ok_or(CheckoutRead::NoSuchCheckout)?;
-        let candidate = made
-            .record
-            .written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .named
-            .contains(relative)
-            || listed.contains(relative);
+        let candidate =
+            locked(&made.record.written).named.contains(relative) || listed.contains(relative);
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }
@@ -5163,10 +5106,7 @@ impl Workspace {
                 }
                 _ => false,
             };
-            let mut held = self
-                .session_checkouts
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut held = locked(&self.session_checkouts);
             if !placed || held.iter().any(|made| made.id == one.id) {
                 if !held.iter().any(|made| made.id == one.id) {
                     unplaced.push(one.id.clone());
@@ -5237,10 +5177,7 @@ impl Workspace {
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        locked(&self.session_checkouts).clear();
     }
 
     /// What this workspace's checkouts are kept in, for the workspace of the next turn to be given
@@ -5361,10 +5298,7 @@ impl Workspace {
                 .join("checkouts")
                 .join(crate::home::key_for(&self.root)),
             None => {
-                let mut held = self
-                    .temporary_checkouts
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut held = locked(&self.temporary_checkouts);
                 if held.is_none() {
                     *held = Some(TemporaryCheckouts {
                         directory: crate::scratch::SessionScratch::for_checkouts()
@@ -5437,17 +5371,10 @@ impl Workspace {
             delegate: made_for,
             git_dir: self.root.join(".git"),
             record: Arc::default(),
-            after: self
-                .working_writes
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .count,
+            after: locked(&self.working_writes).count,
             _claim: made.claim.clone(),
         };
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(entry.clone());
+        locked(&self.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
         delegate.added = Arc::new(Mutex::new(self.added_directories()));
@@ -5477,7 +5404,7 @@ impl Workspace {
         };
         let mut parts: Vec<&str> = relative.split('/').collect();
         parts.pop();
-        let mut touched = self.touched.lock().unwrap_or_else(|e| e.into_inner());
+        let mut touched = locked(&self.touched);
         for end in 1..=parts.len() {
             if touched.len() >= TOUCHED_LIMIT {
                 return;
@@ -5489,13 +5416,7 @@ impl Workspace {
     /// The directories below the root the session has read from or written to, `/`-joined and
     /// relative to it, shallowest first and in name order within a depth (INSTR-14).
     pub fn touched_directories(&self) -> Vec<String> {
-        let mut directories: Vec<String> = self
-            .touched
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-            .collect();
+        let mut directories: Vec<String> = locked(&self.touched).iter().cloned().collect();
         directories.sort_by_key(|directory| directory.matches('/').count());
         directories
     }
@@ -5508,10 +5429,7 @@ impl Workspace {
         }
         let Some(checkout) = &self.checkout else {
             if let Some(relative) = typed.and_then(|typed| place_by_spelling(&self.root, typed)) {
-                let mut writes = self
-                    .working_writes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut writes = locked(&self.working_writes);
                 writes.count += 1;
                 let count = writes.count;
                 writes.last.insert(relative, count);
