@@ -11603,9 +11603,9 @@ fn an_incognito_shell_records_nothing_and_asks_incognito() {
     );
 }
 
-/// A gateway on loopback that lists one model and refuses every chat request with a body naming a
-/// secret, so a log that kept what the server said would keep it.
-fn a_gateway_refusing_with_a_secret() -> u16 {
+/// A gateway on loopback that lists one model and answers every chat request with `status` and a
+/// body naming a secret, so a log that kept what the server said would keep it.
+fn a_gateway_answering_with_a_secret(status: u16) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
     std::thread::spawn(move || {
@@ -11633,7 +11633,7 @@ fn a_gateway_refusing_with_a_secret() -> u16 {
                     r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#,
                 )
             } else {
-                http(401, r#"{"error": "SERVER-SECRET-BODY"}"#)
+                http(status, r#"{"error": "SERVER-SECRET-BODY"}"#)
             };
             let _ = stream.write_all(reply.as_bytes());
             let _ = stream.flush();
@@ -11644,7 +11644,12 @@ fn a_gateway_refusing_with_a_secret() -> u16 {
 
 /// A run against the refusing gateway, with the flags a test adds, and the home it ran in.
 fn a_run_the_gateway_refuses(name: &str, flags: &[&str]) -> (Scratch, u16) {
-    let port = a_gateway_refusing_with_a_secret();
+    a_run_the_gateway_answers_with(name, flags, 401)
+}
+
+/// A run against a gateway that answers every chat request with `status`.
+fn a_run_the_gateway_answers_with(name: &str, flags: &[&str], status: u16) -> (Scratch, u16) {
+    let port = a_gateway_answering_with_a_secret(status);
     let scratch = Scratch::new(name).with_settings(&format!(
         r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
             "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
@@ -11715,6 +11720,38 @@ fn a_log_level_that_is_not_one_is_refused() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("--log-level"), "{stderr}");
     assert!(!scratch.path.join(".bravebot").join("logs").exists());
+}
+
+/// DIAG-3: the level the command line names reaches the log, and without one it is `error`. A
+/// gateway answering 503 is retried, and each retry is an `info` line beside the `error` line of
+/// the failed request, so the two runs tell a level that was passed on from one that was dropped
+/// and a default of `error` from a default of `info`.
+#[test]
+fn the_level_on_the_command_line_reaches_the_log_and_the_default_is_error() {
+    let log_of = |name: &str, flags: &[&str]| {
+        let (scratch, _) =
+            a_run_the_gateway_answers_with(&format!("cli-running-log-level-{name}"), flags, 503);
+        let logs = logs_of(&scratch);
+        assert_eq!(logs.len(), 1, "{name}: expected one log: {logs:?}");
+        std::fs::read_to_string(&logs[0]).expect("read the log")
+    };
+
+    let by_default = log_of("default", &[]);
+    assert!(by_default.contains(" ERROR net.fetch "), "{by_default}");
+    assert!(
+        !by_default.contains(" INFO "),
+        "the default level let an info line through: {by_default}"
+    );
+
+    let asked_for_info = log_of("info", &["--log-level", "info"]);
+    assert!(
+        asked_for_info.contains(" INFO aichat.retry attempt=2 "),
+        "--log-level info did not reach the log: {asked_for_info}"
+    );
+    assert!(
+        asked_for_info.contains(" ERROR net.fetch "),
+        "{asked_for_info}"
+    );
 }
 
 /// DIAG-5: `doctor` names the directory the logs are in.
