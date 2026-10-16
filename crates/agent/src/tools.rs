@@ -2532,6 +2532,33 @@ impl Jobs {
         (name, stop)
     }
 
+    /// Start `line` as a job whose output carries `label`, for a test that holds jobs without a
+    /// turn around them, and hand back its name and the token that stops it.
+    #[cfg(test)]
+    pub(crate) fn start_for_a_test(
+        &mut self,
+        line: &str,
+        label: Label,
+    ) -> (String, bravebot_core::cancel::JobStop) {
+        use bravebot_core::TrustStore;
+        use bravebot_core::file_authority::FileAuthority;
+
+        let root = std::env::current_dir().unwrap();
+        let plan = crate::cmdline::compile(line, &root, None, &mut |_, _| Ok(())).unwrap();
+        let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+            panic!("one pipeline");
+        };
+        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+        self.keep(
+            running,
+            plan.display(),
+            label,
+            FileAuthority::new(TrustStore::new(&root)),
+            0,
+            false,
+        )
+    }
+
     /// Record what the job named was confined to, for the account of a failed finish.
     fn confined_as(&mut self, name: &str, confinement: Option<String>) {
         if let Some(job) = self.running.get_mut(name) {
@@ -12671,23 +12698,7 @@ mod tests {
     /// Start `line` as a job of `jobs` and wait, to a bound, until its steps have exited. The pipes
     /// are not waited for: `Background::ended` would pay the drain's grace on top.
     fn start_a_job_and_wait_for_its_steps(jobs: &mut Jobs, line: &str) {
-        use bravebot_core::TrustStore;
-        use bravebot_core::file_authority::FileAuthority;
-
-        let root = std::env::current_dir().unwrap();
-        let plan = crate::cmdline::compile(line, &root, None, &mut |_, _| Ok(())).unwrap();
-        let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
-            panic!("one pipeline");
-        };
-        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
-        let (name, _stop) = jobs.keep(
-            running,
-            plan.display(),
-            Label::trusted_public(),
-            FileAuthority::new(TrustStore::new(&root)),
-            0,
-            false,
-        );
+        let (name, _stop) = jobs.start_for_a_test(line, Label::trusted_public());
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !jobs.running.get_mut(&name).unwrap().running.steps_exited() {
             assert!(std::time::Instant::now() < until, "`{line}` did not exit");

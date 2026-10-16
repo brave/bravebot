@@ -5397,6 +5397,95 @@ mod tests {
         );
     }
 
+    /// RUN-26. Every finish found between rounds is reported, and a stop the person asked for is
+    /// recorded in the trail, before any job's output is handed to the planner. A turn that fails
+    /// part way through the handing therefore still says how each job ended, including the one it
+    /// never reached. The first job's output cannot be quarantined, because its slot is taken
+    /// already, and the second job, which the person stopped, is the one that must not be lost.
+    #[test]
+    fn every_finish_found_between_rounds_is_reported_before_the_first_is_handed_over() {
+        use crate::report::{JobEvent, Outcome};
+        use bravebot_core::event::Event;
+        use bravebot_core::label::Label;
+
+        let mut jobs = crate::tools::Jobs::new();
+        let (first, _) = jobs.start_for_a_test("echo first", Label::untrusted_public());
+        let (_, stop_the_second) = jobs.start_for_a_test("sleep 30", Label::untrusted_public());
+        let until = Instant::now() + Duration::from_secs(10);
+        while jobs.running_now().iter().any(|(name, _)| *name == first) {
+            assert!(Instant::now() < until, "the first job did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop_the_second.request();
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect two finished jobs");
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let outcome = {
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::default(),
+                &mut sink,
+            )
+            .unwrap();
+            let earlier = policy.label_piped_input("AN-EARLIER-RESULT".to_string());
+            // The slot the first finished job's output is about to be given, taken beforehand so
+            // that writing to it fails whatever the numbering is called.
+            let taken = Conversation::new().next_reference();
+            conversation
+                .quarantine()
+                .writer_for(taken, Label::untrusted_public())
+                .unwrap()
+                .write_measured(earlier)
+                .unwrap();
+            collect_jobs(
+                &mut jobs,
+                tools::OUTPUT_CAP,
+                ReadOutputIs::Asked,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+            )
+        };
+
+        let Err(TurnError::Precommit(refused)) = outcome else {
+            panic!("a job whose output could not be quarantined was handed over anyway");
+        };
+        assert!(
+            refused.contains("has already been written"),
+            "the turn failed for some other reason: {refused}"
+        );
+        assert!(
+            matches!(
+                reporter.jobs.as_slice(),
+                [
+                    JobEvent::Ended { name: first, outcome: Outcome::Succeeded },
+                    JobEvent::Ended { name: second, outcome: Outcome::StoppedByTheUser(_) },
+                ] if first == "job:1" && second == "job:2"
+            ),
+            "{:?}",
+            reporter.jobs
+        );
+        let stopped: Vec<&String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "job_stop",
+                    detail,
+                } => Some(detail),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(stopped.as_slice(), [detail] if detail.starts_with("job:2 stopped by the user")),
+            "the person's stop was not recorded before the failure: {stopped:?}"
+        );
+    }
+
     /// A turn holds a grant for each server the session reached and for no other. A worker it
     /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
     /// delegate's own task names: its grants are its spec's.
