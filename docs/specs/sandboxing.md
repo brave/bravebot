@@ -36,7 +36,7 @@ guards:
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 6
+      - crates/sandbox/src/programs.rs: 7
 documented-by: docs/website/docs/security/security.md
 ---
 
