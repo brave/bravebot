@@ -18,6 +18,7 @@ governs:
   - crates/agent/src/output_schema.rs
   - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/sessions_list.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
@@ -1653,3 +1654,55 @@ would make every change with nobody watching.
 `verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`
 `verified-by: bravebot_tui::app::a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once`
 `verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+
+<a id="CLI-32"></a>
+### CLI-32: `sessions list` lists the sessions recorded for this directory
+
+`bravebot sessions` lists the background roster, the sessions a host is running under the state
+directory ([BG-5](background-sessions.md#BG-5)). The sessions recorded on disk are a different
+set, so they are listed by a further word: `bravebot sessions list [--json] [--limit <n>]`. The
+bare word keeps its meaning.
+
+It reads and writes nothing. One line per record, newest first: the id, how long ago it was last
+written, the title, the branch, the front end that wrote it ([SESSION-29](sessions.md#SESSION-29))
+and whether it can be continued. A manifest run is listed and says it cannot be continued. A record
+holding none of the branch or the front end says so rather than naming one. The title is the prompt
+a person typed ([SESSION-4](sessions.md#SESSION-4)); the record holds nothing untrusted
+([SESSION-2](sessions.md#SESSION-2)), and every field printed has the characters a terminal would
+act on removed. Only the invoking user's state directory is read
+([SESSION-16](sessions.md#SESSION-16)).
+
+Which records belong to this directory is decided by the path inside each record
+([SESSION-28](sessions.md#SESSION-28)) and never by the name of the directory they sit under, which
+is derived lossily and which two working directories can share. A session recorded in another
+directory that maps to the same store name is not listed.
+
+`--limit <n>` prints at most `n` rows and defaults to 20. Where records were left out, a line
+saying how many goes to stderr, so stdout carries the listing and nothing else (CLI-5). `--json`
+puts one object per line on stdout and nothing else: `id`, `title`, `directory`, `updated`,
+`branch`, `front` and `continuable`, every field on every line, and then not even the no-records
+line (CLI-12). A limit of zero, a limit that is not a number, a repeated flag and any other word
+are refused with the status for an argument (CLI-6).
+
+**Why.** A script that wants to know which sessions exist here has no way to ask: the picker is
+interactive and `sessions search` needs text to find. Filtering on the recorded path is what keeps
+two directories sharing a store from showing each other's sessions, which the picker does not do
+today.
+
+**Known cost.** The path inside a record is itself a lossy rendering of the directory it was
+written in, the same `Path::display` text an ordinary, validly-named directory could be called
+([SESSION-28](sessions.md#SESSION-28)). A directory whose name is not valid UTF-8 is told from one
+with that rendering as its real name only up to the rendering: the first's own exact bytes match no
+record, since no record can hold them, and the second's exact name matches whatever either one
+wrote. Telling the two apart would need a record to hold the exact bytes of a directory that is not
+UTF-8, which nothing here does yet.
+
+`verified-by: bravebot_cli::sessions_list::the_words_say_how_many_rows_and_whether_they_are_json`
+`verified-by: bravebot_cli::sessions_list::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::sessions_list::a_session_recorded_in_another_directory_sharing_the_store_is_not_listed`
+`verified-by: bravebot_cli::sessions_list::a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering`
+`verified-by: bravebot_cli::sessions_list::a_manifest_run_is_listed_and_says_it_cannot_be_continued`
+`verified-by: bravebot_cli::sessions_list::a_row_says_the_front_end_that_wrote_it_and_the_branch_it_was_on`
+`verified-by: bravebot_cli::sessions_list::a_title_reaches_a_row_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::sessions_list::json_is_one_object_per_line_and_nothing_else`
+`verified-by: bravebot_cli::sessions_list::a_typed_title_cannot_break_out_of_the_object_it_is_written_in`

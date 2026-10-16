@@ -48,6 +48,10 @@ pub(crate) fn print_help() {
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         (
+            "bravebot sessions list [--json]",
+            t!(cli_usage_sessions_list),
+        ),
+        (
             "bravebot sessions import <tool>",
             t!(cli_usage_sessions_import),
         ),

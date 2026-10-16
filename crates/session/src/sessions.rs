@@ -1551,6 +1551,16 @@ impl Record {
 pub struct Summary {
     pub id: String,
     pub title: String,
+    /// The working directory the record says the session ran in.
+    ///
+    /// On the row because the directory a store is found under is not reversible
+    /// ([`key_for`]), and two working directories can map to the same one. A caller listing the
+    /// sessions of one directory has to tell them apart by the path the record kept
+    /// ([SESSION-28](sessions.md#SESSION-28)).
+    pub directory: String,
+    /// The word for the front end that wrote the record ([SESSION-29](sessions.md#SESSION-29)),
+    /// or `None` for a record written before it was kept.
+    pub front: Option<String>,
     pub branch: Option<String>,
     /// The issue the person said the session is for ([PANEL-12](info-panel.md#PANEL-12)), which
     /// the picker searches.
@@ -2279,6 +2289,8 @@ pub fn list(project: &Path) -> Vec<Summary> {
             Some(Summary {
                 id: listed.id,
                 title: listed.title,
+                directory: listed.directory,
+                front: listed.front,
                 branch: listed.branch,
                 issue: listed.issue,
                 pull_request: listed.pull_request,
@@ -2694,6 +2706,10 @@ fn read(path: &Path) -> Option<Record> {
 struct Listed {
     id: String,
     title: String,
+    directory: String,
+    /// Absent from a record written before the front end was kept.
+    #[serde(default)]
+    front: Option<String>,
     #[serde(default)]
     branch: Option<String>,
     /// Absent from a record written before the links were kept.
@@ -3778,6 +3794,8 @@ mod tests {
         Summary {
             id: format!("s-{updated}"),
             title: "a session".to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: None,
             issue: None,
             pull_request: None,

@@ -23,6 +23,7 @@ mod push_identity;
 mod sandbox_check;
 mod session_import;
 mod session_search;
+mod sessions_list;
 mod shell_init;
 #[cfg(unix)]
 mod supervisor;

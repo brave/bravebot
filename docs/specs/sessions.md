@@ -1446,11 +1446,13 @@ stay behind because they were given for work that the brief describes only in wo
   an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
-  reduce to the same name. Nothing re-checks afterwards: the listing reads every record in that
-  directory without comparing the path recorded inside it. Since a resume restores standing
+  reduce to the same name. The resume picker does not re-check afterwards: it reads every record in
+  that directory without comparing the path recorded inside it. Since a resume restores standing
   permissions, permissions granted in one of those directories would be offered in another.
 
-  The record does hold the true path, so the fix is to filter on it. `two_directories_do_not_share_a_key`
+  The record does hold the true path, and `bravebot sessions list`
+  ([CLI-32](cli.md#CLI-32)) filters on it, so that listing shows only the sessions of the directory
+  it was run in. The picker still does not. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
 

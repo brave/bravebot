@@ -37,6 +37,10 @@ const MCP: [&str; 8] = [
 /// What follows `permissions`.
 const PERMISSIONS: [&str; 1] = ["check"];
 
+/// What follows `sessions`. The bare word lists the background roster, so these are the words
+/// that do something else with it.
+const SESSIONS: [&str; 4] = ["list", "stop", "import", "search"];
+
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
 struct Flag {
@@ -140,6 +144,7 @@ fn bash() -> String {
             auth) COMPREPLY=($(compgen -W "{auth}" -- "$cur")); return 0 ;;
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
             permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
+            sessions) COMPREPLY=($(compgen -W "{sessions}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -158,6 +163,7 @@ complete -o default -F _bravebot bravebot
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
+        sessions = SESSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -173,6 +179,7 @@ _bravebot() {{
             auth) compadd -- {auth}; return ;;
             mcp) compadd -- {mcp}; return ;;
             permissions) compadd -- {permissions}; return ;;
+            sessions) compadd -- {sessions}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -194,6 +201,7 @@ fi
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
+        sessions = SESSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -210,6 +218,7 @@ fn fish() -> String {
         ("auth", AUTH.join(" ")),
         ("mcp", MCP.join(" ")),
         ("permissions", PERMISSIONS.join(" ")),
+        ("sessions", SESSIONS.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {

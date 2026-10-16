@@ -19,6 +19,9 @@ const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 const ID_SHOWN: usize = 8;
 
 /// `bravebot sessions [--json]` and `bravebot sessions stop <id>`.
+///
+/// The bare word is the roster of background sessions, which is what it has always been. The
+/// sessions recorded for a directory are a separate listing under `list` (CLI-32).
 pub(crate) fn sessions(args: &[String]) -> ExitCode {
     match args {
         [] => list(false),
@@ -26,12 +29,14 @@ pub(crate) fn sessions(args: &[String]) -> ExitCode {
         [word, id] if word == "stop" => stop(id),
         [word, rest @ ..] if word == "import" => crate::session_import::command(rest),
         [word, rest @ ..] if word == "search" => crate::session_search::command(rest),
+        [word, rest @ ..] if word == "list" => crate::sessions_list::command(rest),
         _ => fail(Ending::Argument, t!(sessions_usage)),
     }
 }
 
-/// The directory `sessions import` and `sessions search` look in: the one the person typed, or the
-/// current one. It has to exist and be a directory; a path that is not one is an argument error.
+/// The directory `sessions import`, `sessions search` and `sessions list` look in: the one the
+/// person typed, or the current one. It has to exist and be a directory; a path that is not one is
+/// an argument error.
 pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
     let directory = match named {
         Some(path) => path,

@@ -614,6 +614,8 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
@@ -628,6 +630,8 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
