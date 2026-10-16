@@ -189,7 +189,7 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_directory_entry_that_is_not_a_certificate_is_skipped`
 `verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
 `verified-by: bravebot_net::transport::every_named_path_that_yields_nothing_is_reported_rather_than_the_first`
-`verified-by: bravebot_cli::main::the_network_section_names_every_path_that_yielded_nothing`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_path_that_yielded_nothing`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
@@ -264,13 +264,13 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_net::transport::a_lower_case_proxy_variable_that_cannot_be_parsed_is_named`
 `verified-by: bravebot_net::transport::a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once`
 `verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
-`verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
-`verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route`
-`verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
-`verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
-`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
-`verified-by: bravebot_cli::main::the_network_section_never_prints_a_proxy_credential`
+`verified-by: bravebot_cli::doctor::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::doctor::the_network_section_never_prints_a_proxy_credential`
 
 <a id="NET-9"></a>
 ### NET-9: a redirect may not take an https chain into cleartext

@@ -557,7 +557,7 @@ sandbox-rule-climbs = il sort du dossier dont il est lu, ou contient .. là où 
 sandbox-rule-glob-on-a-write = un joker s'applique aux lectures et pas aux écritures
 sandbox-rule-confines-nothing = une écriture sur le dossier personnel ou sur tout le système de fichiers ne confine rien
 sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trouve une clé privée
-sandbox-rule-state-directory = aucune liste n'ajoute d'accès à ~/.bravebot, où se trouvent les clés de la passerelle
+sandbox-rule-state-directory = aucune liste n'ajoute d'accès à ~/.bravebot, où se trouvent les clés de la passerelle, sauf pour lire ~/.bravebot/sessions
 sandbox-rule-holds-credentials = sur cette plateforme, une ligne sur un dossier donne accès à tout ce qu'il contient, donc aucune liste n'ajoute un dossier qui contient un emplacement d'identifiants comme ~/.ssh, ~/.aws ou ~/.bravebot
 sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
 sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
@@ -2175,6 +2175,7 @@ command-reach = Retenir un répertoire ou un identifiant pour une commande, ou l
 command-sandbox = Afficher le mode du bac à sable, ou le changer dès le prochain tour
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
+command-note = Noter quelque chose au dossier de la session, sans le mettre dans la conversation
 command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
 command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
@@ -2249,6 +2250,10 @@ session-resumed = session reprise : { $title }
 session-renamed = renommée en { $title }
 session-rename-needs-a-name = /rename demande un nom, comme /rename le bug de l'analyseur
 session-rename-needs-something = /rename demande un nom qui contienne quelque chose
+session-note-added = note ajoutée au tour { $turn }, dans le dossier seulement : le planificateur ne la reçoit pas
+session-note-needs-text = /note demande la note, comme /note le mauvais fichier a été modifié ici
+session-note-not-recorded = note non ajoutée : cette session n'écrit aucun dossier, la note ne serait gardée nulle part
+session-note-listed = tour { $turn } : { $text }
 # Ce que répondent /issue et /pr. Une valeur refusée n'est pas répétée, car elle peut contenir un
 # caractère de contrôle.
 session-issue-is = cette session est pour { $url }. /issue clear l'enlève

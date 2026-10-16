@@ -10,7 +10,10 @@
 
 Sessions are the records under ~/.bravebot/sessions, one directory per working directory. A session
 is reviewed once: `record` appends a line to `<id>.analysis.jsonl` beside the session, and `pending`
-offers a session again only when it has had more turns since. The marker is a local file because
+offers a session again only when it has had more turns or more notes since. A note is a line the
+person typed with `/note` (docs/specs/sessions.md SESSION-36). It is written to a file beside the
+record copy and named to the analyzer and verifier as data from the person, never put in a prompt.
+The marker is a local file because
 sessions are per machine. Its name does not end in `.json`, because the session store reads every
 `.json` file in a directory as a session record.
 
@@ -100,6 +103,28 @@ def write_marker(directory, session, entry):
         out.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+def notes_of(record):
+    """The notes a person typed on a session, numbered from 1 in the order they were added.
+
+    Only the shape is checked: an entry without text is not a note. What a note says is never read
+    by this script beyond that, and reaches no prompt except through the file it is written to.
+    """
+    found = []
+    for entry in (record or {}).get("notes") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("text"), str) or not entry["text"].strip():
+            continue
+        turn = entry.get("turn")
+        found.append(
+            {
+                "number": len(found) + 1,
+                "turn": turn if isinstance(turn, int) and not isinstance(turn, bool) else 0,
+                "by": entry.get("by") if isinstance(entry.get("by"), str) else "person",
+                "text": entry["text"],
+            }
+        )
+    return found
+
+
 def safe_build(value):
     text = str(value or "")
     return text if re.fullmatch(r"[\w.+ ()/,-]{1,80}", text) else "unknown"
@@ -129,6 +154,7 @@ def candidates(store, workspace=None):
                     "record": str(path),
                     "audit": str(directory / f"{path.stem}.audit.jsonl"),
                     "turns": record["turns"] if isinstance(record.get("turns"), int) else 0,
+                    "notes": len(notes_of(record)),
                     "updated": record["updated"],
                     "build": safe_build(record.get("build")),
                     "workspace": str(record.get("directory") or ""),
@@ -141,10 +167,11 @@ def candidates(store, workspace=None):
 def select(found, named, limit, now, idle):
     """The sessions to review: the ones named, else the unreviewed or grown, newest first.
 
-    A named session is reviewed whatever its marker says and from its first turn, since naming one
-    is how a session is reviewed again. Otherwise a session that is imported, has no turns, or was
-    written within `idle` seconds (so may still be running) is passed over, and one reviewed before
-    is offered only for the turns after the ones that were reviewed.
+    A named session is reviewed whatever its marker says and from its first turn and first note,
+    since naming one is how a session is reviewed again. Otherwise a session that is imported, has
+    no turns, or was written within `idle` seconds (so may still be running) is passed over, and
+    one reviewed before is offered only when it has more turns or more notes than the review
+    considered, for the turns and notes after those.
     """
     if named:
         chosen = []
@@ -157,7 +184,7 @@ def select(found, named, limit, now, idle):
                 raise Problem(f"{name} matches {len(matches)} sessions; give more of the id")
             if matches[0]["turns"] < 1:
                 raise Problem(f"session {matches[0]['id']} has had no turns")
-            chosen.append(dict(matches[0], from_turn=0))
+            chosen.append(dict(matches[0], from_turn=0, from_note=0))
         return chosen
 
     left = []
@@ -165,9 +192,15 @@ def select(found, named, limit, now, idle):
         marker = session["marker"]
         if session["id"].startswith(IMPORTED) or session["turns"] < 1 or now - session["updated"] < idle:
             continue
-        if marker is not None and session["turns"] <= marker["turns"]:
+        if marker is not None and session["turns"] <= marker["turns"] and session.get("notes", 0) <= marker.get("notes", 0):
             continue
-        left.append(dict(session, from_turn=marker["turns"] if marker else 0))
+        left.append(
+            dict(
+                session,
+                from_turn=marker["turns"] if marker else 0,
+                from_note=marker.get("notes", 0) if marker else 0,
+            )
+        )
     left.sort(key=lambda s: s["updated"], reverse=True)
     return left[:limit]
 
@@ -203,6 +236,11 @@ def pending(args, now=None):
         if have_audit:
             shutil.copyfile(session["audit"], audit_copy)
         prompt, result = work / "analyze" / f"{sid}.md", work / "analyze" / f"{sid}.json"
+        notes = notes_of(pa.read_json(record_copy))
+        notes_copy = work / "sessions" / f"{sid}.notes.json"
+        if notes:
+            notes_copy.write_text(json.dumps(notes, indent=2), encoding="utf-8")
+        session = dict(session, notes=len(notes))
         prompt.write_text(
             pa.render(
                 template,
@@ -211,6 +249,9 @@ def pending(args, now=None):
                     "build": session["build"],
                     "turns": str(session["turns"]),
                     "from_turn": str(session["from_turn"]),
+                    "notes": str(len(notes)),
+                    "from_note": str(min(session["from_note"], len(notes))),
+                    "notes_file": str(notes_copy) if notes else "(this session has no notes)",
                     "record_file": str(record_copy),
                     "audit_file": str(audit_copy) if have_audit else "(this session has no audit trail)",
                     "tracker": str(tracker_file),
@@ -344,6 +385,7 @@ def verify(args):
         entry = entries[sid]
         record_copy = Path(work) / "sessions" / f"{sid}.json"
         audit_copy = Path(work) / "sessions" / f"{sid}.audit.jsonl"
+        notes_copy = Path(work) / "sessions" / f"{sid}.notes.json"
         for problem in session["problems"]:
             if problem["state"] != "verify":
                 print(f"  {problem['id']}  {problem.get('verdict') or problem['state']}", file=sys.stderr)
@@ -360,6 +402,7 @@ def verify(args):
                         "claim": pa.fenced(json.dumps(claim, indent=2)),
                         "record_file": str(record_copy),
                         "audit_file": str(audit_copy) if audit_copy.is_file() else "(this session has no audit trail)",
+                        "notes_file": str(notes_copy) if notes_copy.is_file() else "(this session has no notes)",
                         "root": manifest["root"],
                         "commit": manifest["commit"],
                         "results_file": str(result),
@@ -483,6 +526,8 @@ def record(args, today=None):
             "commit": manifest["commit"][:12],
             "turns": entry["turns"],
             "from_turn": entry["from_turn"],
+            "notes": entry.get("notes", 0),
+            "from_note": entry.get("from_note", 0),
             "problems": len(session["problems"]),
             "issues": sorted(set(issues)),
             "dropped": dropped,

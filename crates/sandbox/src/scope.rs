@@ -307,7 +307,7 @@ pub fn environment_reach(
                 "" => named,
                 beneath => named.join(beneath),
             };
-            if let Some(path) = judged(&named, how.names == Names::Directory, home)
+            if let Some(path) = judged(&named, how.names == Names::Directory, home, false)
                 && !already_read(scope, &path, home)
                 && !reached.iter().any(|held: &Reach| held.path == path)
             {
@@ -342,16 +342,20 @@ pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String
 /// `~/.ssh` or `~/.bravebot` or inside either, not `~/.config`, `~/.cache` or `~/Library` whole,
 /// and a link judged by where it leads. It is also refused where it is, or lies inside, a credential
 /// location of the base's table (`~/.aws`, `~/.gnupg`, a browser profile), as `--add-dir` refuses
-/// it. It must also be a directory that exists, since a grant of a path nothing is at reads as a
-/// grant of whatever is created there later.
-pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
-    judged(named, true, home)
+/// it. `~/.bravebot` is the exception for a read (`write` unset) of an entry of it that a stage
+/// reads ([`readable_state_locations`](crate::base::readable_state_locations)), which is judged like
+/// any other directory; a write there is refused. It must also be a directory that exists, since a
+/// grant of a path nothing is at reads as a grant of whatever is created there later.
+pub fn judged_directory(named: &Path, home: &Path, write: bool) -> Option<PathBuf> {
+    judged(named, true, home, !write)
         .filter(|path| path.is_dir())
-        .filter(|path| !crate::rules::inside_a_credential_location(path, home))
+        .filter(|path| !crate::rules::inside_a_credential_location_for(path, home, write))
 }
 
-/// `named` as the sandbox will be told it, or `None` where it is refused.
-fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
+/// `named` as the sandbox will be told it, or `None` where it is refused. `state_read` says the
+/// path is read and not written, so an entry of the state directory that a stage reads is not
+/// refused for being inside it.
+fn judged(named: &Path, directory: bool, home: &Path, state_read: bool) -> Option<PathBuf> {
     if !named.is_absolute() || named.components().any(|part| part == Component::ParentDir) {
         return None;
     }
@@ -366,7 +370,8 @@ fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
         || [named, resolved.as_path()].iter().any(|named| {
             [home, real_home.as_path()].iter().any(|home| {
                 named.starts_with(under(home, ".ssh"))
-                    || named.starts_with(under(home, STATE_DIRECTORY))
+                    || (named.starts_with(under(home, STATE_DIRECTORY))
+                        && !(state_read && crate::rules::reads_readable_state(named, home, false)))
                     || home.starts_with(named)
                     || (directory
                         && [".config", ".cache", "Library"]
@@ -2029,7 +2034,8 @@ mod tests {
         use std::os::unix::fs::symlink;
         let home = scratch_dir("state-directory-reach");
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+        std::fs::create_dir_all(home.join(".bravebot/sessions/-repo")).unwrap();
+        std::fs::create_dir_all(home.join(".bravebot/logs")).unwrap();
         std::fs::create_dir_all(home.join(".bravebotx")).unwrap();
         std::fs::write(home.join(".bravebot/gateway-keys.json"), "").unwrap();
         std::fs::write(home.join(".bravebotx/config"), "").unwrap();
@@ -2057,12 +2063,29 @@ mod tests {
 
         for spelled in [
             home.join(".bravebot"),
-            home.join(".bravebot/sessions"),
+            home.join(".bravebot/logs"),
             home.join("to-state"),
         ] {
-            assert_eq!(judged_directory(&spelled, &home), None, "{spelled:?}");
+            for write in [false, true] {
+                assert_eq!(
+                    judged_directory(&spelled, &home, write),
+                    None,
+                    "{spelled:?} write={write}"
+                );
+            }
         }
-        assert!(judged_directory(&home.join(".bravebotx"), &home).is_some());
+        // The session records are read by a stage and are not written by one.
+        for spelled in [
+            home.join(".bravebot/sessions"),
+            home.join(".bravebot/sessions/-repo"),
+        ] {
+            assert!(
+                judged_directory(&spelled, &home, false).is_some(),
+                "{spelled:?}"
+            );
+            assert_eq!(judged_directory(&spelled, &home, true), None, "{spelled:?}");
+        }
+        assert!(judged_directory(&home.join(".bravebotx"), &home, true).is_some());
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -2085,9 +2108,18 @@ mod tests {
             let link = home.join(format!("link-to-{}", row.replace('/', "-")));
             symlink(&at, &link).unwrap();
             for spelled in [&at, &inner, &link] {
-                assert_eq!(judged_directory(spelled, &home), None, "{spelled:?}");
+                for write in [false, true] {
+                    assert_eq!(
+                        judged_directory(spelled, &home, write),
+                        None,
+                        "{spelled:?} write={write}"
+                    );
+                }
             }
-            assert!(judged_directory(&beside, &home).is_some(), "{beside:?}");
+            assert!(
+                judged_directory(&beside, &home, true).is_some(),
+                "{beside:?}"
+            );
         }
         std::fs::remove_dir_all(&home).unwrap();
     }

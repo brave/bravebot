@@ -65,14 +65,14 @@ impl Looked {
 /// service these sources configure would make the request, so every answer to the question would be
 /// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
-    let model = crate::model_for_this_run(None, config);
+    let model = crate::model::model_for_this_run(None, config);
     let (subscription, a_service_is_configured) =
         match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
             bravebot_agent::backend::Serving::Configured => return None,
             bravebot_agent::backend::Serving::Refused { file, why } => {
                 return Some(fail(
                     Ending::Configuration,
-                    crate::managed_refusal(&model, &file, why),
+                    crate::model::managed_refusal(&model, &file, why),
                 ));
             }
             bravebot_agent::backend::Serving::NothingConfigured {
@@ -88,7 +88,7 @@ pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
         Start::Ended(code) => Some(code),
         Start::Refuse(looked) => Some(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &looked,
@@ -171,7 +171,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     // exported later, and ending here over it would refuse a service that works.
     let unset = unset_gateways(&config, &offered.gateways);
     let blocked = config
-        .provider_for(&crate::model_for_this_run(None, &config))
+        .provider_for(&crate::model::model_for_this_run(None, &config))
         .is_some_and(|(serving, _)| unset.iter().any(|provider| provider.id == serving.id));
     if blocked {
         let lines: Vec<String> = unset
@@ -183,14 +183,14 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     for provider in &unset {
         asking.say(&unset_line(provider, &file, true));
     }
-    let model = crate::model_for_this_run(None, &config);
+    let model = crate::model::model_for_this_run(None, &config);
     match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
         } => Start::Ended(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &Looked::default(),
@@ -201,7 +201,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
         // (BACKEND-48).
         bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
             Ending::Configuration,
-            crate::managed_refusal(&model, &file, why),
+            crate::model::managed_refusal(&model, &file, why),
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }
@@ -1390,7 +1390,7 @@ mod tests {
     /// configured ends a start as well, and that is the end a broken implementation would pass on.
     /// The allow list is empty rather than naming models, so the refusal does not depend on which
     /// model this machine has recorded; the record is read from the real home directory, which no
-    /// test can move. The sentence is read through [`crate::managed_refusal`], the function the start
+    /// test can move. The sentence is read through [`crate::model::managed_refusal`], the function the start
     /// ends with, because `fail` writes to the process's own stderr and no test can read that.
     #[test]
     fn a_start_on_a_model_the_managed_layer_refuses_is_ended() {
@@ -1416,11 +1416,11 @@ mod tests {
             "the start opened on a model the managed layer refuses"
         );
 
-        let model = crate::model_for_this_run(None, &config);
+        let model = crate::model::model_for_this_run(None, &config);
         let (file, why) = config
             .model_refused(&model)
             .expect("the layer refuses the model in force");
-        let said = crate::managed_refusal(&model, file, why);
+        let said = crate::model::managed_refusal(&model, file, why);
         assert!(
             said.contains(&refusing.display().to_string()),
             "the end did not name the file that refused: {said}"

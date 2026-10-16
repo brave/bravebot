@@ -221,7 +221,7 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
 `verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
-`verified-by: bravebot_cli::main::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
+`verified-by: bravebot_cli::doctor::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
 `verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write`
 `verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
@@ -289,9 +289,9 @@ asked for, or names the directory holding it, on the platform where neither was 
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::lib::an_unavailable_backend_reports_no_confinement`
 `verified-by: bravebot_sandbox::policy::confinement_levels_render_for_the_audit_trail`
-`verified-by: bravebot_cli::main::doctor_names_the_confinement_level_in_force`
-`verified-by: bravebot_cli::main::doctor_says_whether_the_kernel_enforces_network_denial`
-`verified-by: bravebot_cli::main::confinement_that_could_not_be_established_fails_the_run`
+`verified-by: bravebot_cli::doctor::doctor_names_the_confinement_level_in_force`
+`verified-by: bravebot_cli::doctor::doctor_says_whether_the_kernel_enforces_network_denial`
+`verified-by: bravebot_cli::doctor::confinement_that_could_not_be_established_fails_the_run`
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
 `verified-by: bravebot_sandbox::windows::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::windows::each_run_confines_through_a_profile_of_its_own`
@@ -587,7 +587,14 @@ its settings on macOS in `~/Library/Application Support/JetBrains`, beside the s
 puts on the search path, so that directory is not a row. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
-`id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
+`id_ed25519_sk.pub`). One subtree of `~/.bravebot` is read: the session records, `~/.bravebot/sessions`,
+so that a script can read past sessions (`session-review` is one). It is lifted for reading only, and
+the rest of the directory stays refused with everything beneath it, including a file a later
+version adds, since the refusal covers the whole directory and no list of files has to be kept in
+step with what the program writes. Nothing under `~/.bravebot` is written by a stage. A transcript
+can hold what a person pasted, so a stage that reads the records is one the plan has to be willing
+to let read them; the network is where they could leave, and the plan decides that
+([SANDBOX-3](#SANDBOX-3)). A public key at another name is read by a stage that carries the remote
 scope when `config` names it, and the one `user.signingkey` names by a stage that signs
 ([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
 the directory around it and every other file in it still refused, because `gh` and git's
@@ -606,6 +613,7 @@ the mode `workspace-write` reads these on purpose:
 | What reads it | Read |
 | --- | --- |
 | `ssh` and the keychain lookup, through the lifts above | `~/.ssh/config`, `~/Library/Keychains/login.keychain-db` |
+| a script that reads past sessions | `~/.bravebot/sessions` |
 | a shell, as it starts | `~/.bashrc`, `~/.zshrc`, `~/.zshenv`, `~/.profile`, `~/.bash_profile` |
 | `git`, `gh`, `glab` and `hub` | `~/.gitconfig`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/glab-cli`, `~/.config/hub` |
 | a package manager | `~/.npmrc`, `~/.yarnrc.yml`, `~/.pypirc`, `~/.config/pip/pip.conf`, `~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`, `~/.cache/huggingface/token` |
@@ -697,6 +705,8 @@ with [SANDBOX-20](#SANDBOX-20).
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_machine_and_refuses_each_credential_location`
 `verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
 `verified-by: bravebot_sandbox::base::the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those`
+`verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
+`verified-by: bravebot_sandbox::base::the_state_directory_entries_a_stage_reads_are_the_session_records_alone`
 `verified-by: bravebot_sandbox::base::the_run_base_leaves_the_token_files_readable`
 `verified-by: bravebot_sandbox::base::every_store_the_catalog_names_is_refused_or_read_on_purpose`
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
@@ -1083,7 +1093,7 @@ own so that the agent and the network are not lent to a `git commit` of an accou
 with ssh, and so that a commit does not read `~/.git-credentials`; the key it needs is one file in
 the person's home that their configuration names, and is read for the same reason `IdentityFile`
 keys are. A configuration of the person's is read for it and a repository's is not, because the
-repository's is a file the plan may write. `~/.bravebot` is refused the same way, since a
+repository's is a file the plan may write. `~/.bravebot` is refused the same way, including the session records the run base reads, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 ssh offers an agent's keys in order and GitHub accepts the first one registered to any account, so a
 person whose agent holds two accounts' keys pushes every repository as one account unless a key is
@@ -2029,8 +2039,8 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_four_words_and_the_last_wins`
 `verified-by: bravebot_cli::main::the_sandbox_flag_refuses_a_word_that_is_not_a_mode`
-`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
-`verified-by: bravebot_cli::main::doctor_reports_a_mode_the_managed_file_refuses`
+`verified-by: bravebot_cli::doctor::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_mode_the_managed_file_refuses`
 `verified-by: bravebot_cli::main::a_refused_mode_says_what_it_does_more_of_and_suggests_a_mode_the_pin_keeps`
 `verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
 `verified-by: bravebot_cli::running::the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`
@@ -2337,7 +2347,7 @@ says nothing about them.
 `verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_reaches_it_through_the_forwarder`
 `verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_cannot_connect_around_it`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
-`verified-by: bravebot_cli::main::doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs`
+`verified-by: bravebot_cli::doctor::doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs`
 `verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_the_proxy_and_ends_with_the_process_that_started_it`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
 `verified-by: bravebot_agent::confine::a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port`
@@ -2462,7 +2472,8 @@ part of it that is on disk is resolved through its links. `~`, `/`, a drive root
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
 which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
-where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), and no list can set the `.git` writes
+where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), except that an `allowRead` entry may name
+`~/.bravebot/sessions` or a path inside it, which the run base reads already, and no list can set the `.git` writes
 [SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. On Windows, where a
 grant cannot be narrowed, an `allowRead` or `allowWrite` entry that is a directory holding one of
 the locations of [SANDBOX-12](#SANDBOX-12) beneath it (the home directory, a directory above it, or
@@ -2522,6 +2533,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_the_state_directory_is_refused`
+`verified-by: bravebot_sandbox::rules::only_a_read_of_the_session_records_is_granted_in_the_state_directory`
+`verified-by: bravebot_agent::reach::the_session_records_may_be_reached_for_reading_and_not_for_writing`
 `verified-by: bravebot_sandbox::rules::a_row_over_a_directory_holding_a_credential_location_is_refused_on_windows_only`
 `verified-by: bravebot_sandbox::rules::a_pattern_on_windows_leaves_out_the_matches_that_hold_a_credential_location`
 `verified-by: bravebot_agent::confine::an_allow_read_over_the_home_directory_is_not_a_row_on_windows`
@@ -2549,7 +2562,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_denial_beneath_a_persons_allowance_is_found_for_the_kind_of_row_it_cuts`
 `verified-by: bravebot_agent::permissions::a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes`
 `verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
-`verified-by: bravebot_cli::main::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
 `verified-by: bravebot_agent::confine::what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
@@ -2721,7 +2734,8 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 
 - **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
   write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
-  `~/.bravebot` and anything inside either, a credential location of the table
+  `~/.bravebot` and anything inside either (a request to read `~/.bravebot/sessions` or a path
+  inside it is not refused), a credential location of the table
   ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
   `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. A
   request for writing is also refused at, inside or above a persistence location

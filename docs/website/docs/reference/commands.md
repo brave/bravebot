@@ -21,6 +21,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
+| `/note` | `<note>` | Note something on this session's record, without putting it in the conversation |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[tokens \| credits \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
@@ -54,6 +55,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
+| `/hunks` | `[number]` | List the hunks the last turn wrote, or put one back as it stood before the turn |
 | `/exit` | | Leave |
 
 Typing `/` offers the list in that order, with your [skills](#skills-after-a-slash) beneath it, and
@@ -864,6 +866,16 @@ refused. Typed while a turn runs with nothing waiting, it is carried out at once
 for the turn to end. Renaming leaves `/undo` nothing to go back to, including the turn running when
 you renamed.
 
+## `/note <note>`
+
+Adds a note to the session record, on the turn the session is on: the running turn, or the last one
+that finished. The record is rewritten at once, and the note is kept with the turn number and the
+fact that you typed it. It is not part of the conversation: it is not a prompt, nothing waiting
+moves, and nothing a turn sends to the model includes it. `/undo` is not affected. A resume, a
+`/branch` and a continued session keep the notes. `/note` with nothing after it lists the notes the session holds, one line each with its turn. Where the session writes no record, as an incognito one does, it says the note reached none. Typed while a turn runs
+with nothing waiting, it is carried out at once. `/session-review` reads the notes of a session it
+reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-on-a-session).
+
 ## `/issue` and `/pr`
 
 `/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
@@ -1110,6 +1122,47 @@ yourself in between is lost. Nothing compares the file against what the turn lef
 asks first.
 :::
 
+## `/hunks [number]`
+
+Lists the hunks the last turn wrote, and puts one of them back. A hunk is a run of changed lines
+between what a file held before the turn and what it holds now.
+
+```
+/hunks           # list the hunks, numbered from one across every file the turn wrote
+/hunks 2         # put hunk 2 back as it stood before the turn
+```
+
+Each row gives the number, the file, the line the hunk starts at and how many lines it added and
+removed, and draws the hunk with a few unchanged lines around it. The list stops at 100 hunks and
+says how many more there were, and `/undo` puts those back with the rest of the turn. When the turn
+also changed files in ways a rewind does not account for, such as through a command, the list says
+it may be missing changes.
+
+`/hunks 2` writes the lines hunk 2 replaced back into the file and leaves every other line as it is
+now, then lists what is left, because the numbers below the hunk have moved. `/undo` afterwards still
+puts the whole turn back as it stood before it.
+
+**A number names a hunk of the list you read.** It is refused, and nothing is written, when you have
+not listed yet, when another turn has run since the list, or when the file no longer holds the hunk as
+listed. That last case is how an edit of your own is protected: the file is compared with what the
+turn kept, and a hunk that moved, grew, shrank or went is not the one you chose.
+
+**Only files you vouched for are compared.** Comparing two texts is a decision, so a file the session
+does not trust is named with the reason instead of being listed, and none of its lines is drawn.
+`/undo` is the way back for it, and it puts back the rest of the turn too. A file the turn created, one
+whose earlier contents were not kept, one that is not text, and one that holds what it held before the
+turn are named the same way.
+
+The file's trust is what it was before: it is withdrawn while the write runs and given back once it
+has succeeded, and a write that fails part way leaves the file untrusted, says so, and is saved to the
+session's record.
+
+:::caution
+**The planner is not told.** The conversation still describes the file as the turn left it, so a later
+edit that names the lines the hunk held is refused for not finding them, and a later write of the whole
+file from what the conversation holds puts the hunk back.
+:::
+
 ## The rules every command shares
 
 **Only a line a person typed into the box.** A command is dispatched from a key press and from nowhere
@@ -1149,7 +1202,7 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the

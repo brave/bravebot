@@ -10,6 +10,7 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1

@@ -108,6 +108,9 @@ pub enum Action {
     HandOver(String),
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Add a note to the session record, kept beside the conversation (SESSION-36). Needs the
+    /// session record, which the loop owns.
+    Note(String),
     /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
     /// conversation and the session record, which the loop owns.
     Branch(String),
@@ -153,6 +156,10 @@ pub enum Action {
     /// is why the argument is carried unparsed: a number that is not one is answered with a line
     /// in the transcript, and the transcript is the loop's.
     Rewind(String),
+    /// List the hunks the last turn wrote, or put one back. Needs the workspace, the trust map and
+    /// the audit, which the loop owns, and carries the argument unparsed for the same reason as
+    /// `Rewind`.
+    Hunks(String),
     Quit,
 }
 

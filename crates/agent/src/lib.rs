@@ -12,6 +12,7 @@ pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+mod calendar;
 pub mod cmdline;
 pub mod compact;
 pub mod confine;
@@ -28,6 +29,7 @@ pub mod granted;
 pub mod home;
 pub mod hooks;
 pub mod host_proxy;
+pub mod hunks;
 #[cfg(test)]
 mod kept_answers;
 pub mod lsp;

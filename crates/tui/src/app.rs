@@ -49,6 +49,8 @@ use bravebot_session::audit::{Stamped, Trail};
 // its tests name the commands without a list of them.
 pub use crate::command_table::*;
 
+mod actions;
+use actions::Held;
 mod keys;
 // The glob for what this file and its tests call. The four `pub` ones stay public as
 // `bravebot_tui::app::..`, the path `tests/references.rs` names them by.
@@ -235,6 +237,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::SendNow => stop_what_is_running(session, cancel),
         Action::Rename(name) => {
             session.answer_while_working(|session| rename_session(session, beside.stored, &name));
+        }
+        Action::Note(text) => {
+            session.answer_while_working(|session| note_session(session, beside.stored, &text));
         }
         Action::Link(kind, argument) => {
             session.answer_while_working(|session| {
@@ -483,6 +488,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(turns) = argument_to(line, REWIND_COMMAND) {
         return Action::Rewind(turns.to_string());
     }
+    if let Some(number) = argument_to(line, HUNKS_COMMAND) {
+        return Action::Hunks(number.to_string());
+    }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
         // No directory is opened by a relative name, so `close` and `close <path>` never name one
         // that `/add-dir` alone could have opened.
@@ -497,6 +505,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(name) = argument_to(line, RENAME_COMMAND) {
         return Action::Rename(name.to_string());
+    }
+    if let Some(text) = argument_to(line, NOTE_COMMAND) {
+        return Action::Note(text.to_string());
     }
     if let Some(name) = argument_to(line, BRANCH_COMMAND) {
         return Action::Branch(name.to_string());
@@ -1720,19 +1731,9 @@ fn save_compacted(
     workspace: &Workspace,
     events: &[Stamped],
 ) {
-    if session.turns == 0 && stored.resumable().is_none() {
-        return;
+    if save_record(session, conversation, stored, trust, programs, workspace) {
+        stored.append_audit(session.turns, events);
     }
-    let title = stored.title().to_string();
-    with_standing(
-        session,
-        conversation,
-        trust,
-        programs,
-        workspace,
-        |standing| stored.save(&title, standing),
-    );
-    stored.append_audit(session.turns, events);
 }
 
 /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation.
@@ -1761,6 +1762,8 @@ fn rewind(
         }
         return;
     };
+    // The turns a list described are gone, and a turn run again in their place numbers the same.
+    session.hunks_listed = None;
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     // Read off the point before anything is removed. The display prompts of the rewound turns go
@@ -1834,23 +1837,99 @@ fn rewind(
         session.note(t!(session_rewound_partly, turn = turn, paths = paths));
     }
     if !gaps.is_empty() {
-        use bravebot_agent::rewind::CoverageGap;
-        let causes = gaps
-            .iter()
-            .map(|gap| match gap {
-                CoverageGap::Command => t!(session_rewind_cause_command),
-                CoverageGap::Hook => t!(session_rewind_cause_hook),
-                CoverageGap::Scratch => t!(session_rewind_cause_scratch),
-                CoverageGap::LanguageServer => t!(session_rewind_cause_server),
-                CoverageGap::Desktop => t!(session_rewind_cause_desktop),
-                CoverageGap::Checkout => t!(session_rewind_cause_checkout),
-                CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
-                CoverageGap::Unknown => t!(session_rewind_cause_unknown),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        session.note(t!(session_rewind_uncovered, causes = causes));
+        session.note(t!(
+            session_rewind_uncovered,
+            causes = coverage_causes(&gaps)
+        ));
     }
+}
+
+/// Carry out `/hunks`: list the hunks of the last turn, or put one back, and keep the audit and
+/// the record.
+///
+/// A write that failed leaves its path distrusted, and a record that kept the map as the last turn
+/// ended would trust a half-written file again on a resume, so the record is written again when
+/// the map changed. Nothing is appended to the audit when no gate was passed, and nothing is saved
+/// where there is no record to keep, as with closing a directory.
+#[allow(clippy::too_many_arguments)]
+fn carry_out_hunks(
+    session: &mut Session,
+    conversation: &Conversation,
+    stored: &mut bravebot_session::sessions::Handle,
+    workspace: &Workspace,
+    trust: &mut TrustStore,
+    programs: &TrustedPrograms,
+    servers: &mut Option<LanguageServers>,
+    argument: &str,
+) {
+    let trust_before = trust.clone();
+    let mut trail = Trail::new();
+    match crate::hunks_command::parse(argument) {
+        crate::hunks_command::Asked::List => {
+            crate::hunks_command::list(session, workspace, trust, &mut trail)
+        }
+        crate::hunks_command::Asked::PutBack(number) => crate::hunks_command::put_back(
+            session,
+            number,
+            workspace,
+            trust,
+            servers,
+            bravebot_agent::home::directory().as_deref(),
+            &mut trail,
+        ),
+        crate::hunks_command::Asked::Unreadable => session.note(t!(session_hunks_needs_a_number)),
+    }
+    if !trail.events().is_empty() {
+        stored.append_audit(session.turns, trail.events());
+    }
+    if *trust != trust_before {
+        save_record(session, conversation, stored, trust, programs, workspace);
+    }
+}
+
+/// Write the session's record now, if there is one to write: nothing where no turn has been had and
+/// nothing is on disk, so a session opened and abandoned leaves none. Whether it did is the answer.
+fn save_record(
+    session: &Session,
+    conversation: &Conversation,
+    stored: &mut bravebot_session::sessions::Handle,
+    trust: &TrustStore,
+    programs: &TrustedPrograms,
+    workspace: &Workspace,
+) -> bool {
+    if session.turns == 0 && stored.resumable().is_none() {
+        return false;
+    }
+    let title = stored.title().to_string();
+    with_standing(
+        session,
+        conversation,
+        trust,
+        programs,
+        workspace,
+        |standing| stored.save(&title, standing),
+    );
+    true
+}
+
+/// What a rewind point does not account for, worded and joined.
+pub(crate) fn coverage_causes(
+    gaps: &std::collections::BTreeSet<bravebot_agent::rewind::CoverageGap>,
+) -> String {
+    use bravebot_agent::rewind::CoverageGap;
+    gaps.iter()
+        .map(|gap| match gap {
+            CoverageGap::Command => t!(session_rewind_cause_command),
+            CoverageGap::Hook => t!(session_rewind_cause_hook),
+            CoverageGap::Scratch => t!(session_rewind_cause_scratch),
+            CoverageGap::LanguageServer => t!(session_rewind_cause_server),
+            CoverageGap::Desktop => t!(session_rewind_cause_desktop),
+            CoverageGap::Checkout => t!(session_rewind_cause_checkout),
+            CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
+            CoverageGap::Unknown => t!(session_rewind_cause_unknown),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What the idle loop does with one event it has read.
@@ -2497,691 +2576,93 @@ fn event_loop(
         };
 
         let private = matches!(action, Action::RunPrivately(_));
+        let mut held = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        };
         match action {
-            Action::Quit => return Ok(left_behind(&stored)),
-            Action::Copy => copy_selection(terminal, &mut session)?,
-            Action::CopyReply(text) => copy_reply(&mut session, &text, crate::clipboard::copy),
-            Action::Paste => take_from_clipboard(&mut session, crate::clipboard::paste()),
-            Action::Edit => {
-                edit_prompt(terminal, &mut session)?;
-                needs_draw = true;
-            }
-            Action::Export(path) => {
-                let markdown = crate::render::as_markdown(&session, stored.title());
-                let exported_path = bravebot_session::sessions::export(
-                    workspace.root(),
-                    stored.id(),
-                    path.as_deref(),
-                    &markdown,
-                );
-                match exported_path {
-                    Ok(p) => session.note(t!(session_exported, path = p.display().to_string())),
-                    Err(e) => session.note(t!(session_export_failed, problem = e.to_string())),
-                }
-                needs_draw = true;
-            }
-            Action::Undo => {
-                let (trust, programs, language_servers) = answers.what_a_rewind_takes_back();
-                rewind(
-                    &mut session,
-                    &mut conversation,
-                    trust,
-                    programs,
-                    &mut stored,
-                    &workspace,
-                    language_servers,
-                    1,
-                );
-                needs_draw = true;
-            }
-            Action::Rewind(turns) => {
-                if turns.is_empty() {
-                    list_rewind_points(&mut session);
-                } else {
-                    match turns.parse::<usize>() {
-                        Ok(steps) if steps > 0 => {
-                            let (trust, programs, language_servers) =
-                                answers.what_a_rewind_takes_back();
-                            rewind(
-                                &mut session,
-                                &mut conversation,
-                                trust,
-                                programs,
-                                &mut stored,
-                                &workspace,
-                                language_servers,
-                                steps,
-                            )
-                        }
-                        _ => session.note(t!(session_rewind_needs_a_number)),
-                    }
-                }
-                needs_draw = true;
-            }
-            Action::Show => {
-                show_transcript(terminal, &mut session)?;
-                needs_draw = true;
-            }
-            Action::ChooseModel => {
-                choose_model(terminal, &mut session, config);
-                needs_draw = true;
-            }
-            Action::ChooseTheme => {
-                choose_theme(terminal, &mut session);
-                needs_draw = true;
-            }
-            Action::SetTheme(name) => {
-                set_theme(&mut session, &name);
-                needs_draw = true;
-            }
-            Action::ChooseEffort => {
-                choose_effort(terminal, &mut session);
-                needs_draw = true;
-            }
-            Action::SetEffort(level) => {
-                set_effort(&mut session, &level);
-                needs_draw = true;
-            }
-            Action::Advisor(word) => {
-                set_advisor(&mut session, config, &word);
-                needs_draw = true;
-            }
-            Action::Style(word) => {
-                set_style(&mut session, &word);
-                needs_draw = true;
-            }
-            Action::ChooseEditing => {
-                choose_editing(terminal, &mut session);
-                needs_draw = true;
-            }
-            Action::AddDirectory(directory) => {
-                // The snapshot holds a trust map without this directory's rule in it, while the
-                // directory itself would stay open.
-                session.rewind.close();
-                add_directory(&mut session, &mut workspace, &mut answers.trust, &directory);
-            }
-            Action::CloseDirectory(directory) => {
-                if close_directory(&mut session, &mut workspace, &mut answers.trust, &directory) {
-                    // The snapshot holds a trust map with this directory's rule in it, while the
-                    // directory itself would stay closed.
-                    session.rewind.close();
-                    // Written now rather than at the end of the next turn: a session that closed
-                    // a directory and then quit would otherwise resume with it open and trusted.
-                    // Wherever a record is on disk, which a rewind to before the first turn can
-                    // leave, and not only once a turn has been had.
-                    if session.turns > 0 || stored.resumable().is_some() {
-                        let title = stored.title().to_string();
-                        with_standing(
-                            &session,
-                            &conversation,
-                            &answers.trust,
-                            &answers.programs,
-                            &workspace,
-                            |standing| stored.save(&title, standing),
-                        );
-                    }
-                }
-            }
+            Action::Quit => return Ok(left_behind(held.stored)),
+            Action::Copy => copy_selection(terminal, held.session)?,
+            Action::CopyReply(text) => copy_reply(held.session, &text, crate::clipboard::copy),
+            Action::Paste => take_from_clipboard(held.session, crate::clipboard::paste()),
+            Action::Edit => edit_prompt(terminal, held.session)?,
+            Action::Export(path) => held.export(path.as_deref()),
+            Action::Undo => held.rewind_steps(1),
+            Action::Rewind(turns) => held.rewind_command(&turns),
+            Action::Hunks(argument) => held.hunks_command(&argument),
+            Action::Show => show_transcript(terminal, held.session)?,
+            Action::ChooseModel => choose_model(terminal, held.session, config),
+            Action::ChooseTheme => choose_theme(terminal, held.session),
+            Action::SetTheme(name) => set_theme(held.session, &name),
+            Action::ChooseEffort => choose_effort(terminal, held.session),
+            Action::SetEffort(level) => set_effort(held.session, &level),
+            Action::Advisor(word) => set_advisor(held.session, config, &word),
+            Action::Style(word) => set_style(held.session, &word),
+            Action::ChooseEditing => choose_editing(terminal, held.session),
+            Action::AddDirectory(directory) => held.add_directory_command(&directory),
+            Action::CloseDirectory(directory) => held.close_directory_command(&directory),
+            Action::Note(text) => note_session(held.session, held.stored, &text),
             Action::ChangeDirectory(directory) => {
-                // The record moves with the working directory, so the snapshot describes a
-                // session that is no longer written where it was.
-                session.rewind.close();
-                let changed = change_directory(
-                    &mut session,
-                    &mut workspace,
-                    &mut answers,
-                    stored.id(),
-                    &directory,
-                    |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
-                );
-                if changed != Changed::Stayed {
-                    with_standing(
-                        &session,
-                        &conversation,
-                        &answers.trust,
-                        &answers.programs,
-                        &workspace,
-                        |standing| stored.move_to(workspace.root(), standing),
-                    );
-                }
-                // After the move, so the session picked up again is picked up where it went.
-                if changed == Changed::Left {
-                    return Ok(left_behind(&stored));
+                if let Some(ended) = held.change_directory_command(terminal, &directory) {
+                    return Ok(ended);
                 }
             }
-            Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
-            Action::Background => match handed_to_the_background(
-                &session,
-                stored.to_resume(),
-                BACKGROUND_LOSES.get().map(String::as_str),
-                bravebot_config::sandbox::in_force().mode,
-                bravebot_core::incognito::engaged(),
-            ) {
-                Ok(ended) => return Ok(ended),
-                Err(refused) => session.note(refused),
-            },
-            Action::Branch(name) => {
-                // And a directory of its own, as a session carrying on from another is given one
-                // (TRUST-15): the old one goes with the session that wrote in it.
-                if branch_session(
-                    &mut session,
-                    &mut stored,
-                    &conversation,
-                    &mut answers,
-                    &workspace,
-                    &workspace.session_checkouts(),
-                    &name,
-                ) {
-                    scratch = opened_scratch(&mut session, &mut workspace);
+            Action::Rename(name) => rename_session(held.session, held.stored, &name),
+            Action::Background => {
+                if let Some(ended) = held.background() {
+                    return Ok(ended);
                 }
             }
+            Action::Branch(name) => held.branch(&name),
             Action::Resume(typed) => {
-                if let Some(record) = record_to_resume(
-                    terminal,
-                    &mut session,
-                    workspace.root(),
-                    stored.id(),
-                    &typed,
-                ) {
-                    *switch = Some(switch_session(
-                        &mut session,
-                        &mut workspace,
-                        servers,
-                        record,
-                    ));
-                    return Ok(left_behind(&stored));
+                if let Some(ended) = held.resume(terminal, servers, switch, &typed) {
+                    return Ok(ended);
                 }
-                needs_draw = true;
             }
             Action::Link(kind, argument) => {
-                link_session(&mut session, &mut stored, kind, &argument)
+                link_session(held.session, held.stored, kind, &argument)
             }
-            Action::Status => {
-                let report = status_report(
-                    &session,
-                    &stored,
-                    &workspace,
-                    scratch.as_ref().map(SessionScratch::path),
-                    config,
-                    Some((&answers.trust, &answers.programs)),
-                );
-                session.report(report);
-                needs_draw = true;
+            Action::Status => held.status(config),
+            Action::ForgetTrust => held.forget_trust_command(),
+            Action::Sandbox(word) => crate::sandbox_command::run(
+                held.session,
+                &word,
+                &bravebot_config::Managed::load(),
+                |asking| crate::ask::ask_as(terminal, asking, t!(ask_sandbox_off_title)),
+            ),
+            Action::Reach(argument) => held.reach(&argument),
+            Action::ListCheckouts => held.list_checkouts(),
+            Action::ListMemories => held.list_memories(),
+            Action::RemoveCheckout(id) => held.remove_checkout_command(terminal, &id),
+            Action::ApplyCheckout(id, paths) => held.apply_checkout(terminal, config, &id, &paths),
+            Action::Compact(focus) => held.compact(terminal, config, &focus)?,
+            Action::Aside(question, pasted, attached) => {
+                held.aside(terminal, config, &question, &pasted, &attached)?
             }
-            Action::ForgetTrust => {
-                // This session's map is left as it is: the answer it began with was given, and
-                // what is withdrawn is the next session's. /clear begins one now, and it asks.
-                session.note(forget_trust(
-                    bravebot_agent::home::directory().as_deref(),
-                    workspace.root(),
-                ));
-                needs_draw = true;
-            }
-            Action::Sandbox(word) => {
-                crate::sandbox_command::run(
-                    &mut session,
-                    &word,
-                    &bravebot_config::Managed::load(),
-                    |asking| crate::ask::ask_as(terminal, asking, t!(ask_sandbox_off_title)),
-                );
-                needs_draw = true;
-            }
-            Action::Reach(argument) => {
-                let home = bravebot_agent::home::directory();
-                let profile = bravebot_agent::home::profile();
-                let paths = bravebot_agent::reach::requested_paths_command(&workspace, &argument);
-                session.note(match home.as_deref() {
-                    _ if paths.is_some() => paths.unwrap_or_default(),
-                    Some(home) => bravebot_agent::reach::command(
-                        &bravebot_agent::reach::Typed {
-                            home,
-                            profile: profile.as_deref(),
-                            session: stored.id(),
-                            directory: workspace.root(),
-                            today: &bravebot_agent::reach::today(),
-                        },
-                        &argument,
-                    ),
-                    None => t!(reach_refused_no_home).to_string(),
-                });
-                needs_draw = true;
-            }
-            Action::ListCheckouts => {
-                let mut branches = std::collections::BTreeMap::new();
-                session.report_checkouts(&workspace.session_checkouts(), |checkout| {
-                    branches
-                        .entry(checkout.repository.clone())
-                        .or_insert_with(|| {
-                            crate::checkouts_command::Branches::read(&checkout.repository)
-                        })
-                        .pushed(&checkout.id)
-                });
-                session.report_unlisted_checkouts(&bravebot_session::sessions::unlisted_checkouts(
-                    &workspace,
-                ));
-                needs_draw = true;
-            }
-            Action::ListMemories => {
-                let memories = bravebot_agent::agents::memories(
-                    &workspace,
-                    bravebot_agent::home::directory().as_deref(),
-                    &answers.trust,
-                    answers.rules.permissions.clone(),
-                    &mut Trail::new(),
-                );
-                session.report_memories(&memories);
-                needs_draw = true;
-            }
-            Action::RemoveCheckout(id) => {
-                let kept = workspace.session_checkouts();
-                let named = kept.iter().find(|listed| listed.id == id).cloned();
-                remove_checkout(
-                    &mut session,
-                    kept,
-                    &id,
-                    |listed| crate::confirm::ask_remove_checkout(terminal, listed),
-                    |id| workspace.remove_session_checkout(id, &mut answers.trust),
-                );
-                let removal = removal_trail(named.as_ref(), &workspace.session_checkouts());
-                stored.append_audit(session.turns, removal.events());
-                needs_draw = true;
-            }
-            Action::ApplyCheckout(id, paths) => {
-                // The person's own typing is the request, so no turn is run: each file goes
-                // through the write gate and is put to them, whatever the map would have said
-                // (CHECKOUT-14).
-                let permission_mode = session.live_permission_mode();
-                let task = Task::new(format!("/checkouts apply {id}"))
-                    .with_home(bravebot_agent::home::directory())
-                    .with_profile(bravebot_agent::home::profile())
-                    .with_cache(bravebot_agent::home::cache())
-                    .remembering(Some(stored.id().to_string()))
-                    .with_permissions(answers.rules.permissions.clone())
-                    .with_permission_mode(permission_mode.clone())
-                    .with_auto_vetting(session.auto_vetting())
-                    .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-                        settings.run_deadlines(),
-                    ));
-                let mut trail = Trail::new();
-                let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
-                let mut confirmer =
-                    bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
-                match turn::apply_checkout_asked_for(
-                    config,
-                    &Egress::new(),
-                    &workspace,
-                    &task,
-                    &id,
-                    &paths,
-                    &mut confirmer,
-                    &mut trail,
-                    answers.trust.clone(),
-                ) {
-                    Ok(done) => {
-                        answers.trust = done.trust;
-                        let heading = match done.applied {
-                            true => t!(checkouts_applied, id = &id),
-                            false => t!(checkouts_not_applied, id = &id),
-                        };
-                        session.note(format!("{heading}\n{}", done.text));
-                    }
-                    Err(_)
-                        if !workspace
-                            .session_checkouts()
-                            .iter()
-                            .any(|kept| kept.id == id) =>
-                    {
-                        session.note(t!(checkouts_no_such, id = &id))
-                    }
-                    Err(refusal) => session.note(refusal),
-                }
-                stored.append_audit(session.turns, trail.events());
-                needs_draw = true;
-            }
-            Action::Compact(focus) => {
-                // The snapshot holds the conversation as it was before it was shortened.
-                session.rewind.close();
-                let events;
-                (conversation, events) = compact_animated(
-                    terminal,
-                    &mut session,
-                    config,
-                    conversation,
-                    &answers.trust,
-                    &focus,
-                )?;
-                save_compacted(
-                    &session,
-                    &mut stored,
-                    &conversation,
-                    &answers.trust,
-                    &answers.programs,
-                    &workspace,
-                    &events,
-                );
-                needs_draw = true;
-            }
-            action @ (Action::Aside(..) | Action::Recap) => {
-                let recap = action == Action::Recap;
-                if recap {
-                    session.away.recapped();
-                }
-                let (question, pasted, attached) = match action {
-                    Action::Aside(question, pasted, attached) => (question, pasted, attached),
-                    _ => (String::new(), Vec::new(), Vec::new()),
-                };
-                if question.is_empty() && !recap {
-                    session.note(t!(btw_needs_a_question));
-                } else {
-                    // The snapshot holds the spend and the timing as they were before the turn,
-                    // and an aside is charged to that turn: rewinding to it would un-charge a
-                    // request that really went out. The same reason `/compact` closes it.
-                    session.rewind.close();
-                    let events = aside_animated(
-                        terminal,
-                        &mut session,
-                        config,
-                        &conversation,
-                        &mut answers.trust,
-                        &question,
-                        recap,
-                        &pasted,
-                        &attached,
-                        &workspace,
-                    )?;
-
-                    // Written now rather than at the end of the next turn, for the reason a
-                    // compaction is: the aside is the change, and a session that asked something
-                    // and then slept should resume with the answer still there.
-                    //
-                    // Nothing yet where no turn has been had, as everywhere else that writes
-                    // outside a turn: a session opened and abandoned should leave no record, and
-                    // a question asked before the first prompt was asked over an empty exchange.
-                    if session.turns > 0 {
-                        let title = stored.title().to_string();
-                        with_standing(
-                            &session,
-                            &conversation,
-                            &answers.trust,
-                            &answers.programs,
-                            &workspace,
-                            |standing| stored.save(&title, standing),
-                        );
-                        stored.append_audit(session.turns, &events);
-                    }
-                }
-                needs_draw = true;
-            }
+            Action::Recap => held.recap(terminal, config)?,
             Action::Manifest(task, pasted, attached) => {
-                if task.is_empty() {
-                    session.note(t!(manifest_needs_a_task));
-                } else {
-                    // The snapshot holds the spend and the timing as they were before the turn,
-                    // and this run is charged to that turn, exactly as an aside is: rewinding to
-                    // it would un-charge requests that really went out, and steps that really
-                    // wrote to the tree are not something the rewind window covers.
-                    session.rewind.close();
-                    let events = manifest_animated(
-                        terminal,
-                        &mut session,
-                        config,
-                        &workspace,
-                        &task,
-                        &pasted,
-                        &attached,
-                        &mut answers.trust,
-                        &answers.rules.permissions,
-                        &run_settings,
-                    )?;
-
-                    // Taken off the workspace rather than kept for anything: a run is not a turn of
-                    // this conversation, and `rewind.close` above already shut the window
-                    // that could have rewound to one, so nothing will put these back. What the
-                    // drain is for is the *next* turn, which takes whatever the workspace is
-                    // holding as its own. Left here, the run's writes would be attributed to that
-                    // turn and `/undo` on it would revert them.
-                    let _ = workspace.take_backups();
-
-                    // The session's own record, written for the reason an aside's is: the run is
-                    // the change, and a session that started one and then slept should resume
-                    // with the note saying where it went still in the transcript. The run's own
-                    // record is a separate file that `manifest_animated` already wrote.
-                    with_standing(
-                        &session,
-                        &conversation,
-                        &answers.trust,
-                        &answers.programs,
-                        &workspace,
-                        |standing| {
-                            crate::manifest_run::save_session(&mut stored, standing, &events)
-                        },
-                    );
-                }
-                needs_draw = true;
+                held.manifest(terminal, config, &task, &pasted, &attached)?
             }
-            action @ (Action::Clear | Action::HandOver(_)) => {
-                // What a handoff adds to a clear is the link back to the session it came from and a
-                // first prompt, and what it takes away is nothing: the file decisions, the
-                // permissions and the quarantine are asked about again below, as after `/clear`.
-                let (brief, source) = match action {
-                    Action::HandOver(brief) => (Some(brief), stored.to_resume().map(|r| r.id)),
-                    _ => (None, None),
-                };
-                (conversation, stored) = clear_session(
-                    &mut session,
-                    &mut workspace,
-                    brief.as_ref().and(source.as_deref()),
-                );
-                // Where this map came from decides nothing further: a directory a settings file
-                // named was opened by an answer the cleared session's user gave, and it closed
-                // with that session rather than carrying into this one.
-                let Some((fresh, whence)) = opening_trust(
-                    terminal,
-                    &mut session,
-                    workspace.root(),
-                    Beginning::New,
-                    stored.id(),
-                ) else {
-                    return Ok(left_behind(&stored));
-                };
-                answers.trust = fresh;
-                // And the rules a new session opens with, for the root it is in: the grants the
-                // cleared session installed were answered by its user, and the files may have
-                // changed since. Where the person already granted a rule the record says so, and
-                // nothing is asked twice.
-                if !answers.rules.read_for(
-                    &mut session,
-                    workspace.root(),
-                    whence,
-                    stored.id(),
-                    |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
-                ) {
-                    return Ok(left_behind(&stored));
+            Action::Clear => {
+                if let Some(ended) = held.clear(terminal, None) {
+                    return Ok(ended);
                 }
-                answers.forget_what_was_agreed();
-                // And a new directory, since nothing in the old one outlives the session that
-                // wrote it. The old one is removed either way: what the cleared context wrote is
-                // not something the session after it should find lying there.
-                scratch = opened_scratch(&mut session, &mut workspace);
-                // Last, once everything the new session is asked has been answered: the next pass
-                // of the loop sends it as the person's own line.
-                if let Some(brief) = brief {
-                    session.hand_over(brief);
-                }
-                needs_draw = true;
             }
-            Action::Handoff(goal) => {
-                if let Some(refusal) =
-                    handoff_refusal(&goal, session.turns, stored.to_resume().is_some())
-                {
-                    session.note(refusal);
-                } else {
-                    // Closed for the reason an aside closes it: the request is charged to a turn
-                    // the snapshot predates.
-                    session.rewind.close();
-                    let (done, events) = ask_animated(
-                        terminal,
-                        &mut session,
-                        config,
-                        &conversation,
-                        &mut answers.trust,
-                        "",
-                        false,
-                        Some(&goal),
-                        &[],
-                        &[],
-                        &workspace,
-                    )?;
-                    stored.append_audit(session.turns, &events);
-                    handoff_answered(&mut session, &goal, done);
+            Action::HandOver(brief) => {
+                if let Some(ended) = held.clear(terminal, Some(brief)) {
+                    return Ok(ended);
                 }
-                needs_draw = true;
             }
-            Action::Submit(prompt) => {
-                // A prompt sent while this one was running goes when it ends, in the order it was
-                // typed, and so does anything typed during that one. Looping here rather than
-                // going back round the outer loop keeps a queued prompt from waiting on a key
-                // press that nobody is there to make.
-                // Whose line each one is, which decides whether a `@path` in it vouches for a
-                // file. Everything the person typed or queued is theirs; the sentence a goal
-                // carries the work on with is this program's, and so is the one a watch fires
-                // with. A fire also must not leave a loop behind repeating itself, which is the
-                // other thing this answers.
-                let whose = if session.watch_is_firing() {
-                    Wrote::TheDriver
-                } else {
-                    Wrote::ThePerson
-                };
-                // Whatever was offered is not the next prompt any more. An answer still on its way
-                // is for a state that has passed, and is dropped when the chain's own request
-                // replaces it below.
-                session.dismiss_suggestion();
-                let mut sending = Some((prompt, whose));
-                while let Some((prompt, wrote)) = sending {
-                    // Here as well as at the top of the outer loop, which no turn in this chain
-                    // goes back round until the last one ends.
-                    session.keep_awake();
-                    let history_start = conversation.recounted().len();
-                    // With the record's rules, which the turn about to run will read: without them a
-                    // yes this turn gives to a recorded memory would outlive rewinding past it.
-                    let recorded = bravebot_agent::memory::with_recorded(
-                        &answers.trust,
-                        &workspace,
-                        bravebot_agent::home::directory().as_deref(),
-                    );
-                    let point = rewind_point(
-                        &session,
-                        &conversation,
-                        &recorded,
-                        &answers.programs,
-                        &stored,
-                    );
-                    let _ = workspace.take_backups();
-                    session.rewind.open(point, prompt.clone());
-                    session.rewind.bind_coverage(&workspace);
-
-                    // Everything the session holds is lent for the turn and taken back: a turn that
-                    // writes untrusted data into a trusted path records that, and the next turn must
-                    // honour it; a turn that has been had is a turn the next one can be asked about;
-                    // a server somebody approved answers the next question without asking again;
-                    // and a run prompt already read is what tells the next one to name a settings
-                    // file instead of a key.
-                    let continued = run_turn_animated(
-                        terminal,
-                        &mut session,
-                        config,
-                        &workspace,
-                        scratch.as_ref().map(SessionScratch::path),
-                        &prompt,
-                        wrote,
-                        conversation,
-                        answers.trust,
-                        answers.programs,
-                        answers.servers,
-                        answers.asked_about,
-                        answers.exposed,
-                        &answers.rules.permissions,
-                        &run_settings,
-                        &mut stored,
-                    )?;
-                    // Taken apart with no `..`, so an answer a turn learns to remember does not
-                    // build until it has a place in `answers`, where `/cd`, `/clear`, `/branch`,
-                    // `/undo` and `/rewind` decide it.
-                    let Continued {
-                        conversation: next,
-                        trust,
-                        programs,
-                        servers,
-                        asked_about,
-                        exposed,
-                        events,
-                    } = continued;
-                    conversation = next;
-                    answers.trust = trust;
-                    answers.programs = programs;
-                    answers.servers = servers;
-                    answers.asked_about = asked_about;
-                    answers.exposed = exposed;
-
-                    session.record_turn(history_start, &conversation);
-                    session.rewind.keep_backups(workspace.take_backups());
-
-                    // Written after each turn rather than at the end, because the end may never
-                    // come: the session worth resuming is the one whose machine slept and never
-                    // woke. Best-effort, like everything else under ~/.bravebot.
-                    with_standing(
-                        &session,
-                        &conversation,
-                        &answers.trust,
-                        &answers.programs,
-                        &workspace,
-                        |standing| stored.save(&prompt, standing),
-                    );
-                    stored.append_audit(session.turns, &events);
-
-                    sending = next_after_a_turn(&mut session, |session| {
-                        let (carrying_on, checked) = goal_check_animated(
-                            terminal,
-                            session,
-                            config,
-                            &conversation,
-                            &answers.trust,
-                        )?;
-                        // The check is a request that really went out, and a refusal in one is
-                        // exactly what somebody reading the trail afterwards wants to find.
-                        stored.append_audit(session.turns, &checked);
-                        Ok(carrying_on)
-                    })?;
-                }
-                // After the last turn of the chain, which is the only one the person is about to
-                // answer.
-                suggesting = suggest_next(&session, config, &conversation, &answers.trust);
-            }
+            Action::Handoff(goal) => held.handoff(terminal, config, &goal)?,
+            Action::Submit(prompt) => suggesting = held.submit(terminal, config, prompt)?,
             Action::Run(line) | Action::RunPrivately(line) => {
-                // Shell effects have no file-tool journal, but older edits can still be undone.
-                session.rewind.bind_coverage(&workspace);
-                workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::Command);
-                let events = run_command(
-                    terminal,
-                    &mut session,
-                    &workspace,
-                    &line,
-                    &mut conversation,
-                    private,
-                )?;
-                // Saved like a turn, and for the same reason: the command is in the conversation
-                // now, so a session resumed without it would have the planner referring to output
-                // it can no longer see.
-                with_standing(
-                    &session,
-                    &conversation,
-                    &answers.trust,
-                    &answers.programs,
-                    &workspace,
-                    |standing| stored.save(&line, standing),
-                );
-                stored.append_audit(session.turns, &events);
-                needs_draw = true;
+                held.run_line(terminal, &line, private)?
             }
             // Cancel and SendNow are only reachable while a turn runs, which `run_turn_animated`
             // handles.
@@ -3692,6 +3173,7 @@ fn fetch_gateway_models(
             .map_err(|error| error.to_string())
     })
 }
+
 /// Where a session's opening trust map came from, which is what it says about it.
 #[derive(Debug, Clone, Copy)]
 enum Whence {
@@ -19643,6 +19125,7 @@ mod tests {
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 MODEL_COMMAND,
+                NOTE_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
@@ -20272,6 +19755,227 @@ mod tests {
             1,
             "a rename that renamed nothing gave up the running turn's point"
         );
+    }
+
+    /// The note is the point of this one, so it must arrive with the action, spaces and all.
+    #[test]
+    fn the_note_command_carries_the_whole_note() {
+        let mut session = Session::new("none");
+        for c in "/note the wrong file was edited".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Note("the wrong file was edited".to_string())
+        );
+        assert!(session.input().is_empty(), "the command stayed on the line");
+        assert!(
+            session.transcript.is_empty(),
+            "the command was sent as a prompt"
+        );
+    }
+
+    /// A sentence mentioning it is a thing to say to the planner.
+    #[test]
+    fn a_prompt_containing_the_note_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /note do".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /note do".to_string())
+        );
+    }
+
+    /// A note typed while a turn runs is kept on that turn in the record (SESSION-36). It is not
+    /// queued and not handed to the running turn, so the planner is given nothing, and it gives up
+    /// no rewind point because no point holds a note.
+    #[test]
+    fn a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        session.rewind.open(a_point_before(0), "first".to_string());
+        let reaching = session.interjections();
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/note the wrong file was edited",
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].turn, 1, "the note is not on the running turn");
+        assert_eq!(notes[0].text, "the wrong file was edited");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_note_added, turn = 1)]
+        );
+        assert!(session.queued.is_empty(), "the note waited as a prompt");
+        assert!(
+            reaching.take().is_none(),
+            "the running turn was handed the note"
+        );
+        assert_eq!(
+            session.rewind.points().len(),
+            1,
+            "a note gave up the running turn's point"
+        );
+    }
+
+    /// `/note` with nothing after it records nothing and says what it needs.
+    #[test]
+    fn a_note_with_no_text_mid_turn_records_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            NOTE_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert!(stored.notes().is_empty());
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_note_needs_text)]
+        );
+    }
+
+    /// SESSION-36: a note typed at an idle prompt, which reaches `note_session` from the event loop
+    /// and not through `typed_during_a_turn`, belongs to the last turn that finished.
+    #[test]
+    fn a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        note_session(&mut session, &mut stored, "it should have asked first");
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(
+            notes[0].turn, 2,
+            "the note is not on the last finished turn"
+        );
+        assert_eq!(notes[0].text, "it should have asked first");
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.text.as_str()),
+            Some(t!(session_note_added, turn = 2).as_str())
+        );
+    }
+
+    /// SESSION-36: where no record can be written, the transcript says the note reached none and
+    /// does not say it was added, so the person is not told a note was kept that no record holds.
+    #[test]
+    fn a_note_where_no_record_can_be_written_is_not_reported_as_added() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::testutil::scratch_dir("bravebot-app-note-unwritable");
+        let mut session = Session::new("none");
+        session.turns = 1;
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let directory = bravebot_session::sessions::project_directory(&root).expect("dir");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.parent().expect("parent")).expect("make the parent");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        note_session(&mut session, &mut stored, "lost");
+
+        std::fs::remove_file(&directory).expect("unblock the directory");
+        let said: Vec<_> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(said, vec![t!(session_note_not_recorded).to_string()]);
+    }
+
+    /// SESSION-36: `/note` with nothing after it brings the session's notes up, one line each with
+    /// its turn, and a control character in one is not drawn as one.
+    #[test]
+    fn a_note_with_no_text_lists_the_notes_the_session_holds() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+        session.turns = 2;
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        note_session(&mut session, &mut stored, "first\u{1b}[31m");
+        session.turns = 3;
+        note_session(&mut session, &mut stored, "second");
+        let before = session.transcript.len();
+
+        note_session(&mut session, &mut stored, "");
+
+        let listed: Vec<_> = session.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(listed.len(), 2, "one line per note");
+        assert!(
+            listed[0]
+                .starts_with(&t!(session_note_listed, turn = 2, text = "first").to_string()[..8])
+        );
+        assert!(listed[0].contains("first") && !listed[0].contains('\u{1b}'));
+        assert_eq!(
+            listed[1],
+            t!(session_note_listed, turn = 3, text = "second")
+        );
+        assert_eq!(stored.notes().len(), 2, "listing added a note");
     }
 
     /// Ctrl-Enter on `/rename` stops nothing, as on any command carried out as it is typed: the
@@ -23778,6 +23482,74 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// `/add-dir close` rewrites the record at once where one is on disk, so a session that closed
+    /// a directory and then quit does not resume with it open and trusted. A session nobody has
+    /// asked anything in has no record, and closing a directory does not make one.
+    #[test]
+    fn closing_a_directory_rewrites_the_record_on_disk_and_writes_none_where_there_is_not() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let base = crate::test_profile::project("bravebot-app-close-directory-record");
+        let root = base.join("project");
+        let notes = base.join("notes");
+        std::fs::create_dir_all(&root).expect("create");
+        std::fs::create_dir_all(&notes).expect("create");
+        let notes = notes.display().to_string();
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut held = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        };
+
+        held.add_directory_command(&notes);
+        held.close_directory_command(&notes);
+        assert_eq!(
+            held.stored.resumable(),
+            None,
+            "closing a directory wrote a record for a session nobody asked anything in"
+        );
+        assert!(sessions::list(&root).is_empty());
+
+        held.add_directory_command(&notes);
+        held.save("tidy the notes");
+        let id = held.stored.id().to_string();
+        assert_eq!(
+            sessions::load(&root, &id)
+                .expect("the record just saved")
+                .directories
+                .len(),
+            1,
+            "the record did not name the directory that was open"
+        );
+
+        held.close_directory_command(&notes);
+        assert!(
+            sessions::load(&root, &id)
+                .expect("the record")
+                .directories
+                .is_empty(),
+            "the record on disk still names the directory that was closed"
+        );
+    }
+
     /// PERM-16 at the other door onto the same reach: `/add-dir` is refused with the key named, and
     /// nothing is vouched for, where a settings layer asked for the tools to stay inside.
     #[test]
@@ -25248,6 +25020,42 @@ mod tests {
         );
     }
 
+    /// PERM-10: a directory a settings file named and the person accepted is closed by `/clear` and
+    /// by a handoff, since the answer that opened it was given by the session being cleared. The
+    /// regression it rejects is a directory staying reachable, with no answer left behind it,
+    /// into a session that was never asked.
+    #[test]
+    fn clearing_closes_the_directories_a_file_named_and_opens_none() {
+        let root = crate::testutil::scratch_dir("bravebot-clear-named-dir-test");
+        let outside = root.join("shared");
+        let project = root.join("project");
+        std::fs::create_dir_all(&outside).expect("scratch");
+        std::fs::create_dir_all(&project).expect("scratch");
+        let canonical = outside.canonicalize().expect("canonical");
+
+        for handed_from in [None, Some("an-earlier-id")] {
+            let mut workspace = Workspace::new(&project).expect("workspace");
+            let mut session = Session::new("none");
+            let mut trust = TrustStore::new("/work");
+            let asked = named_to_open(&mut session, &workspace, &["../shared".to_string()]);
+            open_named(&mut session, &mut workspace, &mut trust, &asked);
+            assert!(
+                workspace.added_directories().contains(&canonical),
+                "the directory was not open to begin with"
+            );
+
+            let _ = clear_session(&mut session, &mut workspace, handed_from);
+
+            assert!(
+                workspace.added_directories().is_empty(),
+                "a directory the cleared session opened stayed open ({handed_from:?}): {:?}",
+                workspace.added_directories()
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// A handoff is a clear that links back to the session it came from, and ends the same grants.
     #[test]
     fn a_handoff_ends_the_reach_and_the_host_answers_too() {
@@ -25940,6 +25748,193 @@ mod tests {
         );
     }
 
+    /// `/rewind` goes back the number of turns typed after it. Anything that is not a whole number
+    /// above zero goes nowhere and says what the command wants, and the bare word lists the points
+    /// without moving.
+    #[test]
+    fn the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-command");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+
+        for prompt in ["first", "second", "third"] {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(
+                &session,
+                &conversation,
+                &answers.trust,
+                &answers.programs,
+                &stored,
+            );
+            session.rewind.open(point, prompt.to_string());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        assert_eq!(session.turns, 3, "the fixture did not have three turns");
+
+        let mut held = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        };
+
+        held.rewind_command("");
+        assert_eq!(held.session.turns, 3, "the bare word went back");
+        assert!(
+            held.session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(session_rewind_points)),
+            "the bare word did not list the points"
+        );
+
+        for refused in ["0", "two", "-1", "1.5"] {
+            held.rewind_command(refused);
+            assert_eq!(held.session.turns, 3, "`/rewind {refused}` went back");
+            assert_eq!(
+                held.session.transcript.last().expect("a note").text,
+                t!(session_rewind_needs_a_number),
+                "`/rewind {refused}` did not say what the command wants"
+            );
+        }
+
+        held.rewind_command("2");
+        assert_eq!(
+            held.session.turns, 1,
+            "`/rewind 2` did not go back two turns"
+        );
+    }
+
+    /// A turn is lent the conversation and every answer the session holds, and what it returns
+    /// replaces them. A field left out of the return leaves the next turn with an empty trust map,
+    /// no vouched programs or no servers, and moving the values into the turn gives the compiler
+    /// nothing to say about it.
+    #[test]
+    fn a_turn_is_lent_everything_the_session_holds_and_what_it_returns_replaces_it() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::programs::Command;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-lend");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        give_answers(&mut answers, &root);
+        answers.trust.trust("notes");
+        let held_trust = answers.trust.clone();
+        let held_programs = answers.programs.clone();
+        let held_asked_about = answers.asked_about.clone();
+        let held_exposed = answers.exposed.clone();
+        let held_messages = conversation.recounted().len();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut held = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        };
+
+        let lent = held.lend();
+        assert_eq!(
+            lent.conversation.recounted().len(),
+            held_messages,
+            "the turn was lent a conversation the session did not hold"
+        );
+        assert_eq!(lent.trust, held_trust, "the turn was lent another map");
+        assert_eq!(
+            lent.programs, held_programs,
+            "the turn was lent other programs"
+        );
+        assert!(lent.servers.is_some(), "the turn was lent no servers");
+        assert_eq!(
+            lent.asked_about, held_asked_about,
+            "the turn was lent other prompts drawn"
+        );
+        assert_eq!(
+            lent.exposed, held_exposed,
+            "the turn was lent other files agreed to"
+        );
+
+        let git = Command::new("/usr/bin/git", vec!["status".into()], &root);
+        let mut next = lent.conversation;
+        next.push(Message::user("one more"));
+        let mut trust = lent.trust;
+        trust.trust("returned");
+        let mut programs = lent.programs;
+        programs.trust(git.clone());
+        let mut asked_about = lent.asked_about;
+        asked_about.record(git);
+        let mut exposed = lent.exposed;
+        exposed.allow(".other");
+        let events = held.take_back(Continued {
+            conversation: next,
+            trust: trust.clone(),
+            programs: programs.clone(),
+            servers: lent.servers,
+            asked_about: asked_about.clone(),
+            exposed: exposed.clone(),
+            events: Vec::new(),
+        });
+
+        assert!(events.is_empty());
+        assert_eq!(
+            held.conversation.recounted().len(),
+            held_messages + 1,
+            "the conversation the turn returned was not put back"
+        );
+        assert_eq!(held.answers.trust, trust, "the map was not put back");
+        assert_ne!(held.answers.trust, held_trust);
+        assert_eq!(
+            held.answers.programs, programs,
+            "the programs were not put back"
+        );
+        assert!(
+            held.answers.servers.is_some(),
+            "the servers were not put back"
+        );
+        assert_eq!(
+            held.answers.asked_about, asked_about,
+            "the prompts drawn were not put back"
+        );
+        assert_eq!(
+            held.answers.exposed, exposed,
+            "the files agreed to were not put back"
+        );
+    }
+
     /// The bare word is the list, which is the surface the command exists for: seeing what a
     /// rewind would put back before running it.
     #[test]
@@ -25980,6 +25975,38 @@ mod tests {
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("/rewinding the tape".to_string())
+        );
+    }
+
+    /// The bare word is the list of hunks, and a number after it names one, so the argument is
+    /// carried as it was typed and read where the transcript is.
+    #[test]
+    fn the_hunks_command_carries_the_number_it_was_given() {
+        for (typed, carried) in [("/hunks", ""), ("/hunks 2", "2"), ("/hunks two", "two")] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Hunks(carried.to_string()),
+                "{typed}"
+            );
+        }
+    }
+
+    /// `/hunksaw the plank` is a longer word, so it is a prompt, as CMD-2 has it.
+    #[test]
+    fn a_longer_word_starting_with_hunks_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/hunksaw the plank".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/hunksaw the plank".to_string())
         );
     }
 

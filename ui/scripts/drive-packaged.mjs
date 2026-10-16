@@ -12,14 +12,11 @@ import { _electron as electron } from 'playwright-core'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdirSync } from 'node:fs'
 import { acceptsInspect } from './fuses.mjs'
+import { checker } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 const BUNDLE = `dist/Brave Bot-darwin-${process.arch === 'arm64' ? 'arm64' : 'x64'}/Brave Bot.app`
 if (!existsSync(BUNDLE)) {

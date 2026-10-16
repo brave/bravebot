@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/loops.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/entry.rs

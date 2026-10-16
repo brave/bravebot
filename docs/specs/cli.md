@@ -4,6 +4,11 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/model.rs
+  - crates/cli/src/one_shot.rs
+  - crates/cli/src/usage.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs
@@ -171,7 +176,7 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_and_says_its_identifier`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
-`verified-by: bravebot_cli::main::a_report_that_found_a_configuration_error_ends_on_it`
+`verified-by: bravebot_cli::doctor::a_report_that_found_a_configuration_error_ends_on_it`
 `verified-by: bravebot_cli::exit::every_ending_has_a_status_of_its_own`
 `verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
@@ -234,11 +239,11 @@ installed. It also checks that `gh` can read the login it holds in the real home
 ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
 that is not `<host>/<owner>` is refused with the status an argument error has.
 
-`verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
-`verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
-`verified-by: bravebot_cli::main::doctor_accepts_current_windows_copies_and_reports_stale_ones`
-`verified-by: bravebot_cli::main::doctor_checks_resolved_agent_link_targets`
-`verified-by: bravebot_cli::main::doctor_finds_direnv_only_when_path_contains_an_executable`
+`verified-by: bravebot_cli::doctor::doctor_development_checks_only_apply_to_the_source_tree`
+`verified-by: bravebot_cli::doctor::doctor_reports_agent_discovery_conflicts_without_changing_them`
+`verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`
+`verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
+`verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -348,22 +353,22 @@ and a report that fixes what it finds leaves them unable to tell what was alread
 read for what it resolves to rather than for whether it exists, because a link to the wrong file is
 the case a directory listing calls healthy, and it is the one the reader cannot otherwise catch.
 
-`verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
-`verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
+`verified-by: bravebot_cli::doctor::a_gateway_credential_is_reported_as_found_and_never_printed`
+`verified-by: bravebot_cli::doctor::a_gateway_with_no_credential_is_reported_as_having_none`
 `verified-by: bravebot_cli::running::doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential`
 `verified-by: bravebot_cli::running::doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
-`verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
-`verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`
-`verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
-`verified-by: bravebot_cli::main::a_missing_state_directory_names_every_variable_it_looked_at`
-`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
-`verified-by: bravebot_cli::main::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
-`verified-by: bravebot_cli::main::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
-`verified-by: bravebot_cli::main::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
-`verified-by: bravebot_cli::main::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
-`verified-by: bravebot_cli::main::doctor_names_a_managed_file_that_pinned_nothing`
-`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_names_the_state_directory_it_resolved`
+`verified-by: bravebot_cli::doctor::doctor_says_when_the_files_are_left_unrestricted`
+`verified-by: bravebot_cli::doctor::a_missing_state_directory_is_reported_with_what_it_costs`
+`verified-by: bravebot_cli::doctor::a_missing_state_directory_names_every_variable_it_looked_at`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::doctor::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
+`verified-by: bravebot_cli::doctor::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
+`verified-by: bravebot_cli::doctor::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
+`verified-by: bravebot_cli::doctor::doctor_names_a_managed_file_that_pinned_nothing`
+`verified-by: bravebot_cli::doctor::doctor_names_the_sandbox_mode_and_where_it_came_from`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
@@ -1118,6 +1123,7 @@ because no part of `auth` would use them.
 `verified-by: bravebot_cli::main::a_system_prompt_flag_with_no_words_is_refused`
 `verified-by: bravebot_cli::main::words_that_open_with_a_dash_are_taken_when_they_are_a_sentence`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+`verified-by: bravebot_cli::running::a_session_in_lines_sends_the_system_prompts_with_a_typed_line`
 `verified-by: bravebot_cli::running::a_run_given_system_prompts_sends_them_and_keeps_the_rest_of_the_system_prompt`
 `verified-by: bravebot_cli::running::a_system_prompt_flag_with_no_words_exits_with_the_argument_status`
 `verified-by: bravebot_cli::running::a_manifest_run_is_refused_the_system_prompt_flags`

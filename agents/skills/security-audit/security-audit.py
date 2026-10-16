@@ -358,6 +358,7 @@ REGISTERED = {
 # declarations above.
 REMEMBERED_SETS = (
     "crates/tui/src/app.rs",
+    "crates/tui/src/app/actions.rs",
     "crates/tui/src/state.rs",
     "crates/tui/src/sandbox_command.rs",
     "crates/cli/src/plain.rs",

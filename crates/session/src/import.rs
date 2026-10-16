@@ -202,6 +202,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         // Where one turn ended and the next began is not something these files say (SESSION-25).
         history: None,
         asides: Vec::new(),
+        notes: Vec::new(),
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,

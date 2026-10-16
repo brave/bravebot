@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/state.rs
   - crates/tui/src/state/completion.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/workspace.rs
   - crates/ui-bridge/src/mentions.rs
   - crates/session/src/excerpt.rs
 documented-by: docs/website/docs/using/context.md

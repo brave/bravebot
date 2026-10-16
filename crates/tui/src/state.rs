@@ -994,6 +994,8 @@ pub struct Session {
     waiting_on: Option<bravebot_agent::report::DelegateId>,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
+    /// What the last `/hunks` listed, so a number typed after it names the hunk it was read beside.
+    pub hunks_listed: Option<crate::hunks_command::Listed>,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
     ///
     /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
@@ -1405,6 +1407,7 @@ impl Session {
             standing: None,
             standing_by_setting: false,
             rewind: Default::default(),
+            hunks_listed: None,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
@@ -1690,6 +1693,7 @@ impl Session {
         self.answers.clear();
         self.turn_places.clear();
         self.unplaced_todos.clear();
+        self.hunks_listed = None;
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -1987,27 +1991,15 @@ impl Session {
         self.drop_composing();
         self.running = Some(activity.clone());
         let entry = Entry::tool(activity);
-        match self.attributed_to.and_then(|id| self.at(id)) {
-            Some(at) => self.transcript[at]
-                .delegate
-                .as_mut()
-                .expect("a delegate entry holds its delegate")
-                .keep(entry),
+        match self.attributed_at() {
+            Some(at) => self.delegate_mut(at).keep(entry),
             None => self.transcript.push(entry),
         }
     }
 
     /// Record where the last call's result went.
     pub fn landed(&mut self, landing: Landing) {
-        if let Some(entry) = self
-            .working_lines()
-            .iter_mut()
-            .rev()
-            .take_while(|entry| {
-                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
-            })
-            .find(|entry| entry.speaker == Speaker::Tool)
-        {
+        if let Some(entry) = self.call_where(|_| true) {
             entry.landing = Some(landing);
         }
     }
@@ -2022,15 +2014,7 @@ impl Session {
         let delegates = self.attributed_to.is_some();
         let held = self.expandable_lines;
         let mut kept = 0;
-        if let Some(entry) = self
-            .working_lines()
-            .iter_mut()
-            .rev()
-            .take_while(|entry| {
-                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
-            })
-            .find(|entry| entry.speaker == Speaker::Tool)
-        {
+        if let Some(entry) = self.call_where(|_| true) {
             if delegates || held.saturating_add(returned.whole.len()) > SESSION_EXPANDABLE_LINES {
                 returned.whole = returned.lines.clone();
             } else {
@@ -2050,22 +2034,15 @@ impl Session {
     ///
     /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives.
     pub fn show(&mut self, shown: Shown) {
-        let target = self
-            .working_lines()
-            .iter_mut()
-            .rev()
-            .take_while(|entry| {
-                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
-            })
-            .find(|entry| entry.speaker == Speaker::Tool);
-        match target {
+        match self.call_where(|_| true) {
             Some(entry) if entry.shown.is_none() => {
                 entry.shown = Some(shown);
             }
             _ => {
-                let mut entry = Entry::system("");
-                entry.shown = Some(shown);
-                self.hold(entry);
+                self.hold(Entry {
+                    shown: Some(shown),
+                    ..Entry::system("")
+                });
             }
         }
     }
@@ -2081,26 +2058,14 @@ impl Session {
         if self.attributed_to.is_none() {
             self.movable = None;
         }
-        let target = self
-            .working_lines()
-            .iter_mut()
-            .rev()
-            .take_while(|entry| {
-                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
-            })
-            .find(|entry| entry.speaker == Speaker::Tool && Self::still_running(entry));
-        match target {
+        match self.call_where(Self::still_running) {
             Some(entry) => {
                 *entry = Entry::tool(activity);
             }
             // Straight into the delegate's own count where it has one, since a call that
             // finished without this side seeing it start is still a call it made.
-            None => match self.attributed_to.and_then(|id| self.at(id)) {
-                Some(at) => self.transcript[at]
-                    .delegate
-                    .as_mut()
-                    .expect("a delegate entry holds its delegate")
-                    .keep(Entry::tool(activity)),
+            None => match self.attributed_at() {
+                Some(at) => self.delegate_mut(at).keep(Entry::tool(activity)),
                 None => self.transcript.push(Entry::tool(activity)),
             },
         }
@@ -4141,6 +4106,9 @@ impl Session {
             turns: self.turns,
             transcript_len: self.transcript.len(),
         };
+        // A list of hunks describes the turn before this one, and a number typed after this turn
+        // must be read beside a list of its own.
+        self.hunks_listed = None;
         self.prompt_at = None;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
@@ -4248,10 +4216,17 @@ impl Session {
         self.away.turn_done(std::time::Instant::now());
         self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is
-        // about the session rather than the last turn.
+        // about the session rather than the last turn. Added to the turn's figure rather than set,
+        // since a turn that compacted part way through has already put that cost there.
+        self.charge(tokens);
+    }
+
+    /// Add tokens to the session's total and to the current turn's figure in the breakdown.
+    ///
+    /// The one place both are written, so the breakdown adds up to the total. Zero is the leading
+    /// entry, before the first turn: whatever is spent there is spent outside every turn.
+    fn charge(&mut self, tokens: u64) {
         self.tokens += tokens;
-        // Added to rather than set, since a turn that compacted part way through has already put
-        // that cost here under the same number.
         *self.spend.entry(self.turns).or_insert(0) += tokens;
     }
 
@@ -4346,9 +4321,7 @@ impl Session {
         self.leave_work(tokens);
         let entry = self.timing.entry(self.turns).or_default();
         if let Some(spent) = spent {
-            entry.inference_ms += spent.inference_ms;
-            entry.tools_ms += spent.tools_ms;
-            entry.stalled_ms += spent.stalled_ms;
+            entry.add_measured(spent);
         }
     }
 
@@ -4381,10 +4354,7 @@ impl Session {
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
         self.clear_in_progress();
-        self.tokens += tokens;
-        // Zero before the first turn, which is the leading entry: whatever is spent there is spent
-        // outside every turn, and that is what the number says.
-        *self.spend.entry(self.turns).or_insert(0) += tokens;
+        self.charge(tokens);
         self.timing.entry(self.turns).or_default().wall_ms += took;
         took
     }

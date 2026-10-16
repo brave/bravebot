@@ -156,10 +156,10 @@ impl Session {
     /// Added to rather than set, for the reason the token breakdown is: a turn that compacted part
     /// way through has already charged that wait to the same number.
     pub fn spent_time(&mut self, timing: bravebot_agent::timing::Timing) {
-        let entry = self.timing.entry(self.turns).or_default();
-        entry.inference_ms += timing.inference_ms;
-        entry.tools_ms += timing.tools_ms;
-        entry.stalled_ms += timing.stalled_ms;
+        self.timing
+            .entry(self.turns)
+            .or_default()
+            .add_measured(timing);
     }
 
     /// Cumulative usage from the worker, retained until this turn ends.
@@ -169,8 +169,7 @@ impl Session {
 
     pub(super) fn charge_progress(&mut self) -> u64 {
         let spent = std::mem::take(&mut self.progress);
-        self.tokens += spent.tokens;
-        *self.spend.entry(self.turns).or_default() += spent.tokens;
+        self.charge(spent.tokens);
         self.spent_time(spent.timing);
         self.served_from_cache(
             spent.cached,

@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/state/standing.rs
   - crates/tui/src/state/watching.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs

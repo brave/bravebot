@@ -29,6 +29,7 @@
 //! and is put in front of each request afresh. A persistent session therefore holds one copy of
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
+use crate::calendar::civil_from_days;
 use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::workspace::Workspace;
@@ -627,31 +628,6 @@ pub(crate) fn today() -> String {
         .unwrap_or(0);
     let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
     format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// Convert a count of days since 1970-01-01 to a civil date.
-///
-/// Howard Hinnant's `civil_from_days`, exact for every date this will see and needing no leap-year
-/// table. Duplicated from `crate::subscription` rather than shared: that one is part of the
-/// credential protocol's wire format, and coupling a line of the system prompt to it would mean a
-/// change for one had to answer for the other.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = (z - era * 146_097) as u64;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i64 + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    } as u32;
-
-    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.

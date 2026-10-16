@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
 guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read
@@ -547,6 +548,7 @@ directory a person typed from being reachable on different terms.
 `verified-by: bravebot_tui::app::a_person_asked_about_the_workspace_is_asked_about_each_named_directory`
 `verified-by: bravebot_tui::app::a_resume_that_brought_its_own_map_opens_no_directory_a_file_named`
 `verified-by: bravebot_tui::app::an_accepted_directory_is_opened_and_trusted_like_one_typed`
+`verified-by: bravebot_tui::app::clearing_closes_the_directories_a_file_named_and_opens_none`
 
 ## The file
 

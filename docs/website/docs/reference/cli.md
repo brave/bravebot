@@ -929,6 +929,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |
+| `/note <note>` | Note something on this session's record, without putting it in the conversation |
 | `/compact` | Summarise the conversation so far, keeping the recent part |
 | `/btw <question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | Recap where this session stands, without putting it in the conversation |

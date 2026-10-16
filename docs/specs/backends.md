@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/model.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
@@ -492,7 +493,7 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
 `verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
-`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
+`verified-by: bravebot_cli::doctor::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -957,6 +958,7 @@ is the thing that knows.
 `verified-by: bravebot_aichat::lib::a_request_without_a_gateway_is_still_signed`
 `verified-by: bravebot_aichat::lib::a_gateway_request_goes_to_the_configured_host_with_a_bearer_token`
 `verified-by: bravebot_aichat::client::the_model_listing_is_fetched_from_the_models_path`
+`verified-by: bravebot_aichat::client::a_gateways_roster_request_carries_no_brave_product_header`
 
 
 <a id="BACKEND-26"></a>
@@ -1638,6 +1640,8 @@ that path rather than with the person in front of the screen.
 
 `verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other`
+`verified-by: bravebot_config::managed::the_file_is_read_from_the_directory_the_platform_reserves`
 `verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
 `verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
 `verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
@@ -2216,7 +2220,7 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
-`verified-by: bravebot_cli::main::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
+`verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
 
 <a id="BACKEND-50"></a>
