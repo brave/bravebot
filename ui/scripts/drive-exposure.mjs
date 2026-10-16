@@ -7,73 +7,34 @@
 // Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
 // `pnpm run drive:exposure` does first.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE'
 
 // The model service. A planner that reads `.env` whenever the last thing said was not a tool's
 // result, and ends the turn when it was.
-const rounds = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
-  const answered = (JSON.parse(body).messages ?? []).at(-1)?.role === 'tool'
-  const delta = answered
-    ? { role: 'assistant', content: 'done' }
-    : { role: 'assistant', tool_calls: [{ index: 0, id: `call-${rounds.length}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: '.env' }) } }] }
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: answered ? 'stop' : 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
-})
-await new Promise((resolve) => service.listen(0, '127.0.0.1', resolve))
+const { service, rounds } = await startModelService(({ messages }) =>
+  messages.at(-1)?.role === 'tool' ? { content: 'done' } : { tool: { name: 'read_file', arguments: { path: '.env' } } })
 
 /** What the tools handed back in a request the planner was sent. */
 const toolResults = (round) => (JSON.parse(round).messages ?? []).filter((message) => message.role === 'tool').map((message) => message.content).join('\n')
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-exposure-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
+const { root, project, profile, env } = makeWorld('bravebot-exposure-', { service })
 writeFileSync(join(project, '.env'), `AWS_ACCESS_KEY_ID=${KEY}\n`)
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
   const trustIt = async () => {
     await trust.locator('[data-test="trust-approve"]').click()
     await trust.waitFor({ state: 'hidden' })
   }
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await trustIt()
+  await openProject(page, app, project)
 
   const composer = page.locator('.composer textarea')
   const stop = page.locator('.composer .stop')
@@ -147,7 +108,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'exposure-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }

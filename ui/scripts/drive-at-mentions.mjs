@@ -10,67 +10,33 @@
 // (`electron-vite build`), which `npm run drive:at-mentions` does first. Screenshots of the open
 // list in light and dark go to AT_MENTIONS_OUTPUT, or /tmp/bravebot-ui.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
-const listening = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-
-const rounds = []
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
+const { service, rounds } = await startModelService(async () => {
   if (held) await held.promise
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return { content: 'done' }
 })
-await listening(service)
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-at-mentions-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), join(project, 'src/nested'), join(project, 'node_modules/pkg'), join(project, 'scripts'), profile]) mkdirSync(path, { recursive: true })
+const { root, project, profile, env } = makeWorld('bravebot-at-mentions-', {
+  service,
+  dirs: ['project/src/nested', 'project/node_modules/pkg', 'project/scripts'],
+})
 writeFileSync(join(project, 'src/nested/deep.md'), 'The release colour is blue.\n')
 writeFileSync(join(project, 'src/main.rs'), 'fn main() {}\n')
 writeFileSync(join(project, 'README.md'), '# Project\n')
 writeFileSync(join(root, 'outside.txt'), 'A secret outside the project.\n')
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = process.env.AT_MENTIONS_OUTPUT || '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 900 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 900 } }))
+  await openProject(page, app, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.locator('[data-test="trust-approve"]').click()
-  await trust.waitFor({ state: 'hidden' })
 
   const field = page.getByRole('textbox', { name: 'Message the agent' })
   const list = page.locator('[data-test="mention-list"]')
@@ -260,7 +226,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'at-mentions-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }
