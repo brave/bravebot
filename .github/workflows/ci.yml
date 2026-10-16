@@ -41,6 +41,7 @@ jobs:
     outputs:
       rust: ${{ steps.affected.outputs.rust }}
       ui: ${{ steps.affected.outputs.ui }}
+      mobile: ${{ steps.affected.outputs.mobile }}
       build: ${{ steps.affected.outputs.build }}
       installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
@@ -280,7 +281,7 @@ jobs:
       # their advisory audit here. `pnpm audit` reads pnpm-lock.yaml and needs no install.
       - name: Audit the lockfiles for known advisories
         run: |
-          for dir in ui docs/website packages/agent-client; do
+          for dir in ui docs/website packages/agent-client mobile; do
             (cd "$dir" && pnpm audit --audit-level=high)
           done
 
@@ -583,6 +584,36 @@ jobs:
       # display and none of the desktop app's dependencies.
       - name: Build and test the session client
         run: make check-agent-client
+
+  # The React Native app's types and tests against the session client it links, which this job
+  # builds first. No device or simulator is involved, so a native build is not checked here.
+  mobile:
+    name: Mobile app
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.mobile != 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        id: pnpm
+        run: |
+          corepack enable
+          echo "store=$(cd mobile && pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-store-mobile-${{ runner.os }}-${{ hashFiles('mobile/pnpm-lock.yaml', 'packages/agent-client/pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-mobile-${{ runner.os }}-
+
+      - name: Type-check and test the mobile app
+        run: make check-mobile
 
   # The desktop app where it runs rather than cross-compiled for it. The helper's walk refuses
   # junctions, streams and device names on NTFS, which no other host has, and the walkthrough

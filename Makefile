@@ -73,6 +73,7 @@ help:
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
 	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
 	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
+	@echo "  make check-mobile          Type-check and test the React Native app (no device or simulator)"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
@@ -264,9 +265,9 @@ check-reviewdog-full: check-reviewdog-selftest
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, and it has no dependencies, so that download is the whole supply chain surface
-# it has. The three projects with dependencies are ui/ (Electron's tree), docs/website and
-# packages/agent-client. Each has a pnpm lockfile of its own and none is a workspace of another
-# deliberately, so nothing else reaches them.
+# it has. The four projects with dependencies are ui/ (Electron's tree), docs/website,
+# packages/agent-client and mobile/. Each has a pnpm lockfile of its own and none is a workspace
+# of another deliberately, so nothing else reaches them.
 #
 # `install --frozen-lockfile --lockfile-only` fails when a lockfile does not satisfy its
 # package.json and fetches nothing. contrib/check-pnpm-lockfiles.py then holds each lockfile's
@@ -286,6 +287,7 @@ check-npm:
 	pnpm --dir ui install --frozen-lockfile --lockfile-only
 	pnpm --dir docs/website install --frozen-lockfile --lockfile-only
 	pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only
+	pnpm --dir mobile install --frozen-lockfile --lockfile-only
 	python3 contrib/check-pnpm-lockfiles.py
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
@@ -369,7 +371,7 @@ docs-updated-to-sha:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -460,6 +462,17 @@ check-agent-client:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
 	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 	pnpm --dir packages/agent-client run check
+
+# The React Native app under mobile/: its types and its tests, against the session client it links.
+# The client is built first because the app resolves it through its dist. Neither a device nor a
+# simulator is involved, so this is a check of the TypeScript only. The app has its own lockfile and
+# is not a pnpm workspace.
+.PHONY: check-mobile
+check-mobile:
+	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/agent-client run build
+	pnpm --dir mobile install --frozen-lockfile --ignore-scripts
+	pnpm --dir mobile run check
 
 # The install the desktop application's recipes start from: here, and for the two Windows packaging
 # steps below. Leo's build is cached in pnpm's store, which CI restores, so a warm install does

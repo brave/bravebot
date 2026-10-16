@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GATES = (
     "check-scripts", "check", "check-spec", "check-security", "check-locales", "check-versions",
     "check-narration", "check-docs", "check-npm", "check-deps", "check-msrv", "check-windows",
-    "check-linux", "check-ui", "check-agent-client", "check-reviewdog",
+    "check-linux", "check-ui", "check-agent-client", "check-mobile", "check-reviewdog",
 )
 
 
@@ -186,6 +186,20 @@ class CheckTargets(unittest.TestCase):
                 expected = commands[:commands.index(failing) + 1] if failing else commands
                 self.assertEqual(self.log.read_text().splitlines(), expected)
 
+    def test_the_mobile_gate_builds_the_client_before_the_app_checks_and_preserves_each_failure(self):
+        """The app resolves the client through its built dist, so a client that fails to build
+        must stop the gate before the app is type-checked or tested."""
+        commands = ["pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir packages/agent-client run build",
+                    "pnpm --dir mobile install --frozen-lockfile --ignore-scripts",
+                    "pnpm --dir mobile run check"]
+        for failing in ("", *commands):
+            with self.subTest(failing=failing):
+                result = self.run_make("check-mobile", FAIL_COMMAND=failing)
+                self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
+                expected = commands[:commands.index(failing) + 1] if failing else commands
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
     def test_client_scenarios_that_are_no_longer_there_fail_the_gate(self):
         """A scenario directory emptied or renamed must not leave the gate green on nothing."""
         (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").unlink()
@@ -217,6 +231,7 @@ class CheckTargets(unittest.TestCase):
                     "pnpm --dir ui install --frozen-lockfile --lockfile-only",
                     "pnpm --dir docs/website install --frozen-lockfile --lockfile-only",
                     "pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only",
+                    "pnpm --dir mobile install --frozen-lockfile --lockfile-only",
                     "python3 contrib/check-pnpm-lockfiles.py"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
