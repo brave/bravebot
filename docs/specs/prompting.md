@@ -4,6 +4,8 @@ title: Asking a person
 status: normative
 governs:
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/pinned.rs
+  - crates/tui/src/confirm/run.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/remote_confirm.rs
   - ui/src/renderer/shown.ts

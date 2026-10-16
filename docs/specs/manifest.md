@@ -13,6 +13,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
