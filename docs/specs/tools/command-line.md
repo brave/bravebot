@@ -141,10 +141,10 @@ Refused, as a compile error with the offending span named:
 
 | Construct | Why |
 |---|---|
-| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw |
+| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `<(…)`, `>(…)` | same, plus a file descriptor nobody named |
 | `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` that names nothing (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
-| `$((…))` | arithmetic is a language, and a language needs an interpreter |
+| `$((…))` | arithmetic is a language, and a language needs an interpreter; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `&` | backgrounding is a parameter of the call, not a token in the line |
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
@@ -181,6 +181,7 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_dollar_that_names_nothing_is_an_ordinary_character`
 `verified-by: bravebot_agent::cmdline::a_dollar_that_opens_an_expansion_is_still_refused`
 `verified-by: bravebot_agent::cmdline::the_variable_refusal_names_the_quoting_that_works`
+`verified-by: bravebot_agent::cmdline::the_substitution_and_arithmetic_refusals_name_single_quotes`
 `verified-by: bravebot_agent::cmdline::arithmetic_is_refused`
 `verified-by: bravebot_agent::cmdline::backgrounding_is_refused`
 `verified-by: bravebot_agent::cmdline::a_here_document_is_refused`
