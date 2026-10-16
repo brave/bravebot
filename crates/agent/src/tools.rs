@@ -29,6 +29,7 @@ use crate::processor::{self, Chat};
 use crate::report::{Activity, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
+use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::credentials::Scanned;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{RecordingSink, Sink};
@@ -1336,6 +1337,42 @@ fn table(
                     }
                 },
                 "required": ["url", "path"]
+            }),
+        ),
+        Tool::function(
+            "list_mcp_resources",
+            "List the resources an MCP server offers, including their URIs and names. \
+             Use this before reading a resource with read_mcp_resource. The user is asked \
+             to approve the server's resource list on the first turn you list it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "The alias of the MCP server whose resources to list."
+                    }
+                },
+                "required": ["server"]
+            }),
+        ),
+        Tool::function(
+            "read_mcp_resource",
+            "Read the text content of a resource from an MCP server by URI. \
+             Returns a reference (ref:N) to quarantined content. List the server's \
+             resources with list_mcp_resources first.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "The alias of the MCP server holding the resource."
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "The URI of the resource to read."
+                    }
+                },
+                "required": ["server", "uri"]
             }),
         ),
     ];
@@ -3172,6 +3209,8 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "read_output" => Some("ref"),
         "watch_file" => Some("path"),
         "advisor" => Some("question"),
+        "list_mcp_resources" => Some("server"),
+        "read_mcp_resource" => Some("uri"),
         _ => None,
     }
 }
@@ -3850,6 +3889,8 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         "read_git" => read_git(policy, tools, confirmer, &arguments),
         "repo_map" => repo_map(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
+        "list_mcp_resources" => list_mcp_resources(policy, tools, reporter, confirmer, &arguments),
+        "read_mcp_resource" => read_mcp_resource(policy, tools, reporter, confirmer, &arguments),
         "write_file" => write_file(policy, tools, confirmer, &arguments),
         "edit_file" => edit_file(
             policy,
@@ -10346,6 +10387,225 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
     produced
 }
 
+/// Format an MCP server's resource list for display to the planner and person.
+fn format_resource_list(alias: &str, resources: &[bravebot_mcp::RawResource]) -> String {
+    if resources.is_empty() {
+        return format!("Server '{alias}' offers no resources.");
+    }
+    let mut out = format!("Resources offered by '{alias}':\n\n");
+    for r in resources {
+        out.push_str(&format!("- URI: {}\n  Name: {}\n", r.uri, r.name));
+        if let Some(desc) = &r.description {
+            out.push_str(&format!("  Description: {}\n", desc));
+        }
+        if let Some(mime) = &r.mime_type {
+            out.push_str(&format!("  MIME Type: {}\n", mime));
+        }
+    }
+    out
+}
+
+/// List the resources an MCP server offers (MCP-10, SERVERS-19).
+fn list_mcp_resources<S: Sink, C: Confirmer + ?Sized, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    reporter: &mut R,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let Some(proposed) = argument(arguments, "server") else {
+        return Produced::problem("error: 'server' is required");
+    };
+
+    let alias = match policy.promote_confined_read("list_mcp_resources", "server", &proposed) {
+        Ok(promoted) => match promoted.into_trusted() {
+            Ok(alias) => alias,
+            Err(_) => return Produced::problem("refused: 'server' was not trusted"),
+        },
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    let Some(offer) = tools.mcp else {
+        return Produced::problem(format!("error: no MCP server '{alias}' was reached"));
+    };
+    let session = offer.session();
+    let is_reached = session.aliases().iter().any(|a| a == &alias);
+    if !is_reached {
+        return Produced::problem(format!("error: no MCP server '{alias}' was reached"));
+    }
+
+    if let Err(denial) = policy.before_capability(Capability::McpCall(ServerAlias::new(&alias))) {
+        return Produced::problem(format!("refused: {denial}"));
+    }
+
+    if session.is_resources_approved(&alias) {
+        if let Some(cached) = session.cached_resource_list(&alias) {
+            return Produced::new(
+                Labelled::trusted(cached),
+                format!("resources {alias} offers"),
+                format!("resources from {alias}"),
+            );
+        }
+    }
+
+    let listing = match session.list_resources_from(policy, &tools.chat.egress, &alias) {
+        Ok(listing) => listing,
+        Err(error) => {
+            return Produced::problem(format!("error: listing resources from {alias} failed: {error}"));
+        }
+    };
+
+    let formatted = format_resource_list(&alias, listing.resources());
+
+    if !session.is_resources_approved(&alias) {
+        let mode = tools.permission_mode.get();
+        let labelled_list = Labelled::new(formatted.clone(), bravebot_mcp::list_label());
+        let (verdict, reason, usage) = match mode != crate::PermissionMode::Bypass {
+            true => {
+                let spec = policy.before_vetting_a_resource_list(&alias, labelled_list.clone());
+                let checked = crate::vet::run(policy, &mut tools.chat, reporter, &spec);
+                let reason = checked.reason.map(|reason| {
+                    let proof = policy.authorise_display_release("what a check said about content");
+                    reason.declassify(&proof)
+                });
+                (checked.verdict, reason, checked.usage)
+            }
+            false => (
+                Verdict::Inconclusive("the check was not made"),
+                None,
+                Usage::default(),
+            ),
+        };
+
+        let resources: Vec<crate::confirm::ListedResource> = listing
+            .resources()
+            .iter()
+            .map(|r| crate::confirm::ListedResource {
+                uri: r.uri.clone(),
+                name: r.name.clone(),
+                description: r.description.clone(),
+                mime_type: r.mime_type.clone(),
+            })
+            .collect();
+
+        let request = crate::confirm::ResourceListRequest {
+            alias: alias.clone(),
+            resources,
+            refused: listing.refused(),
+            verdict,
+            reason,
+        };
+
+        let answer = confirmer.confirm_resource_list(&request);
+        if answer == Decision::Reject {
+            return Produced::problem(format!(
+                "refused: the user did not approve listing resources for {alias}"
+            ));
+        }
+
+        policy.endorse_resource_list(&alias);
+        let by = match mode {
+            crate::PermissionMode::Bypass => Endorsed::ByBypassing,
+            _ => Endorsed::ByAPerson,
+        };
+        let promoted = match policy.promote_a_resource_list(&alias, &labelled_list, by) {
+            Ok(promoted) => promoted,
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        };
+
+        session.approve_resources(&alias);
+        session.set_cached_resource_list(&alias, formatted.clone());
+
+        let mut produced = Produced::new(
+            promoted,
+            format!("resources {alias} offers"),
+            format!("resources from {alias}"),
+        );
+        produced.usage.add(usage);
+        return produced;
+    }
+
+    session.set_cached_resource_list(&alias, formatted.clone());
+    Produced::new(
+        Labelled::trusted(formatted),
+        format!("resources {alias} offers"),
+        format!("resources from {alias}"),
+    )
+}
+
+/// Read a resource's text content by its URI (MCP-1, MCP-6, MCP-10, SERVERS-19).
+fn read_mcp_resource<S: Sink, C: Confirmer + ?Sized, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    _reporter: &mut R,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let Some(proposed_server) = argument(arguments, "server") else {
+        return Produced::problem("error: 'server' is required");
+    };
+
+    let alias = match policy.promote_confined_read("read_mcp_resource", "server", &proposed_server) {
+        Ok(promoted) => match promoted.into_trusted() {
+            Ok(alias) => alias,
+            Err(_) => return Produced::problem("refused: 'server' was not trusted"),
+        },
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    let Some(proposed_uri) = argument(arguments, "uri") else {
+        return Produced::problem("error: 'uri' is required");
+    };
+
+    let uri = match policy.promote_confined_read("read_mcp_resource", "uri", &proposed_uri) {
+        Ok(promoted) => match promoted.into_trusted() {
+            Ok(uri) => uri,
+            Err(_) => return Produced::problem("refused: 'uri' was not trusted"),
+        },
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    let Some(offer) = tools.mcp else {
+        return Produced::problem(format!("error: no MCP server '{alias}' was reached"));
+    };
+    let session = offer.session();
+    let is_reached = session.aliases().iter().any(|a| a == &alias);
+    if !is_reached {
+        return Produced::problem(format!("error: no MCP server '{alias}' was reached"));
+    }
+
+    if let Err(denial) = policy.before_capability(Capability::McpCall(ServerAlias::new(&alias))) {
+        return Produced::problem(format!("refused: {denial}"));
+    }
+
+    if !session.is_resources_approved(&alias) {
+        let request = crate::confirm::ResourceReadRequest {
+            alias: alias.clone(),
+            uri: uri.clone(),
+        };
+        let answer = confirmer.confirm_resource_read(&request);
+        if answer == Decision::Reject {
+            return Produced::problem(format!(
+                "refused: the user did not approve reading resource '{uri}' from {alias}"
+            ));
+        }
+    }
+
+    let read_result = session.read_resource_from(policy, &tools.chat.egress, &alias, &uri);
+    match read_result {
+        Ok(labelled) => {
+            let note = format!("read resource '{uri}' from {alias}");
+            let origin = format!("what {alias} returned for {uri}");
+            let mut produced = Produced::new(labelled, origin, note).of_content();
+            produced.untrusted = true;
+            produced
+        }
+        Err(error) => {
+            Produced::problem(format!("error: reading resource '{uri}' from {alias} failed: {error}"))
+        }
+    }
+}
+
 /// What a background pipeline has printed since it was last looked at.
 ///
 /// The job name is routing, and it is the driver's own: a name this module minted and looked up in
@@ -13630,6 +13890,8 @@ mod tests {
             "job_output",
             "lsp",
             "spawn_agent",
+            "list_mcp_resources",
+            "read_mcp_resource",
         ] {
             assert!(
                 gating_capability(name).is_some(),

@@ -28,7 +28,9 @@ use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_core::vetting::{Endorsed, Verdict};
 use bravebot_i18n::t;
-use bravebot_mcp::{HttpServer, Listing, McpError, McpResult, StdioServer, wire_name};
+use bravebot_mcp::{
+    HttpServer, Listing, McpError, McpResult, ResourceListing, StdioServer, wire_name,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -40,6 +42,31 @@ pub enum Connection {
     Stdio(StdioServer),
     /// A remote server, every request to which goes through the egress gate.
     Http(HttpServer),
+}
+
+impl Connection {
+    pub(crate) fn list_resources<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+    ) -> McpResult<ResourceListing> {
+        match self {
+            Connection::Stdio(server) => server.list_resources(),
+            Connection::Http(server) => server.list_resources(policy, egress),
+        }
+    }
+
+    pub(crate) fn read_resource<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+        uri: &str,
+    ) -> McpResult<Labelled<String>> {
+        match self {
+            Connection::Stdio(server) => server.read_resource(policy, uri),
+            Connection::Http(server) => server.read_resource(policy, egress, uri),
+        }
+    }
 }
 
 /// A server that completed its handshake and answered for its tools, with the declaration it was
@@ -179,6 +206,10 @@ struct Server {
     connection: Mutex<Connection>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
+    /// Whether the user has approved this server's resource list (SERVERS-19).
+    resources_approved: Mutex<bool>,
+    /// The formatted resource list if already approved or fetched.
+    resource_list: Mutex<Option<String>>,
 }
 
 struct Shared {
@@ -278,6 +309,8 @@ impl Session {
                 state: Mutex::new(State::Unasked(reached.listing)),
                 connection: Mutex::new(reached.connection),
                 _home: reached.home,
+                resources_approved: Mutex::new(false),
+                resource_list: Mutex::new(None),
             })
             .collect();
         Self(Arc::new(Shared {
@@ -301,6 +334,66 @@ impl Session {
             .iter()
             .map(|server| server.alias.clone())
             .collect()
+    }
+
+    /// Whether the user has approved this server's resource list (SERVERS-19).
+    pub fn is_resources_approved(&self, alias: &str) -> bool {
+        self.0
+            .servers
+            .iter()
+            .find(|server| server.alias == alias)
+            .map(|server| *held(&server.resources_approved))
+            .unwrap_or(false)
+    }
+
+    /// Mark that this server's resource list was approved by the user (SERVERS-19).
+    pub fn approve_resources(&self, alias: &str) {
+        if let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) {
+            *held(&server.resources_approved) = true;
+        }
+    }
+
+    /// The formatted resource list for this server if already fetched and cached.
+    pub fn cached_resource_list(&self, alias: &str) -> Option<String> {
+        self.0
+            .servers
+            .iter()
+            .find(|server| server.alias == alias)
+            .and_then(|server| held(&server.resource_list).clone())
+    }
+
+    /// Cache the formatted resource list for this server.
+    pub fn set_cached_resource_list(&self, alias: &str, text: String) {
+        if let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) {
+            *held(&server.resource_list) = Some(text);
+        }
+    }
+
+    /// List resources from this server (MCP-10, SERVERS-19).
+    pub(crate) fn list_resources_from<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+        alias: &str,
+    ) -> McpResult<ResourceListing> {
+        let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
+            return Err(McpError::Transport(format!("no server {alias} was reached")));
+        };
+        held(&server.connection).list_resources(policy, egress)
+    }
+
+    /// Read a resource from this server by URI (MCP-1, MCP-6, MCP-10).
+    pub(crate) fn read_resource_from<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+        alias: &str,
+        uri: &str,
+    ) -> McpResult<Labelled<String>> {
+        let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
+            return Err(McpError::Transport(format!("no server {alias} was reached")));
+        };
+        held(&server.connection).read_resource(policy, egress, uri)
     }
 
     /// One grant for each server reached, naming it and no other (SERVERS-9).
@@ -837,6 +930,11 @@ pub struct Offer {
 }
 
 impl Offer {
+    /// The session this offer belongs to.
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
     /// The functions a backend is sent, one per tool.
     ///
     /// The description is the server's words, which a person read and let through, so it is sent
