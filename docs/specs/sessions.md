@@ -846,8 +846,8 @@ names it on the line that reports the rewind.
 `verified-by: bravebot_session::sessions::required_paths_missing_from_backup_entries_are_unavailable_restorations`
 `verified-by: bravebot_session::sessions::backup_provenance_is_independent_of_coverage`
 
-<a id="SESSION-36"></a>
-### SESSION-36: one hunk of what the last turn wrote can be put back, and the rest of the file left as it is
+<a id="SESSION-37"></a>
+### SESSION-37: one hunk of what the last turn wrote can be put back, and the rest of the file left as it is
 
 `/hunks` with nothing after it lists the hunks the last turn wrote, numbered from one across the
 paths in the order the turn first wrote them. A hunk is a run of changed lines between what the path

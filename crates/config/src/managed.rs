@@ -798,6 +798,55 @@ mod tests {
         );
     }
 
+    /// The set is the clause's list and no other: a name dropped from it leaves an administrator
+    /// unable to pin where that request goes, and one added widens the layer past destinations.
+    #[test]
+    fn every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other() {
+        let listed = [
+            "BRAVE_AI_CHAT_ENDPOINT",
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "BRAVEBOT_USE_BEDROCK",
+            "AWS_REGION",
+            "AWS_PROFILE",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ];
+        let env: String = listed
+            .iter()
+            .map(|name| format!(r#""{name}": "pinned-value""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let managed = scratch("managed-every-name", &format!(r#"{{"env": {{{env}}}}}"#));
+
+        for name in listed {
+            assert_eq!(
+                managed.get(name),
+                Some("pinned-value"),
+                "{name} is pinnable"
+            );
+        }
+        let mut pinned: Vec<&str> = managed.pinned().collect();
+        pinned.sort_unstable();
+        let mut expected = listed.to_vec();
+        expected.sort_unstable();
+        assert_eq!(pinned, expected);
+    }
+
+    /// The path is a literal for the platform, so a different directory means a different file
+    /// answers for the machine.
+    #[test]
+    fn the_file_is_read_from_the_directory_the_platform_reserves() {
+        let expected = if cfg!(target_os = "macos") {
+            "/Library/Application Support/bravebot/managed.json"
+        } else if cfg!(windows) {
+            r"C:\ProgramData\bravebot\managed.json"
+        } else {
+            "/etc/bravebot/managed.json"
+        };
+        assert_eq!(managed_file(), Path::new(expected));
+    }
+
     /// A layer that can pin anything is a layer somebody uses to pin a preference. What an
     /// organisation and an individual can disagree about is where a request goes, so nothing else
     /// is read, however the file spells it.
