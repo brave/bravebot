@@ -493,7 +493,7 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
 `verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
-`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
+`verified-by: bravebot_cli::doctor::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -2217,7 +2217,7 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
-`verified-by: bravebot_cli::main::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
+`verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
 
 <a id="BACKEND-50"></a>
