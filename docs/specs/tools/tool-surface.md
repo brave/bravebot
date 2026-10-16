@@ -54,6 +54,8 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`advisor`](advisor.md) | none | `question` | the advisor's reply |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 | [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
+| `list_mcp_resources` | `server` | none | the resource URIs and names |
+| `read_mcp_resource` | `server`, `uri` | none | a reference |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.
