@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpa
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { _electron as electron } from 'playwright-core'
+import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -43,23 +43,21 @@ const server = createServer(async (req, res) => {
     res.end(`data: ${JSON.stringify({ model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 } })}\n\ndata: [DONE]\n\n`)
   } catch (error) { failures.push(String(error)); res.writeHead(500); res.end('Fixture assertion failed') }
 })
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+await listening(server)
 function writeFixtureSettings(model) {
   writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ provider: { local: { options: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: fixtureToken }, models: { test: {} } } }, model }))
 }
 writeFixtureSettings('local/test')
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
+const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
 async function until(predicate, label) {
   const deadline = Date.now() + 20000
   while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
 }
 try {
   // Under xvfb the GPU process's GL start can hold the hidden window's first paint past a click's timeout on a fresh runner.
-  app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11', '--disable-gpu'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
-  page = await app.firstWindow(); page.setDefaultTimeout(15000)
-  await page.setViewportSize({ width: 1350, height: 900 })
-  const uiErrors = []; page.on('pageerror', error => uiErrors.push(error.message))
+  const world = await launchWorld({ profile, env, linuxArgs: ['--disable-gpu'], timeout: 15000, viewport: { width: 1350, height: 900 } })
+  app = world.app; page = world.page
+  const uiErrors = world.errors
   await app.evaluate(({ dialog }, project) => {
     globalThis.walkthroughPicker = { path: project, calls: [] }
     dialog.showOpenDialog = async (_window, options) => {

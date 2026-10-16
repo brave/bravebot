@@ -221,17 +221,35 @@ credits from whatever backend is configured. `drive-columns`, `drive-panels`, `d
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-conversation-workflow`,
-`drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
-`drive-rewind`, `drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
-`drive-vetting`, `drive-visual` and `drive-perf`.
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
+`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
+`drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
+`drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
-The flag isolates only the app's own state. Most of these also replace the bridge with IPC
-fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and
-sends a live turn through the isolated profile using your real credentials.
-`drive-manual-walkthrough` and `drive-rewind` also set a disposable `HOME`. `drive-agent-rpc` never opens a window:
-it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, launch with
-a temporary `--user-data-dir` and mock or isolate whatever the bridge would reach.
+`drive-at-mentions`, `drive-connectors`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-manual-walkthrough`, `drive-mcp`, `drive-permission-mode`, `drive-plan`,
+`drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
+the temporary profile its caller made. `drive-manual-walkthrough`, `drive-remembered-trust`,
+`drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the
+inherited variables and, for `drive-vetting`, the project opening. The others also take their
+temporary root, `HOME` and settings file from it, and their stub model service where they have one.
+
+The flag isolates only the app's own state. Some of these replace the bridge with IPC fixtures, so
+they need no credentials and make no requests. Those that launch through `drive-world.mjs` run the
+real bridge and agent, with a model service on `127.0.0.1` where they have one: they need no
+credentials, and `drive-language-server`, `drive-permission-mode` and `drive-sandbox-mode` run real
+programs on your machine. `drive-models-live` sends a live turn through the isolated profile using
+your real credentials.
+`drive-manual-walkthrough`, `drive-remembered-trust`, `drive-rewind` and `drive-vetting` also set a
+disposable `HOME` of their own. `drive-sandbox-mode` writes one file under your real home, and
+removes it and the file its confined program tries to plant there when it ends. `drive-agent-rpc`
+never opens a window: it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, build
+its temporary root with `makeWorld`, start its model service with `startModelService`, launch with
+`launchWorld` and open its project with `openProject`, all from `scripts/drive-world.mjs`, and mock or
+isolate whatever else the bridge would reach.
 
 ### The visual gallery
 
