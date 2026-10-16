@@ -1424,12 +1424,59 @@ fn run_task(
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> ExitCode {
+    match prepare_the_run(args, skip_permissions, agent, prompts) {
+        Ok(prepared) => run_and_report(prepared),
+        Err(stopped) => stopped,
+    }
+}
+
+/// What the second half of a one-shot run reads, and the two guards that only have to live as long
+/// as the run does. The fields are declared in the order the run used to declare the locals they
+/// replace, and `run_and_report` binds them in that order, so they are dropped in the order they
+/// always were.
+struct Prepared {
+    workspace: bravebot_agent::Workspace,
+    continued: Option<bravebot_session::sessions::Record>,
+    agent: Option<String>,
+    /// Held because dropping it removes the run's scratch directory.
+    _scratch: Option<bravebot_agent::SessionScratch>,
+    egress: bravebot_net::Egress,
+    task: Task,
+    /// Held because dropping it stops the servers the task reaches.
+    _reached: servers::Reached,
+    config: Config,
+    under: Option<String>,
+    model: String,
+    mode: Mode,
+    trace: bool,
+    as_json: bool,
+    as_stream: bool,
+    trust_workspace: bool,
+    named_on_the_command_line: bool,
+    permission_mode: bravebot_agent::PermissionMode,
+}
+
+/// Everything a one-shot run settles before the turn: the arguments, the configuration, the
+/// workspace and the session it continues, the definition and the model, and the task. Each refusal
+/// is printed here, so the code it returns is the one the run exits with.
+fn prepare_the_run(
+    args: &[String],
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: SystemPrompts,
+) -> Result<Prepared, ExitCode> {
     let invocation = match parse_invocation(args) {
         Ok(invocation) => invocation,
         // Whether a result object was asked for is read off the raw arguments here, because the
         // parse that would otherwise have said is the thing that just failed, and a caller that
         // asked for one asked for this one too.
-        Err(err) => return stopped_before_the_turn(wants_json(args), Ending::Argument, err),
+        Err(err) => {
+            return Err(stopped_before_the_turn(
+                wants_json(args),
+                Ending::Argument,
+                err,
+            ));
+        }
     };
     let Invocation {
         prompt,
@@ -1456,14 +1503,18 @@ fn run_task(
         let is_tty = stdin.is_terminal();
         match piped_input(stdin.lock(), is_tty) {
             Ok(text) => text,
-            Err(err) => return stopped_before_the_turn(as_json, Ending::Argument, err),
+            Err(err) => return Err(stopped_before_the_turn(as_json, Ending::Argument, err)),
         }
     } else {
         None
     };
 
     if prompt.is_empty() && piped.is_none() {
-        return stopped_before_the_turn(as_json, Ending::Argument, t!(cli_task_required));
+        return Err(stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_task_required),
+        ));
     }
 
     if let Some(conflict) = manifest_conflict(
@@ -1474,25 +1525,29 @@ fn run_task(
         &prompts,
         resume.as_ref(),
     ) {
-        return stopped_before_the_turn(as_json, Ending::Argument, conflict);
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
     // Read and vetted before anything is sent, so a schema outside what is checked is a refused
     // argument and not a constraint the run quietly did not hold the reply to.
     let output_schema = match output_schema.as_deref().map(load_output_schema).transpose() {
         Ok(schema) => schema,
         Err(complaint) => {
-            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                complaint,
+            ));
         }
     };
 
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
-            return stopped_before_the_turn(
+            return Err(stopped_before_the_turn(
                 as_json,
                 Ending::Configuration,
                 t!(cli_configuration_problem, problem = err),
-            );
+            ));
         }
     };
 
@@ -1518,25 +1573,25 @@ fn run_task(
     if !asked_below
         && let Some(how) = nothing_serves(&config, &model_for_this_run(model.as_deref(), &config))
     {
-        return stopped_before_the_turn(as_json, Ending::Configuration, how);
+        return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
     }
 
     // Resolved like `--model`, and refused like it where the machine-level layer refuses the
     // name, so a run never starts with an advisor its first question could not reach (BACKEND-48).
     let advisor = match advisor.map(|name| resolve_advisor(&config, &name)) {
         Some(Ok(advisor)) => Some(advisor),
-        Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
+        Some(Err(how)) => return Err(stopped_before_the_turn(as_json, Ending::Configuration, how)),
         None => None,
     };
 
     let mut workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
         Err(err) => {
-            return stopped_before_the_turn(
+            return Err(stopped_before_the_turn(
                 as_json,
                 Ending::Failed,
                 t!(cli_workspace_problem, problem = err),
-            );
+            ));
         }
     };
 
@@ -1549,18 +1604,18 @@ fn run_task(
                 eprintln!("{}", t!(cli_notice, notice = notice));
             }
         }
-        Err(problem) => return stopped_before_the_turn(as_json, Ending::Argument, problem),
+        Err(problem) => return Err(stopped_before_the_turn(as_json, Ending::Argument, problem)),
     }
 
     // Found before anything is sent, so a session that is not there exits with the status for an
     // argument and costs nothing (CLI-25).
-    let mut continued = match resume
+    let continued = match resume
         .as_ref()
         .map(|asked| continued::find(workspace.root(), asked))
         .transpose()
     {
         Ok(record) => record,
-        Err(why) => return stopped_before_the_turn(as_json, Ending::Argument, why),
+        Err(why) => return Err(stopped_before_the_turn(as_json, Ending::Argument, why)),
     };
 
     // The rules the settings file carried, read before the definition is matched so the match
@@ -1612,7 +1667,9 @@ fn run_task(
                 (None, None)
             }
             Ok(bravebot_tui::app::Settled::Nothing) => (None, None),
-            Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
+            Err(refused) => {
+                return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
+            }
         };
     if asked_below
         && let Some(how) = nothing_serves(
@@ -1622,7 +1679,7 @@ fn run_task(
                 .unwrap_or_else(|| model_for_this_run(None, &config)),
         )
     {
-        return stopped_before_the_turn(as_json, Ending::Configuration, how);
+        return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
     }
 
     // A run is a session for this: it is given somewhere of its own to write what is not part of
@@ -1631,7 +1688,6 @@ fn run_task(
     let _scratch = scratch_for_this_run(&mut workspace);
 
     let egress = bravebot_net::Egress::new();
-    let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
 
     for problem in &rejected {
         eprintln!(
@@ -1688,7 +1744,11 @@ fn run_task(
         match bravebot_session::excerpt::of(workspace.root(), id) {
             Ok(excerpt) => excerpts.push(excerpt),
             Err(refused) => {
-                return stopped_before_the_turn(as_json, Ending::Argument, refused.said(id));
+                return Err(stopped_before_the_turn(
+                    as_json,
+                    Ending::Argument,
+                    refused.said(id),
+                ));
             }
         }
     }
@@ -1735,21 +1795,6 @@ fn run_task(
     }
     task = task.with_mcp(reached.session());
 
-    // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
-    // applied. The one exception is a plan, which is put before the first step rather than in the
-    // middle of a run, and only where both ends of the conversation are a terminal: a plan written
-    // into a redirected stderr is a plan nobody read, and a pipe means the answer would be read
-    // from whatever fed it.
-    //
-    // Unless the flag was given, which is the one way a run nobody is watching may write: the
-    // person accepted that when they typed it, and this is the only path where the refusal above
-    // is what stands between the flag and an effect.
-    let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-    let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
-    // Screening off the task, so the answer the tools fill a verdict in under and the answer that
-    // decides whether a verdict which objects can refuse are the one value resolved above.
-    let mut confirmer =
-        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
@@ -1759,11 +1804,6 @@ fn run_task(
             t!(cli_notice, notice = t!(session_permissions_skipped))
         );
     }
-
-    // Progress goes to stderr so stdout stays the reply and nothing else, which is what makes
-    // the command pipeable. Without it a long turn prints nothing until it is over.
-    let mut reporter = progress::Progress::new(std::io::stderr())
-        .streaming(as_stream.then(|| json::Stream::new(std::io::stdout())));
 
     // Before the turn, so the sign-in's own output is not interleaved with progress lines and a
     // browser opening is accounted for. Nothing happens where no sign-in is wanted, which includes
@@ -1798,11 +1838,11 @@ fn run_task(
         && (config.bedrock_for(&model).is_some()
             || !bravebot_tui::app::reads_structured_output(&config, &model))
     {
-        return stopped_before_the_turn(
+        return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
             t!(cli_output_schema_not_served, model = model.as_str()),
-        );
+        ));
     }
 
     // A level goes out only where the listing describing the model in force says it is read
@@ -1828,6 +1868,71 @@ fn run_task(
     if let Err(failure) = signed_in {
         eprintln!("{}", t!(cli_notice, notice = failure.to_string()));
     }
+
+    Ok(Prepared {
+        workspace,
+        continued,
+        agent,
+        _scratch,
+        egress,
+        task,
+        _reached: reached,
+        config,
+        under,
+        model,
+        mode,
+        trace,
+        as_json,
+        as_stream,
+        trust_workspace,
+        named_on_the_command_line,
+        permission_mode,
+    })
+}
+
+/// The turn or the manifest, and what is reported of how it ended.
+fn run_and_report(prepared: Prepared) -> ExitCode {
+    let Prepared {
+        workspace,
+        mut continued,
+        agent,
+        _scratch,
+        egress,
+        task,
+        _reached,
+        config,
+        under,
+        model,
+        mode,
+        trace,
+        as_json,
+        as_stream,
+        trust_workspace,
+        named_on_the_command_line,
+        permission_mode,
+    } = prepared;
+    let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
+
+    // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
+    // applied. The one exception is a plan, which is put before the first step rather than in the
+    // middle of a run, and only where both ends of the conversation are a terminal: a plan written
+    // into a redirected stderr is a plan nobody read, and a pipe means the answer would be read
+    // from whatever fed it.
+    //
+    // Unless the flag was given, which is the one way a run nobody is watching may write: the
+    // person accepted that when they typed it, and this is the only path where the refusal above
+    // is what stands between the flag and an effect.
+    let attended = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
+    // Screening off the task, so the answer the tools fill a verdict in under and the answer that
+    // decides whether a verdict which objects can refuse are the one value resolved above.
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting);
+
+    // Progress goes to stderr so stdout stays the reply and nothing else, which is what makes
+    // the command pipeable. Without it a long turn prints nothing until it is over.
+    let mut reporter = progress::Progress::new(std::io::stderr())
+        .streaming(as_stream.then(|| json::Stream::new(std::io::stdout())));
 
     // The id of the record this run wrote, which the result object carries (CLI-25).
     let mut session: Option<String> = None;
