@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "build", "installers", "docs", "npm", "deps")
+AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -95,6 +95,7 @@ ALWAYS = (
 HOST = {
     "rust": ("check",),
     "ui": ("check-ui", "check-agent-client"),
+    "mobile": ("check-mobile",),
     "docs": ("check-docs",),
     "npm": ("check-npm",),
     "deps": ("check-deps",),
@@ -134,16 +135,17 @@ def classify(path, desktop):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
     if path.startswith("packages/agent-client/"):
-        # The client's tests run in the job for the desktop UI against the built bridge. Only the
-        # wire contract file is also read by a Rust test.
+        # The client's tests run in the job for the desktop UI against the built bridge, and the
+        # mobile app links the client and builds it first. Only the wire contract file is also
+        # read by a Rust test.
         name = path[len("packages/agent-client/"):]
-        found = {"ui"}
+        found = {"ui", "mobile"}
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
         if name in PACKAGE_FILES:
             found.add("npm")
         return frozenset(found)
-    for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
+    for under, area in (("docs/website/", "docs"), ("ui/", "ui"), ("mobile/", "mobile")):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
             return frozenset({area, "npm"} if lockfile else {area})
@@ -325,11 +327,16 @@ CASES = (
     ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
-    ("packages/agent-client/src/common/client.ts", {"ui"}),
-    ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
-    ("packages/agent-client/package-lock.json", {"ui", "npm"}),
-    ("packages/agent-client/pnpm-lock.yaml", {"ui", "npm"}),
-    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "npm"}),
+    ("packages/agent-client/src/common/client.ts", {"ui", "mobile"}),
+    ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui", "mobile"}),
+    ("packages/agent-client/package-lock.json", {"ui", "mobile", "npm"}),
+    ("packages/agent-client/pnpm-lock.yaml", {"ui", "mobile", "npm"}),
+    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "mobile", "npm"}),
+    ("mobile/src/App.tsx", {"mobile"}),
+    ("mobile/ios/Bravebot.xcodeproj/project.pbxproj", {"mobile"}),
+    ("mobile/package.json", {"mobile", "npm"}),
+    ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
+    ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
