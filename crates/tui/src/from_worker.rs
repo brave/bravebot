@@ -96,6 +96,8 @@ pub(crate) fn show_in_a_turn(
         | ToMain::Server(_)
         | ToMain::Manifest(_)
         | ToMain::ToolList(_)
+        | ToMain::ResourceList(_)
+        | ToMain::ResourceRead(_)
         | ToMain::McpCall(_)
         | ToMain::Move(_)
         | ToMain::Path(_)

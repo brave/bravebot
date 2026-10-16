@@ -949,6 +949,36 @@ pub(super) fn run_turn_animated(
                         crate::remote_confirm::Reply::ToolList,
                     );
                 }
+                crate::remote_confirm::ToMain::ResourceList(request) => {
+                    let answer = crate::confirm::ask_resource_list(terminal, &request);
+                    reply_to(
+                        session,
+                        &cancel,
+                        &answer_tx,
+                        answer,
+                        |session, answer| {
+                            if *answer == crate::confirm::Answer::Approve {
+                                session.note(format!(
+                                    "MCP server {} offers {} resource(s)",
+                                    request.alias,
+                                    request.resources.len()
+                                ));
+                            }
+                        },
+                        crate::remote_confirm::Reply::ResourceList,
+                    );
+                }
+                crate::remote_confirm::ToMain::ResourceRead(request) => {
+                    let answer = crate::confirm::ask_resource_read(terminal, &request);
+                    reply_to(
+                        session,
+                        &cancel,
+                        &answer_tx,
+                        answer,
+                        |_, _| {},
+                        crate::remote_confirm::Reply::ResourceRead,
+                    );
+                }
                 crate::remote_confirm::ToMain::McpCall(request) => {
                     let answer = crate::confirm::ask_mcp_call(terminal, &request);
                     reply_to(

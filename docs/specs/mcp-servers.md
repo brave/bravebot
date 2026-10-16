@@ -1634,6 +1634,36 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
 
+<a id="SERVERS-21"></a>
+### SERVERS-21: resource lists and resource reads are put to the person
+
+A server's resources are put to the person before the planner receives the list. When the server
+offers no resources, `list_mcp_resources` returns that immediately without prompting or running a
+check (USE-001). On the first turn the planner calls `list_mcp_resources` with available resources,
+the resource list is vetted under CHECK-10 and put to the person with a confirmation prompt showing
+the resource URIs and names (in Bypass mode, the list is promoted without a check or prompt, per
+permission-modes.md). On approval, the list is promoted to trusted public under LABEL-8 for the rest
+of the session, and reading any resource offered in the approved list requires no further confirmation.
+A no holds for the rest of the session and is not asked again: subsequent calls to `list_mcp_resources`
+for that server in the same session refuse immediately without prompting or running a check.
+
+If `read_mcp_resource` is called for a URI not in the approved list, or before the server's resource
+list has been approved, an interactive prompt is put to the person asking to approve reading that
+specific resource URI. On rejection, the read is refused. Content read from a resource is placed into
+quarantine as untrusted and private, returning an opaque reference (ref:N) to the planner (MCP-1, MCP-13).
+
+A delegate is offered `list_mcp_resources` and `read_mcp_resource` where it holds the `LanguageServer`
+capability ([LSP-9](tools/lsp.md#LSP-9), [DELEGATE-4](delegation.md#DELEGATE-4)). The `checker` and
+`worker` kinds hold it, so a delegate of either kind is offered both tools; a `reader` does not.
+
+`verified-by: bravebot_core::policy::a_resource_list_reaches_the_planner_only_through_an_endorsement`
+`verified-by: bravebot_agent::mcp::a_resource_list_is_vetted_and_reading_it_returns_a_quarantined_reference`
+`verified-by: bravebot_agent::mcp::reading_an_unlisted_uri_prompts_even_after_resource_list_approved`
+`verified-by: bravebot_agent::mcp::bypassing_promotes_resource_list_and_reads_without_asking`
+`verified-by: bravebot_agent::mcp::an_empty_resource_list_returns_without_prompting_or_vetting`
+`verified-by: bravebot_agent::mcp::a_declined_resource_list_is_refused_for_the_session_and_not_asked_again`
+`verified-by: bravebot_agent::mcp::delegate_resource_tools_are_gated_by_kind`
+
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below

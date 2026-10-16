@@ -764,6 +764,30 @@ export interface McpToolsRequest {
   vetting: Vetting
 }
 
+export interface McpResource { uri: string; name: string; description: string | null; mimeType: string | null }
+
+/**
+ * The resources an MCP server lists, put to the person before any is offered to the model
+ * (SERVERS-21). `refused` counts resources the client would not draw. A yes holds for the session
+ * and is not remembered.
+ */
+export interface McpResourcesRequest {
+  request: number
+  alias: string
+  resources: McpResource[]
+  refused: number
+  vetting: Vetting
+}
+
+/**
+ * A request to read one resource from an MCP server (SERVERS-21).
+ */
+export interface McpResourceReadRequest {
+  request: number
+  alias: string
+  uri: string
+}
+
 /**
  * One call to an MCP server's tool (SERVERS-7). `name` is `alias:tool`. Each argument's value is
  * JSON, as the model wrote it. Three answers: no, yes, and yes without asking again about this
@@ -1020,6 +1044,8 @@ export interface EventMap {
   'exposure.request': ExposureRequest
   'mcp-server.request': McpServerRequest
   'mcp-tools.request': McpToolsRequest
+  'mcp-resources.request': McpResourcesRequest
+  'mcp-resource-read.request': McpResourceReadRequest
   'mcp-call.request': McpCallRequest
   'mcp-move.request': McpMoveRequest
   'host.request': HostRequest

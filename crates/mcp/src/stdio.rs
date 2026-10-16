@@ -10,9 +10,10 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    Listing, PromptListing, PromptResult, RpcNotification, RpcRequest, RpcResponse, ToolResult,
-    call_params, declares_prompts, declares_tools_list_changed, get_prompt_params,
-    initialize_params, is_tools_list_changed, paged, paged_prompts,
+    Listing, PromptListing, PromptResult, ReadResourceResult, ResourceListing, RpcNotification,
+    RpcRequest, RpcResponse, ToolResult, call_params, declares_prompts,
+    declares_tools_list_changed, get_prompt_params, initialize_params, is_tools_list_changed,
+    listed_resources_or_none, paged, paged_prompts, paged_resources, read_resource_params,
 };
 use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::event::Sink;
@@ -407,5 +408,41 @@ impl StdioServer {
         }
 
         Ok(Labelled::new(parsed.text(), label))
+    }
+
+    /// Servers serving only tools or prompts may omit `resources/list`; reading those yields an
+    /// empty list rather than failing the call. MCP-13, SERVERS-21.
+    pub fn list_resources(&mut self) -> McpResult<ResourceListing> {
+        let listed = paged_resources(|params| self.send_request("resources/list", params));
+        log_step("mcp.list_resources", &listed);
+        listed_resources_or_none(&self.name, listed.map(|l| l.listing(&self.name)))
+    }
+
+    /// Extracts text payload for quarantine and attaches a private label. MCP-1, MCP-6, MCP-13.
+    pub fn read_resource<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        uri: &str,
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let result = self
+            .send_request("resources/read", Some(read_resource_params(uri)))
+            .map_err(|error| named(error, uri))?;
+
+        let parsed: ReadResourceResult =
+            serde_json::from_value(result).map_err(|e| malformed("resource result", &e))?;
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let text = parsed.text().ok_or_else(|| {
+            McpError::Transport(format!("resource '{uri}' contained no text content"))
+        })?;
+
+        Ok(Labelled::new(text, label))
     }
 }
