@@ -163,6 +163,161 @@ fn has_more_to_show(entry: &Entry) -> bool {
             .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
 }
 
+/// A note, one line to each line of `text`.
+///
+/// Shared by the notes in the transcript and by what commands typed during a turn answered, which
+/// are the same voice and have to look it.
+fn note_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|text| {
+            Line::from(Span::styled(
+                format!("{:LEAD$}{text}", ""),
+                Style::default().fg(theme::note()),
+            ))
+        })
+        .collect()
+}
+
+/// The lines an entry is drawn as, which depend on who it is from.
+fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    match entry.speaker {
+        // The user's own words, echoed the way they were typed.
+        Speaker::User => {
+            for (index, text) in entry.text.lines().enumerate() {
+                let prefix = if index == 0 { "> " } else { "  " };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{text}"),
+                    Style::default().fg(theme::brand_primary()),
+                )));
+            }
+        }
+        // The model writes markdown whether or not it is asked to, so the reply is styled
+        // rather than shown with its markers.
+        //
+        // Under the definition's name where a person addressed one, which the driver matched
+        // and the reply had no say in (ADDRESS-12).
+        Speaker::Assistant => {
+            if let Some(name) = &entry.answered_as {
+                lines.push(Line::from(Span::styled(
+                    format!("{:LEAD$}{}", "", t!(agent_answered, name = name.as_str())),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+            }
+            lines.extend(assistant_lines(&entry.text, width))
+        }
+        // The session in its own voice, indented to the column the rest of the transcript's
+        // text starts in. Not behind the detail marker: that says the line belongs to the
+        // entry above it, and the notes starting up leaves are drawn before there is one.
+        Speaker::System => lines.extend(note_lines(&entry.text)),
+        // In the same column as a note and in the colour of a failure, wrapped rather than
+        // clipped: a reason is the one line in the transcript somebody reads to the end.
+        Speaker::Failure | Speaker::Stopped => {
+            for text in entry.text.lines() {
+                for row in wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows {
+                    lines.push(Line::from(Span::styled(
+                        format!("{:LEAD$}{row}", ""),
+                        Style::default().fg(theme::fail()),
+                    )));
+                }
+            }
+        }
+        // Echoed with the marker the user typed it behind, so the scrollback reads back the way
+        // the session happened.
+        Speaker::Shell => {
+            for (index, text) in entry.text.lines().enumerate() {
+                let prefix = if index == 0 { "! " } else { "  " };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{}", printable(text)),
+                    Style::default().fg(theme::accent()),
+                )));
+            }
+        }
+        // Plainly, and indented to sit under the command. No marker down the margin and no
+        // markdown: this is a terminal's output, and the user is reading it as one.
+        //
+        // Not a quarantine block either, which is the point of the whole feature: the user
+        // typed the command, so the kernel labelled what it printed trusted, and dressing it as
+        // untrusted would say the opposite of what is true.
+        Speaker::Output => {
+            for text in entry.text.lines() {
+                lines.push(Line::from(Span::raw(format!("  {}", printable(text)))));
+            }
+        }
+        // A delegate the turn started, with its own work under it rather than mixed into
+        // the turn's. Several run at once, so interleaved neither sequence could be read.
+        Speaker::Delegate => {
+            if let Some(delegate) = &entry.delegate {
+                lines.extend(delegate_lines(delegate, width as usize));
+            }
+        }
+        // What the turn did, kept in the scrollback next to what it said about it.
+        Speaker::Tool => match &entry.activity {
+            Some(activity) => lines.extend(activity_lines(
+                activity,
+                entry.landing,
+                entry.expanded && session.scrolling(),
+                width as usize,
+            )),
+            // A call read back out of a stored session, which records that it happened and
+            // not what came of it. Drawn without the coloured marker a live call earns,
+            // since green would claim an outcome the record does not have.
+            None => {
+                lines.extend(call_rows(
+                    Span::styled(format!("{TURN_MARKER} "), dim()),
+                    entry.text.clone(),
+                    dim(),
+                    &entry.why,
+                ));
+            }
+        },
+    }
+    lines
+}
+
+/// What follows an entry's own lines: what the call handed the planner, what the person alone may
+/// read, the plan the turn worked to, and the trail.
+///
+/// `began` is where the entry's own lines began in `lines`, and `index` is the entry's place in
+/// the sequence being drawn.
+fn entry_extras(
+    session: &Session,
+    entry: &Entry,
+    width: u16,
+    began: usize,
+    lines: &mut Vec<Line<'static>>,
+    calls: &mut Vec<(usize, usize, usize)>,
+    index: usize,
+) {
+    if let Some(returned) = &entry.returned {
+        lines.extend(returned_lines(
+            returned,
+            entry.expanded && session.scrolling(),
+            width as usize,
+        ));
+    }
+
+    // The expand key acts on the rows from the call to the end of what it returned, so the end is
+    // taken here, before anything that hangs beneath the call is drawn.
+    if has_more_to_show(entry) {
+        calls.push((began, lines.len(), index));
+    }
+
+    // What the model was not allowed to read, for the person who is.
+    if let Some(shown) = &entry.shown {
+        lines.extend(quarantined_lines(shown, width as usize));
+    }
+
+    // The plan the turn worked to, kept next to what it produced.
+    lines.extend(todo_lines(&entry.todos));
+
+    if session.show_trail && !entry.trail.is_empty() {
+        for recorded in &entry.trail {
+            lines.push(trail_line(recorded));
+        }
+    }
+}
+
 /// The lines each entry is drawn as, appended to `lines`, with where each prompt and each call
 /// with more to show begins.
 ///
@@ -178,132 +333,11 @@ fn push_entries(
 ) {
     for (index, entry) in viewed.iter().enumerate() {
         let began = lines.len();
-        match entry.speaker {
-            // The user's own words, echoed the way they were typed.
-            Speaker::User => {
-                prompts.push(lines.len());
-                for (index, text) in entry.text.lines().enumerate() {
-                    let prefix = if index == 0 { "> " } else { "  " };
-                    lines.push(Line::from(Span::styled(
-                        format!("{prefix}{text}"),
-                        Style::default().fg(theme::brand_primary()),
-                    )));
-                }
-            }
-            // The model writes markdown whether or not it is asked to, so the reply is styled
-            // rather than shown with its markers.
-            //
-            // Under the definition's name where a person addressed one, which the driver matched
-            // and the reply had no say in (ADDRESS-12).
-            Speaker::Assistant => {
-                if let Some(name) = &entry.answered_as {
-                    lines.push(Line::from(Span::styled(
-                        format!("{:LEAD$}{}", "", t!(agent_answered, name = name.as_str())),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )));
-                }
-                lines.extend(assistant_lines(&entry.text, width))
-            }
-            // The session in its own voice, indented to the column the rest of the transcript's
-            // text starts in. Not behind the detail marker: that says the line belongs to the
-            // entry above it, and the notes starting up leaves are drawn before there is one.
-            Speaker::System => {
-                for text in entry.text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{:LEAD$}{text}", ""),
-                        Style::default().fg(theme::note()),
-                    )));
-                }
-            }
-            // In the same column as a note and in the colour of a failure, wrapped rather than
-            // clipped: a reason is the one line in the transcript somebody reads to the end.
-            Speaker::Failure | Speaker::Stopped => {
-                for text in entry.text.lines() {
-                    for row in
-                        wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows
-                    {
-                        lines.push(Line::from(Span::styled(
-                            format!("{:LEAD$}{row}", ""),
-                            Style::default().fg(theme::fail()),
-                        )));
-                    }
-                }
-            }
-            // Echoed with the marker the user typed it behind, so the scrollback reads back the way
-            // the session happened.
-            Speaker::Shell => {
-                for (index, text) in entry.text.lines().enumerate() {
-                    let prefix = if index == 0 { "! " } else { "  " };
-                    lines.push(Line::from(Span::styled(
-                        format!("{prefix}{}", printable(text)),
-                        Style::default().fg(theme::accent()),
-                    )));
-                }
-            }
-            // Plainly, and indented to sit under the command. No marker down the margin and no
-            // markdown: this is a terminal's output, and the user is reading it as one.
-            //
-            // Not a quarantine block either, which is the point of the whole feature: the user
-            // typed the command, so the kernel labelled what it printed trusted, and dressing it as
-            // untrusted would say the opposite of what is true.
-            Speaker::Output => {
-                for text in entry.text.lines() {
-                    lines.push(Line::from(Span::raw(format!("  {}", printable(text)))));
-                }
-            }
-            // A delegate the turn started, with its own work under it rather than mixed into
-            // the turn's. Several run at once, so interleaved neither sequence could be read.
-            Speaker::Delegate => {
-                if let Some(delegate) = &entry.delegate {
-                    lines.extend(delegate_lines(delegate, width as usize));
-                }
-            }
-            // What the turn did, kept in the scrollback next to what it said about it.
-            Speaker::Tool => match &entry.activity {
-                Some(activity) => lines.extend(activity_lines(
-                    activity,
-                    entry.landing,
-                    entry.expanded && session.scrolling(),
-                    width as usize,
-                )),
-                // A call read back out of a stored session, which records that it happened and
-                // not what came of it. Drawn without the coloured marker a live call earns,
-                // since green would claim an outcome the record does not have.
-                None => {
-                    lines.extend(call_rows(
-                        Span::styled(format!("{TURN_MARKER} "), dim()),
-                        entry.text.clone(),
-                        dim(),
-                        &entry.why,
-                    ));
-                }
-            },
+        if entry.speaker == Speaker::User {
+            prompts.push(began);
         }
-
-        if let Some(returned) = &entry.returned {
-            lines.extend(returned_lines(
-                returned,
-                entry.expanded && session.scrolling(),
-                width as usize,
-            ));
-        }
-        if has_more_to_show(entry) {
-            calls.push((began, lines.len(), index));
-        }
-
-        // What the model was not allowed to read, for the person who is.
-        if let Some(shown) = &entry.shown {
-            lines.extend(quarantined_lines(shown, width as usize));
-        }
-
-        // The plan the turn worked to, kept next to what it produced.
-        lines.extend(todo_lines(&entry.todos));
-
-        if session.show_trail && !entry.trail.is_empty() {
-            for recorded in &entry.trail {
-                lines.push(trail_line(recorded));
-            }
-        }
+        lines.extend(speaker_lines(session, entry, width));
+        entry_extras(session, entry, width, began, lines, calls, index);
 
         // Tool calls come in runs and read as one block, so they are not spaced apart. A turn
         // that read six files would otherwise take twelve lines of blank. Notes run together the
@@ -349,12 +383,7 @@ fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<
     // off the transcript until the turn ends (CMD-8), and the session's rather than a delegate's.
     if !session.said_while_working().is_empty() && !session.watching_a_delegate() {
         for entry in session.said_while_working() {
-            for text in entry.text.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!("{:LEAD$}{text}", ""),
-                    Style::default().fg(theme::note()),
-                )));
-            }
+            lines.extend(note_lines(&entry.text));
         }
         lines.push(Line::raw(""));
     }
@@ -869,5 +898,228 @@ pub(super) mod counted {
             wrapped: WRAPPED.get(),
         };
         (result, work)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::QUARANTINE_BAR;
+    use bravebot_agent::diff::Change;
+    use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
+    use bravebot_core::todo::{Row, Status};
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn position(lines: &[Line<'_>], needle: &str) -> usize {
+        lines
+            .iter()
+            .position(|line| text(line).contains(needle))
+            .unwrap_or_else(|| panic!("{needle} was not drawn"))
+    }
+
+    /// Both are the session speaking. Drawn in different places or colours, the same words would
+    /// read as coming from two sources depending on whether the person typed the command before
+    /// the turn or during it.
+    #[test]
+    fn a_note_and_a_command_answered_mid_turn_are_drawn_alike() {
+        let _held = crate::theme::exclusive();
+        let said = "first line\nsecond line";
+
+        let mut noted = Session::new("kernel-enforced");
+        noted.transcript.push(Entry::user("hello"));
+        noted.note(said);
+        let (noted, ..) = with_prompts(&noted, 90, 24);
+
+        let mut answered = Session::new("kernel-enforced");
+        answered.transcript.push(Entry::user("hello"));
+        answered.answer_while_working(|session| session.note(said));
+        let (answered, ..) = with_prompts(&answered, 90, 24);
+
+        let first = position(&noted, "first line");
+        let rows: Vec<String> = noted[first..first + 2].iter().map(text).collect();
+        assert_eq!(rows, ["  first line", "  second line"]);
+        for line in &noted[first..first + 2] {
+            assert_eq!(line.spans.len(), 1, "{line:?}");
+            assert_eq!(line.spans[0].style, Style::default().fg(theme::note()));
+        }
+        assert_eq!(answered, noted);
+    }
+
+    /// Who an entry is from decides how it reads: the person's words behind the marker they were
+    /// typed with, a failure in its own colour and wrapped so the whole reason can be read, a
+    /// command's output plainly, and a reply under the definition's name where a person addressed
+    /// one.
+    #[test]
+    fn each_speaker_is_drawn_in_its_own_shape() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let drawn = |entry: Entry, width: u16| -> Vec<Line<'static>> {
+            speaker_lines(&session, &entry, width)
+        };
+        let styled = |lines: &[Line<'_>]| -> Vec<(String, Style)> {
+            lines
+                .iter()
+                .map(|line| (text(line), line.spans[0].style))
+                .collect()
+        };
+        let person = Style::default().fg(theme::brand_primary());
+        let fail = Style::default().fg(theme::fail());
+
+        assert_eq!(
+            styled(&drawn(Entry::user("first\nsecond"), 90)),
+            [
+                ("> first".to_string(), person),
+                ("  second".to_string(), person)
+            ]
+        );
+
+        let accent = Style::default().fg(theme::accent());
+        assert_eq!(
+            styled(&drawn(Entry::shell("ls\n| wc"), 90)),
+            [("! ls".to_string(), accent), ("  | wc".to_string(), accent)]
+        );
+
+        assert_eq!(
+            styled(&drawn(Entry::output("one\ntwo"), 90)),
+            [
+                ("  one".to_string(), Style::default()),
+                ("  two".to_string(), Style::default())
+            ]
+        );
+
+        assert_eq!(
+            styled(&drawn(Entry::stopped("stopped by the person"), 90)),
+            [("  stopped by the person".to_string(), fail)]
+        );
+
+        let reason = "alpha beta gamma delta epsilon zeta";
+        let rows = drawn(Entry::failure(reason), 20);
+        assert!(rows.len() >= 2, "a reason wider than the room was clipped");
+        for row in &rows {
+            assert!(text(row).starts_with("  ") && row.width() <= 20, "{row:?}");
+            assert_eq!(row.spans[0].style, fail);
+        }
+        let words: Vec<String> = rows
+            .iter()
+            .map(|row| text(row).trim().to_string())
+            .collect();
+        assert_eq!(words.join(" "), reason);
+
+        // A terminal narrower than the lead and a word still wraps at a width a word fits.
+        let narrow: Vec<String> = drawn(Entry::failure("abcdefg hijklmn"), 4)
+            .iter()
+            .map(|row| text(row).trim().to_string())
+            .collect();
+        assert_eq!(narrow, ["abcdefg", "hijklmn"]);
+
+        let named = drawn(
+            Entry::assistant("hello", Vec::new()).answered_as(Some("reader".to_string())),
+            90,
+        );
+        assert_eq!(
+            styled(&named[..1]),
+            [(
+                "  reader answered".to_string(),
+                Style::default().add_modifier(Modifier::BOLD)
+            )]
+        );
+        assert!(text(&named[1]).ends_with("hello"), "{named:?}");
+    }
+
+    /// The scroller's previous-prompt and next-prompt keys move between these lines, so each has
+    /// to be the one its own words begin on. A shell command is the person's own words too and is
+    /// not a prompt.
+    #[test]
+    fn each_prompt_is_found_at_the_line_it_begins_on() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        session.note("starting up\nand a second line");
+        session
+            .transcript
+            .push(Entry::user("first prompt\nover two lines"));
+        session.transcript.push(Entry::assistant(
+            "an answer\n\nover three lines",
+            Vec::new(),
+        ));
+        session.transcript.push(Entry::shell("ls"));
+        session.transcript.push(Entry::user("second prompt"));
+
+        let (lines, prompts, _) = with_prompts(&session, 90, 24);
+
+        let begins: Vec<String> = prompts.iter().map(|&at| text(&lines[at])).collect();
+        assert_eq!(begins, ["> first prompt", "> second prompt"]);
+    }
+
+    /// The expand key reveals a call and what it returned, so the rows it acts on end where the
+    /// quarantined block under the call begins. That block, the plan and the trail hang under the
+    /// call in that order and are not part of it.
+    #[test]
+    fn a_calls_expandable_rows_end_where_what_hangs_under_it_begins() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        session.show_trail = true;
+        session.transcript.push(Entry::user("run it"));
+
+        let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+        call.landing = Some(Landing::Context);
+        let output: Vec<String> = (0..40).map(|n| format!("output {n}")).collect();
+        call.returned = Some(Returned {
+            lines: output[..5].to_vec(),
+            total: 40,
+            from_the_end: false,
+            whole: output,
+        });
+        call.shown = Some(Shown {
+            origin: "a reader delegate".to_string(),
+            reach: Reach::NotThePlanner,
+            label: "untrusted".to_string(),
+            preview: vec!["quarantined body".to_string()],
+            lines: 1,
+        });
+        call.todos = vec![Row {
+            content: "read the parser".to_string(),
+            marker: "✓",
+            status: Status::Done,
+        }];
+        call.trail = vec![TrailLine {
+            text: "read allowed".to_string(),
+            blocked: false,
+        }];
+        session.transcript.push(call);
+
+        session.transcript.push(Entry::tool(
+            Activity::running("Write", "out.txt")
+                .done("wrote 17 lines")
+                .with_changes(
+                    (0..MAX_DIFF_LINES + 5)
+                        .map(|n| Change::Added(format!("change {n}")))
+                        .collect(),
+                ),
+        ));
+
+        let (lines, _, calls) = with_prompts(&session, 90, 24);
+
+        let run = position(&lines, "Run(make)");
+        let block = position(&lines, QUARANTINE_BAR);
+        let plan = position(&lines, "read the parser");
+        let trail = position(&lines, "read allowed");
+        let write = position(&lines, "Write(out.txt)");
+        assert!(
+            position(&lines, "… 35 more lines") < block && block < plan && plan < trail,
+            "what hangs under the call is not drawn in order: {lines:?}"
+        );
+        assert_eq!(
+            calls,
+            [
+                (run, block, 1),
+                (write, position(&lines, "… 5 more lines") + 1, 2)
+            ]
+        );
     }
 }
