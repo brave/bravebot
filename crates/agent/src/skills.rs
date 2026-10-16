@@ -1063,7 +1063,9 @@ const MAX_LISTED_DEPTH: usize = 6;
 /// A link is left out whatever it points at, and the directory itself is searched where it lands, so
 /// a link out of the directory is never followed and never named (LOAD-4). A name that is not text,
 /// or that holds a control character, is left out as well: it would be written into a result a
-/// planner reads, where a newline would start a line of its own.
+/// planner reads, where a newline would start a line of its own. A directory `list_files` skips
+/// (`__pycache__`, `node_modules`) and a compiled `.pyc` are left out too: they are generated, and
+/// would fill the cap and become the first file offered as the example.
 fn files_beside(directory: &Path, keep: impl Fn(&str) -> bool) -> Vec<String> {
     let Ok(landed) = directory.canonicalize() else {
         return Vec::new();
@@ -1102,6 +1104,9 @@ fn collect_files(
         }
         let relative = format!("{prefix}{name}");
         if kind.is_dir() {
+            if bravebot_filetype::is_ignored_directory(&name) {
+                continue;
+            }
             collect_files(
                 &entry.path(),
                 &format!("{relative}/"),
@@ -1109,7 +1114,11 @@ fn collect_files(
                 keep,
                 found,
             );
-        } else if kind.is_file() && relative != SKILL_FILE && keep(&relative) {
+        } else if kind.is_file()
+            && relative != SKILL_FILE
+            && !name.ends_with(".pyc")
+            && keep(&relative)
+        {
             found.push(relative);
         }
         if found.len() >= MAX_LISTED_FILES {
