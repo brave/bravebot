@@ -545,6 +545,194 @@ pub fn call_params(name: &str, arguments: Value) -> Value {
     serde_json::json!({ "name": name, "arguments": arguments })
 }
 
+/// Params for `resources/read`.
+pub fn read_resource_params(uri: &str) -> Value {
+    serde_json::json!({ "uri": uri })
+}
+
+/// One resource descriptor from an MCP server (MCP-10).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RawResource {
+    pub uri: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+/// The most resources one server's list offers. The rest are refused and counted.
+pub const MAX_RESOURCES: usize = 128;
+
+/// A `resources/list` result, one entry at a time.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ResourceList {
+    #[serde(default)]
+    pub(crate) resources: Vec<Value>,
+    #[serde(default, rename = "nextCursor")]
+    pub(crate) next_cursor: Option<String>,
+}
+
+/// A server's whole resource list, asked for a page at a time.
+pub(crate) fn paged_resources(
+    mut ask: impl FnMut(Option<Value>) -> crate::McpResult<Value>,
+) -> crate::McpResult<ResourceList> {
+    let mut list = ResourceList::default();
+    let mut params = None;
+    for _ in 0..MAX_PAGES {
+        let page: ResourceList = serde_json::from_value(ask(params)?)
+            .map_err(|e| crate::malformed("resource list", &e))?;
+        list.resources.extend(page.resources);
+        let Some(cursor) = page.next_cursor else {
+            break;
+        };
+        params = Some(serde_json::json!({ "cursor": cursor }));
+    }
+    Ok(list)
+}
+
+/// An MCP server's resource list (MCP-10, SERVERS-19).
+pub struct ResourceListing {
+    alias: String,
+    raw: String,
+    list: Labelled<String>,
+    resources: Vec<RawResource>,
+    offered: usize,
+    refused: usize,
+}
+
+impl std::fmt::Debug for ResourceListing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceListing")
+            .field("alias", &self.alias)
+            .field("offered", &self.offered)
+            .field("refused", &self.refused)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ResourceListing {
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    pub fn list(&self) -> &Labelled<String> {
+        &self.list
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn resources(&self) -> &[RawResource] {
+        &self.resources
+    }
+
+    pub fn offered(&self) -> usize {
+        self.offered
+    }
+
+    pub fn refused(&self) -> usize {
+        self.refused
+    }
+}
+
+impl ResourceList {
+    pub(crate) fn listing(self, alias: &str) -> ResourceListing {
+        let mut refused = 0;
+        let mut drawn: BTreeMap<String, RawResource> = BTreeMap::new();
+        for res_val in self.resources {
+            let Ok(resource) = serde_json::from_value::<RawResource>(res_val) else {
+                refused += 1;
+                continue;
+            };
+            if resource.uri.trim().is_empty() || resource.name.trim().is_empty() {
+                refused += 1;
+                continue;
+            }
+            let uri = resource.uri.clone();
+            let description = resource.description.as_deref().map(described);
+            let sanitized = RawResource {
+                uri: resource.uri,
+                name: resource.name,
+                description,
+                mime_type: resource.mime_type,
+                size: resource.size,
+            };
+            drawn.insert(uri, sanitized);
+        }
+        let mut resources: Vec<RawResource> = drawn.into_values().collect();
+        if resources.len() > MAX_RESOURCES {
+            refused += resources.len() - MAX_RESOURCES;
+            resources.truncate(MAX_RESOURCES);
+        }
+        let offered = resources.len();
+        let json_val = serde_json::to_value(&resources).unwrap_or(Value::Array(Vec::new()));
+        let text = json_val.to_string();
+        ResourceListing {
+            alias: alias.to_string(),
+            raw: text.clone(),
+            list: Labelled::new(text, crate::list_label()),
+            resources,
+            offered,
+            refused,
+        }
+    }
+}
+
+/// A server without `resources/list` is one that lists no resources.
+pub fn listed_resources_or_none(
+    alias: &str,
+    listed: crate::McpResult<ResourceListing>,
+) -> crate::McpResult<ResourceListing> {
+    match listed {
+        Err(crate::McpError::Server {
+            code: METHOD_NOT_FOUND,
+            ..
+        }) => Ok(ResourceList::default().listing(alias)),
+        other => other,
+    }
+}
+
+/// A `resources/read` result from an MCP server (MCP-10).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadResourceResult {
+    #[serde(default)]
+    pub contents: Vec<ResourceContentBlock>,
+}
+
+/// One content block in a `resources/read` reply.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceContentBlock {
+    #[serde(default)]
+    pub uri: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub blob: Option<String>,
+}
+
+impl ReadResourceResult {
+    /// Extract text content per MCP-6: only text is taken, binary blobs are ignored,
+    /// and multiple text blocks are joined.
+    pub fn text(&self) -> Option<String> {
+        let texts: Vec<&str> = self
+            .contents
+            .iter()
+            .filter_map(|c| c.text.as_deref())
+            .collect();
+        if texts.is_empty() {
+            None
+        } else {
+            Some(texts.join("\n"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1022,5 +1210,99 @@ mod tests {
             ),
             (3, 0, 0)
         );
+    }
+
+    #[test]
+    fn a_resource_list_parses_and_sanitizes() {
+        let raw = r#"{"resources":[
+            {"uri":"postgres://db/users","name":"Users","description":"All users table","mimeType":"application/json"},
+            {"uri":"file:///logs/today.txt","name":"Today Logs","description":"Daily system logs"},
+            {"uri":"invalid_resource_missing_name"},
+            {"uri":"   ","name":"blank uri"}
+        ]}"#;
+        let list: ResourceList = serde_json::from_str(raw).unwrap();
+        let listing = list.listing("mydb");
+        assert_eq!(listing.offered(), 2);
+        assert_eq!(listing.refused(), 2);
+        assert_eq!(listing.alias(), "mydb");
+        // Sorted by uri
+        assert_eq!(listing.resources()[0].uri, "file:///logs/today.txt");
+        assert_eq!(listing.resources()[0].name, "Today Logs");
+        assert_eq!(listing.resources()[1].uri, "postgres://db/users");
+        assert_eq!(listing.resources()[1].name, "Users");
+    }
+
+    #[test]
+    fn resource_read_text_is_joined_and_blobs_ignored() {
+        let raw = r#"{"contents":[
+            {"uri":"file:///data.txt","mimeType":"text/plain","text":"first part"},
+            {"uri":"file:///data.txt","mimeType":"image/png","blob":"iVBORw0KGgoAAAANSUhEUgAA..."},
+            {"uri":"file:///data.txt","mimeType":"text/plain","text":"second part"}
+        ]}"#;
+        let result: ReadResourceResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            result.text(),
+            Some("first part\nsecond part".to_string())
+        );
+    }
+
+    #[test]
+    fn resource_read_with_no_text_returns_none() {
+        let raw = r#"{"contents":[
+            {"uri":"file:///data.bin","mimeType":"application/octet-stream","blob":"deadbeef"}
+        ]}"#;
+        let result: ReadResourceResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(result.text(), None);
+    }
+
+    #[test]
+    fn method_not_found_yields_empty_resource_listing() {
+        let err = Err(crate::McpError::Server {
+            code: METHOD_NOT_FOUND,
+            method: "resources/list".to_string(),
+        });
+        let listing = listed_resources_or_none("mydb", err).expect("empty listing");
+        assert_eq!(listing.offered(), 0);
+        assert_eq!(listing.refused(), 0);
+        assert_eq!(listing.alias(), "mydb");
+    }
+
+    #[test]
+    fn resource_list_is_paged_and_bounded() {
+        let mut pages = 0;
+        let paged = paged_resources(|_| {
+            pages += 1;
+            if pages > 2 * MAX_PAGES {
+                return Err(crate::McpError::Transport("asked past the bound".into()));
+            }
+            let cursor = (pages < 15).then(|| format!("cursor_{pages}"));
+            Ok(serde_json::json!({
+                "resources": [
+                    {"uri": format!("file:///item_{pages}"), "name": format!("Item {pages}")}
+                ],
+                "nextCursor": cursor,
+            }))
+        })
+        .expect("read up to page bound");
+        assert_eq!((pages, paged.resources.len()), (MAX_PAGES, MAX_PAGES));
+    }
+
+    #[test]
+    fn resource_list_is_capped_at_max_resources() {
+        let mut raw_resources = Vec::new();
+        for i in 0..(MAX_RESOURCES + 20) {
+            raw_resources.push(serde_json::json!({
+                "uri": format!("file:///doc_{i:04}"),
+                "name": format!("Doc {i}"),
+            }));
+        }
+        let list = ResourceList {
+            resources: raw_resources,
+            next_cursor: None,
+        };
+        let listing = list.listing("capped");
+        assert_eq!(listing.offered(), MAX_RESOURCES);
+        assert_eq!(listing.refused(), 20);
+        assert_eq!(listing.resources().len(), MAX_RESOURCES);
     }
 }

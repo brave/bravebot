@@ -5521,6 +5521,29 @@ fn run_turn_animated(
                     let _ =
                         answer_tx.send(crate::remote_confirm::Reply::ToolList(answer.decision()));
                 }
+                crate::remote_confirm::ToMain::ResourceList(request) => {
+                    let answer = crate::confirm::ask_resource_list(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::Answer::Approve {
+                        session.note(format!(
+                            "MCP server {} offers {} resource(s)",
+                            request.alias,
+                            request.resources.len()
+                        ));
+                    }
+                    let _ = answer_tx
+                        .send(crate::remote_confirm::Reply::ResourceList(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::ResourceRead(request) => {
+                    let answer = crate::confirm::ask_resource_read(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx
+                        .send(crate::remote_confirm::Reply::ResourceRead(answer.decision()));
+                }
                 crate::remote_confirm::ToMain::McpCall(request) => {
                     let answer = crate::confirm::ask_mcp_call(terminal, &request);
                     if answer.stops_the_turn() {
@@ -5908,6 +5931,8 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Server(_) => Reply::Server(Decision::Reject),
         ToMain::Manifest(_) => Reply::Manifest(Decision::Reject),
         ToMain::ToolList(_) => Reply::ToolList(Decision::Reject),
+        ToMain::ResourceList(_) => Reply::ResourceList(Decision::Reject),
+        ToMain::ResourceRead(_) => Reply::ResourceRead(Decision::Reject),
         ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Path(_) => Reply::Path(Decision::Reject),

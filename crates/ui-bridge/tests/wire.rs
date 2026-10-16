@@ -1478,6 +1478,40 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     assert_eq!(moved["authority"], "elsewhere.example:443");
     assert_eq!(moved["destination"], "https://user@elsewhere.example/mcp");
     assert_eq!(moved["mayRecord"], true);
+
+    let resources = wire::mcp_resources_request(
+        4,
+        &bravebot_agent::confirm::ResourceListRequest {
+            alias: "weather".into(),
+            resources: vec![bravebot_agent::confirm::ListedResource {
+                uri: "memo://weather/today".into(),
+                name: "Today's Weather".into(),
+                description: Some("the forecast".into()),
+                mime_type: Some("text/plain".into()),
+            }],
+            refused: 1,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+        },
+    );
+    assert_eq!(resources["alias"], "weather");
+    assert_eq!(
+        resources["resources"],
+        json!([{"uri": "memo://weather/today", "name": "Today's Weather",
+            "description": "the forecast", "mimeType": "text/plain"}])
+    );
+    assert_eq!(resources["refused"], 1);
+    assert_eq!(resources["vetting"]["verdict"], "safe");
+
+    let read = wire::mcp_resource_read_request(
+        5,
+        &bravebot_agent::confirm::ResourceReadRequest {
+            alias: "weather".into(),
+            uri: "memo://weather/today".into(),
+        },
+    );
+    assert_eq!(read["alias"], "weather");
+    assert_eq!(read["uri"], "memo://weather/today");
 }
 
 /// A live accepted prompt follows the saved transcript's tag-only rule.

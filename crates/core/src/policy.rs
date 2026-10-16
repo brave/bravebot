@@ -1114,6 +1114,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, label))
     }
 
+    /// The prompt CHECK-10 puts in front of a server's resource list, since a yes promotes the list into
+    /// the planner's context (SERVERS-19, CHECK-10). It reads the list as it will be drawn, which is the
+    /// whole of what a yes covers.
+    pub fn before_vetting_a_resource_list(
+        &mut self,
+        alias: &str,
+        list: Labelled<String>,
+    ) -> crate::vetting::VettingSpec {
+        self.fix_check(
+            list,
+            format!("the resources the MCP server {alias} offers"),
+            crate::vetting::Origin::Recorded(format!(
+                "what the MCP server {alias} listed for its resources"
+            )),
+            None,
+            None,
+        )
+    }
+
+    /// Record that the resources `alias` offers were vouched for as drawn, or answered for by the mode.
+    pub fn endorse_resource_list(&mut self, alias: &str) {
+        self.issue_grant("mcp_resources", "alias", alias.to_string());
+    }
+
+    /// Take the word of whoever endorsed a server's resource list and give the planner the list (LABEL-8).
+    pub fn promote_a_resource_list(
+        &mut self,
+        alias: &str,
+        list: &Labelled<String>,
+        by: crate::vetting::Endorsed,
+    ) -> Gated<Labelled<String>> {
+        self.consume_grant("mcp_resources", "alias", alias)?;
+        let was = list.label();
+        let proof = Declassification::authorise("a resource list somebody vouched for as drawn");
+        let text = list.clone().declassify(&proof);
+        let label = Label::trusted_public();
+        self.allow(
+            "mcp_resources",
+            format!(
+                "the resources {alias} offers were {was}; {}, so the planner is offered them at {label}",
+                by.describe()
+            ),
+        );
+        Ok(Labelled::new(text, label))
+    }
+
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
@@ -10080,6 +10126,39 @@ five
             "{text}"
         );
         assert!(!text.contains("expects"), "{text}");
+    }
+
+    /// A resource list arrives at `(U,pub)` and needs an endorsement to reach the planner (LABEL-8, SERVERS-19),
+    /// and what comes out is the text that was drawn, now at a label the driver may offer resources from.
+    #[test]
+    fn a_resource_list_reaches_the_planner_only_through_an_endorsement() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let list = Labelled::new(
+            "[{\"uri\":\"file:///log.txt\",\"name\":\"Logs\"}]".to_string(),
+            Label::untrusted_public(),
+        );
+
+        assert!(
+            policy
+                .promote_a_resource_list("mydb", &list, Endorsed::ByAPerson)
+                .is_err()
+        );
+        policy.endorse_resource_list("other");
+        assert!(
+            policy
+                .promote_a_resource_list("mydb", &list, Endorsed::ByAPerson)
+                .is_err()
+        );
+        policy.endorse_resource_list("mydb");
+        let promoted = policy
+            .promote_a_resource_list("mydb", &list, Endorsed::ByAPerson)
+            .expect("endorsed");
+        assert_eq!(promoted.label(), Label::trusted_public());
+        assert_eq!(
+            promoted.into_trusted().expect("trusted"),
+            "[{\"uri\":\"file:///log.txt\",\"name\":\"Logs\"}]"
+        );
     }
 
     /// A rule is matched against the program and its arguments, and an assignment is in neither:

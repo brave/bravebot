@@ -266,6 +266,8 @@ impl Bridge {
                 )),
             ),
             "mcp-tools.reply" => self.reply_decision(request, Reply::McpTools),
+            "mcp-resources.reply" => self.reply_decision(request, Reply::McpResources),
+            "mcp-resource-read.reply" => self.reply_decision(request, Reply::McpResourceRead),
             "mcp-call.reply" => self.deliver(
                 request,
                 Reply::McpCall(wire::call_decision(

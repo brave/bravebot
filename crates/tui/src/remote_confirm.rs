@@ -21,8 +21,9 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, PathRequest, ResourceListRequest,
+    ResourceReadRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
+    VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -117,6 +118,11 @@ pub enum ToMain {
     /// The tools an MCP server offers, before any is offered to the planner. The main thread must
     /// reply.
     ToolList(ToolListRequest),
+    /// A resource list from an MCP server needs approval before reaching the planner. The main
+    /// thread must reply.
+    ResourceList(ResourceListRequest),
+    /// Reading a resource from an MCP server needs approval. The main thread must reply.
+    ResourceRead(ResourceReadRequest),
     /// A call to an MCP server's tool. The main thread must reply.
     McpCall(McpCallRequest),
     /// A remote MCP server's reply pointed somewhere it is not declared. The main thread must
@@ -204,6 +210,8 @@ pub enum Reply {
     Server(Decision),
     Manifest(Decision),
     ToolList(Decision),
+    ResourceList(Decision),
+    ResourceRead(Decision),
     McpCall(CallDecision),
     Move(Decision),
     Path(Decision),
@@ -321,6 +329,20 @@ impl Confirmer for RemoteConfirmer {
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         match self.exchange(ToMain::ToolList(request.clone())) {
             Some(Reply::ToolList(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        match self.exchange(ToMain::ResourceList(request.clone())) {
+            Some(Reply::ResourceList(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        match self.exchange(ToMain::ResourceRead(request.clone())) {
+            Some(Reply::ResourceRead(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -1093,6 +1115,8 @@ mod tests {
                     ToMain::Server(_) => seen.push("server"),
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::ToolList(_) => seen.push("tool list"),
+                    ToMain::ResourceList(_) => seen.push("resource list"),
+                    ToMain::ResourceRead(_) => seen.push("resource read"),
                     ToMain::McpCall(_) => seen.push("mcp call"),
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),

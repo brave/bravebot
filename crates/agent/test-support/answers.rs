@@ -48,6 +48,12 @@ impl Confirmer for Answers {
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         ApproveWrites.confirm_tool_list(request)
     }
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        ApproveWrites.confirm_resource_list(request)
+    }
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        ApproveWrites.confirm_resource_read(request)
+    }
     fn confirm_mcp_call(&mut self, _: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }

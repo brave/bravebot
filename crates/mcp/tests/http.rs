@@ -829,3 +829,104 @@ fn configured_headers_are_attached_to_requests() {
         "x-api-key header must be sent: {headers:?}"
     );
 }
+
+#[test]
+fn an_http_server_lists_resources() {
+    let (url, received) = serve(vec![json_response(
+        r#"{"jsonrpc":"2.0","id":0,"result":{"resources":[{"uri":"custom://item1","name":"First Item","description":"Description 1"},{"uri":"custom://item2","name":"Second Item"}]}}"#,
+    )]);
+
+    let mut sink = RecordingSink::new();
+    let egress = Egress::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    let listing = server
+        .list_resources(&mut policy, &egress)
+        .expect("listing");
+
+    assert_eq!(listing.offered(), 2);
+    assert_eq!(listing.refused(), 0);
+    assert_eq!(listing.resources()[0].uri, "custom://item1");
+    assert_eq!(listing.resources()[1].uri, "custom://item2");
+
+    let request_body = received.recv().expect("request received");
+    assert!(request_body.contains("\"resources/list\""));
+    assert!(policy.finish());
+}
+
+#[test]
+fn an_http_server_with_no_resources_method_degrades_to_empty_listing() {
+    let (url, received) = serve(vec![json_response(
+        r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"Method not found"}}"#,
+    )]);
+
+    let mut sink = RecordingSink::new();
+    let egress = Egress::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    let listing = server
+        .list_resources(&mut policy, &egress)
+        .expect("empty listing on method not found");
+
+    assert_eq!(listing.offered(), 0);
+    assert_eq!(listing.refused(), 0);
+    assert!(listing.resources().is_empty());
+
+    let request_body = received.recv().expect("request received");
+    assert!(request_body.contains("\"resources/list\""));
+    assert!(policy.finish());
+}
+
+#[test]
+fn an_http_server_reads_a_resource_and_labels_output() {
+    let (url, received) = serve(vec![json_response(
+        r#"{"jsonrpc":"2.0","id":0,"result":{"contents":[{"uri":"custom://item1","mimeType":"text/plain","text":"resource text content"}]}}"#,
+    )]);
+
+    let mut sink = RecordingSink::new();
+    let egress = Egress::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    let result = server
+        .read_resource(&mut policy, &egress, "custom://item1")
+        .expect("read succeeds");
+
+    assert_eq!(result.label(), Label::untrusted_private());
+    let proof = policy.authorise_display_release("test reads resource text");
+    assert_eq!(result.declassify(&proof), "resource text content");
+
+    let request_body = received.recv().expect("request received");
+    assert!(request_body.contains("\"resources/read\""));
+    assert!(request_body.contains("\"custom://item1\""));
+    assert!(policy.finish());
+}

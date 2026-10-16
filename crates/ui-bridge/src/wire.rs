@@ -25,8 +25,8 @@
 use bravebot_agent::PermissionMode;
 use bravebot_agent::confirm::{
     CallDecision, Decision, ExposureRequest, FetchRequest, HostRequest, Intent, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, ResourceListRequest, ResourceReadRequest,
+    RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -746,6 +746,38 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "refused": request.refused,
         "withheld": request.withheld,
         "vetting": vetting(request.verdict, request.reason.as_deref(), None),
+    })
+}
+
+/// A server's resources, put to the person before the planner receives the list (SERVERS-19).
+pub fn mcp_resources_request(id: u64, request: &ResourceListRequest) -> Value {
+    let resources: Vec<Value> = request
+        .resources
+        .iter()
+        .map(|res| {
+            json!({
+                "uri": res.uri,
+                "name": res.name,
+                "description": res.description,
+                "mimeType": res.mime_type,
+            })
+        })
+        .collect();
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "resources": resources,
+        "refused": request.refused,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), None),
+    })
+}
+
+/// A request to read one resource from an MCP server (SERVERS-19).
+pub fn mcp_resource_read_request(id: u64, request: &ResourceReadRequest) -> Value {
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "uri": request.uri,
     })
 }
 

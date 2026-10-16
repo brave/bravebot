@@ -1550,6 +1550,26 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
 
+<a id="SERVERS-19"></a>
+### SERVERS-19: resource lists and resource reads are put to the person
+
+A server's resources are put to the person before the planner receives the list. On the first turn
+the planner calls `list_mcp_resources`, the resource list is vetted under CHECK-10 and put to the
+person with a confirmation prompt showing the resource URIs and names (in Bypass mode, the list is
+promoted without a check or prompt, per permission-modes.md). On approval, the list is promoted to
+trusted public under LABEL-8 for the rest of the session, and reading any resource offered in the
+approved list requires no further confirmation.
+
+If `read_mcp_resource` is called for a URI not in the approved list, or before the server's resource
+list has been approved, an interactive prompt is put to the person asking to approve reading that
+specific resource URI. On rejection, the read is refused. Content read from a resource is placed into
+quarantine as untrusted and private, returning an opaque reference (ref:N) to the planner (MCP-1, MCP-10).
+
+`verified-by: bravebot_core::policy::a_resource_list_reaches_the_planner_only_through_an_endorsement`
+`verified-by: bravebot_agent::mcp::a_resource_list_is_vetted_and_reading_it_returns_a_quarantined_reference`
+`verified-by: bravebot_agent::mcp::reading_an_unlisted_uri_prompts_even_after_resource_list_approved`
+`verified-by: bravebot_agent::mcp::bypassing_promotes_resource_list_and_reads_without_asking`
+
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below

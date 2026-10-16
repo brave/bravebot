@@ -142,6 +142,20 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_tool_list(request)
     }
 
+    fn confirm_resource_list(
+        &mut self,
+        request: &bravebot_agent::confirm::ResourceListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.refusing.confirm_resource_list(request)
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ResourceReadRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.refusing.confirm_resource_read(request)
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &bravebot_agent::confirm::McpCallRequest,
@@ -171,5 +185,30 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     /// it just asked.
     fn interjection(&mut self) -> Option<String> {
         self.refusing.interjection()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bravebot_agent::confirm::{Decision, ResourceListRequest, ResourceReadRequest};
+
+    #[test]
+    fn one_shot_refuses_resource_prompts() {
+        let mut confirmer = OneShot::new(std::io::empty(), Vec::new(), false);
+        let list_req = ResourceListRequest {
+            alias: "weather".into(),
+            resources: Vec::new(),
+            refused: 0,
+            verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
+            reason: None,
+        };
+        assert_eq!(confirmer.confirm_resource_list(&list_req), Decision::Reject);
+
+        let read_req = ResourceReadRequest {
+            alias: "weather".into(),
+            uri: "memo://weather/today".into(),
+        };
+        assert_eq!(confirmer.confirm_resource_read(&read_req), Decision::Reject);
     }
 }

@@ -9,9 +9,9 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, Intent,
-    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
-    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
-    WriteRequest,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+    ResourceListRequest, ResourceReadRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Reach, Shown};
@@ -89,6 +89,14 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         ask_tool_list(self.terminal, request).decision()
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        ask_resource_list(self.terminal, request).decision()
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        ask_resource_read(self.terminal, request).decision()
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
@@ -2073,6 +2081,146 @@ fn draw_tool_list(
             Span::raw(format!(" {}    ", t!(mcp_tools_yes))),
             Span::styled("2", refusing()),
             Span::raw(format!(" {}    ", t!(mcp_tools_no))),
+        ];
+        spans.extend(stopping());
+        vec![Line::from(spans)]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// Put the resources an MCP server offers to the person, blocking until answered (SERVERS-19).
+pub fn ask_resource_list<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &ResourceListRequest,
+) -> Answer {
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_resource_list(frame, request, scroll, seen),
+        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+    )
+}
+
+fn draw_resource_list(
+    frame: &mut ratatui::Frame,
+    request: &ResourceListRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::ok(), "offer these resources to the model?");
+    let width = inside.width as usize;
+
+    let marked = Style::default().fg(theme::running());
+    let margin = Span::styled("┃ ", marked);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme::muted());
+
+    let heading = match request.resources.is_empty() {
+        true => format!("{} lists no resources it can offer", request.alias),
+        false => format!("{} offers {} resource(s)", request.alias, request.resources.len()),
+    };
+    let mut lines = indented(heading, bold, width);
+    lines.push(Line::raw(""));
+    lines.extend(verdict_rows(
+        request.verdict,
+        request.reason.as_ref(),
+        &margin,
+        width,
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        "A yes makes these resources available to the planner for this session.",
+        muted,
+        width,
+    ));
+
+    for resource in &request.resources {
+        lines.push(Line::raw(""));
+        lines.extend(indented(format!("{} ({})", resource.name, resource.uri), bold, width));
+        if let Some(description) = &resource.description {
+            for line in description.lines() {
+                lines.extend(marked_rows(&margin, &[Span::raw(line.to_string())], width));
+            }
+        }
+    }
+    if request.refused > 0 {
+        lines.push(Line::raw(""));
+        lines.extend(indented(
+            format!("{} resources were not listed", request.refused),
+            muted,
+            width,
+        ));
+    }
+
+    let keys = |answerable: bool| {
+        let mut spans = vec![
+            Span::styled("  1", approving(theme::ok(), answerable)),
+            Span::raw(" Yes, offer them    "),
+            Span::styled("2", refusing()),
+            Span::raw(" No, continue without them    "),
+        ];
+        spans.extend(stopping());
+        vec![Line::from(spans)]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// Ask whether to read a resource from an MCP server (SERVERS-19).
+pub fn ask_resource_read<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &ResourceReadRequest,
+) -> Answer {
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_resource_read(frame, request, scroll, seen),
+        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+    )
+}
+
+fn draw_resource_read(
+    frame: &mut ratatui::Frame,
+    request: &ResourceReadRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::ok(), "read this resource?");
+    let width = inside.width as usize;
+
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme::muted());
+
+    let heading = format!("Read resource from MCP server '{}'", request.alias);
+    let mut lines = indented(heading, bold, width);
+    lines.push(Line::raw(""));
+    lines.extend(indented(format!("URI: {}", request.uri), bold, width));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        "Content read from the resource is placed into quarantine as untrusted and private.",
+        muted,
+        width,
+    ));
+
+    let keys = |answerable: bool| {
+        let mut spans = vec![
+            Span::styled("  1", approving(theme::ok(), answerable)),
+            Span::raw(" Yes, allow reading    "),
+            Span::styled("2", refusing()),
+            Span::raw(" No, refuse    "),
         ];
         spans.extend(stopping());
         vec![Line::from(spans)]
@@ -7505,8 +7653,8 @@ mod tests {
     }
 
     kinds!(
-        Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Host, Ask,
+        Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList,
+        ResourceList, ResourceRead, McpCall, Move, Path, Host, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -7831,6 +7979,60 @@ mod tests {
                     refusing: '2',
                     grants: Vec::new(),
                     deciding,
+                })
+            }
+            Kind::ResourceList => {
+                let uris = numbered('u', 60);
+                let descriptions = numbered('d', 60);
+                let request = ResourceListRequest {
+                    alias: "weather".into(),
+                    resources: uris
+                        .iter()
+                        .zip(&descriptions)
+                        .map(|(uri, desc)| bravebot_agent::confirm::ListedResource {
+                            uri: format!("memo://weather/{uri}"),
+                            name: format!("Item {uri}"),
+                            description: Some(format!("Resource details. {desc}")),
+                            mime_type: Some("text/plain".into()),
+                        })
+                        .collect(),
+                    refused: 0,
+                    verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
+                    reason: None,
+                };
+                let mut deciding = uris;
+                deciding.extend(descriptions);
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_resource_list(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '2',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::ResourceRead => {
+                let words = numbered('w', 260);
+                let request = ResourceReadRequest {
+                    alias: "weather".into(),
+                    uri: format!("memo://weather/{}", words.join("/")),
+                };
+                let drawn = request.clone();
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_resource_read(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '2',
+                    grants: Vec::new(),
+                    deciding: words,
                 })
             }
             Kind::McpCall => {

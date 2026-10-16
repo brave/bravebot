@@ -322,6 +322,37 @@ fn a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing() {
     );
 }
 
+/// `mcp-resources.reply` and `mcp-resource-read.reply` are methods the bridge routes. With no waiting
+/// question they are refused as an answer to nothing, which tells them apart from unknown methods.
+#[test]
+fn resource_replies_for_no_waiting_question_are_refused() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+
+    assert_eq!(
+        call(
+            &mut bridge,
+            "mcp-resources.reply",
+            json!({ "session": &handle, "request": 1, "decision": "approve" })
+        ),
+        Err(ErrorCode::NoSuchRequest)
+    );
+    assert_eq!(
+        call(
+            &mut bridge,
+            "mcp-resource-read.reply",
+            json!({ "session": &handle, "request": 1, "decision": "approve" })
+        ),
+        Err(ErrorCode::NoSuchRequest)
+    );
+}
+
 /// Cancelling something that is not running is not an error: a turn can finish between
 /// the key being pressed and the request arriving.
 #[test]

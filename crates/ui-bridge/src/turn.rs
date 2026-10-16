@@ -17,8 +17,9 @@ use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, ResourceListRequest, ResourceReadRequest,
+    RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+    WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
 use bravebot_core::ask::{Answer, Asking};
@@ -55,6 +56,10 @@ pub enum Kind {
     McpServer,
     /// Whether to offer an MCP server's tools to the model (SERVERS-8).
     McpTools,
+    /// Whether to offer an MCP server's resources to the model (SERVERS-19).
+    McpResources,
+    /// Whether to read one resource from an MCP server (SERVERS-19).
+    McpResourceRead,
     /// Whether to make one call to an MCP server's tool (SERVERS-7).
     McpCall,
     /// Whether a remote MCP server moved where its reply pointed (SERVERS-11).
@@ -100,6 +105,8 @@ pub enum Reply {
     /// Three answers: no, yes, and yes for every server this project requests from now on.
     McpServer(bravebot_agent::servers::Answer),
     McpTools(Decision),
+    McpResources(Decision),
+    McpResourceRead(Decision),
     /// Three answers: no, yes, and yes without asking again about this tool in this project.
     McpCall(CallDecision),
     McpMove(Decision),
@@ -123,6 +130,8 @@ impl Reply {
             Reply::Exposure(_) => Kind::Exposure,
             Reply::McpServer(_) => Kind::McpServer,
             Reply::McpTools(_) => Kind::McpTools,
+            Reply::McpResources(_) => Kind::McpResources,
+            Reply::McpResourceRead(_) => Kind::McpResourceRead,
             Reply::McpCall(_) => Kind::McpCall,
             Reply::McpMove(_) => Kind::McpMove,
             Reply::Host(_) => Kind::Host,
@@ -147,6 +156,8 @@ impl Reply {
             | Reply::Manifest(decision)
             | Reply::Exposure(decision)
             | Reply::McpTools(decision)
+            | Reply::McpResources(decision)
+            | Reply::McpResourceRead(decision)
             | Reply::McpMove(decision)
             | Reply::Host(decision) => Some(*decision),
             Reply::Run(_) | Reply::McpServer(_) | Reply::McpCall(_) | Reply::Ask(_) => None,
@@ -176,6 +187,8 @@ impl Kind {
             Kind::Exposure => Reply::Exposure(Decision::Reject),
             Kind::McpServer => Reply::McpServer(bravebot_agent::servers::Answer::No),
             Kind::McpTools => Reply::McpTools(Decision::Reject),
+            Kind::McpResources => Reply::McpResources(Decision::Reject),
+            Kind::McpResourceRead => Reply::McpResourceRead(Decision::Reject),
             Kind::McpCall => Reply::McpCall(CallDecision::reject()),
             Kind::McpMove => Reply::McpMove(Decision::Reject),
             Kind::Host => Reply::Host(Decision::Reject),
@@ -627,6 +640,18 @@ impl Confirmer for BridgeConfirmer {
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
             wire::mcp_tools_request(id, request)
+        })
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        self.yes_or_no(Kind::McpResources, "mcp-resources.request", |id| {
+            wire::mcp_resources_request(id, request)
+        })
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        self.yes_or_no(Kind::McpResourceRead, "mcp-resource-read.request", |id| {
+            wire::mcp_resource_read_request(id, request)
         })
     }
 

@@ -438,6 +438,26 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_resource_list(
+        &mut self,
+        request: &crate::confirm::ResourceListRequest,
+    ) -> crate::confirm::Decision {
+        self.asked(
+            |held| held.confirm_resource_list(request),
+            |refuse| refuse.confirm_resource_list(request),
+        )
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        request: &crate::confirm::ResourceReadRequest,
+    ) -> crate::confirm::Decision {
+        self.asked(
+            |held| held.confirm_resource_read(request),
+            |refuse| refuse.confirm_resource_read(request),
+        )
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,
