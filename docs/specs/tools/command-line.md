@@ -17,6 +17,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/agent/src/confirm.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/run.rs
   - crates/ui-bridge/src/wire.rs
 guards:
   - symbol: cmdline::compile

@@ -13,6 +13,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/core/src/remembered.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/run.rs
 guards:
   - symbol: Policy::read_output
   - symbol: Policy::remember_command
