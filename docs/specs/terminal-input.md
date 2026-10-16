@@ -2682,10 +2682,10 @@ arriving is drawn again only when its words change. What `@` and `/` offer is wo
 the line a key press leaves, however many callers ask, and a directory that has gone unchanged for
 two seconds is listed once, not on every key.
 
-**Why.** A frame that laid the whole conversation out again made typing lag in proportion to the
-length of the session, and a directory of many files made every key after an `@` slow. A typed
-character is the one thing a person watches the screen for, so nothing that scales with something
-else may stand between it and the screen.
+**Why.** A frame that lays the whole conversation out again makes typing lag in proportion to the
+length of the session, and listing a directory of many files on every key makes each key after an `@`
+slow. A typed character is the one thing a person watches the screen for, so nothing that scales
+with something else may stand between it and the screen.
 
 `verified-by: bravebot_tui::input::only_a_stream_of_positions_or_sizes_is_an_event_a_frame_waits_out`
 `verified-by: bravebot_tui::render::a_keystroke_is_drawn_without_measuring_the_transcript_again`

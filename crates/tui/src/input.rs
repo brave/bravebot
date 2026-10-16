@@ -149,7 +149,6 @@ pub fn next_is_a_stream() -> io::Result<bool> {
         .is_some_and(|(event, _)| is_a_stream(event)))
 }
 
-/// Whether an event is one of a stream: the pointer moving, pressing or scrolling, or a new size.
 fn is_a_stream(event: &TermEvent) -> bool {
     matches!(event, TermEvent::Mouse(_) | TermEvent::Resize(..))
 }
@@ -386,5 +385,31 @@ mod tests {
         }
 
         assert!(pending().is_empty(), "the queue held something back");
+
+        // `next_is_a_stream` looks at the front of a non-empty queue without taking it, so a key
+        // waiting behind a drag is not reported until the drag has been read.
+        let drag = TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        for (front, behind, stream) in [
+            (key(KeyCode::Char('a')), drag.clone(), false),
+            (drag, key(KeyCode::Char('a')), true),
+        ] {
+            {
+                let mut queue = pending();
+                queue.push_back((front, true));
+                queue.push_back((behind, false));
+            }
+            assert_eq!(
+                next_is_a_stream().expect("a queue with events in it cannot reach the terminal"),
+                stream,
+                "the answer was not about the event at the front of the queue"
+            );
+            assert_eq!(pending().len(), 2, "asking took an event out of the queue");
+            pending().clear();
+        }
     }
 }
