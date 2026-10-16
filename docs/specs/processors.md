@@ -74,8 +74,28 @@ The policy layer, the part of `bravebot-core` that owns the gates, concatenates 
 without seeing it. The `instruction` comes from the planner and must not
 be private.
 
+What the planner writes is private once its context holds private content, which
+[LABEL-8](labels.md#LABEL-8) lists the ways of reaching: a slot `vet_content` let through, output
+`read_output` read to it, a delegate's report, or a resumed conversation that already held some.
+From then on every call is refused. The refusal does not ask for a rewording, since none helps, and
+names what still reaches a quarantined reference: a filter such as `grep` or `tail` run with
+`stdin_ref` set to it, whose printed result `read_output` shows, and `vet_content` for a reference
+that holds no text. A reference made in such a context is described without the move that names a
+processor, and the tool's description says the call is refused once the context holds private
+content.
+
+**Why.** A planner told to give a reference to a processor, and refused for the rest of the
+conversation when it does, reads the whole of a long output with `read_output` instead, which is
+the content the processor was the way to avoid reading.
+
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
 `verified-by: bravebot_agent::turn::a_planner_shown_private_content_cannot_instruct_a_processor`
+`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
+`verified-by: bravebot_core::policy::a_reference_names_no_processor_exactly_when_the_context_holds_private_content`
+`verified-by: bravebot_core::reference::a_reference_closed_to_processors_names_none_and_keeps_the_other_moves`
+`verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
+`verified-by: bravebot_agent::turn::a_planner_that_cannot_start_a_processor_is_not_pointed_at_one`
+`verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner

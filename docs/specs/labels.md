@@ -22,7 +22,7 @@ guards:
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 113
+      - crates/core/src/policy.rs: 115
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
@@ -64,7 +64,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 280
-      - crates/core/src/policy.rs: 24
+      - crates/core/src/policy.rs: 25
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -126,7 +126,7 @@ guards:
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/turn.rs: 12
-      - crates/core/src/policy.rs: 8
+      - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/manifest.rs: 7
@@ -148,7 +148,7 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 5
-      - crates/core/src/policy.rs: 21
+      - crates/core/src/policy.rs: 22
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1

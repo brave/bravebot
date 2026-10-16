@@ -1743,6 +1743,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Label::new(self.context, self.holds)
     }
 
+    /// Whether every processor call is refused from here on: once the context holds private
+    /// content, the instruction the planner writes carries the context's label, which is private,
+    /// and PROC-4 refuses a private one. Text that would send the planner to a processor reads
+    /// this and leaves the move out.
+    pub fn processors_closed(&self) -> bool {
+        !self.context_label().is_public()
+    }
+
+    /// A reference made now, marked as closed to processors where none can be started.
+    fn made_here(&self, reference: crate::reference::Reference) -> crate::reference::Reference {
+        if self.processors_closed() {
+            reference.closed_to_processors()
+        } else {
+            reference
+        }
+    }
+
     /// Raise what the context holds to include `shown`, recording `how` it came to hold it.
     ///
     /// One way: [`Confidentiality::join`] cannot lower it, so nothing shown later makes a
@@ -2473,13 +2490,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             slot: slot.clone(),
             label,
         });
-        Ok(crate::reference::Reference::new(
+        Ok(self.made_here(crate::reference::Reference::new(
             slot,
             origin,
             measured.lines,
             measured.bytes,
             label,
-        ))
+        )))
     }
 
     /// Take a summary of the planner's own context back into that context.
@@ -2746,12 +2763,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  holds the file and nothing reads it yet"
             ),
         );
-        Ok(crate::reference::Reference::unread(
+        Ok(self.made_here(crate::reference::Reference::unread(
             slot,
             origin,
             Some(bytes),
             label,
-        ))
+        )))
     }
 
     /// Reserve one slot per entry in a listing the planner may not read.
@@ -2857,7 +2874,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 label,
                 origin: path.clone(),
             });
-            let reference = crate::reference::Reference::unread(slot, origin, None, label);
+            let reference = self.made_here(crate::reference::Reference::unread(
+                slot, origin, None, label,
+            ));
             references.push(if is_a_directory {
                 reference.of_a_directory()
             } else {
@@ -3323,10 +3342,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         if !label.is_public() {
             // An instruction labelled from a context holding private content is private however
             // it is worded, so advice to reword would only send the planner round again.
-            let instead = if self.holds == Confidentiality::Private {
+            let instead = if self.processors_closed() {
                 "what you write has been private since you were shown private content, so no \
                  rewording changes that and no processor can be started in this conversation; \
-                 tell the user what this one was for"
+                 to narrow a reference that holds text, run a filter such as grep or tail with \
+                 stdin_ref set to it and call read_output on what that prints, and vet_content \
+                 asks the user to show you a reference whole"
             } else {
                 "say what to do rather than pasting what was read"
             };
@@ -7736,6 +7757,90 @@ mod tests {
                 described.contains("greater depth"),
                 "the planner was not told how to reach what is inside: {described}"
             );
+        }
+    }
+
+    /// PROC-4 refuses every processor call once the context holds private content, and a reference
+    /// is where the planner is told what to do with quarantined content. Each way the policy makes
+    /// one is asked, and the context is varied on both axes: one that has met untrusted data and
+    /// holds nothing private can still start a processor, so only what it holds decides.
+    #[test]
+    fn a_reference_names_no_processor_exactly_when_the_context_holds_private_content() {
+        for (held, integrity) in [
+            (Confidentiality::Public, Integrity::Trusted),
+            (Confidentiality::Public, Integrity::Untrusted),
+            (Confidentiality::Private, Integrity::Trusted),
+            (Confidentiality::Private, Integrity::Untrusted),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut slots = SlotStore::new();
+            let mut policy = open_policy(&mut sink).resuming(integrity).holding(held);
+            let printed = Labelled::new("a long log\n".to_string(), Label::untrusted_private());
+            let ids = [
+                SlotId::new("ref:1"),
+                SlotId::new("ref:2"),
+                SlotId::new("ref:3"),
+                SlotId::new("ref:4"),
+            ];
+
+            let presented = policy
+                .present(
+                    "run",
+                    ids[0].clone(),
+                    "what `make` printed",
+                    &printed,
+                    &mut slots,
+                )
+                .expect("presents")
+                .reference()
+                .cloned()
+                .expect("a reference");
+            let kept = policy
+                .keep_whole(
+                    "run",
+                    ids[1].clone(),
+                    "what `make` printed",
+                    &printed,
+                    &mut slots,
+                )
+                .expect("keeps the whole of it");
+            let file = policy
+                .defer(
+                    "read_file",
+                    ids[2].clone(),
+                    "notes.md",
+                    &Labelled::trusted("notes.md".to_string()),
+                    42,
+                    &mut slots,
+                )
+                .expect("a file may be reserved");
+            let entries = Labelled::new(vec!["notes.md".to_string()], Label::untrusted_private());
+            let entry = policy
+                .defer_entries(
+                    "list_files",
+                    "an entry in \".\"",
+                    &entries,
+                    0,
+                    &ids[3..],
+                    &mut slots,
+                )
+                .expect("entries may be reserved")
+                .remove(0);
+
+            let closed = held == Confidentiality::Private;
+            for (made, reference) in [
+                ("present", &presented),
+                ("keep_whole", &kept),
+                ("defer", &file),
+                ("defer_entries", &entry),
+            ] {
+                assert_eq!(
+                    reference.describe().contains("spawn_processor"),
+                    !closed,
+                    "{made} in a context holding {held:?} at {integrity:?}: {}",
+                    reference.describe()
+                );
+            }
         }
     }
 
@@ -15273,6 +15378,50 @@ five
                 .before_processor("p", &[public], &secret, None, &store)
                 .expect_err("a private instruction must be refused");
             assert_eq!(err.principle, Principle::Confinement);
+        }
+
+        /// No wording makes an instruction public once the context holds private content, so the
+        /// refusal says what still reaches a quarantined reference instead of sending the planner
+        /// to a person who cannot help, and does not tell it to reword, which would not change
+        /// anything. The instruction is written from the context, as a turn writes it.
+        #[test]
+        fn the_refusal_of_a_processor_in_a_private_context_names_what_still_works() {
+            let (store, public, _) = quarantine();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "pull out the failing tests"),
+                ReleasePlan::new(),
+                all_capabilities(),
+                &mut sink,
+            )
+            .unwrap()
+            .holding(crate::label::Confidentiality::Private);
+
+            let written =
+                policy.label_model_output("spawn_processor", "list the failures".to_string());
+            let err = policy
+                .before_processor("p", &[public], &written, None, &store)
+                .expect_err("a private context cannot instruct a processor");
+
+            assert!(
+                err.message
+                    .contains("no processor can be started in this conversation"),
+                "{}",
+                err.message
+            );
+            assert!(
+                err.message.contains("stdin_ref")
+                    && err.message.contains("read_output")
+                    && err.message.contains("vet_content"),
+                "the refusal names no route that still works: {}",
+                err.message
+            );
+            assert!(
+                !err.message.contains("tell the user")
+                    && !err.message.contains("rather than pasting"),
+                "{}",
+                err.message
+            );
         }
 
         /// The audit trail must be able to show what a processor was allowed to see, without
