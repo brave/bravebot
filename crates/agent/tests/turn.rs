@@ -53491,6 +53491,70 @@ fn the_advisor_is_asked_with_the_planners_context_and_no_tools() {
     );
 }
 
+/// ADVISOR-2: on a round that follows earlier exchanges, the advisor is sent every message the
+/// planner was sent on that round, unchanged and in order, and one message more.
+#[test]
+fn the_advisor_is_sent_the_whole_request_the_planner_was_sent_that_round() {
+    let (requests, _, outcome) = consulting(
+        "advisor-whole-context",
+        Some("advisor-model"),
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-BETA"),
+            reply_with("done"),
+        ],
+    );
+    outcome.expect("turn runs");
+    assert_eq!(requests.len(), 4, "planner, planner, advisor, planner");
+
+    // The planner's last message is sent as a list of text parts so a cache breakpoint can sit on
+    // it, and the advisor's copy of the same message carries the plain string. Both are read as
+    // the text they hold, so the comparison is of the words and their order.
+    fn as_text(message: &serde_json::Value) -> serde_json::Value {
+        let mut message = message.clone();
+        if let Some(parts) = message["content"].as_array() {
+            let joined: String = parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect();
+            message["content"] = serde_json::Value::String(joined);
+        }
+        message
+    }
+    let messages_of = |request: &serde_json::Value| -> Vec<serde_json::Value> {
+        request["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(as_text)
+            .collect()
+    };
+    let planner = messages_of(&requests[1]);
+    let advisor = messages_of(&requests[2]);
+    assert!(
+        planner.len() > 2,
+        "the round held no earlier exchange, so a trimmed context would pass: {planner:?}"
+    );
+    assert_eq!(
+        advisor.len(),
+        planner.len() + 1,
+        "the advisor was sent more or less than the planner's request and the question"
+    );
+    for (at, (sent_to_planner, sent_to_advisor)) in planner.iter().zip(&advisor).enumerate() {
+        assert_eq!(
+            sent_to_advisor, sent_to_planner,
+            "message {at} of the advisor's context differs from the planner's"
+        );
+    }
+    assert!(
+        advisor[planner.len()]
+            .to_string()
+            .contains("which file should I read first?"),
+        "the closing message did not carry the question"
+    );
+}
+
 /// ADVISOR-4: what the advisor cost is part of what the turn cost, and the trail says which model
 /// was asked.
 #[test]
@@ -53671,6 +53735,56 @@ fn an_advisor_model_the_machine_refuses_is_not_asked() {
     );
 }
 
+/// ADVISOR-7: a stop while the advisor is being asked ends the turn as a stop anywhere else does,
+/// carrying the requests that were sent, and is not read back to the planner as a failed call.
+#[test]
+fn a_stop_while_the_advisor_is_asked_ends_the_turn_as_a_stop_with_what_it_sent() {
+    let scratch = Scratch::new("advisor-stop");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("advisor", AN_ADVISOR_CALL)),
+        Served::Status(503),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopping = cancel.clone();
+    let waiter = std::thread::spawn(move || {
+        for _ in 0..2 {
+            received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the planner's request and then the advisor's");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        stopping.cancel();
+        received
+    });
+    let error = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+    let received = waiter.join().expect("the waiter ran");
+    assert_eq!(
+        error.ending(),
+        bravebot_agent::Ending::Stopped { attempts: Some(1) }
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "the turn went on to ask again after the stop"
+    );
+}
+
 /// ADVISOR-4: once the planner's context has met content nobody vouched for, the advisor's reply is
 /// labelled by that context and the planner is given a reference rather than the text.
 #[test]
@@ -53702,6 +53816,20 @@ fn an_advisor_that_was_shown_untrusted_content_is_quarantined() {
     assert!(
         !last.contains("ADVICE-QUARANTINED"),
         "the planner was handed advice given over untrusted content: {last}"
+    );
+    // The call is answered with the sentence for a result the planner may not read, not with an
+    // error or with nothing: a build that drops the reply or fails the call would also keep the
+    // advice out of the request.
+    let last: serde_json::Value = serde_json::from_str(last).expect("a request");
+    let answered = last["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(message_words)
+        .any(|words| words.contains("Result of advisor could not be shown to you."));
+    assert!(
+        answered,
+        "the advice was not held back as a result the planner cannot read: {last}"
     );
 }
 
