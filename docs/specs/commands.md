@@ -490,6 +490,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
+`verified-by: bravebot_tui::app::enter_takes_a_skill_row_the_arrows_moved_onto_instead_of_the_typed_command`
 `verified-by: bravebot_tui::app::a_command_word_typed_in_full_still_offers_the_skills_extending_it`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
