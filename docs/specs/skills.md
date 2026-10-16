@@ -244,12 +244,17 @@ turn would offer is. Each skill records whether it was found in the project, in 
 directory or in this program, and one that shadowed another records where it was found, not where
 the one it shadowed was.
 
+The list draws names, descriptions and argument hints and loads no skill, so it does not list the
+files beside each skill. Everything else it reads is what a turn reads.
+
 **Why.** A list that found skills its own way would sooner or later name one the planner is never
 shown, and a skill in a project nobody trusts is exactly the one [SKILL-6](#SKILL-6) counts rather
 than names. Where it was found is what lets a person tell a skill of their own from one a checkout
-brought with it.
+brought with it. Walking every skill's directory for files only `load_skill` reads on each slash
+would make the list lag behind the keys.
 
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_agent::skills::the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
 
