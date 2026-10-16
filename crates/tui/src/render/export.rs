@@ -40,6 +40,7 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
 
     let plans = session.todos_by_turn();
     let turns = session.transcript_turns();
+    let running = session.a_turn_is_running().then_some(session.turns);
     let recorded: std::collections::BTreeMap<_, _> = session
         .turn_history()
         .iter()
@@ -63,6 +64,9 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                             }
                         };
                         out.push_str(&format!("**Outcome:** {outcome}\n\n"));
+                    }
+                    if running == Some(*turn) {
+                        out.push_str("**Outcome:** still running when exported\n\n");
                     }
                     if let Some(tokens) = session.spend_by_turn().get(turn) {
                         out.push_str(&format!("**Usage:** {tokens} tokens\n\n"));

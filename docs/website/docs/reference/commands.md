@@ -1031,6 +1031,12 @@ tree through a symlink is refused as well. Missing parent directories are create
 **Anything already at the path is refused rather than replaced**, a symlink whose target is missing
 included. The file is written readable by you alone, as the record it came from is.
 
+Typed while a turn runs, it writes the transcript as it stands and does not wait. A reply the turn is
+still writing is not in the file, and neither is a prompt waiting behind the turn. The prompt the turn
+is working on is marked `**Outcome:** still running when exported`. Without a path the file takes the
+session's default name, which an export after the turn then finds taken, so give that one a path of
+its own.
+
 ## `/copy [n]`
 
 Puts the latest reply on the clipboard, and `/copy 2` the one before it. What is copied is the
@@ -1208,7 +1214,7 @@ it and the picture or file goes with it.
 `/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
-key. The exception is a line of the same command already waiting, which they wait behind, so
+key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a

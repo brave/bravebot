@@ -209,7 +209,8 @@ struct Beside<'a> {
     /// The record the session is kept under. The turn is given only its id, and the record is
     /// written after the turn with whatever name the session has by then.
     stored: &'a mut bravebot_session::sessions::Handle,
-    /// The working directory, by name only: what `/forget-trust` withdraws is kept about it.
+    /// The working directory, by name only: what `/forget-trust` withdraws is kept about it, and
+    /// `/export` writes under it.
     root: &'a std::path::Path,
     /// Where that answer is kept, or `None` where the platform names nowhere.
     home: Option<&'a std::path::Path>,
@@ -274,6 +275,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
+        }),
+        Action::Export(path) => session.answer_while_working(|session| {
+            export_session(session, beside.stored, beside.root, path.as_deref());
         }),
         Action::ChooseModel => {
             session.answer_while_working(|session| open_model_picker(session, beside.config));
@@ -2603,7 +2607,14 @@ fn event_loop(
             Action::CopyReply(text) => copy_reply(held.session, &text, crate::clipboard::copy),
             Action::Paste => take_from_clipboard(held.session, crate::clipboard::paste()),
             Action::Edit => edit_prompt(terminal, held.session)?,
-            Action::Export(path) => held.export(path.as_deref()),
+            Action::Export(path) => {
+                export_session(
+                    held.session,
+                    held.stored,
+                    held.workspace.root(),
+                    path.as_deref(),
+                );
+            }
             Action::Undo => held.rewind_steps(1),
             Action::Rewind(turns) => held.rewind_command(&turns),
             Action::Hunks(argument) => held.hunks_command(&argument),
@@ -19168,6 +19179,7 @@ mod tests {
                 COPY_COMMAND,
                 COST_COMMAND,
                 EFFORT_COMMAND,
+                EXPORT_COMMAND,
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
@@ -19584,6 +19596,155 @@ mod tests {
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
+    }
+
+    /// A scratch directory for a transcript to be written into, with a record begun under it.
+    fn exporting_into(name: &str) -> (std::path::PathBuf, bravebot_session::sessions::Handle) {
+        let root = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        (root, stored)
+    }
+
+    /// SESSION-17. `/export` mid-turn writes the transcript as it stands when the line is typed.
+    /// The turn holds neither the transcript nor the name the file goes under, and the moment a
+    /// person wants the file is while the turn is still going. The file says its last prompt was
+    /// still running, neither the prompt waiting behind the turn nor the reply half written is in
+    /// it, and where it went is said under the turn without joining the transcript.
+    #[test]
+    fn export_typed_mid_turn_writes_the_transcript_as_it_stands() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = exporting_into("bravebot-app-export-mid-turn");
+        let mut session = a_turn_running_on("first");
+        session.narrate("read the parser");
+        session.streaming("a reply still being writ");
+        assert!(!session.reply_so_far().is_empty());
+        type_while_working(&mut session, "second");
+        let transcript = session.transcript.len();
+
+        typed_during_a_turn(
+            &mut session,
+            EXPORT_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root: &root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        let written = root.join(format!("bravebot-export-{}.md", stored.id()));
+        let text = std::fs::read_to_string(&written).expect("/export wrote nothing");
+        assert!(text.contains("## User\n\nfirst\n\n"), "{text}");
+        assert!(
+            text.contains("**Outcome:** still running when exported\n\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("## Assistant\n\nread the parser\n\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("second"),
+            "a waiting prompt was exported: {text}"
+        );
+        assert!(
+            !text.contains("still being writ"),
+            "a reply still being written was exported: {text}"
+        );
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(session_exported, path = written.display().to_string())]
+        );
+        assert_eq!(
+            session.transcript.len(),
+            transcript,
+            "/export wrote into the transcript of the turn in flight"
+        );
+        assert_eq!(waiting_prompts(&session), vec!["second"], "/export waited");
+        assert_eq!(session.input(), "", "/export was left in the box");
+    }
+
+    /// A path typed after `/export` is confined to the working directory whenever it is typed, so
+    /// one that leaves it is refused mid-turn as at rest, and the refusal is said under the turn.
+    #[test]
+    fn export_typed_mid_turn_refuses_a_path_outside_the_working_directory() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, mut stored) = exporting_into("bravebot-app-export-refused");
+        let _ = std::fs::remove_file(root.with_file_name("elsewhere.md"));
+        let mut session = a_turn_running_on("first");
+
+        typed_during_a_turn(
+            &mut session,
+            &format!("{EXPORT_COMMAND} ../elsewhere.md"),
+            key(KeyCode::Enter),
+            &mut Beside {
+                stored: &mut stored,
+                root: &root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert!(!root.with_file_name("elsewhere.md").exists());
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(
+                session_export_failed,
+                problem = "path must not contain '..' components"
+            )]
+        );
+    }
+
+    /// At rest the note joins the transcript, a name already taken is refused and said, and the
+    /// file that was there is left as it was.
+    #[test]
+    fn export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, stored) = exporting_into("bravebot-app-export-at-rest");
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "the answer");
+
+        export_session(&mut session, &stored, &root, Some("notes/chat.md"));
+
+        let written = root.join("notes/chat.md");
+        assert_eq!(
+            last_note(&session),
+            t!(session_exported, path = written.display().to_string())
+        );
+        let before = std::fs::read_to_string(&written).expect("the export");
+        assert!(before.contains("## Assistant\n\nthe answer"), "{before}");
+
+        answered(&mut session, "second", "another answer");
+        export_session(&mut session, &stored, &root, Some("notes/chat.md"));
+
+        assert_eq!(
+            last_note(&session),
+            t!(
+                session_export_failed,
+                problem = "'notes/chat.md' already exists"
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(&written).expect("the export"),
+            before
+        );
     }
 
     /// `/issue` and `/pr` as the event loop carries them out, at rest.
@@ -20695,6 +20856,8 @@ mod tests {
                 _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {
                     format!("{} no-such-name", command.name)
                 }
+                // Refused before anything is written, so no directory the fixture names is touched.
+                _ if command.name == EXPORT_COMMAND => format!("{} ../refused", command.name),
                 MidTurn::Runs | MidTurn::Changes | MidTurn::RunsUnlessItStarts => {
                     command.name.to_string()
                 }

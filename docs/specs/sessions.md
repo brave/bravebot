@@ -494,8 +494,15 @@ any local account on multi-user machines and shared hosts.
 is: `..`, a root and a drive prefix are refused, and containment is then tested against the
 canonical path of the deepest directory that exists, so a path leading through a symlink out of
 the tree is refused as well. Anything already at the path is refused rather than replaced, a
-symlink whose target is missing included. Missing parent directories are created. The file is
+symlink whose target is missing included, and the name is created exclusively as well, so one that
+appears after the check, as a turn writing in the directory can make it, is refused the same way.
+Missing parent directories are created. The file is
 written mode 0600, as SESSION-16 writes the record it came from.
+
+`/export` is carried out as it is typed while a turn runs ([CMD-8](commands.md#CMD-8)). The file holds
+the transcript as it stands then, and the prompt the turn is working on carries `**Outcome:** still
+running when exported` where a finished prompt carries its ending. Only the turn in flight is marked:
+a prompt whose record kept no ending is left without one, as below.
 
 Exporting after a resume retains each recorded prompt and safe failure reason, with failed and
 cancelled endings distinct and attached to the turn that produced them. Under each prompt, the
@@ -506,6 +513,9 @@ and how the turn ended rather than in place of any of them.
 
 `verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
+`verified-by: bravebot_tui::sessions::exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other`
+`verified-by: bravebot_tui::sessions::exporting_a_turn_with_no_recorded_ending_does_not_call_it_running`
+`verified-by: bravebot_tui::app::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
 
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise
@@ -519,6 +529,7 @@ be a way to write it anywhere.
 `verified-by: bravebot_session::sessions::exporting_refuses_a_path_through_a_symlinked_directory`
 `verified-by: bravebot_session::sessions::exporting_refuses_to_overwrite_an_existing_file`
 `verified-by: bravebot_session::sessions::exporting_refuses_a_path_that_is_a_dangling_symlink`
+`verified-by: bravebot_session::sessions::a_name_taken_after_the_check_is_refused_and_left_as_it_was`
 `verified-by: bravebot_session::sessions::an_exported_transcript_is_readable_only_by_its_owner`
 `verified-by: bravebot_session::sessions::exporting_creates_intermediate_directories`
 

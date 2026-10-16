@@ -317,6 +317,24 @@ pub(super) fn rename_session(
     }
 }
 
+/// Write the transcript as it stands to a markdown file under the working directory, and say where
+/// (SESSION-17).
+///
+/// Used at rest and while a turn runs, so a path is confined and a name already taken is refused the
+/// same way in both.
+pub(super) fn export_session(
+    session: &mut Session,
+    stored: &bravebot_session::sessions::Handle,
+    root: &std::path::Path,
+    path: Option<&str>,
+) {
+    let markdown = crate::render::as_markdown(session, stored.title());
+    match bravebot_session::sessions::export(root, stored.id(), path, &markdown) {
+        Ok(written) => session.note(t!(session_exported, path = written.display().to_string())),
+        Err(e) => session.note(t!(session_export_failed, problem = e.to_string())),
+    }
+}
+
 /// Add a note a person typed to the session record, or list the session's notes, and say so
 /// (SESSION-36).
 ///
