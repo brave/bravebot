@@ -2958,13 +2958,21 @@ lie outside every directory a confined stage may write.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
+- **A program named in a started program's arguments is resolved first.** A started program keeps bravebot's own
+  `PATH`, which can hold those directories, so an argument that names a program for it to start is
+  that program's absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux
+  is given `cat` that way ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a
+  directory the inhibitor is not started, and `/caffeinate` reports it as it does an inhibitor that
+  is not installed.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
 **Why.** A stage can write `.venv/bin/aws`, and an activated environment puts that directory first
 on `PATH`. The name `aws` then resolves to the stage's file, which bravebot starts outside any
 confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen what runs with
-the person's access, which the confinement exists to deny it.
+the person's access, which the confinement exists to deny it. A started program looks up a name in
+its own arguments through the `PATH` it inherited from bravebot, not through the lookup above.
+`systemd-inhibit` starts `cat` that way, so its argument is the resolved path and not the bare name.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -2987,6 +2995,8 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
+`verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::editor::an_editor_named_only_by_a_planted_file_is_not_found`
 `verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`

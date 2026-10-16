@@ -607,7 +607,11 @@ The inhibitor is a fixed argument vector, and only idle sleep is held off:
 |---|---|
 | macOS | `/usr/bin/caffeinate -i -w <this process's id>` |
 | Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
-| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block cat` |
+| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block <cat>`, `<cat>` being the absolute path of `cat` |
+
+`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, because `systemd-inhibit` starts it
+and would otherwise look the name up on the `PATH` it inherited. When no `cat` is found that way the
+inhibitor does not start.
 
 Each one's standard input is a pipe this process holds, and each ends the hold when this process
 ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
@@ -621,8 +625,9 @@ open. The screen still locks, but the machine stays up with whatever credentials
 command is off until a person has read that and asked for it a second time, which is where a person
 working under a device policy finds out whether it is allowed. A hold that could not be kept turns
 the command off, so nobody walks away from a machine they believe is held. Nothing from a model, a
-file or a setting reaches the argument vector, so the inhibitor is not a process running code we did
-not write ([sandboxing.md](sandboxing.md)).
+file or a setting reaches the argument vector, and the one program it names is resolved from
+directories no confined stage could have written, so the inhibitor is not a process running code we
+did not write ([sandboxing.md](sandboxing.md)).
 
 `verified-by: bravebot_tui::state::a_loop_waiting_for_its_next_tick_holds_the_machine_awake`
 `verified-by: bravebot_tui::state::a_turn_holds_the_machine_awake_until_it_ends`
@@ -637,6 +642,9 @@ not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::starting_a_program_that_does_not_exist_fails`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_that_ended_by_itself_is_reported`
 `verified-by: bravebot_tui::caffeinate::the_macos_inhibitor_holds_idle_sleep_for_this_process_alone`
+`verified-by: bravebot_tui::caffeinate::the_inhibitor_holds_idle_sleep_and_starts_the_cat_it_was_found_at_byte_for_byte`
+`verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Drafting the project's instructions
