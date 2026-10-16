@@ -13897,6 +13897,54 @@ mod tests {
         );
     }
 
+    /// ADVISOR-9: the session's choice is written nowhere, so a session resumed from its record
+    /// starts from the setting. A record that carried the choice, or a resume that brought it
+    /// back, would hold the advisor the person had only named for the earlier session.
+    #[test]
+    fn a_session_advisor_is_not_written_to_the_record_and_a_resume_starts_from_the_setting() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-advisor-not-recorded");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let mut config = a_config_needing_no_sign_in();
+        config.advisor_model = Some("the-settings-advisor".into());
+        let mut session = Session::new("none");
+        set_advisor(&mut session, &config, "opus");
+        let chosen = config.model_named("opus");
+        assert_eq!(session.advisor(), Some(chosen.as_str()));
+
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| stored.save("a session", standing),
+        );
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        let written = serde_json::to_string(&record).expect("a record serializes");
+        assert!(
+            !written.contains(&chosen),
+            "the session's advisor was written to its record: {written}"
+        );
+
+        let mut resumed = Session::new("none");
+        restore_resumed(&mut resumed, &config, &mut workspace, &record);
+        assert_eq!(resumed.advisor(), None, "a resume brought the advisor back");
+        assert_eq!(
+            with_session_advisor(Task::new("p"), &resumed).advisor,
+            None,
+            "the resumed turn would not be left to the setting"
+        );
+        assert_eq!(config.advisor().as_deref(), Some("the-settings-advisor"));
+    }
+
     /// A session that named no advisor leaves the turn to the setting rather than overriding it
     /// with nothing.
     #[test]

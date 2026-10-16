@@ -54415,6 +54415,53 @@ fn an_advisor_model_the_machine_refuses_is_not_asked() {
     );
 }
 
+/// ADVISOR-8: a model the setting names that the machine refuses does not stop the run or hide the
+/// tool; the refusal is answered when the planner calls, as ADVISOR-7 words it.
+#[test]
+fn a_refused_advisor_the_settings_name_is_answered_per_call_and_stops_nothing() {
+    let scratch = Scratch::new("advisor-setting-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let managed = scratch.path.join("managed.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["settings-advisor"]}}"#).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    config.advisor_model = Some("settings-advisor".into());
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("a refused setting model does not stop the run");
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    assert_eq!(
+        requests.len(),
+        2,
+        "planner, then planner; none to the advisor"
+    );
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the tool was withheld up front"
+    );
+    assert!(
+        requests[1]
+            .to_string()
+            .contains("do not allow the advisor model"),
+        "got: {}",
+        requests[1]
+    );
+}
+
 /// ADVISOR-7: a stop while the advisor is being asked ends the turn as a stop anywhere else does,
 /// carrying the requests that were sent, and is not read back to the planner as a failed call.
 #[test]
