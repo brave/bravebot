@@ -112,6 +112,26 @@ def test_a_worktree_goes_in_an_ignored_directory_of_the_clone_unless_a_directory
     assert "/.worktrees/" in gitignore.splitlines(), "git must ignore the default directory"
 
 
+def test_an_issue_is_named_by_number_or_by_its_url_and_has_a_worktree_of_its_own():
+    for arg in ("806", "#806", "https://github.com/brave/bravebot/issues/806#issuecomment-5"):
+        assert pr_worktree.issue_number(arg) == 806, arg
+    for arg in ("https://github.com/other/bravebot/issues/806", "https://github.com/brave/bravebot/pull/806", "main"):
+        code, _ = quietly(pr_worktree.issue_number, arg)
+        assert code == 1, arg
+    main = Path("/work/bravebot")
+    assert pr_worktree.worktree_path(main, 9, issue=True) == main / ".worktrees" / "issue-9"
+    with mock.patch.dict(os.environ, {pr_worktree.WORKTREES_ENV: "/elsewhere"}):
+        assert pr_worktree.worktree_path(main, 9, issue=True) == Path("/elsewhere/bravebot-issue-9")
+        assert pr_worktree.worktree_path(main, 9) == Path("/elsewhere/bravebot-9")
+
+
+def test_the_standard_worktree_of_a_pull_request_is_the_one_it_names_else_the_one_for_its_number():
+    main = Path("/work/bravebot")
+    named = SimpleNamespace(main=main, number=9, standard=Path("/chosen"))
+    assert pr_worktree.standard_path(named) == Path("/chosen")
+    assert pr_worktree.standard_path(SimpleNamespace(main=main, number=9)) == main / ".worktrees" / "pr-9"
+
+
 def test_a_pull_request_is_named_by_number_or_by_its_url():
     for arg in ("806", "#806", "https://github.com/brave/bravebot/pull/806/files"):
         assert pr_worktree.pr_number(arg) == 806, arg

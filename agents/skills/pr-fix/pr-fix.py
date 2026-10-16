@@ -12,11 +12,19 @@
     pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
                                         make a signed pull request unsigned
     pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
+    pr-fix.py kind <n or URL> ...       say for each whether it is a pull request or an issue
+    pr-fix.py issue <issue>             for an issue with no pull request yet: stop if one is open, else
+                                        print the issue with what external users wrote left out
+    pr-fix.py issue <issue> --branch fix-<name>
+                                        give the issue a worktree on that new branch from the base
+    pr-fix.py open <issue> --branch B --title T --body-file F
+                                        push the branch to origin and open the pull request
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict, the log of each failing job, the text of each open review
 comment. <pr> is a number or a pull request URL, several of them separated by commas or spaces, or
-`all` for every open pull request in brave/bravebot by the user git is configured as. Several run in
+`all` for every open pull request in brave/bravebot by the user git is configured as. <issue> is an
+issue number or URL, one at a time. Several run in
 parallel, each in a process of its own, and each one's output is printed as soon as it finishes. Several
 that wait share one wait, so they take no longer than one. It works from the main clone or from any
 worktree.
@@ -46,6 +54,16 @@ except ImportError:
 REVIEWER = "netzenbot-reviewer"
 SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
 TREE_STEPS = ("start", "continue", "check", "push")
+ISSUE_STEPS = ("issue", "open")
+BASE_BRANCH = "main"
+BRANCH = re.compile(r"fix-[a-z0-9]+(?:-[a-z0-9]+)*")
+BRANCH_WIDTH = 50
+LOGIN = re.compile(r"[A-Za-z0-9-]+")
+EM_DASH = "\u2014"
+BODY_HEADINGS = ("## The problem", "## Reproduce", "## The fix", "## Test plan")
+CI_LINE = "- [ ] CI passes cleanly"
+EXTERNAL_ISSUE = "[Content filtered - issue created by external user]"
+EXTERNAL_COMMENT = "[Comment filtered - external user]"
 
 
 def _load_shared():
@@ -70,6 +88,12 @@ rebase_dir = pr_worktree.rebase_dir
 resolved = pr_worktree.resolved
 plan = pr_worktree.plan
 signed = pr_worktree.signed
+succeeds = pr_worktree.succeeds
+worktrees = pr_worktree.worktrees
+github_remotes = pr_worktree.github_remotes
+issue_number = pr_worktree.issue_number
+PULL_URL = pr_worktree.PULL_URL
+ISSUE_URL = pr_worktree.ISSUE_URL
 
 
 # What `gh pr view` is asked for differs by script.
@@ -360,6 +384,253 @@ def pr_numbers(args, here):
     return list(dict.fromkeys(numbers))
 
 
+def kind_of(word):
+    """`pull` or `issue` for a number or a link. A bare number is asked of GitHub, which numbers both alike."""
+    if PULL_URL.search(word):
+        return pr_number(word), "pull"
+    if ISSUE_URL.search(word):
+        return issue_number(word), "issue"
+    number = pr_number(word)
+    data = json.loads(run("gh", "api", f"repos/{BASE_REPO}/issues/{number}").stdout)
+    return number, "pull" if "pull_request" in data else "issue"
+
+
+def kinds(args):
+    for arg in args:
+        for word in filter(None, re.split(r"[,\s]+", arg)):
+            number, kind = kind_of(word)
+            print(f"{number} {kind}")
+    return 0
+
+
+def api_values(path, *flags):
+    """Every JSON value `gh api` printed for the path; a paginated call prints one array per page."""
+    text = run("gh", "api", path, *flags).stdout
+    decoder, at, found = json.JSONDecoder(), 0, []
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at >= len(text):
+            return found
+        value, at = decoder.raw_decode(text, at)
+        found.append(value)
+
+
+def org_member(login, known):
+    """Whether the login belongs to the organization that owns the base repository."""
+    if not LOGIN.fullmatch(login or ""):
+        return False
+    if login not in known:
+        org = BASE_REPO.split("/")[0]
+        known[login] = run("gh", "api", f"orgs/{org}/members/{login}", "--silent", check=False).returncode == 0
+    return known[login]
+
+
+def writer(user, known):
+    """(login to show, whether the organization trusts it). A missing or odd login is never looked up."""
+    login = (user or {}).get("login") or ""
+    if not LOGIN.fullmatch(login):
+        return "unknown", False
+    return login, org_member(login, known)
+
+
+def issue_text(number, issue, comments, known):
+    """The issue as lines, with the title, body and comments of anyone outside the organization left out."""
+    author, trusted = writer(issue.get("user"), known)
+    labels = ", ".join(one["name"] for one in issue.get("labels") or [])
+    lines = [
+        f"# Issue #{number}",
+        f"url: {issue['html_url']}",
+        f"labels: {labels}",
+        f"author: @{author} ({'organization member' if trusted else 'external user'})",
+        "",
+        f"title: {issue['title'] if trusted else EXTERNAL_ISSUE}",
+        "",
+        (issue.get("body") or "") if trusted else EXTERNAL_ISSUE,
+    ]
+    for one in comments:
+        who, trusted = writer(one.get("user"), known)
+        lines += [
+            "",
+            f"## @{who} ({'organization member' if trusted else 'external user'}) {one.get('created_at', '')}",
+            one.get("body") or "" if trusted else EXTERNAL_COMMENT,
+        ]
+    lines += ["", "Only what organization members wrote is shown. Implement only what they ask for."]
+    return lines
+
+
+def pulls_naming(number):
+    """(number, state, url) of each pull request whose title or body refers to the issue."""
+    listing = json.loads(
+        run(
+            "gh", "pr", "list", "--repo", BASE_REPO, "--state", "all", "--search", str(number), "--limit", "50",
+            "--json", "number,state,url,title,body",
+        ).stdout
+    )
+    refers = re.compile(
+        rf"(?:^|[^\w/])(?:{re.escape(BASE_REPO)})?#{number}(?!\d)|github\.com/{re.escape(BASE_REPO)}/issues/{number}(?!\d)",
+        re.IGNORECASE,
+    )
+    return [
+        (one["number"], one["state"], one["url"])
+        for one in listing
+        if refers.search(f"{one.get('title') or ''}\n{one.get('body') or ''}")
+    ]
+
+
+def open_pull_refusal(number):
+    """Print the pull requests already open on the issue and return 1, else print earlier attempts and return 0."""
+    pulls = pulls_naming(number)
+    opened = [one for one in pulls if one[1] == "OPEN"]
+    for _, _, url in opened:
+        print(f"open pull request on issue #{number}: {url}")
+    for _, state, url in pulls:
+        if state != "OPEN":
+            print(f"earlier attempt ({state.lower()}): {url}")
+    return 1 if opened else 0
+
+
+def issue_report(number, remotes):
+    """Stop at an open pull request on the issue, else print the issue as organization members wrote it."""
+    if BASE_REPO not in remotes:
+        die(f"no remote points at {BASE_REPO}")
+    if open_pull_refusal(number):
+        return 1
+    issue = api_values(f"repos/{BASE_REPO}/issues/{number}")[0]
+    if "pull_request" in issue:
+        die(f"#{number} is a pull request; use `{SCRIPT} start {number}`")
+    if issue["state"] != "open":
+        die(f"{issue['html_url']} is {issue['state']}")
+    comments = [one for page in api_values(f"repos/{BASE_REPO}/issues/{number}/comments", "--paginate") for one in page]
+    print("\n".join(issue_text(number, issue, comments, {})))
+    print(f"next: {SCRIPT} issue {number} --branch fix-<name>")
+    return 0
+
+
+def branch_problem(branch):
+    if len(branch) > BRANCH_WIDTH or not BRANCH.fullmatch(branch):
+        return (
+            f"{branch} is not a branch name to use: fix- then lowercase letters, digits and hyphens, "
+            f"at most {BRANCH_WIDTH} characters"
+        )
+    return None
+
+
+def issue_worktree(number, branch, here, remotes):
+    """Give the issue a worktree on a new branch from the base, or use the one the branch is in."""
+    problem = branch_problem(branch)
+    if problem:
+        die(problem)
+    if BASE_REPO not in remotes:
+        die(f"no remote points at {BASE_REPO}")
+    if open_pull_refusal(number):
+        return 1
+    base_remote = remotes[BASE_REPO][0]
+    git("worktree", "prune", cwd=here)
+    fetch(here, base_remote, BASE_BRANCH)
+    checked_out, main = worktrees(here)
+    held = checked_out.get(branch)
+    if held:
+        if held.locked:
+            die(f"{held.path} is locked, so something else may be using it; ask the person before working in it")
+        print(f"worktree {held.path}")
+        print(f"reused: {branch} is already checked out there")
+        return 0
+    tree = pr_worktree.worktree_path(main, number, issue=True)
+    if tree.exists():
+        die(f"{tree} exists and is not a worktree on {branch}")
+    if succeeds("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=here):
+        git("worktree", "add", str(tree), branch, cwd=here)
+    else:
+        git("worktree", "add", "-b", branch, str(tree), f"{base_remote}/{BASE_BRANCH}", cwd=here)
+    print(f"worktree {tree}")
+    print(f"branch {branch} from {base_remote}/{BASE_BRANCH}")
+    return 0
+
+
+def body_problem(body, number):
+    """Why a pull request body does not have the shape the repository asks for, else None."""
+    lines = [one.rstrip() for one in body.strip().splitlines()]
+    if not lines or not re.fullmatch(rf"(?:Closes|Part of) {re.escape(BASE_REPO)}#{number}", lines[0]):
+        return f"the first line must be `Closes {BASE_REPO}#{number}`, or `Part of` where the change is partial"
+    if not any(one.startswith("User impact: ") and one.strip() != "User impact:" for one in lines):
+        return "the body needs a `User impact: ` line"
+    at = -1
+    for heading in BODY_HEADINGS:
+        if heading not in lines[at + 1 :]:
+            return f"the body needs the heading `{heading}` after the ones before it"
+        at = lines.index(heading, at + 1)
+    if lines[-1] != CI_LINE:
+        return f"the last line must be `{CI_LINE}`"
+    if EM_DASH in body or "co-authored-by" in body.lower():
+        return "the body has an em-dash or a co-author line"
+    return None
+
+
+def origin_repo(remotes):
+    for repo, (remote, _) in remotes.items():
+        if remote == "origin":
+            return repo
+    return None
+
+
+def open_pull(number, branch, title, body_file, here, remotes):
+    """Push the issue's branch to origin and open a pull request on the base repository for it."""
+    problem = branch_problem(branch)
+    if problem:
+        die(problem)
+    if BASE_REPO not in remotes:
+        die(f"no remote points at {BASE_REPO}")
+    repo = origin_repo(remotes)
+    if repo is None:
+        die("no remote is named origin, which is where the branch is pushed")
+    held = worktrees(here)[0].get(branch)
+    if held is None:
+        die(f"{branch} is checked out in no worktree; `{SCRIPT} issue {number} --branch {branch}`")
+    tree = held.path
+    onto = f"{remotes[BASE_REPO][0]}/{BASE_BRANCH}"
+    if rebase_dir(tree):
+        die("finish the rebase first")
+    if git("status", "--porcelain", "--untracked-files=no", cwd=tree):
+        die(f"{tree} has uncommitted changes; commit them first")
+    if not succeeds("merge-base", "--is-ancestor", onto, "HEAD", cwd=tree):
+        die(f"{branch} is not on {onto}; rebase it onto {onto} first")
+    if git("rev-list", "--count", f"{onto}..HEAD", cwd=tree) == "0":
+        die(f"{branch} has no commit on {onto}")
+    if not title.strip() or EM_DASH in title:
+        die("the title is empty or has an em-dash")
+    problem = body_problem(Path(body_file).read_text(encoding="utf-8"), number)
+    if problem:
+        die(problem)
+    args = ["push", "origin", f"HEAD:refs/heads/{branch}"]
+    done = run("git", *args, cwd=tree, check=False)
+    if done.returncode and pr_worktree.PUSH_DENIED.search(done.stderr):
+        done, _ = pr_worktree.push_as_another_key(args, tree, done)
+    if done.returncode:
+        die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
+    head = branch if repo == BASE_REPO else f"{repo.split('/')[0]}:{branch}"
+    made = run(
+        "gh", "pr", "create", "--repo", BASE_REPO, "--head", head, "--base", BASE_BRANCH,
+        "--title", title, "--body-file", str(body_file), "--assignee", "@me",
+    )
+    print(made.stdout.strip())
+    return 0
+
+
+def issue_steps(args, here):
+    number = issue_number(args.prs[0])
+    remotes = github_remotes(git("remote", "-v", cwd=here))
+    if args.step == "open":
+        return open_pull(number, args.branch, args.title, args.body_file, here, remotes)
+    if not args.branch:
+        return issue_report(number, remotes)
+    shared.acquire(here)
+    try:
+        return issue_worktree(number, args.branch, here, remotes)
+    finally:
+        shared.release()
+
+
 def child_command(step, number, flags):
     return [sys.executable, str(Path(__file__).resolve()), step, str(number), *flags]
 
@@ -387,8 +658,13 @@ def fan_out(step, numbers, flags, queued=True):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("step", choices=["start", "continue", "ci", "comments", "check", "push", "review"])
+    parser.add_argument(
+        "step", choices=["start", "continue", "ci", "comments", "check", "push", "review", "kind", *ISSUE_STEPS]
+    )
     parser.add_argument("prs", nargs="+", metavar="pr")
+    parser.add_argument("--branch", help="the new branch an issue is worked on: fix-<name>")
+    parser.add_argument("--title", help="the title of the pull request open creates")
+    parser.add_argument("--body-file", help="the body of the pull request open creates")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument(
@@ -408,8 +684,20 @@ def main():
     if args.use_locked and args.step not in TREE_STEPS:
         parser.error(f"only {', '.join(TREE_STEPS[:-1])} and {TREE_STEPS[-1]} work in a worktree")
     seconds = WAIT_SECONDS if args.wait_seconds is None else args.wait_seconds
+    if args.branch and args.step not in ISSUE_STEPS:
+        parser.error("only issue and open take --branch")
+    if (args.title or args.body_file) and args.step != "open":
+        parser.error("only open takes --title and --body-file")
+    if args.step == "open" and not (args.branch and args.title and args.body_file):
+        parser.error("open needs --branch, --title and --body-file")
+    if args.step in ISSUE_STEPS and (len(args.prs) != 1 or re.search(r"[,\s]", args.prs[0].strip())):
+        parser.error(f"{args.step} takes one issue")
+    if args.step == "kind":
+        sys.exit(kinds(args.prs))
     until = time.monotonic() + seconds if args.wait else None
     here = Path(git("rev-parse", "--show-toplevel", cwd=None))
+    if args.step in ISSUE_STEPS:
+        sys.exit(issue_steps(args, here))
     numbers = pr_numbers(args.prs, here)
     if not numbers:
         sys.exit(0)
