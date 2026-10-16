@@ -53,7 +53,8 @@ pub(super) struct Reminded {
     /// that tried to deliver, and telling it to start delivering would be answering something
     /// nobody asked.
     pub(super) nothing_written: bool,
-    /// Whether it has said that files changed and nothing was run.
+    /// Set once the reminder that files changed and nothing was run has been put, so it is said once
+    /// a turn and a planner that keeps not running anything is not nagged every round.
     pub(super) nothing_run: bool,
 }
 
@@ -305,7 +306,8 @@ pub(super) enum Recovery {
 /// what stops a model with nothing to say from costing a request per round.
 #[derive(Default)]
 pub(super) struct Retries {
-    /// Whether the turn moved to the person's fallback model.
+    /// Set once the turn has moved to the fallback model, so the move happens once, and so that
+    /// the model that answered is not compared with the session's, which is the one that failed.
     pub(super) fell_back: bool,
     /// Whether a request the service refused has already been answered with a compaction this turn
     /// (COMPACT-14). Once, and not reset: a second refusal is the turn's failure.
