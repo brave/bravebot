@@ -689,8 +689,8 @@ mod tests {
         let session = parent.join("work");
         let held = parent.join("held");
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary =
-            std::env::temp_dir().join(format!("bravebot-programs-restrict-{}", std::process::id()));
+        let shared = std::env::temp_dir();
+        let temporary = shared.join(format!("bravebot-programs-restrict-{}", std::process::id()));
         let elsewhere = scratch_dir("programs-restrict-elsewhere");
         let linked = elsewhere.join("bin");
         std::fs::create_dir_all(session.join("bin")).unwrap();
