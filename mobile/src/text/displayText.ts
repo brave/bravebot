@@ -10,6 +10,8 @@ export interface TextSegment {
 
 // Cf, Zl and Zp beyond C1, plus the other characters that draw as nothing or as a blank (U+034F, the
 // Hangul and Khmer fillers, the Mongolian and standard variation selectors, blank braille), as inclusive ranges.
+// The joiner (U+200D) and the variation selectors (U+FE00-FE0F) are escaped even inside an emoji sequence, so such a
+// sequence shows them written out. They can also hide text, and a person approving something needs to see them.
 const HIDDEN: readonly (readonly [number, number])[] = [
   [0x00ad, 0x00ad], [0x034f, 0x034f], [0x0600, 0x0605], [0x061c, 0x061c], [0x06dd, 0x06dd], [0x070f, 0x070f],
   [0x0890, 0x0891], [0x08e2, 0x08e2], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180b, 0x180f], [0x200b, 0x200f], [0x2028, 0x202e],

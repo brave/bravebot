@@ -39,6 +39,11 @@ describe('display escaping', () => {
     expect(displayString('שלום 123 \u{1F600}')).toBe('שלום 123 \u{1F600}')
   })
 
+  it('writes out the joiner and variation selector of an emoji sequence, because they can hide text too', () => {
+    const escaped = displaySegments('\u2764\uFE0F \u{1F468}\u200D\u{1F469}').filter((segment) => segment.escaped).map((segment) => segment.text)
+    expect(escaped).toEqual(['U+FE0F', 'U+200D'])
+  })
+
   it('does not let text that looks like an escape pass as one', () => {
     const [segment] = displaySegments('U+202E')
     expect(segment).toEqual({ text: 'U+202E', escaped: false })
