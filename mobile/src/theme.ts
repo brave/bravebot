@@ -44,7 +44,6 @@ const dark: Theme = {
   },
 }
 
-// Leo spacing: s 4, m 8, l 12, xl 16, 2xl 24.
 export const space = { s: 4, m: 8, l: 12, xl: 16, xxl: 24 } as const
 // Leo radius: s 4, m 8, l 12, xl 16, xxl 24, full.
 export const radius = { chip: 4, control: 8, card: 12, field: 16, bubble: 24, pill: 999 } as const

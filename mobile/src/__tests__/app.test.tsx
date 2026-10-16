@@ -2,6 +2,7 @@ import App from '../App'
 import { allText, byTestId, has, isDisabled, render, textOf } from './helpers'
 
 describe('the app with no target', () => {
+  // A build with no target must not look like a working session, so nothing that starts or reviews one is offered.
   it('shows a blank slate that says nothing is connected and offers nothing to start', async () => {
     const tree = await render(<App />)
     expect(has(tree, 'no-target')).toBe(true)
@@ -11,6 +12,7 @@ describe('the app with no target', () => {
     }
   })
 
+  // A disabled control with no explanation reads as broken, so the composer says why it cannot be used.
   it('has a composer that is disabled and says why', async () => {
     const tree = await render(<App />)
     expect(byTestId(tree, 'composer-input').props.editable).toBe(false)

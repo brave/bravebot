@@ -59,4 +59,4 @@ The unverified rows are the gap Q5 keeps open. Closing it means pinning checksum
 
 ## Checks
 
-`make check-npm` lints `mobile/pnpm-lock.yaml` and checks it against `package.json`. `make check-mobile` type-checks and tests the app. `contrib/affected-checks.py` maps `mobile/` to the front-end job, which runs both. `.github/CODEOWNERS` covers the manifest, lockfile, Metro and Babel configuration, and the Gradle and Xcode project entry points. Native builds are not in CI.
+`make check-npm` lints `mobile/pnpm-lock.yaml` and checks it against `package.json`. `make check-mobile` type-checks and tests the app. `contrib/affected-checks.py` gives a change under `mobile/` the `mobile` area, which runs `check-mobile` in the `Mobile app` job, and also the `npm` area when the change is to `package.json` or a lockfile, which runs `check-npm`. `.github/CODEOWNERS` covers the manifest, lockfile, Metro and Babel configuration, and the Gradle and Xcode project entry points. Native builds are not in CI.
