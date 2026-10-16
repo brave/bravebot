@@ -77,6 +77,7 @@ These are not accepted risks or implementation details that can be skipped. The 
   Existing CLI/TUI marking helpers inspect text and produce terminal output; importing them into
   bridge dispatch would violate its boundary. Extract a narrow allowed presentation module or
   crate when the first rendering caller needs shared transforms, with its layering entry and tests.
+- **First rendering caller:** the mobile app renders released content before any Rust binding exists. It shows content as plain text with its label and escapes control, format, separator and bidirectional characters with a TypeScript function named and documented as a placeholder (`mobile/src/text/displayText.ts`). It is display-only. The app cannot call the Rust implementation until the stage-2b binding exists, so the shared helper, its layering entry and its tests arrive with that caller, in a narrow allowed presentation module chosen then. Until it does the TypeScript function is the only copy outside the Rust renderers, and a change to either is checked against the other. See [the app's rendering rules](app-shell.md#rendering-untrusted-text).
 - **Remaining:** native rendering and marking. See [implemented scope](client-contract.md#implemented-typescript-client).
   The TypeScript client library carries payloads as received and reads none of them. Its terminal
   program escapes control, zero-width and bidirectional characters locally in a diagnostic dump and renders
