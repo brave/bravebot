@@ -201,9 +201,10 @@ are several.
    `## Reproduce`, `## The fix` and `## Test plan`. The test plan lists the commands actually run as
    checked boxes, says which plausible regression the tests reject, and ends with the line
    `- [ ] CI passes cleanly`. Then
-   `... open <n> --branch fix-<kebab-name> --title <title> --body-file <file>` checks that the
+   `... open <n> --title <title> --body-file <file>` checks that the
    worktree is clean and on `upstream/main` and that the title and body have that shape, pushes the
-   branch to `origin` and opens the pull request on brave/bravebot. The pull request is not a draft,
+   branch in `.worktrees/issue-<n>` to `origin` and opens the pull request on brave/bravebot. Add
+   `--branch fix-<kebab-name>` only when step 2 reused a branch checked out in another worktree. The pull request is not a draft,
    has no labels, is assigned to `@me`, and is never merged by this skill.
 7. Continue with `... review <pr>` and `... ci <pr> --wait` for the new pull request, using the
    number `open` printed, and the steps above if a check fails.

@@ -17,8 +17,10 @@
                                         print the issue with what external users wrote left out
     pr-fix.py issue <issue> --branch fix-<name>
                                         give the issue a worktree on that new branch from the base
-    pr-fix.py open <issue> --branch B --title T --body-file F
-                                        push the branch to origin and open the pull request
+    pr-fix.py open <issue> --title T --body-file F [--branch B]
+                                        push the issue's branch to origin and open the pull request;
+                                        the branch is the one in the issue's worktree, and --branch
+                                        names it when it was reused from another worktree
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict, the log of each failing job, the text of each open review
@@ -574,17 +576,37 @@ def origin_repo(remotes):
     return None
 
 
+def issue_branch(checked_out, main, number):
+    """The branch checked out in the issue's own worktree, else None."""
+    tree = pr_worktree.worktree_path(main, number, issue=True)
+    for branch, held in checked_out.items():
+        if pr_worktree.same_place(held.path, tree):
+            return branch
+    return None
+
+
 def open_pull(number, branch, title, body_file, here, remotes):
-    """Push the issue's branch to origin and open a pull request on the base repository for it."""
-    problem = branch_problem(branch)
-    if problem:
-        die(problem)
+    """Push the issue's branch to origin and open a pull request on the base repository for it.
+
+    Without a branch it is the one in the issue's worktree, which `issue --branch` made.
+    """
     if BASE_REPO not in remotes:
         die(f"no remote points at {BASE_REPO}")
     repo = origin_repo(remotes)
     if repo is None:
         die("no remote is named origin, which is where the branch is pushed")
-    held = worktrees(here)[0].get(branch)
+    checked_out, main = worktrees(here)
+    if branch is None:
+        branch = issue_branch(checked_out, main, number)
+        if branch is None:
+            die(
+                f"no worktree for issue #{number}; `{SCRIPT} issue {number} --branch fix-<name>` makes one, "
+                f"or pass --branch for a branch checked out in another worktree"
+            )
+    problem = branch_problem(branch)
+    if problem:
+        die(problem)
+    held = checked_out.get(branch)
     if held is None:
         die(f"{branch} is checked out in no worktree; `{SCRIPT} issue {number} --branch {branch}`")
     tree = held.path
@@ -662,7 +684,7 @@ def main():
         "step", choices=["start", "continue", "ci", "comments", "check", "push", "review", "kind", *ISSUE_STEPS]
     )
     parser.add_argument("prs", nargs="+", metavar="pr")
-    parser.add_argument("--branch", help="the new branch an issue is worked on: fix-<name>")
+    parser.add_argument("--branch", help="the branch an issue is worked on: fix-<name>; open reads it from the issue's worktree without it")
     parser.add_argument("--title", help="the title of the pull request open creates")
     parser.add_argument("--body-file", help="the body of the pull request open creates")
     parser.add_argument("--target", action="append", default=[], help="a make target for check to run")
@@ -688,8 +710,8 @@ def main():
         parser.error("only issue and open take --branch")
     if (args.title or args.body_file) and args.step != "open":
         parser.error("only open takes --title and --body-file")
-    if args.step == "open" and not (args.branch and args.title and args.body_file):
-        parser.error("open needs --branch, --title and --body-file")
+    if args.step == "open" and not (args.title and args.body_file):
+        parser.error("open needs --title and --body-file")
     if args.step in ISSUE_STEPS and (len(args.prs) != 1 or re.search(r"[,\s]", args.prs[0].strip())):
         parser.error(f"{args.step} takes one issue")
     if args.step == "kind":

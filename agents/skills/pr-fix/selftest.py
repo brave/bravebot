@@ -1024,11 +1024,84 @@ def test_a_branch_is_pushed_to_origin_and_the_pull_request_opened_on_brave_brave
         assert "--draft" not in create and "--label" not in create, create
 
 
+def test_an_issue_worktree_that_is_locked_is_refused_until_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        tree = clone / ".worktrees" / "issue-5"
+        git("worktree", "add", "-q", "-b", "fix-thing", str(tree), "upstream/main", cwd=clone)
+        git("worktree", "lock", "--reason", "build running", str(tree), cwd=clone)
+        _, patched = gh_calls(lambda args: "[]")
+        with patched:
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+        assert code == 1 and f"{tree} is locked" in out and "ask the person" in out, out
+        assert "reused:" not in out, "a locked worktree is not offered as the one to use"
+
+
+def test_open_refuses_what_it_cannot_push_from_before_it_touches_anything():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        seen, patched = gh_calls(lambda args: "[]")
+        with patched:
+            code, out = quietly(pr_fix.open_pull, 5, "fix-thing", "t", body, clone, {"brave/bravebot": remotes["brave/bravebot"]})
+            assert code == 1 and "no remote is named origin" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, "fix-thing", "t", body, clone, {"someone/bravebot": remotes["someone/bravebot"]})
+            assert code == 1 and "no remote points at brave/bravebot" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, "fix-nowhere", "t", body, clone, remotes)
+            assert code == 1 and "fix-nowhere is checked out in no worktree" in out, out
+
+            old = root / "old"
+            git("fetch", "-q", "upstream", cwd=clone)
+            git("worktree", "add", "-q", "-b", "fix-old", str(old), "upstream/main~1", cwd=clone)
+            code, out = quietly(pr_fix.open_pull, 5, "fix-old", "t", body, clone, remotes)
+            assert code == 1 and "fix-old is not on upstream/main" in out, out
+        assert not any(call[1:3] == ("pr", "create") for call in seen), "nothing is opened after a refusal"
+        assert not pr_fix.succeeds("rev-parse", "--verify", "--quiet", "refs/heads/fix-old", cwd=root / "fork.git"), "nothing is pushed"
+
+
+def test_open_reads_the_branch_from_the_issue_worktree_when_it_is_not_given():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        seen, patched = gh_calls(
+            lambda args: "[]" if args[1] == "pr" and args[2] == "list" else "https://github.com/brave/bravebot/pull/30\n"
+        )
+        with patched:
+            code, out = quietly(pr_fix.open_pull, 5, None, "Fix the thing", body, clone, remotes)
+            assert code == 1 and "no worktree for issue #5" in out and "issue 5 --branch fix-<name>" in out, out
+
+            elsewhere = root / "elsewhere"
+            git("worktree", "add", "-q", "-b", "fix-other", str(elsewhere), "upstream/main", cwd=clone)
+            code, out = quietly(pr_fix.open_pull, 5, None, "Fix the thing", body, clone, remotes)
+            assert code == 1 and "no worktree for issue #5" in out, "a branch in another worktree is not guessed"
+
+            quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+            tree = clone / ".worktrees" / "issue-5"
+            (tree / "b.txt").write_text("fix\n")
+            git("add", "b.txt", cwd=tree)
+            git("commit", "-q", "-m", "fix the thing", cwd=tree)
+            code, out = quietly(pr_fix.open_pull, 5, None, "Fix the thing", body, clone, remotes)
+            assert code == 0 and "pull/30" in out, out
+        assert git("rev-parse", "fix-thing", cwd=root / "fork.git") == git("rev-parse", "HEAD", cwd=tree)
+        create = next(call for call in seen if call[1:3] == ("pr", "create"))
+        assert create[create.index("--head") + 1] == "someone:fix-thing", create
+
+
 def test_the_issue_steps_take_one_issue_and_only_open_takes_a_title_and_a_body():
     with in_a_git_directory():
         for argv, said in (
             (["issue", "1,2"], "issue takes one issue"),
-            (["open", "1", "--branch", "fix-a"], "open needs --branch, --title and --body-file"),
+            (["open", "1", "--branch", "fix-a"], "open needs --title and --body-file"),
             (["ci", "1", "--branch", "fix-a"], "only issue and open take --branch"),
             (["issue", "1", "--title", "t"], "only open takes --title and --body-file"),
         ):
