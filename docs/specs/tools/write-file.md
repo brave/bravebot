@@ -36,6 +36,7 @@ still had to be endorsed on its own.
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
 `verified-by: bravebot_agent::turn::a_write_that_names_two_bodies_or_none_is_refused`
 `verified-by: bravebot_agent::turn::a_write_with_blank_references_beside_its_path_and_contents_goes_through`
+`verified-by: bravebot_agent::turn::a_blank_contents_is_the_body_and_writes_an_empty_file`
 
 <a id="WRITE-2"></a>
 ### WRITE-2: a reference that names no file is not a destination

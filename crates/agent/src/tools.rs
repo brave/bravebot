@@ -17165,6 +17165,70 @@ mod tests {
                 "a delegate was offered a way to arm a watch"
             );
         }
+
+        /// A planner can name a tool it was never offered, and a call that quietly worked would arm
+        /// a watch whose fire nobody is there to read, so a delegate and a surface that keeps no
+        /// watches are answered as an unknown name at dispatch and arm nothing. The first case is
+        /// the control: without it an implementation that refused every call would pass. For a
+        /// surface that keeps no watches the dispatch arm and `watch_file` itself both refuse, so
+        /// that case fails only when both are removed.
+        #[test]
+        fn a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name()
+         {
+            let scratch = Scratch::new("dispatch");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "1",
+                "function": {
+                    "name": "watch_file",
+                    "arguments": r#"{"path": "a.txt"}"#,
+                }
+            }))
+            .expect("a call");
+
+            for (arming, delegated, refused) in [
+                (Arming::Allowed { free: 8 }, false, false),
+                (Arming::Allowed { free: 8 }, true, true),
+                (Arming::Unavailable, false, true),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "tell me when a file changes");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+
+                let output = super::arguments::with_tools(&workspace, |tools| {
+                    tools.arming = arming;
+                    tools.delegated = delegated;
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let told = super::arguments::told(&mut policy, &output.text);
+
+                assert_eq!(
+                    told == "error: no such tool 'watch_file'",
+                    refused,
+                    "{arming:?}, delegated {delegated}: {told}"
+                );
+                assert_eq!(
+                    output.watch.is_none(),
+                    refused,
+                    "{arming:?}, delegated {delegated}: a watch was armed anyway"
+                );
+            }
+        }
     }
 
     /// SCHED-6: a delegate is offered no `schedule_next`, so the descriptions it receives must not

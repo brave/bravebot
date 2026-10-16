@@ -92,6 +92,7 @@ field turning one sentence into an unbounded number of runs is worth a bound.
 `verified-by: bravebot_agent::turn::one_call_can_fan_a_task_out_over_several_delegates`
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
+`verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away

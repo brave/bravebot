@@ -207,6 +207,7 @@ the calendar, written `YYYY-MM-DD`, is refused with the form it takes.
 `verified-by: bravebot_agent::turn::since_and_until_are_whole_days_and_anything_else_is_refused`
 `verified-by: bravebot_agent::git::since_and_until_bound_the_log_by_whole_days`
 `verified-by: bravebot_agent::git::only_a_real_calendar_day_is_read_as_one`
+`verified-by: bravebot_agent::turn::since_and_until_include_the_first_and_last_second_of_their_day`
 
 <a id="GIT-7"></a>
 ### GIT-7: a git run whose output is sealed names read_git

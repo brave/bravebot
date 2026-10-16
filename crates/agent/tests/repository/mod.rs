@@ -4,6 +4,11 @@
 /// 2023-11-14 22:13:20 UTC. A path with a `/` is placed in a directory. Called again on the same
 /// root, it commits on top of `main`, at the same moment.
 pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &str) {
+    commit_files_at(root, files, message, 1_700_000_000);
+}
+
+/// The same, made at `time`, in seconds since the epoch.
+pub fn commit_files_at(root: &std::path::Path, files: &[(&str, &str)], message: &str, time: i64) {
     use gix_object::Write as _;
 
     fn tree(store: &gix_odb::loose::Store, files: &[(&str, &str)]) -> gix_hash::ObjectId {
@@ -63,8 +68,8 @@ pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &st
         .write_buf(
             gix_object::Kind::Commit,
             format!(
-                "tree {}\n{parent}author A U Thor <author@example.com> 1700000000 +0000\n\
-                 committer C O Mitter <committer@example.com> 1700000000 +0000\n\n{message}\n",
+                "tree {}\n{parent}author A U Thor <author@example.com> {time} +0000\n\
+                 committer C O Mitter <committer@example.com> {time} +0000\n\n{message}\n",
                 tree.to_hex()
             )
             .as_bytes(),

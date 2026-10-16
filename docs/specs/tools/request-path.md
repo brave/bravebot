@@ -31,6 +31,7 @@ other. A call without a path is answered with an error and asks nobody.
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
+`verified-by: bravebot_agent::turn::a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody`
 
 <a id="PATHREQ-2"></a>
 ### PATHREQ-2: only a yes grants, and a run with nobody to ask refuses
@@ -100,6 +101,7 @@ The tool is in the set no delegate is offered, and a call naming it anyway is an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
 ### PATHREQ-7: a yes does not reach the file tools, except where the mode that answers every question gave it
