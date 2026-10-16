@@ -2233,6 +2233,41 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
 }
 
+/// What a third-party service is sent is the shape it documents. A roster request that named this
+/// product would tell a gateway something it cannot act on, and the header is the one thing Brave's
+/// own listing carries that a gateway's must not, whether or not a credential goes with it.
+#[test]
+fn a_gateways_roster_request_carries_no_brave_product_header() {
+    for token in [None, Some("a-token")] {
+        let (endpoint, received) = serve(GATEWAY_ROSTER);
+        let provider = gateway_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+            .expect("the roster was fetched");
+
+        let captured = received.recv().expect("request captured");
+        assert!(
+            captured.request_line.starts_with("GET /v1/models"),
+            "the roster was not what was asked: {}",
+            captured.request_line
+        );
+        assert_eq!(
+            captured.header("Brave-Product"),
+            None,
+            "a gateway's roster request named this product (credential: {token:?})"
+        );
+    }
+}
+
 /// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
 /// up with a roster. A 404 and a 200 nobody can decode are the two ways such a gateway answers, and
 /// each is followed by the service-wide question rather than by an empty roster or an error.
