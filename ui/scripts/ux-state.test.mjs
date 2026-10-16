@@ -589,3 +589,58 @@ test('submit and the run-plan callback list every field they test', () => {
     assert.match(deps, /live\?\.running/, `${name} must depend on live?.running`)
   }
 })
+
+// The window builds a session in three places (resumed, new, forked) from three different bridge
+// answers; the eight fields that start the same everywhere are written once.
+function bridgeFields(over = {}) {
+  return {
+    handle: 's-9', model: 'm', summary: { id: null, title: 'T', project: 'p', branch: null, directory: '/d' },
+    entries: [], todos: [], askingTrust: '/d', keepingTrust: null, trustRemembered: null, forkedFrom: null,
+    focus: 4, bot: null, archived: 2, autoVetting: true, permissionMode: 'ask', sandboxMode: 'on', rules: null,
+    ...over,
+  }
+}
+
+test('a new session starts with the eight starting values and keeps every field it was given', () => {
+  const { newLive } = load('src/renderer/live.ts')
+  const fields = bridgeFields()
+  const live = newLive(fields)
+  assert.deepEqual(
+    { turns: live.turns, quarantine: live.quarantine, phase: live.phase, checking: live.checking, hook: live.hook, composing: live.composing, tokens: live.tokens, running: live.running },
+    { turns: {}, quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false },
+  )
+  for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
+  assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
+  assert.notEqual(newLive(fields).quarantine, live.quarantine, 'or one quarantine list')
+})
+
+test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {
+  const { liveKey, preIdKey } = load('src/renderer/live.ts')
+  const key = (id) => JSON.stringify(['/d', id])
+  const draft = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+  const bare = { handle: 'h', summary: { id: null, directory: '/d' } }
+  const saved = { handle: 'h', draftId: 'draft:1', summary: { id: 'rec', directory: '/d' } }
+  assert.equal(liveKey(draft), key('draft:1'))
+  assert.equal(liveKey(bare), key('h'), 'no draft falls back to the handle')
+  assert.equal(liveKey(saved), key('rec'), 'the record id wins over the draft')
+  assert.equal(preIdKey(saved), key('draft:1'), 'the pre-id key ignores the record id')
+  assert.equal(preIdKey(bare), key('h'))
+})
+
+test('a draft moves to the record id once the session has one, and only then', () => {
+  const written = []
+  globalThis.window = { bravebot: { writeExperience: async (key, value) => { written.push([key, value]) } } }
+  try {
+    const { promoteDraft } = load('src/renderer/live.ts')
+    const old = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+    const next = { ...old, summary: { id: 'rec', directory: '/d' } }
+    promoteDraft(old, next)
+    const keys = written.map(([key]) => key)
+    assert.deepEqual(keys, [JSON.stringify(['/d', 'rec']), JSON.stringify(['/d', 'draft:1'])])
+    assert.equal(written[1][1].draft, '', 'the old key forgets its draft')
+    written.length = 0
+    promoteDraft(next, next)
+    promoteDraft(old, old)
+    assert.deepEqual(written, [], 'a session that already had an id, or still has none, moves nothing')
+  } finally { delete globalThis.window }
+})
