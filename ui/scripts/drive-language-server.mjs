@@ -8,12 +8,10 @@
 // Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
 // `pnpm run drive:language-server` does first. Not for Windows: the server is a shell script.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
 /** A language server that answers what a session asks of one, and says when it came up. */
 const SERVER = `#!/bin/sh
@@ -46,71 +44,35 @@ done
 
 // The model service. A planner that asks where a symbol is defined whenever the last thing said
 // was not a tool's result, and ends the turn when it was, so every prompt is one question.
-const rounds = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
-  const answered = (JSON.parse(body).messages ?? []).at(-1)?.role === 'tool'
-  const question = { operation: 'goToDefinition', path: 'src/a.rs', line: 1, character: 12 }
-  const delta = answered
-    ? { role: 'assistant', content: 'done' }
-    : { role: 'assistant', tool_calls: [{ index: 0, id: `call-${rounds.length}`, type: 'function', function: { name: 'lsp', arguments: JSON.stringify(question) } }] }
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: answered ? 'stop' : 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
-})
-await new Promise((resolve) => service.listen(0, '127.0.0.1', resolve))
+const { service, rounds } = await startModelService(({ messages }) =>
+  messages.at(-1)?.role === 'tool'
+    ? { content: 'done' }
+    : { tool: { name: 'lsp', arguments: { operation: 'goToDefinition', path: 'src/a.rs', line: 1, character: 12 } } })
 
-// Resolved, because the agent names the project by its real path and the card is compared with it.
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-lsp-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile'), bin = join(root, 'bin')
-for (const path of [join(home, '.bravebot'), join(project, 'src'), profile, bin]) mkdirSync(path, { recursive: true })
+// makeWorld resolves the root, because the agent names the project by its real path and the card is compared with it.
+const { root, project, profile, env } = makeWorld('bravebot-lsp-', { service, dirs: ['project/src', 'bin'] })
+const bin = join(root, 'bin')
 writeFileSync(join(project, 'src/a.rs'), 'pub struct Held;\n')
 const program = join(bin, 'rust-analyzer')
 writeFileSync(program, SERVER)
 chmodSync(program, 0o755)
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
 const starts = join(root, 'starts')
 const started = () => (existsSync(starts) ? readFileSync(starts, 'utf8').split('\n').filter(Boolean).map(Number) : [])
 const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
 
-const env = Object.fromEntries(['DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
 Object.assign(env, {
   // The script's directory first, so the name the agent looks up is this server and no other.
   PATH: `${bin}:${process.env.PATH}`,
-  HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US',
   STARTS: starts, DEFINED_AT: join(project, 'src/a.rs'),
 })
 
 const output = '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 let closed = false
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.locator('[data-test="trust-approve"]').click()
-  await trust.waitFor({ state: 'hidden' })
+  ;({ app, page, errors } = await launchWorld({ profile, env }))
+  await openProject(page, app, project)
 
   const composer = page.locator('.composer textarea')
   const stop = page.locator('.composer .stop')
@@ -170,7 +132,7 @@ try {
   if (page && !closed) await page.screenshot({ path: join(output, 'server-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  if (!closed) await app.close().catch(() => undefined)
+  if (!closed) await app?.close().catch(() => undefined)
   for (const pid of started()) if (alive(pid)) process.kill(pid)
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })

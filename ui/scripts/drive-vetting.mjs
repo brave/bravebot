@@ -4,26 +4,20 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { inheritedEnv, launchWorld, openProject } from './drive-world.mjs'
 
 async function banner(auto) {
   const root = mkdtempSync(join(tmpdir(), 'bravebot-vetting-'))
   const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
   for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
   writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ vetting: { auto } }))
-  const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]))
-  Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config') })
-  const app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
+  const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config') })
+  let app
   try {
-    const page = await app.firstWindow(); page.setDefaultTimeout(15000)
-    const errors = []; page.on('pageerror', error => errors.push(error.message))
-    await app.evaluate(({ dialog }, path) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-    }, project)
-    await page.getByRole('button', { name: 'Open project', exact: true }).click()
-    const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-    await trust.locator('[data-test="trust-approve"]').click()
-    await trust.waitFor({ state: 'hidden' })
+    const launched = await launchWorld({ profile, env, timeout: 15000 })
+    app = launched.app
+    const { page, errors } = launched
+    await openProject(page, app, project)
     const notice = page.locator('.entries .session-banner')
     if (auto) await notice.waitFor()
     const shown = await notice.count() ? await notice.innerText() : null
@@ -32,7 +26,7 @@ async function banner(auto) {
     assert.deepEqual(errors, [])
     return shown
   } finally {
-    await app.close()
+    await app?.close()
     rmSync(root, { recursive: true, force: true })
   }
 }

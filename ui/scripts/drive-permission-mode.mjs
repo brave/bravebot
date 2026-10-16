@@ -10,74 +10,31 @@
 // Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
 // `pnpm run drive:permission-mode` does first.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
-
-const listening = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
 // A planner that makes the one call the last prompt names, and ends the turn once a tool answered.
-const rounds = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
-  const messages = JSON.parse(body).messages ?? []
+const { service, rounds } = await startModelService(({ messages }) => {
   const answered = messages.at(-1)?.role === 'tool'
   const asked = JSON.stringify(messages.filter((message) => message.role === 'user').at(-1) ?? '')
   const file = asked.match(/Write ([a-z]+\.md)/)?.[1]
-  const call = answered ? null
-    : file ? { name: 'write_file', arguments: JSON.stringify({ path: file, contents: '# Notes\n' }) }
-      : asked.includes('Run') ? { name: 'run', arguments: JSON.stringify({ command: '/usr/bin/touch ran.txt' }) }
-        : null
-  const delta = call
-    ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${rounds.length}`, type: 'function', function: call }] }
-    : { role: 'assistant', content: 'done' }
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: call ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return answered ? { content: 'done' }
+    : file ? { tool: { name: 'write_file', arguments: { path: file, contents: '# Notes\n' } } }
+      : asked.includes('Run') ? { tool: { name: 'run', arguments: { command: '/usr/bin/touch ran.txt' } } }
+        : { content: 'done' }
 })
-await listening(service)
 
 const lastToolResult = (round) => (JSON.parse(round).messages ?? []).filter((message) => message.role === 'tool').at(-1)?.content
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-mode-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
+const { root, project, profile, env } = makeWorld('bravebot-mode-', { service })
 
 const output = '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.getByRole('button', { name: "Don't trust", exact: true }).click()
-  await trust.waitFor({ state: 'hidden' })
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
+  await openProject(page, app, project, { trust: false })
 
   const composer = page.locator('.composer textarea')
   const stop = page.locator('.composer .stop')
@@ -175,7 +132,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'mode-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }

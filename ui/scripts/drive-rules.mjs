@@ -9,12 +9,9 @@
 // `pnpm run drive:rules` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
-
-const listening = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
 // The website, under two names. The person's file allows one and refuses the other.
 const reached = []
@@ -30,69 +27,36 @@ const refused = `http://localhost:${port}/refused`
 
 // The model service. A planner that fetches the address named in the last prompt, and ends the
 // turn once a tool has answered.
-const rounds = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
-  const messages = JSON.parse(body).messages ?? []
+const { service, rounds } = await startModelService(({ messages }) => {
   const answered = messages.at(-1)?.role === 'tool'
   const asked = JSON.stringify(messages.filter((message) => message.role === 'user').at(-1) ?? '')
   const url = asked.match(/http:\/\/[a-z0-9.]+:\d+\/[a-z]+/)?.[0]
-  const delta = answered || !url
-    ? { role: 'assistant', content: 'done' }
-    : { role: 'assistant', tool_calls: [{ index: 0, id: `call-${rounds.length}`, type: 'function', function: { name: 'fetch_url', arguments: JSON.stringify({ url }) } }] }
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return answered || !url ? { content: 'done' } : { tool: { name: 'fetch_url', arguments: { url } } }
 })
-await listening(service)
 
 const toolResults = (round) => (JSON.parse(round).messages ?? []).filter((message) => message.role === 'tool').map((message) => message.content).join('\n')
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-rules-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), join(project, '.bravebot'), profile]) mkdirSync(path, { recursive: true })
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-  permissions: {
-    allow: ['WebFetch(domain:127.0.0.1)'],
-    deny: ['WebFetch(domain:localhost)', 'Fetchh(domain:localhost)'],
+const { root, project, profile, env } = makeWorld('bravebot-rules-', {
+  service,
+  dirs: ['project/.bravebot'],
+  settings: {
+    permissions: {
+      allow: ['WebFetch(domain:127.0.0.1)'],
+      deny: ['WebFetch(domain:localhost)', 'Fetchh(domain:localhost)'],
+    },
   },
-}))
+})
 const checkout = join(project, '.bravebot/settings.json')
 writeFileSync(checkout, JSON.stringify({
   permissions: { allow: ['WebFetch(domain:localhost)'], additionalDirectories: ['../other'] },
 }))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.locator('[data-test="trust-approve"]').click()
-  await trust.waitFor({ state: 'hidden' })
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
+  await openProject(page, app, project)
 
   const composer = page.locator('.composer textarea')
   const stop = page.locator('.composer .stop')
@@ -150,7 +114,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'rules-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => site.close(resolve))
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })

@@ -9,10 +9,9 @@
 // `pnpm run drive:mcp` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
 const WIRE = 'mcp__weather__get_forecast'
 
@@ -33,65 +32,26 @@ const weather = createServer(async (request, response) => {
   response.writeHead(200, { 'Content-Type': 'application/json' })
   response.end(JSON.stringify({ jsonrpc: '2.0', id: call.id ?? null, result }))
 })
-await new Promise((resolve) => weather.listen(0, '127.0.0.1', resolve))
+await listening(weather)
 const url = `http://127.0.0.1:${weather.address().port}/mcp`
 
 // The model service. Calls the weather tool wherever it is offered and the last thing said was
 // not a tool's result, and otherwise ends the turn.
-const rounds = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
-  const asked = JSON.parse(body)
-  const offered = (asked.tools ?? []).some((tool) => tool.function?.name === WIRE || tool.name === WIRE)
-  const answered = (asked.messages ?? []).at(-1)?.role === 'tool'
-  const delta = offered && !answered
-    ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${rounds.length}`, type: 'function', function: { name: WIRE, arguments: JSON.stringify({ city: 'Paris' }) } }] }
-    : { role: 'assistant', content: 'done' }
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+const { service, rounds } = await startModelService(({ body, messages }) => {
+  const offered = (JSON.parse(body).tools ?? []).some((tool) => tool.function?.name === WIRE || tool.name === WIRE)
+  return offered && messages.at(-1)?.role !== 'tool' ? { tool: { name: WIRE, arguments: { city: 'Paris' } } } : { content: 'done' }
 })
-await new Promise((resolve) => service.listen(0, '127.0.0.1', resolve))
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-mcp-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), join(project, '.bravebot'), profile]) mkdirSync(path, { recursive: true })
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
+const { root, home, project, profile, env } = makeWorld('bravebot-mcp-', { service, dirs: ['project/.bravebot'] })
 writeFileSync(join(home, '.bravebot/mcp.json'), JSON.stringify({ servers: { weather: { transport: 'http', url } } }))
 writeFileSync(join(project, '.bravebot/settings.json'), JSON.stringify({ mcp: { request: ['weather'] } }))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await trust.locator('[data-test="trust-approve"]').click()
-  await trust.waitFor({ state: 'hidden' })
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
+  await openProject(page, app, project)
   assert.equal(methods.length, 0, 'opening a session starts no server')
 
   const composer = page.locator('.composer textarea')
@@ -165,7 +125,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'mcp-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   await new Promise((resolve) => weather.close(resolve))
   rmSync(root, { recursive: true, force: true })
