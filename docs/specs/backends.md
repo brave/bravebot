@@ -958,6 +958,7 @@ is the thing that knows.
 `verified-by: bravebot_aichat::lib::a_request_without_a_gateway_is_still_signed`
 `verified-by: bravebot_aichat::lib::a_gateway_request_goes_to_the_configured_host_with_a_bearer_token`
 `verified-by: bravebot_aichat::client::the_model_listing_is_fetched_from_the_models_path`
+`verified-by: bravebot_aichat::client::a_gateways_roster_request_carries_no_brave_product_header`
 
 
 <a id="BACKEND-26"></a>
@@ -1639,6 +1640,8 @@ that path rather than with the person in front of the screen.
 
 `verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other`
+`verified-by: bravebot_config::managed::the_file_is_read_from_the_directory_the_platform_reserves`
 `verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
 `verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
 `verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
