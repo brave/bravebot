@@ -128,6 +128,7 @@ for this run and a run that silently lacked it would not say so.
 `verified-by: bravebot_config::settings::the_home_and_the_named_file_may_name_an_advisor`
 `verified-by: bravebot_config::lib::the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset`
 `verified-by: bravebot_ui_bridge::settings::a_project_files_advisor_is_reported_as_ignored`
+`verified-by: bravebot_agent::turn::a_refused_advisor_the_settings_name_is_answered_per_call_and_stops_nothing`
 
 <a id="ADVISOR-9"></a>
 ### ADVISOR-9: `/advisor` names the advisor for the rest of an interactive session
@@ -158,3 +159,4 @@ gone.
 `verified-by: bravebot_tui::app::an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays`
 `verified-by: bravebot_tui::app::dropping_the_advisor_says_whether_the_setting_still_names_one`
 `verified-by: bravebot_tui::app::the_bare_advisor_command_says_which_advisor_is_in_force`
+`verified-by: bravebot_tui::app::a_session_advisor_is_not_written_to_the_record_and_a_resume_starts_from_the_setting`
