@@ -77,6 +77,7 @@ startup file, and a run started from a stretch they asked to leave no trace of s
 one itself.
 
 `verified-by: bravebot_cli::running::an_incognito_shell_records_nothing_and_asks_incognito`
+`verified-by: bravebot_cli::running::an_empty_incognito_variable_stops_nothing`
 
 <a id="SHELLINT-4"></a>
 ### SHELLINT-4: a question carries the lines since the last one, and the terminal's file ends with it
@@ -100,6 +101,9 @@ back. The first line of a window cut at 64 KiB can begin partway through. Anythi
 
 `verified-by: bravebot_cli::running::a_question_carries_the_commands_since_the_last_one_on_stdin`
 `verified-by: bravebot_cli::running::the_recorded_lines_are_private_and_end_with_the_terminal`
+`verified-by: bravebot_cli::running::a_question_carries_at_most_the_last_two_hundred_lines`
+`verified-by: bravebot_cli::running::a_question_carries_at_most_sixty_four_kib_of_the_latest_lines`
+`verified-by: bravebot_cli::running::closing_the_terminal_runs_the_exit_handler_the_shell_already_had`
 
 <a id="SHELLINT-5"></a>
 ### SHELLINT-5: the lines enter the run as piped input and never as an argument

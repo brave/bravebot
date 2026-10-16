@@ -49,6 +49,7 @@ what catches it.
 `verified-by: bravebot_core::policy::a_summary_of_a_trusted_conversation_is_adopted`
 `verified-by: bravebot_core::policy::a_summary_of_an_untrusted_conversation_is_refused_rather_than_adopted`
 `verified-by: bravebot_agent::turn::a_summary_of_an_untrusted_conversation_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line`
 
 <a id="COMPACT-2"></a>
 ### COMPACT-2: the summariser is offered no tools
@@ -157,6 +158,9 @@ a fallback rather than the usual case: see COMPACT-9.
 `verified-by: bravebot_agent::turn::a_conversation_past_the_budget_is_summarised_before_the_next_request`
 `verified-by: bravebot_agent::turn::a_conversation_nobody_has_measured_is_not_compacted`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
+`verified-by: bravebot_agent::turn::a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted`
+`verified-by: bravebot_agent::turn::a_summariser_that_failed_is_not_asked_again_for_the_rest_of_the_turn`
+`verified-by: bravebot_agent::turn::a_turn_is_summarised_more_than_once_as_the_rounds_build_up`
 `verified-by: by-construction (the default budget is asserted below the smallest useful window at compile time)`
 
 <a id="COMPACT-9"></a>
@@ -226,6 +230,7 @@ only the round says how far into the work.
 
 `verified-by: bravebot_agent::turn::the_trail_says_what_a_compaction_gave_up_and_what_it_cost`
 `verified-by: bravebot_agent::turn::the_trail_says_which_round_a_compaction_landed_on`
+`verified-by: bravebot_agent::turn::compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line`
 
 <a id="COMPACT-11"></a>
 ### COMPACT-11: the summariser asks for no cache of the exchange it gives up
@@ -370,6 +375,9 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
 `verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`
+`verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_summary_model_that_is_not_obeyed`
 
 <a id="COMPACT-16"></a>
 ### COMPACT-16: the planner's latest task list is sent again after the summary
