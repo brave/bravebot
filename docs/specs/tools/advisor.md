@@ -44,6 +44,7 @@ destination it chose. A tool for the advisor would make it a second planner.
 
 `verified-by: bravebot_agent::turn::the_advisor_is_asked_with_the_planners_context_and_no_tools`
 `verified-by: bravebot_agent::advisor::the_request_offers_no_tools_and_ends_with_the_question`
+`verified-by: bravebot_agent::turn::the_advisor_is_sent_the_whole_request_the_planner_was_sent_that_round`
 
 <a id="ADVISOR-3"></a>
 ### ADVISOR-3: a private question is not sent
@@ -101,6 +102,7 @@ refuse is not asked, whichever route named it, and the planner is told to carry 
 
 `verified-by: bravebot_agent::turn::a_failed_advisor_call_tells_the_planner_only_the_category`
 `verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
+`verified-by: bravebot_agent::turn::a_stop_while_the_advisor_is_asked_ends_the_turn_as_a_stop_with_what_it_sent`
 
 <a id="ADVISOR-8"></a>
 ### ADVISOR-8: the `advisorModel` setting names the advisor when the command line does not
