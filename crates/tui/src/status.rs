@@ -283,7 +283,6 @@ pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxM
     }
 }
 
-/// Compose the report.
 /// The line for the network the programs `run` starts have, where it is closed.
 fn network_line(
     settled: Option<&bravebot_config::RunNetwork>,
@@ -438,6 +437,7 @@ pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
     }
 }
 
+/// Compose the report.
 pub fn report(facts: &Facts<'_>) -> Report {
     let mut lines = Vec::new();
 
@@ -508,6 +508,105 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
+    lines.extend(model_and_agent_lines(facts));
+
+    lines.extend(choice_lines(facts));
+
+    lines.extend(sandbox_lines(facts));
+
+    lines.extend(standing_lines(facts));
+
+    lines.extend(running_lines(facts));
+
+    lines.extend(usage_lines(facts));
+
+    // Last because it is the part that grows. What a write recorded is the thing nothing else
+    // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
+    let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
+    // The turn in flight owns the trust map and the vouched programs and answers into them as it
+    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
+    // above about every run being asked is the one this report must not get wrong.
+    if facts.turn_holds_rules {
+        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
+    } else {
+        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
+        if rules.is_empty() {
+            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
+        } else {
+            lines.push(Line::new(
+                t!(status_trust),
+                t!(count_rules, count = rules.len()),
+            ));
+            for (path, integrity) in rules.iter() {
+                let shown = if path.is_empty() { "." } else { path };
+                lines.push(match integrity {
+                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
+                    Some(Integrity::Untrusted) => {
+                        Line::new("", shown).with_note(t!(status_untrusted))
+                    }
+                    None => Line::new("", shown).with_note(t!(status_undecided)),
+                });
+            }
+        }
+
+        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
+        // this session announces itself by appearing; this is the one that stops appearing, so without
+        // a line here there is nothing to tell them a command now runs unasked and that what it prints
+        // is being read as trusted.
+        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
+
+        if vouched.is_empty() {
+            // Two different true things, and the wider one is only true where the record is empty as
+            // well. A session that has vouched for nothing but carries a remembered line does not put
+            // every run to the person, and this is the screen responsible for saying what they are
+            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
+            // one claim this report must not make.
+            lines.push(Line::new(
+                t!(status_programs),
+                match remembered.is_some() {
+                    true => t!(status_nothing_vouched_this_session),
+                    false => t!(status_every_run_is_asked),
+                },
+            ));
+        } else {
+            lines.push(
+                Line::new(
+                    t!(status_trusted_commands),
+                    t!(count_commands, count = vouched.len()),
+                )
+                .with_note(t!(status_trusted_commands_note)),
+            );
+            // Every one of them, however many there are: a vouched command that the report will not
+            // show is a permission with nothing anywhere to say it is held, since the prompt it
+            // answers is the thing that has stopped appearing.
+            //
+            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+            // the entry is what this report exists to read back: two entries for one command in two
+            // directories would otherwise draw as one line twice, and a reader could not tell which
+            // grant they hold. Relative to the workspace where it is inside it, the way every other
+            // path on this screen is written.
+            for command in vouched.iter() {
+                lines.push(Line::new("", command.display()).with_note(t!(
+                    status_command_in,
+                    directory = within(facts.directory, &command.directory)
+                )));
+            }
+        }
+    }
+
+    if let Some(record) = remembered {
+        lines.extend(remembered_lines(facts, record));
+    }
+
+    lines.extend(grant_lines(facts));
+
+    Report { lines }
+}
+
+/// The model, the agent and the model that answered, where it is not the one asked for.
+fn model_and_agent_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+
     // The definition's model where it names one, since `/model` was not what chose it.
     let definitions = facts
         .agent
@@ -554,6 +653,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
+    lines
+}
+
+/// The effort level, the theme and the endpoint: what a person chose, and what it reaches.
+fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+
     // Beside the model, because the two together are what a turn costs: the same question asked of
     // the same model bills differently at either end of this range.
     lines.push(match (facts.effort, facts.model_reads_effort) {
@@ -591,6 +697,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
             },
         ),
     );
+
+    lines
+}
+
+/// The confinement level and the network, sockets, filesystem and host lists that qualify it.
+fn sandbox_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // The level is what the platform can enforce over a process running code we did not write, and
     // a session is inside no such boundary. Reported with the note rather than dropped, because
@@ -633,6 +746,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
         bravebot_config::sandbox_network::settled(),
         facts.sandbox_mode,
     ));
+
+    lines
+}
+
+/// The standing answers that hold the session back: MCP servers, permission mode, programs write and auto-vetting.
+fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // Named rather than counted, since the question is which of them this session can reach, and
     // said where there are none, since a checkout that asked for one is where somebody looks. The
@@ -678,6 +798,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 .with_note(t!(status_vetting_where)),
         );
     }
+
+    lines
+}
+
+/// What happens without anybody typing: the loop, the goal, the watches and the jobs.
+fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
@@ -755,6 +882,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
             origin = origin
         )));
     }
+
+    lines
+}
+
+/// What the session has cost: turns and tokens, time, and the cache.
+fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     lines.push(Line::new(
         t!(status_this_session),
@@ -842,157 +976,93 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
-    // Last because it is the part that grows. What a write recorded is the thing nothing else
-    // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
-    let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
-    // The turn in flight owns the trust map and the vouched programs and answers into them as it
-    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
-    // above about every run being asked is the one this report must not get wrong.
-    if facts.turn_holds_rules {
-        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
-    } else {
-        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
-        if rules.is_empty() {
-            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
-        } else {
-            lines.push(Line::new(
-                t!(status_trust),
-                t!(count_rules, count = rules.len()),
-            ));
-            for (path, integrity) in rules.iter() {
-                let shown = if path.is_empty() { "." } else { path };
-                lines.push(match integrity {
-                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
-                    Some(Integrity::Untrusted) => {
-                        Line::new("", shown).with_note(t!(status_untrusted))
-                    }
-                    None => Line::new("", shown).with_note(t!(status_undecided)),
-                });
-            }
-        }
+    lines
+}
 
-        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
-        // this session announces itself by appearing; this is the one that stops appearing, so without
-        // a line here there is nothing to tell them a command now runs unasked and that what it prints
-        // is being read as trusted.
-        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
-
-        if vouched.is_empty() {
-            // Two different true things, and the wider one is only true where the record is empty as
-            // well. A session that has vouched for nothing but carries a remembered line does not put
-            // every run to the person, and this is the screen responsible for saying what they are
-            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
-            // one claim this report must not make.
-            lines.push(Line::new(
-                t!(status_programs),
-                match remembered.is_some() {
-                    true => t!(status_nothing_vouched_this_session),
-                    false => t!(status_every_run_is_asked),
-                },
-            ));
-        } else {
-            lines.push(
-                Line::new(
-                    t!(status_trusted_commands),
-                    t!(count_commands, count = vouched.len()),
-                )
-                .with_note(t!(status_trusted_commands_note)),
-            );
-            // Every one of them, however many there are: a vouched command that the report will not
-            // show is a permission with nothing anywhere to say it is held, since the prompt it
-            // answers is the thing that has stopped appearing.
-            //
-            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
-            // the entry is what this report exists to read back: two entries for one command in two
-            // directories would otherwise draw as one line twice, and a reader could not tell which
-            // grant they hold. Relative to the workspace where it is inside it, the way every other
-            // path on this screen is written.
-            for command in vouched.iter() {
-                lines.push(Line::new("", command.display()).with_note(t!(
-                    status_command_in,
-                    directory = within(facts.directory, &command.directory)
-                )));
-            }
-        }
-    }
-
-    // The other standing answer that stops a prompt appearing, and the one a person is least able
-    // to account for from memory: it was given in a session that has ended, possibly last week, and
-    // nothing on the screen since has mentioned it. So each line says which of the two lifetimes it
-    // is carrying, and the report says where the file is, since deleting a line from it is the way
-    // back. Said only where there is something to say: a session that has remembered nothing learns
-    // nothing from a line about it, and the programs line above already says every run is asked.
-    if let Some(record) = remembered {
-        let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
-        lines.push(
-            Line::new(
-                t!(status_remembered),
-                t!(count_commands, count = entries.len()),
-            )
-            .with_note(t!(status_remembered_note)),
-        );
-        for entry in entries.iter().take(MAX_REMEMBERED) {
-            lines.push(Line::new("", entry.line.display()).with_note(
-                match entry.answered_in == facts.session_id {
-                    true => t!(status_remembered_this_session),
-                    false => t!(status_remembered_earlier),
-                },
-            ));
-        }
-        if entries.len() > MAX_REMEMBERED {
-            // How many of each was left out, not just how many: the two lifetimes are the point,
-            // and a person deciding what to delete cannot tell from a bare count which answers
-            // they are still carrying from another session.
-            let left_out = &entries[MAX_REMEMBERED..];
-            let earlier = left_out
-                .iter()
-                .filter(|entry| entry.answered_in != facts.session_id)
-                .count();
-            lines.push(Line::new(
-                "",
-                t!(
-                    status_remembered_and_more,
-                    count = left_out.len(),
-                    earlier = earlier
-                ),
-            ));
-        }
-        lines.push(Line::new(
-            "",
-            t!(status_remembered_where, path = record.path.display()),
+/// The other standing answer that stops a prompt appearing, and the one a person is least able
+/// to account for from memory: it was given in a session that has ended, possibly last week, and
+/// nothing on the screen since has mentioned it. So each line says which of the two lifetimes it
+/// is carrying, and the report says where the file is, since deleting a line from it is the way
+/// back. Said only where there is something to say: a session that has remembered nothing learns
+/// nothing from a line about it, and the programs line above already says every run is asked.
+fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
+    lines.push(
+        Line::new(
+            t!(status_remembered),
+            t!(count_commands, count = entries.len()),
+        )
+        .with_note(t!(status_remembered_note)),
+    );
+    for entry in entries.iter().take(MAX_REMEMBERED) {
+        lines.push(Line::new("", entry.line.display()).with_note(
+            match entry.answered_in == facts.session_id {
+                true => t!(status_remembered_this_session),
+                false => t!(status_remembered_earlier),
+            },
         ));
     }
+    if entries.len() > MAX_REMEMBERED {
+        // How many of each was left out, not just how many: the two lifetimes are the point,
+        // and a person deciding what to delete cannot tell from a bare count which answers
+        // they are still carrying from another session.
+        let left_out = &entries[MAX_REMEMBERED..];
+        let earlier = left_out
+            .iter()
+            .filter(|entry| entry.answered_in != facts.session_id)
+            .count();
+        lines.push(Line::new(
+            "",
+            t!(
+                status_remembered_and_more,
+                count = left_out.len(),
+                earlier = earlier
+            ),
+        ));
+    }
+    lines.push(Line::new(
+        "",
+        t!(status_remembered_where, path = record.path.display()),
+    ));
 
-    // The third standing answer, and the one that changes a plan a person is shown: a command's
-    // plan carries a row they did not see requested. The rows are `/reach`'s own, so the number on
-    // each is the one `/reach remove` takes.
+    lines
+}
+
+/// The third standing answer, and the one that changes a plan a person is shown: a command's
+/// plan carries a row they did not see requested. The rows are `/reach`'s own, so the number on
+/// each is the one `/reach remove` takes.
+fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
     if !facts.reach.is_empty() {
-        lines.push(
+        lines.extend(rows(
             Line::new(
                 t!(status_reach),
                 t!(count_reach_grants, count = facts.reach.len()),
             )
             .with_note(t!(status_reach_note)),
-        );
-        for row in facts.reach {
-            lines.push(Line::new("", row.as_str()));
-        }
+            facts.reach,
+        ));
     }
 
     if !facts.requested_paths.is_empty() {
-        lines.push(
+        lines.extend(rows(
             Line::new(
                 t!(status_requested_paths),
                 t!(count_requested_paths, count = facts.requested_paths.len()),
             )
             .with_note(t!(status_requested_paths_note)),
-        );
-        for row in facts.requested_paths {
-            lines.push(Line::new("", row.as_str()));
-        }
+            facts.requested_paths,
+        ));
     }
+    lines
+}
 
-    Report { lines }
+/// A heading line, then one line under it for each row.
+fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
+    let mut lines = vec![heading];
+    lines.extend(rows.iter().map(|row| Line::new("", row.as_str())));
+    lines
 }
 
 /// What can be said about the tier before a request has settled it.
@@ -3153,6 +3223,53 @@ mod tests {
                 commit = "fedcba9876",
                 delegate = "d2.1"
             )
+        );
+    }
+
+    /// The groups `report` is built from keep the order the rows have always had when every one of
+    /// them has something to say: what was chosen (model, effort, theme, endpoint), then what
+    /// holds the session back, what runs unattended, what the session cost, and the trust rules
+    /// last. A group drawn out of turn, or a call dropped from `report`, moves one of the
+    /// boundaries below.
+    #[test]
+    fn the_groups_of_rows_keep_their_order_when_every_group_has_rows() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
+        goal.not_met("nothing above runs the tests".to_string());
+        let mut mixed = facts(&config, &trust);
+        mixed.goal = Some(&goal);
+        mixed.auto_vetting = true;
+        mixed.timing = bravebot_agent::timing::Timing {
+            wall_ms: 30_000,
+            inference_ms: 20_000,
+            tools_ms: 5_000,
+            stalled_ms: 0,
+        };
+
+        let lines = report(&mixed).lines;
+        let at = |label: String| {
+            lines
+                .iter()
+                .position(|line| line.label == label)
+                .unwrap_or_else(|| panic!("no row labelled {label:?}: {lines:?}"))
+        };
+        let order = [
+            at(t!(status_model).to_string()),
+            at(t!(status_effort).to_string()),
+            at(t!(status_theme).to_string()),
+            at(t!(status_endpoint).to_string()),
+            at(t!(status_confinement).to_string()),
+            at(t!(status_mcp_servers).to_string()),
+            at(t!(status_vetting).to_string()),
+            at(t!(status_goal).to_string()),
+            at(t!(status_this_session).to_string()),
+            at(t!(status_time).to_string()),
+            at(t!(status_trust).to_string()),
+        ];
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "the groups are out of order: {order:?}"
         );
     }
 
