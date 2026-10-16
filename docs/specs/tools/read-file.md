@@ -172,12 +172,11 @@ The sentence opens with that condition, and the description must say that any ot
 sentence about a later look. A turn nothing will ask again is told to say plainly that no later look
 is coming under the same condition.
 
-**Why the line is conditional.** A planner answering a request to summarise what a README says about
-installation, and a delegate reporting on one file read and one command run, each ended on a statement
-that no later look was scheduled. Neither request involved watching or being told of a change. The
-statement reads as if a first look had been taken and a repeat could have been arranged, and it tells
-the person nothing they asked about. The condition names a request and not the user, because a
-delegate holds a task and never sees the user's line.
+**Why the line is conditional.** An unconditional statement that no later look was scheduled, on a
+request that has nothing to do with watching or being told of a change, reads as if a first look had
+been taken and a repeat could have been arranged, and it tells the person nothing they asked about.
+The condition names a request and not the user, because a delegate holds a task and never sees the
+user's line.
 
 **Why the planner arranges it rather than the person.** This clause used to have the description hand
 over a `/loop` line for the person to type, on the grounds that only a loop outlives a turn. A session
