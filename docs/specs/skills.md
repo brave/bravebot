@@ -331,6 +331,7 @@ is read.
 `verified-by: bravebot_agent::skills::a_key_nothing_reads_is_carried_out_beside_the_skill_that_declared_it`
 `verified-by: bravebot_cli::running::doctor_names_a_skill_key_nothing_reads`
 `verified-by: bravebot_cli::running::doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops`
+`verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
 ## Known costs

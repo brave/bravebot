@@ -6776,6 +6776,60 @@ fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
     );
 }
 
+/// SKILL-16 with SKILL-4 and TRUST-23. `doctor` reads a project's skills the way a turn there
+/// would, so it names one's unread key only where the directory has been vouched for. A skill with
+/// no description is one reason a turn drops a file and an unvouched directory is another, and a
+/// `doctor` that applied the first and not the second passes the test above.
+///
+/// The person's own skill, which carries the same key, is named in both runs, so a run that is
+/// silent about the project is not silent about everything. The run after the answer is kept shows
+/// the first was silent because of the missing answer and not because `doctor` never looks in a
+/// project.
+#[test]
+fn doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted() {
+    let scratch = Scratch::new("cli-running-skill-unread-key-project").with_file(
+        ".bravebot/skills/athome/SKILL.md",
+        "---\nname: athome\ndescription: written for another agent\nallowed-tools: \
+         Read\n---\n\nthe body\n",
+    );
+    let cwd = scratch.path.join("project");
+    let skill = cwd.join(".claude/skills/imported/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).expect("create the project's skills");
+    std::fs::write(
+        &skill,
+        "---\nname: imported\ndescription: written for another agent\nallowed-tools: \
+         Read\n---\n\nthe body\n",
+    )
+    .expect("write the project's skill");
+
+    let before = bravebot_started_in(&scratch.path, &cwd, CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&before);
+    assert!(
+        stdout.contains("skills/athome/SKILL.md"),
+        "doctor did not report the person's own skill: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("imported/SKILL.md"),
+        "doctor named a skill from a directory nobody vouched for: {stdout}{stderr}"
+    );
+
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        eprintln!(
+            "skipped the run after a kept answer: this filesystem cannot say when a directory was made"
+        );
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+    let after = bravebot_started_in(&scratch.path, &cwd, CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&after);
+    assert!(
+        stdout.contains("skills/athome/SKILL.md") && stdout.contains("imported/SKILL.md"),
+        "doctor did not name the project's skill in a directory with a kept answer: {stdout}{stderr}"
+    );
+}
+
 /// A definition as a person keeps one under this home's own directory, which a run reads without
 /// asking anybody, since nobody but the person writes there (DELEGATE-20).
 fn a_definition(name: &str, fields: &str) -> String {
