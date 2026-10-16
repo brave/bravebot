@@ -9,21 +9,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskAnswer,
   BridgeEvent,
-  Checking,
-  Hook,
   ForkedSession,
   KeptTrust,
   OpenedSession,
   PermissionMode,
   SandboxMode,
-  RewindPoint,
   RewoundSession,
   RunRecord,
   SettingsRules,
-  Waiting,
   SessionSummary,
-  Shown,
-  TodoRow,
 } from '../shared/protocol'
 import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
@@ -42,12 +36,12 @@ import { conversationModel, rememberModel } from './models'
 import type { ExportFormat } from '../shared/export'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
-import { type Fork, forkOf, forkedSessions } from '../shared/forks'
+import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, botProjects, type Bot } from '../shared/bots'
 import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
-import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
+import { receiveTurn, type TurnDisclosure } from './turn-details'
 import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
@@ -56,142 +50,13 @@ import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
 import { planRewind, pointForPrompt, RequestFailed, rewindFailure } from './rewind'
 import { RewindConfirm } from './components/Rewind'
-
-/** What the app is doing, which decides most of what the interface offers. */
-interface Live {
-  model: string | null
-  handle: string
-  /**
-   * The record's own id, or `null` for a session made in this window and not yet listed.
-   *
-   * Kept rather than looked up by title: two sessions can share a title, and a context menu
-   * that closed whichever one matched first would close the wrong one.
-   */
-  summary: {
-    id: string | null
-    title: string
-    project: string
-    branch: string | null
-    directory: string
-  }
-  entries: t.Entry[]
-  turns: Turns
-  todos: TodoRow[]
-  quarantine: Shown[]
-  phase: Waiting | null
-  /** What a running confined check was given. Beside the phase, which a check does not change. */
-  checking: Checking | null
-  hook: Hook | null
-  /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
-  composing: string | null
-  tokens: number
-  contextTokens?: number
-  running: boolean
-  /** Set when a fresh session needs the trust question answered before it can run. */
-  askingTrust: string | null
-  /** Where a yes would be kept, while the question is asked and the answer may be kept (TRUST-23). */
-  keepingTrust: string | null
-  /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
-  trustRemembered: KeptTrust | null
-  /**
-   * Where this session was cut from, for a session that was forked out of another.
-   *
-   * The title is carried because it is what the banner says, and the window may not have the
-   * parent in its list — a session with no record yet is in no list at all.
-   */
-  forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
-  /**
-   * A prompt to scroll to and mark, counted over the prompts the transcript drew.
-   *
-   * An ordinal rather than an entry id, because ids are minted fresh every time a session is
-   * opened and this arrives from a session that was open a moment ago. The ordinal is the same
-   * coordinate the fork itself was cut on, so it is the one thing about a place in a transcript
-   * that two sessions can both mean.
-   */
-  focus: number | null
-  /**
-   * The bot whose session this is, and whether it still knows it is one.
-   *
-   * `null` for an ordinary session. For a bot's, `grounded` says whether the conversation
-   * currently carries its briefing: false when the session has just been opened, and false again
-   * once compaction has taken the briefing out of it. The next prompt sent while it is false
-   * carries the briefing with it, which is the whole of what makes a bot persist.
-   */
-  bot: { slug: string; grounded: boolean } | null
-  /**
-   * How many messages compaction has taken out of this conversation, as of the last thing heard
-   * about it.
-   *
-   * Watched rather than the `compacting` phase, which is emitted before compaction is attempted
-   * and so also fires when there was nothing worth compacting — and then on every round of a
-   * conversation that is over budget and cannot get under it. This only rises, and it rises
-   * exactly once per compaction that actually happened.
-   */
-  archived: number
-  /** Whether the session opened with auto-vetting on, as the agent settled it then. */
-  autoVetting: boolean
-  /** What the session's next turn asks before it acts, as the bridge last reported it. */
-  permissionMode: PermissionMode
-  /** What the session's next turn holds a program to, as the bridge last reported it. */
-  sandboxMode: SandboxMode
-  /** The permission rules this session opened under. Null where the bridge reported none. */
-  rules?: SettingsRules | null
-  /**
-   * The entry id of a prompt this window has sent and not yet been told the ordinal of.
-   *
-   * A prompt is drawn the moment it is sent, and where it landed among the things the user said
-   * is not knowable here: the turn adds a user message for every file named in the prompt, and
-   * another if it spends its tool budget. So the agent reports it when the turn ends, and this
-   * says which row to put it on. `null` for a turn nobody in this window asked for, a watch
-   * firing or a bot bringing its memory up to date, which draw no prompt and must not take the
-   * ordinal of the one above them.
-   */
-  awaitingOrdinal?: string | null
-  /** The points the session can be put back to, newest first, as the agent last listed them. */
-  rewind?: RewindPoint[]
-  outcome?: 'complete' | 'failed'
-  draftId?: string
-  queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[] }[]
-  attachments?: FileAttachment[]
-  /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
-  sendRefused?: string | null
-}
-
-/**
- * Where a session was cut from, ready for a banner, or `null` for one that was not.
- *
- * The title comes from the session list, which is the fresher of the two places it could come
- * from — a fork's record on disk says only what the parent was called; the list says what it is
- * called. A parent the list does not hold (one whose record has not been written yet, or one in
- * a project since deleted) falls back to its id, which is at least a true name.
- */
-function cameFrom(
-  forks: Fork[],
-  directory: string,
-  id: string,
-  sessions: SessionSummary[],
-): Live['forkedFrom'] {
-  const fork = forkOf(forks, directory, id)
-  if (!fork) return null
-  const parent = sessions.find(
-    (session) => session.id === fork.parent.id && session.directory === fork.parent.directory,
-  )
-  return {
-    directory: fork.parent.directory,
-    id: fork.parent.id,
-    title: parent?.title ?? fork.parent.id,
-    prompt: fork.prompt,
-  }
-}
+import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
 
 /** Whether a bot has recorded this conversation, in the folder it ran in. */
 function hadConversation(bot: Bot, summary: { id: string; directory: string }): boolean {
   return bot.conversations.some((each) => each.id === summary.id && each.directory === summary.directory)
 }
 
-/** What a chat is called until its first prompt names it. */
-const NEW_CHAT = 'New Chat'
 
 /** What a chat in a bot's home folder is listed under. */
 const NO_PROJECT = 'No project'
@@ -257,11 +122,7 @@ export function App(): React.JSX.Element {
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
     const old = liveRef.current
     const next = typeof action === 'function' ? action(old) : action
-    if (old && next && old.handle === next.handle && !old.summary.id && next.summary.id) {
-      setConversation(conversationKey(next.summary.directory, next.summary.id),
-        conversationPreferences(conversationKey(old.summary.directory, old.draftId ?? old.handle)))
-      setConversation(conversationKey(old.summary.directory, old.draftId ?? old.handle), { draft: '' })
-    }
+    if (old && next && old.handle === next.handle) promoteDraft(old, next)
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
@@ -274,11 +135,7 @@ export function App(): React.JSX.Element {
     const old = openedLives.current.get(handle) ?? null
     const next = typeof action === 'function' ? action(old) : action
     if (next) {
-      if (old && !old.summary.id && next.summary.id) { setConversation(
-        conversationKey(next.summary.directory, next.summary.id),
-        conversationPreferences(conversationKey(old.summary.directory, old.draftId ?? old.handle)))
-        setConversation(conversationKey(old.summary.directory, old.draftId ?? old.handle), { draft: '' })
-      }
+      if (old) promoteDraft(old, next)
       openedLives.current.set(handle, next)
       refreshLives((n) => n + 1)
     }
@@ -298,11 +155,11 @@ export function App(): React.JSX.Element {
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
-  const draftKey = live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? live.handle) : ''
+  const draftKey = live ? liveKey(live) : ''
   const draft = preferences.conversations[draftKey]?.draft ?? ''
   const setDraft = useCallback((text: string) => {
     const current = liveRef.current
-    if (current) setConversation(conversationKey(current.summary.directory, current.summary.id ?? current.draftId ?? current.handle), { draft: text })
+    if (current) setConversation(liveKey(current), { draft: text })
   }, [])
   useEffect(() => {
     if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
@@ -492,7 +349,7 @@ export function App(): React.JSX.Element {
         id: summary.id,
       })
       if (bot) setConversation(conversationKey(summary.directory, summary.id), { botSlug: bot.slug })
-      setLive({
+      setLive(newLive({
         handle: opened.session,
         model: bot?.model ?? conversationModel(summary.directory, summary.id, opened.model),
         summary: {
@@ -503,15 +360,7 @@ export function App(): React.JSX.Element {
           directory: opened.record.directory,
         },
         entries: t.fromSaid(opened.said),
-        turns: {},
         todos: Object.values(opened.todos).flat(),
-        quarantine: [],
-        phase: null,
-        checking: null,
-        hook: null,
-        tokens: 0,
-        composing: null,
-        running: false,
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
@@ -535,7 +384,7 @@ export function App(): React.JSX.Element {
         sandboxMode: opened.sandboxMode,
         rules: opened.settingsRules ?? null,
         rewind: opened.rewind ?? [],
-      })
+      }))
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
@@ -568,7 +417,7 @@ export function App(): React.JSX.Element {
         directory: chosen,
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
-      setLive({
+      setLive(newLive({
         handle: made.session,
         draftId,
         model: bot?.model ?? made.model,
@@ -580,15 +429,7 @@ export function App(): React.JSX.Element {
           directory: chosen,
         },
         entries: [],
-        turns: {},
         todos: [],
-        quarantine: [],
-        phase: null,
-        checking: null,
-        hook: null,
-        tokens: 0,
-        composing: null,
-        running: false,
         contextTokens: 0,
         askingTrust: made.remembered ? null : chosen,
         keepingTrust: made.keeping ?? null,
@@ -601,7 +442,7 @@ export function App(): React.JSX.Element {
         permissionMode: made.permissionMode,
         sandboxMode: made.sandboxMode,
         rules: made.settingsRules ?? null,
-      })
+      }))
       setProblem(null)
       return made.session
     } catch (error) {
@@ -659,7 +500,7 @@ export function App(): React.JSX.Element {
         queuePaused: queued ? true : old.queuePaused,
       } : old)
       if (!queued && sending) {
-        const key = conversationKey(sending.summary.directory, sending.summary.id ?? sending.draftId ?? sending.handle)
+        const key = liveKey(sending)
         if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
       }
       return
@@ -1235,7 +1076,7 @@ export function App(): React.JSX.Element {
 
         // The fork first and the parent second: the cut is made out of the parent's live state,
         // so letting go of it before asking would be asking about a session that had gone.
-        setLive({
+        setLive(newLive({
           handle: forked.session,
           model: live.model,
           summary: {
@@ -1249,42 +1090,34 @@ export function App(): React.JSX.Element {
             directory: forked.directory,
           },
           entries: t.fromSaid(forked.said),
-          turns: {},
           todos: Object.values(forked.todos).flat(),
-          quarantine: [],
-          phase: null,
-          checking: null,
-          hook: null,
-          tokens: 0,
-          composing: null,
-          running: false,
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
           keepingTrust: forked.keeping ?? null,
           trustRemembered: forked.remembered ?? null,
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
-        // conversation resumed forever; a second one carrying its name would be a second bot
-        // wearing it, with the same memory file and no way to tell them apart in the list.
-        bot: null,
-        // A child begins with the archive its parent had at the cut, which the fork answer does
-        // not carry. Zero is the safe way to be wrong: it can only ask for a briefing that is not
-        // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
-        // in this build it asks for nothing at all.
-        archived: 0,
-        autoVetting: forked.autoVetting,
-        permissionMode: forked.permissionMode,
-        sandboxMode: forked.sandboxMode,
-        rules: forked.settingsRules ?? null,
-        // The parent's backups stay the parent's: nothing in the child has written anything yet.
-        rewind: [],
-        forkedFrom: {
+          // conversation resumed forever; a second one carrying its name would be a second bot
+          // wearing it, with the same memory file and no way to tell them apart in the list.
+          bot: null,
+          // A child begins with the archive its parent had at the cut, which the fork answer does
+          // not carry. Zero is the safe way to be wrong: it can only ask for a briefing that is not
+          // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
+          // in this build it asks for nothing at all.
+          archived: 0,
+          autoVetting: forked.autoVetting,
+          permissionMode: forked.permissionMode,
+          sandboxMode: forked.sandboxMode,
+          rules: forked.settingsRules ?? null,
+          // The parent's backups stay the parent's: nothing in the child has written anything yet.
+          rewind: [],
+          forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
             title: forked.parent.title ?? live.summary.title,
             prompt: forked.parent.prompt,
           },
           focus: null,
-        })
+        }))
         // From the agent rather than from `entry.text`: what the composer opens with should be
         // the prompt that was actually cut out, not the one this window thought it clicked.
         setDraft(forked.prefill)
@@ -1442,7 +1275,7 @@ export function App(): React.JSX.Element {
     else if (choice.kind === 'none') directory = owner?.home ?? null
     else directory = choice.directory
     if (!directory || directory === current.summary.directory) return
-    const oldKey = conversationKey(current.summary.directory, current.draftId ?? current.handle)
+    const oldKey = preIdKey(current)
     const text = conversationPreferences(oldKey).draft
     const handle = await create(directory, owner ? { slug: owner.slug, model: current.model } : undefined)
     if (!handle) return

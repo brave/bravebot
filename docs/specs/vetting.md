@@ -14,6 +14,7 @@ governs:
   - crates/ui-bridge/src/wire.rs
   - crates/ui-bridge/src/turn.rs
   - ui/src/renderer/App.tsx
+  - ui/src/renderer/live.ts
   - ui/src/renderer/components/Transcript.tsx
   - ui/scripts/ux-state.test.mjs
 guards:
