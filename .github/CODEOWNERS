@@ -42,7 +42,11 @@
 /mobile/android/build.gradle @bbondy
 /mobile/android/app/build.gradle @bbondy
 /mobile/android/settings.gradle @bbondy
+/mobile/android/gradle.properties @bbondy
 /mobile/android/gradle/wrapper/ @bbondy
+/mobile/android/gradlew @bbondy
+/mobile/android/gradlew.bat @bbondy
+/mobile/ios/Podfile @bbondy
 /mobile/ios/Bravebot.xcodeproj/ @bbondy
 /Cargo.lock @bbondy
 /contrib/required-checks.txt @bbondy
