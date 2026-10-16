@@ -655,7 +655,25 @@ impl Conversation {
             .iter()
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
-        (given_up >= kept + self.skills_to_carry(cut).len()).then_some(cut)
+        let carried = self.skills_to_carry(cut);
+        if given_up < kept + carried.len() {
+            return None;
+        }
+
+        // Counts are not sizes: one exchange can be a repeated one-line prompt and the next
+        // eighty thousand tokens of file reads, so the same bound is applied to what each side
+        // weighs.
+        let freed: usize = self.messages[..cut]
+            .iter()
+            .filter(|stored| !matches!(stored.composed, Some(Composed::Summary)))
+            .map(stored_bytes)
+            .sum();
+        let retained: usize = self.messages[cut..]
+            .iter()
+            .chain(&carried)
+            .map(stored_bytes)
+            .sum();
+        (freed >= retained).then_some(cut)
     }
 
     /// The skills a cut at `boundary` would have to carry, as the result of the newest load of
@@ -1146,6 +1164,20 @@ const SKILL_KEPT_BYTES: usize = 5_000 * BYTES_PER_TOKEN;
 
 /// The most of all skills sent again after one summary, about 25,000 tokens.
 const SKILLS_KEPT_BYTES: usize = 25_000 * BYTES_PER_TOKEN;
+
+/// What a message adds to a request, in bytes: its text and the calls it carries.
+///
+/// A measure of shape, not of meaning: nothing here reads what the words say.
+fn stored_bytes(stored: &Stored) -> usize {
+    let calls: usize = stored
+        .message
+        .tool_calls
+        .iter()
+        .flatten()
+        .map(|call| call.function.name.len() + call.function.arguments.len())
+        .sum();
+    stored.message.content.text().len() + calls
+}
 
 /// The leading `limit` bytes of `text` at a character boundary, and whether any was left out.
 fn within(text: &str, limit: usize) -> (&str, bool) {
@@ -1653,9 +1685,9 @@ mod tests {
     fn a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut() {
         let mut conversation = Conversation::new();
         for (prompt, answer) in [
-            ("first", "a"),
-            ("second", "b"),
-            ("third", "c"),
+            ("first, a prompt as long as the one below", "a"),
+            ("second, a prompt as long as the one below", "b"),
+            ("third, a prompt as long as the one below", "c"),
             (
                 &format!("{TOOL_RESULT_PREFIX}my experiment: explain it") as &str,
                 "d",
@@ -2182,6 +2214,44 @@ mod tests {
         assert!(conversation.compaction_boundary().is_some());
     }
 
+    /// COMPACT-5 compares what each side weighs, not how many exchanges it holds. Four prompts
+    /// (three of them repeats) in front of eight huge reads pass a count of two against two, and
+    /// the summary written would be longer than the few bytes it replaced.
+    #[test]
+    fn a_cut_that_frees_a_few_bytes_and_keeps_huge_reads_is_not_made() {
+        let mut conversation = Conversation::new();
+        for _ in 0..4 {
+            conversation.push(Message::user("fix the build"));
+        }
+        for round in 0..8 {
+            let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
+            call.id = format!("r{round}");
+            conversation.push(Message::assistant_calling("looking", vec![call]));
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "x".repeat(40_000),
+            ));
+        }
+        assert_eq!(conversation.compaction_boundary(), None);
+    }
+
+    /// The size bound must not stop a cut that does free more than it keeps: many short exchanges
+    /// followed by one very large one is the shape the by-round fallback is for.
+    #[test]
+    fn a_cut_that_frees_more_than_it_keeps_is_still_made_after_a_large_exchange_is_given_up() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read everything"));
+        let mut call = a_call("read_file", r#"{"path":"big.rs"}"#);
+        call.id = "big".to_string();
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result("big", "x".repeat(40_000)));
+        conversation.push(Message::assistant("read it"));
+        for prompt in ["second", "third", "fourth"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        assert!(conversation.compaction_boundary().is_some());
+    }
+
     /// The same bound on the round fallback, which is where it was actually costing something: a
     /// long turn added one round at a time, so each compaction gave up one round to keep twelve.
     #[test]
@@ -2401,7 +2471,13 @@ mod tests {
     /// second time in the summary would put two lists in front of the planner.
     #[test]
     fn a_task_list_the_cut_leaves_in_place_is_not_sent_twice() {
-        let mut conversation = four_exchanges();
+        // Heavy enough to give up more than the list weighs when it is sent again (COMPACT-5).
+        let mut conversation = Conversation::new();
+        for prompt in ["first", "second", "third"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
         conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] a"));
         conversation.task_list_shown();
 
@@ -2664,14 +2740,19 @@ mod tests {
     /// A prompt and an answer, the filler between the parts of the skill tests.
     fn an_exchange(conversation: &mut Conversation, prompt: &str) {
         conversation.push(Message::user(prompt));
-        conversation.push(Message::assistant("ok"));
+        // Long enough that a carried skill's wrapper is not heavier than an exchange (COMPACT-5
+        // weighs bytes), and the same for every exchange so a count still says what a size would.
+        conversation.push(Message::assistant("ok ".repeat(200)));
     }
 
     /// A round in which the planner loaded `name` and was shown `body`, recorded as a turn records it.
     fn a_skill_load(conversation: &mut Conversation, id: &str, name: &str, body: &str) {
         let mut call = a_call("load_skill", &format!(r#"{{"name":"{name}"}}"#));
         call.id = id.to_string();
-        conversation.push(Message::assistant_calling("loading", vec![call]));
+        // As long as the wrapper a carried copy is sent in, so that what a cut gives up is not
+        // lighter than the skill it brings back (COMPACT-5 weighs bytes).
+        let reason = "loading the skill ".repeat(20);
+        conversation.push(Message::assistant_calling(reason, vec![call]));
         conversation.push_skill_result(
             Message::tool_result(id, format!("{TOOL_RESULT_PREFIX}load_skill:\n\n{body}")),
             name.to_string(),
@@ -2699,7 +2780,11 @@ mod tests {
             let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
             call.id = format!("r{round}");
             conversation.push(Message::assistant_calling("looking", vec![call]));
-            conversation.push(Message::tool_result(format!("r{round}"), "some lines"));
+            // Long enough that a carried skill is not heavier than a round (COMPACT-5 weighs bytes).
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "some lines ".repeat(30),
+            ));
         }
     }
 
@@ -3144,7 +3229,7 @@ mod tests {
             },
         );
         conversation.push(Message::assistant("done"));
-        for prompt in ["second", "third", "fourth"] {
+        for prompt in ["second", "third", "fourth", "fifth"] {
             an_exchange(&mut conversation, prompt);
         }
 

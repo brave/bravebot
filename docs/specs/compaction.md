@@ -100,11 +100,18 @@ cut that would not free more than it retains is not made at all.
 life and shortens nothing. Measured at 35 summaries in a turn that should have made none. Never
 relax this to compact sooner.
 
+"At least as much" is measured twice: in exchanges (or rounds), and in bytes of what each side
+holds. A count alone cannot tell a few repeated one-line prompts from eighty thousand tokens of file
+reads, so a cut that gives up two short prompts and keeps the reads is not made, and the round cut
+is tried instead.
+
 A skill the cut would send again ([COMPACT-17](#COMPACT-17)) counts as kept, since it takes the
 place of what was given up.
 
 `verified-by: bravebot_agent::conversation::a_cut_that_would_give_up_less_than_it_keeps_is_not_worth_a_request`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
+`verified-by: bravebot_agent::conversation::a_cut_that_frees_a_few_bytes_and_keeps_huge_reads_is_not_made`
+`verified-by: bravebot_agent::conversation::a_cut_that_frees_more_than_it_keeps_is_still_made_after_a_large_exchange_is_given_up`
 `verified-by: bravebot_agent::conversation::a_head_that_is_only_an_earlier_summary_is_not_compacted_again`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_agent::conversation::a_conversation_with_nothing_but_recent_exchanges_is_not_compacted`
