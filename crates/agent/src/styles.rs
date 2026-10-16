@@ -417,11 +417,31 @@ mod tests {
         home: Option<&Path>,
         trust: bravebot_core::trust::TrustStore,
     ) -> Vec<String> {
+        offered_denying(workspace, home, trust, &[])
+    }
+
+    fn denying(deny: &[&str]) -> bravebot_core::permissions::Permissions {
+        let deny: Vec<String> = deny.iter().map(|rule| rule.to_string()).collect();
+        bravebot_core::permissions::Permissions::parse(
+            &deny,
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        )
+        .0
+    }
+
+    fn offered_denying(
+        workspace: &Workspace,
+        home: Option<&Path>,
+        trust: bravebot_core::trust::TrustStore,
+        deny: &[&str],
+    ) -> Vec<String> {
         offered_from_project(
             workspace,
             home,
             trust,
-            bravebot_core::permissions::Permissions::default(),
+            denying(deny),
             &mut bravebot_core::event::RecordingSink::new(),
         )
     }
@@ -430,6 +450,15 @@ mod tests {
         workspace: &Workspace,
         trust: bravebot_core::trust::TrustStore,
         name: &str,
+    ) -> Option<Style> {
+        resolved_denying(workspace, trust, name, &[])
+    }
+
+    fn resolved_denying(
+        workspace: &Workspace,
+        trust: bravebot_core::trust::TrustStore,
+        name: &str,
+        deny: &[&str],
     ) -> Option<Style> {
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
@@ -444,8 +473,27 @@ mod tests {
         )
         .expect("policy")
         .with_trust(trust)
+        .with_permissions(denying(deny))
         .with_root(workspace.root());
         resolve_project(&mut policy, workspace, name)
+    }
+
+    #[test]
+    fn a_deny_rule_over_a_project_style_neither_offers_nor_resolves_it() {
+        let workspace = project_with("deny", &[("secret", "Hidden."), ("open", "Shown.")]);
+        let rule = [".bravebot/styles/secret.md"].map(|path| format!("Read({path})"));
+        let rule: Vec<&str> = rule.iter().map(String::as_str).collect();
+
+        assert_eq!(
+            offered_denying(&workspace, None, vouching(&workspace), &rule),
+            ["open"]
+        );
+        assert_eq!(
+            resolved_denying(&workspace, vouching(&workspace), "secret", &rule),
+            None
+        );
+        assert!(resolved_denying(&workspace, vouching(&workspace), "open", &rule).is_some());
+        assert!(resolved(&workspace, vouching(&workspace), "secret").is_some());
     }
 
     #[test]

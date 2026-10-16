@@ -388,8 +388,8 @@ gate and reads each import through it, so nothing untrusted decides what is read
 
 `/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
 one of the person's own or one of the project's, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
-pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
-compared whole against the built-in list and the person's own files, and nothing a person types after
+pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in, the person's own file or the project's, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
+compared whole against the built-in list, the person's own files and the project's, and nothing a person types after
 `/style` reaches the prompt.
 
 A person's own style is a file `~/.bravebot/styles/<name>.md`. Its name is a slug (lowercase letters
