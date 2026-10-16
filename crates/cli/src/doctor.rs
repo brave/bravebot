@@ -189,7 +189,21 @@ pub(crate) fn sandbox_filesystem_lines(
         .collect()
 }
 
-/// Report whether configuration is usable, without revealing the signing key.
+/// One fact line under `label` for each item, said by `say`. The caller names the message in
+/// `say`, so each is still named where it is used.
+fn each<T>(label: impl AsRef<str>, items: impl IntoIterator<Item = T>, say: impl Fn(T) -> String) {
+    for item in items {
+        fact(label.as_ref(), say(item));
+    }
+}
+
+/// `each` under `doctor_settings_ignored`, for the settings that name only the file that held them.
+fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -> String) {
+    each(t!(doctor_settings_ignored), paths, |path| {
+        say(path.display().to_string())
+    });
+}
+
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
 /// that wrote it, and the ones that are not in force with why.
 ///
@@ -215,76 +229,82 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
         fact(t!(doctor_sandbox_filesystem), line);
     }
     let managed_file = bravebot_config::managed_file().display().to_string();
-    for (list, entry) in &settled.unread {
-        fact(
-            t!(doctor_settings_ignored),
+    each(
+        t!(doctor_settings_ignored),
+        &settled.unread,
+        |(list, entry)| {
             t!(
                 doctor_managed_sandbox_unread,
                 key = list.key(),
                 path = entry.path.clone(),
                 managed = managed_file.clone()
-            ),
-        );
-    }
-    for (path, key) in settings.sandbox_filesystem_ignored() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_filesystem_ignored(),
+        |(path, key)| {
             t!(
                 doctor_settings_sandbox_filesystem_ignored,
                 key = key,
                 path = path.display().to_string()
-            ),
-        );
-    }
-    for (path, key) in settings.sandbox_filesystem_misshapen() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_filesystem_misshapen(),
+        |(path, key)| {
             t!(
                 doctor_settings_sandbox_misshapen,
                 key = key,
                 path = path.display().to_string()
-            ),
-        );
-    }
-    for (path, key) in settings.sandbox_hosts_ignored() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_hosts_ignored(),
+        |(path, key)| {
             t!(
                 doctor_settings_sandbox_hosts_ignored,
                 key = key,
                 path = path.display().to_string()
-            ),
-        );
-    }
-    for (path, key) in settings.sandbox_hosts_misshapen() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_hosts_misshapen(),
+        |(path, key)| {
             t!(
                 doctor_settings_sandbox_hosts_misshapen,
                 key = key,
                 path = path.display().to_string()
-            ),
-        );
-    }
-    for path in settings.git_identities_ignored() {
-        fact(
-            t!(doctor_settings_ignored),
-            t!(
-                doctor_settings_git_identities_ignored,
-                path = path.display().to_string()
-            ),
-        );
-    }
-    for (path, key) in settings.git_identities_misshapen() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    ignored(settings.git_identities_ignored(), |path| {
+        t!(doctor_settings_git_identities_ignored, path = path).to_string()
+    });
+    each(
+        t!(doctor_settings_ignored),
+        settings.git_identities_misshapen(),
+        |(path, key)| {
             t!(
                 doctor_settings_git_identities_misshapen,
                 key = key,
                 path = path.display().to_string()
-            ),
-        );
-    }
+            )
+            .to_string()
+        },
+    );
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
     if let Some(home) = bravebot_agent::home::profile() {
         for entry in &settings.git_identities().entries {
@@ -310,28 +330,509 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             }
         }
     }
-    for list in managed.filesystem_unreadable() {
-        fact(
-            t!(doctor_settings_ignored),
+    each(
+        t!(doctor_settings_ignored),
+        managed.filesystem_unreadable(),
+        |list| {
             t!(
                 doctor_managed_sandbox_misshapen,
                 key = list.key(),
                 path = managed_file.clone()
-            ),
-        );
-    }
-    for key in managed.sandbox_hosts_unreadable() {
-        fact(
-            t!(doctor_settings_ignored),
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        managed.sandbox_hosts_unreadable(),
+        |key| {
             t!(
                 doctor_settings_sandbox_hosts_misshapen,
                 key = key,
                 path = managed_file.clone()
+            )
+            .to_string()
+        },
+    );
+}
+
+/// Names only. On some machines a value here is a credential, and a diagnostic that prints one is a
+/// diagnostic people paste into issues.
+///
+/// The variables the file names, not everything it configured: a gateway is a block rather than a
+/// variable and gets a section of its own. A file that only configures one therefore names nothing
+/// here, which is absence rather than an empty list.
+fn report_settings_sources(settings: &bravebot_config::Settings) {
+    let named: Vec<&str> = settings.names().collect();
+    match (named.is_empty(), settings.is_empty()) {
+        (false, _) => fact(
+            t!(doctor_settings),
+            t!(doctor_settings_names, names = named.join(", ")),
+        ),
+        (true, false) => fact(t!(doctor_settings), t!(doctor_settings_no_variables)),
+        (true, true) => fact(t!(doctor_settings), t!(doctor_settings_absent)),
+    }
+
+    // What a pattern in `run.scrubEnv` reached on this machine. An exact entry withholds what it
+    // says and needs no line; a pattern's effect depends on the variables this process holds, so
+    // the file alone does not tell a person whether it caught what they meant or more than they
+    // meant. Names only, never a value (RUN-28).
+    each(
+        t!(doctor_scrub_pattern),
+        bravebot_config::scrub::matched_by_patterns(settings),
+        |(pattern, name)| {
+            t!(
+                doctor_scrub_pattern_matched,
+                pattern = pattern,
+                variable = name
+            )
+            .to_string()
+        },
+    );
+
+    // Which files are in force, weakest first, and then only the names where that order decided
+    // something. A person reading a value they did not expect has three places it could have come
+    // from, and the paths are the whole of what tells them which.
+    each(t!(doctor_settings_layer), settings.layers(), |layer| {
+        layer.display().to_string()
+    });
+    each(
+        t!(doctor_settings_override),
+        settings.overridden(),
+        |(name, path)| {
+            t!(
+                doctor_settings_overridden,
+                name = name,
+                path = path.display().to_string()
+            )
+            .to_string()
+        },
+    );
+}
+
+/// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
+/// narrowing keys. The network and filesystem ones follow in their own sections.
+fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
+    let managed_file = bravebot_config::managed_file().display().to_string();
+    // A key that looks like configuration and does nothing, which is the one worth saying out
+    // loud: it is read from the home layer alone, so a checkout cannot stop whoever opened it being
+    // asked, and somebody who wrote it into one has to be told rather than left wondering why the
+    // prompt still appears.
+    ignored(settings.vetting_ignored(), |path| {
+        t!(doctor_settings_vetting_ignored, path = path).to_string()
+    });
+    ignored(settings.providers_ignored(), |path| {
+        t!(doctor_settings_provider_ignored, path = path).to_string()
+    });
+    ignored(settings.model_ignored(), |path| {
+        t!(doctor_settings_model_ignored, path = path).to_string()
+    });
+    ignored(settings.advisor_ignored(), |path| {
+        t!(doctor_settings_advisor_ignored, path = path).to_string()
+    });
+    ignored(settings.fallback_ignored(), |path| {
+        t!(doctor_settings_fallback_ignored, path = path).to_string()
+    });
+    ignored(settings.summary_ignored(), |path| {
+        t!(doctor_settings_summary_ignored, path = path).to_string()
+    });
+    ignored(settings.agent_ignored(), |path| {
+        t!(doctor_settings_agent_ignored, path = path).to_string()
+    });
+    ignored(settings.style_ignored(), |path| {
+        t!(doctor_settings_style_ignored, path = path).to_string()
+    });
+    ignored(settings.references_ignored(), |path| {
+        t!(doctor_settings_references_ignored, path = path).to_string()
+    });
+
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_ignored(),
+        |(path, mode)| {
+            t!(
+                doctor_settings_sandbox_ignored,
+                mode = mode.name(),
+                path = path.display().to_string()
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        settings.sandbox_strict_ignored(managed),
+        |(path, mode, held)| {
+            t!(
+                doctor_settings_sandbox_strict_ignored,
+                path = path.display().to_string(),
+                mode = mode.name(),
+                held = held.display().to_string()
+            )
+            .to_string()
+        },
+    );
+    ignored(settings.sandbox_unreadable(), |path| {
+        t!(doctor_settings_sandbox_unreadable, path = path).to_string()
+    });
+    each(
+        t!(doctor_settings_ignored),
+        managed.sandbox_unreadable().then_some(()),
+        |()| {
+            t!(
+                doctor_settings_sandbox_unreadable,
+                path = managed_file.clone()
+            )
+            .to_string()
+        },
+    );
+
+    // A key beside the ones this build reads, which the lines above cannot cover: those name a key
+    // that was recognised and not obeyed, and this one was never read at all. The file is
+    // documented as largely another tool's shape, so a pasted block holds `sandbox` or `hooks`, and
+    // nothing else would tell whoever wrote one that the restriction they believe is in force was
+    // never read. A note rather than a failure, on BACKEND-36's reasoning: a key written for a
+    // later release must not stop this binary.
+    each(
+        t!(doctor_settings_unread),
+        settings.unread_keys(),
+        |(path, key)| {
+            t!(
+                doctor_settings_unread_key,
+                key = key,
+                path = path.display().to_string()
+            )
+            .to_string()
+        },
+    );
+
+    // The same, for a key that only refuses and was spelled as something other than a boolean: it
+    // is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"` has a session as
+    // permissive as one that named nothing, and nothing else would say so. The managed file among
+    // them, since an administrator who mistyped a pin is the person least likely to be told by the
+    // machine it binds.
+    each(
+        t!(doctor_settings_ignored),
+        settings.narrowing_unreadable(),
+        |(path, key)| {
+            t!(
+                doctor_settings_narrowing_ignored,
+                key = format!("permissions.{key}"),
+                path = path.display().to_string()
+            )
+            .to_string()
+        },
+    );
+    each(
+        t!(doctor_settings_ignored),
+        managed.narrowing_unreadable(),
+        |key| {
+            t!(
+                doctor_settings_narrowing_ignored,
+                key = format!("permissions.{key}"),
+                path = managed_file.clone()
+            )
+            .to_string()
+        },
+    );
+}
+
+/// The network for the programs `run` starts, named only where it is not open, with who decided
+/// it, and the layers that tried to open what a person closed. A word that is neither is read as
+/// absent, so it is said for the reason a mistyped pin is.
+fn report_run_network(
+    network: &bravebot_config::RunNetwork,
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+) {
+    if network.network.is_closed() {
+        fact(
+            t!(doctor_run_network),
+            t!(
+                doctor_run_network_closed,
+                source = bravebot_tui::status::run_network_source(&network.decided)
             ),
+        );
+    }
+    ignored(settings.run_network_ignored(), |path| {
+        t!(doctor_settings_network_ignored, path = path).to_string()
+    });
+    ignored(settings.run_network_unreadable(), |path| {
+        t!(doctor_settings_network_unreadable, path = path).to_string()
+    });
+    each(
+        t!(doctor_settings_ignored),
+        managed.network_unreadable().then_some(()),
+        |()| {
+            t!(
+                doctor_managed_network_unreadable,
+                path = bravebot_config::managed_file().display().to_string()
+            )
+            .to_string()
+        },
+    );
+}
+
+/// The `allow` rules a checkout or the home layer proposes, each named as granted or dropped. The
+/// rules this workspace's record says the person granted are returned, since the permission count
+/// that follows includes them.
+fn report_allow_rules(
+    settings: &bravebot_config::Settings,
+) -> Vec<bravebot_agent::granted::Proposed> {
+    // The same, for the other name a checkout cannot answer on its own: an `allow` entry
+    // stops a prompt, so one read out of a file that arrived with a clone would run a
+    // program nobody was asked about. A rule this workspace's own record says the person
+    // granted is in force and says so; every other one is dropped and says that. Named one
+    // rule at a time rather than counted, for the reason the vetting line gives and because
+    // the two answers are per rule rather than per file.
+    // The rules among them, which is what this is about: an entry that is not a rule is
+    // nobody's grant, so it is left out here and named for what is wrong with it below,
+    // under PERM-11, exactly as the same line in the home layer is.
+    let proposed =
+        bravebot_agent::permissions::proposed(settings, bravebot_agent::home::profile().as_deref());
+    // The record is keyed on the workspace, so this answers about the directory `doctor` ran
+    // in. Canonicalized, because a session keys on the root the workspace resolved and a
+    // report keyed on the spelling would answer about a path that session never wrote: the
+    // two agree on Unix and do not on Windows, where resolving prefixes a name. No state
+    // directory, or one that cannot be read, is a record that says nothing, and a rule
+    // nobody granted is one that is dropped.
+    let here = std::env::current_dir().and_then(|cwd| cwd.canonicalize());
+    let granted: Vec<bravebot_agent::granted::Proposed> =
+        match (bravebot_agent::home::directory(), here) {
+            (Some(home), Ok(cwd)) => bravebot_agent::granted::Store::new(&home, &cwd)
+                .granted(&proposed)
+                .into_iter()
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
+    for rule in &proposed {
+        let path = rule.path.display().to_string();
+        match granted.contains(rule) {
+            true => fact(
+                t!(doctor_settings_granted),
+                t!(
+                    doctor_settings_allow_granted,
+                    rule = &rule.rule,
+                    path = path
+                ),
+            ),
+            false => fact(
+                t!(doctor_settings_ignored),
+                t!(
+                    doctor_settings_allow_ignored,
+                    rule = &rule.rule,
+                    path = path
+                ),
+            ),
+        }
+    }
+    granted
+}
+
+/// Counted rather than listed: a rule is the user's own text and printing it back says nothing they
+/// cannot read in the file. What is worth saying is which of them this build could not act on,
+/// because those are the ones that look like protection and are not.
+fn report_permissions(
+    settings: &bravebot_config::Settings,
+    granted: &[bravebot_agent::granted::Proposed],
+    ending: &mut Ending,
+) {
+    // The granted rules are in the count, because they are rules in force: a report that left
+    // them out would say a workspace had one rule where a session there has two.
+    let (permissions, rejected) = bravebot_agent::permissions::with_granted(
+        settings,
+        &granted
+            .iter()
+            .map(|rule| rule.rule.clone())
+            .collect::<Vec<_>>(),
+        bravebot_agent::home::profile().as_deref(),
+        // The directory `doctor` ran in, whose volume answers about case. Empty where it
+        // cannot be read, which the probe reads as a volume that compares bytes.
+        &std::env::current_dir()
+            .and_then(|cwd| cwd.canonicalize())
+            .unwrap_or_default(),
+    );
+    fact(
+        t!(doctor_permissions),
+        match permissions.is_empty() {
+            true => t!(doctor_permissions_absent).to_string(),
+            false => t!(doctor_permissions_count, count = permissions.len() as i64),
+        },
+    );
+    for problem in &rejected {
+        // The catch-all rather than the configuration status, which CLI-6 gives to a
+        // configuration nothing ran on: the rest of the file is honoured and a session
+        // here opens and works, so what is wrong is one line of it rather than the whole.
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_permissions_unreadable),
+            bravebot_agent::permissions::describe(problem),
         );
     }
 }
 
+/// The backends a person can choose from and what would end each credential this build holds for
+/// itself. Returns the stored subscription it loaded, which the model section reports.
+fn report_backends(
+    config: &Config,
+    ending: &mut Ending,
+) -> Option<bravebot_skus::StoredCredentials> {
+    // Both, where both are reachable, because both are offered to a person choosing and a
+    // report naming one of them explains only the half of the picker they happened to use.
+    if config.serves_aichat() {
+        report_aichat(config);
+    }
+    if let Some(bedrock) = config.bedrock.as_ref() {
+        report_bedrock(bedrock);
+    }
+    for provider in &config.providers {
+        report_gateway(provider);
+    }
+    // A file of gateway keys that cannot be read is read as none, so every gateway a key in
+    // it was for is reported above as having none, and this says why. The catch-all
+    // status, as for a rule above: a session opens and works, without those keys.
+    if let Some(directory) = bravebot_agent::home::directory()
+        && bravebot_config::keys::Keys::read(&directory).is_err()
+    {
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_gateway_keys),
+            t!(
+                doctor_gateway_keys_unreadable,
+                path = bravebot_config::keys::file(&directory).display()
+            ),
+        );
+    }
+
+    // What would end each credential this build holds for itself, and which tier the gate
+    // walk left it on. Reported beside the backends rather than kept for a leak, because it
+    // can only be written down while the arrangement is still understood, and the person
+    // reading it after a key appears somewhere public needs the surface that revokes it
+    // rather than the expiry, which is all anything here kept before.
+    //
+    // The batch is asked for here rather than inside the record, because the record is
+    // configuration and the file the batch sits in is a fact about the machine.
+    let subscription = bravebot_skus::store::load().ok();
+    for held in config.held(subscription.is_some()) {
+        fact(t!(doctor_ends), what_would_end(held));
+        fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
+        if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
+            fact(t!(doctor_noticed), noticed);
+        }
+        if let Some(binding) = how_it_is_bound(held) {
+            fact(t!(doctor_binding), binding);
+        }
+        if let Some(survives) = what_outlives_revoking(held) {
+            fact(t!(doctor_outlives), survives);
+        }
+        // How it got here, after what would end it: the lines above name the credential
+        // and the address somebody acts on, and these say which gate each drop failed and
+        // whether anybody could have done otherwise.
+        for drop in held.walk() {
+            if let Some(dropped) = why_it_dropped(held, *drop) {
+                fact(t!(doctor_dropped), dropped);
+            }
+        }
+    }
+    subscription
+}
+
+/// What a run would actually request, and the subscription where one means something.
+fn report_model(
+    config: &Config,
+    settings: &bravebot_config::Settings,
+    subscription: Option<&bravebot_skus::StoredCredentials>,
+) {
+    // What a run would actually request, since a choice made with `/model` overrides the
+    // configured default and reporting only the default would explain the wrong thing. Not
+    // where a checkout's settings outrank the choice, since naming it then would explain
+    // the wrong thing the other way round.
+    match bravebot_agent::backend::pick(
+        config,
+        bravebot_session::store::model(bravebot_session::store::load_model(), settings),
+    ) {
+        bravebot_agent::backend::Pick::InForce(chosen) => {
+            fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
+        }
+        bravebot_agent::backend::Pick::SetAside(pick) => fact(
+            t!(doctor_model),
+            t!(
+                doctor_model_set_aside,
+                model = &config.default_model,
+                pick = pick
+            ),
+        ),
+        // The configured model answers as it does above, and the reason differs: a model this
+        // machine does not request is one a configured service would have served, so the
+        // line above would name the wrong fault. Then the file, which is the one thing
+        // somebody in this case can act on, and which nothing at the end of this section
+        // names: that is asked about the model a run would request, the configured one by
+        // then (BACKEND-48).
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => {
+            fact(
+                t!(doctor_model),
+                t!(
+                    doctor_model_refused,
+                    model = &config.default_model,
+                    pick = &recorded
+                ),
+            );
+            fact(
+                t!(doctor_settings_ignored),
+                t!(
+                    session_model_pick_refused,
+                    model = &recorded,
+                    reason = reason
+                ),
+            );
+        }
+        bravebot_agent::backend::Pick::Absent => fact(
+            t!(doctor_model),
+            t!(doctor_model_default, model = &config.default_model),
+        ),
+    }
+
+    // Only where a subscription means something. A Leo credential is what the premium half of
+    // the Brave roster needs, and it means nothing to Bedrock.
+    if config.serves_aichat() {
+        report_subscription(subscription);
+    }
+}
+
+/// Last of the configuration section, and a failure, because a report that said "configuration OK"
+/// about a machine where a session refuses to start is the one thing a person in that position is
+/// certain to read first.
+///
+/// A model the machine-level layer refuses is the same failure read by the same person, and the one
+/// case where what they have to do is ask somebody else (BACKEND-48).
+fn report_serving(config: &Config, ending: &mut Ending) {
+    let model = model_for_this_run(None, config);
+    match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
+        bravebot_agent::backend::Serving::NothingConfigured {
+            subscription,
+            a_service_is_configured,
+        } => {
+            *ending = ends_on(*ending, Ending::Configuration);
+            println!();
+            println!(
+                "{}",
+                how_to_configure_a_model(
+                    subscription.as_deref(),
+                    a_service_is_configured,
+                    &import::looked(a_service_is_configured),
+                )
+            );
+        }
+        bravebot_agent::backend::Serving::Refused { file, why } => {
+            *ending = ends_on(*ending, Ending::Configuration);
+            println!();
+            println!("{}", managed_refusal(&model, &file, why));
+        }
+        bravebot_agent::backend::Serving::Configured => {}
+    }
+}
+
+/// Report whether configuration is usable, without revealing the signing key.
 pub(crate) fn doctor() -> ExitCode {
     // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
     // build cannot use a status of its own, and a report collapsing every way a machine can be
@@ -350,322 +851,20 @@ pub(crate) fn doctor() -> ExitCode {
     match Config::from_env_and_settings(&settings, &managed) {
         Ok(config) => {
             println!("{}", t!(doctor_configuration_ok));
+            report_settings_sources(&settings);
+            report_ignored_settings(&settings, &managed);
 
-            // Names only. On some machines a value here is a credential, and a diagnostic that
-            // prints one is a diagnostic people paste into issues.
-            //
-            // The variables the file names, not everything it configured: a gateway is a block rather
-            // than a variable and gets a section of its own below. A file that only configures one
-            // therefore names nothing here, which is absence rather than an empty list.
-            let named: Vec<&str> = settings.names().collect();
-            match (named.is_empty(), settings.is_empty()) {
-                (false, _) => fact(
-                    t!(doctor_settings),
-                    t!(doctor_settings_names, names = named.join(", ")),
-                ),
-                (true, false) => fact(t!(doctor_settings), t!(doctor_settings_no_variables)),
-                (true, true) => fact(t!(doctor_settings), t!(doctor_settings_absent)),
-            }
-
-            // What a pattern in `run.scrubEnv` reached on this machine. An exact entry withholds
-            // what it says and needs no line; a pattern's effect depends on the variables this
-            // process holds, so the file alone does not tell a person whether it caught what they
-            // meant or more than they meant. Names only, never a value (RUN-28).
-            for (pattern, name) in bravebot_config::scrub::matched_by_patterns(&settings) {
-                fact(
-                    t!(doctor_scrub_pattern),
-                    t!(
-                        doctor_scrub_pattern_matched,
-                        pattern = pattern,
-                        variable = name
-                    ),
-                );
-            }
-
-            // Which files are in force, weakest first, and then only the names where that order
-            // decided something. A person reading a value they did not expect has three places it
-            // could have come from, and the paths are the whole of what tells them which.
-            for layer in settings.layers() {
-                fact(t!(doctor_settings_layer), layer.display().to_string());
-            }
-            for (name, path) in settings.overridden() {
-                fact(
-                    t!(doctor_settings_override),
-                    t!(
-                        doctor_settings_overridden,
-                        name = name,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-
-            // A key that looks like configuration and does nothing, which is the one worth saying
-            // out loud: it is read from the home layer alone, so a checkout cannot stop whoever
-            // opened it being asked, and somebody who wrote it into one has to be told rather than
-            // left wondering why the prompt still appears.
-            for path in settings.vetting_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_vetting_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.providers_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_provider_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.model_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_model_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.advisor_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_advisor_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.fallback_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_fallback_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.summary_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_summary_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.agent_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_agent_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.style_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_style_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.references_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_references_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-
-            for (path, mode) in settings.sandbox_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_sandbox_ignored,
-                        mode = mode.name(),
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for (path, mode, held) in settings.sandbox_strict_ignored(&managed) {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_sandbox_strict_ignored,
-                        path = path.display().to_string(),
-                        mode = mode.name(),
-                        held = held.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.sandbox_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_sandbox_unreadable,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            if managed.sandbox_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_sandbox_unreadable,
-                        path = bravebot_config::managed_file().display().to_string()
-                    ),
-                );
-            }
-
-            // A key beside the ones this build reads, which the lines above cannot cover: those name
-            // a key that was recognised and not obeyed, and this one was never read at all. The file
-            // is documented as largely another tool's shape, so a pasted block holds `sandbox` or
-            // `hooks`, and nothing else would tell whoever wrote one that the restriction they
-            // believe is in force was never read. A note rather than a failure, on BACKEND-36's
-            // reasoning: a key written for a later release must not stop this binary.
-            for (path, key) in settings.unread_keys() {
-                fact(
-                    t!(doctor_settings_unread),
-                    t!(
-                        doctor_settings_unread_key,
-                        key = key,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-
-            // The same, for a key that only refuses and was spelled as something other than a
-            // boolean: it is read as absence (PERM-16, PERM-17), so somebody who quoted `"true"`
-            // has a session as permissive as one that named nothing, and nothing else would say so.
-            // The managed file among them, since an administrator who mistyped a pin is the person
-            // least likely to be told by the machine it binds.
-            for (path, key) in settings.narrowing_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_narrowing_ignored,
-                        key = format!("permissions.{key}"),
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for key in managed.narrowing_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_narrowing_ignored,
-                        key = format!("permissions.{key}"),
-                        path = bravebot_config::managed_file().display().to_string()
-                    ),
-                );
-            }
-
-            // The network for the programs `run` starts, named only where it is not open, with who
-            // decided it, and the layers that tried to open what a person closed. A word that
-            // is neither is read as absent, so it is said for the reason a mistyped pin is.
             let network = bravebot_config::settled_run_network()
                 .cloned()
                 .unwrap_or_else(|| bravebot_config::resolve_run_network(None, &settings, &managed));
-            if network.network.is_closed() {
-                fact(
-                    t!(doctor_run_network),
-                    t!(
-                        doctor_run_network_closed,
-                        source = bravebot_tui::status::run_network_source(&network.decided)
-                    ),
-                );
-            }
-            for path in settings.run_network_ignored() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_network_ignored,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            for path in settings.run_network_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_settings_network_unreadable,
-                        path = path.display().to_string()
-                    ),
-                );
-            }
-            if managed.network_unreadable() {
-                fact(
-                    t!(doctor_settings_ignored),
-                    t!(
-                        doctor_managed_network_unreadable,
-                        path = bravebot_config::managed_file().display().to_string()
-                    ),
-                );
-            }
+            report_run_network(&network, &settings, &managed);
 
             // The lists of paths the programs `run` starts are held to, entry by entry with the
             // file that wrote each, so a person finds what to edit; and each way an entry was not
             // obeyed, since a refusal that is not in force holds back nothing and says nothing.
             doctor_sandbox_filesystem(&settings, &managed);
 
-            // The same, for the other name a checkout cannot answer on its own: an `allow` entry
-            // stops a prompt, so one read out of a file that arrived with a clone would run a
-            // program nobody was asked about. A rule this workspace's own record says the person
-            // granted is in force and says so; every other one is dropped and says that. Named one
-            // rule at a time rather than counted, for the reason the vetting line gives and because
-            // the two answers are per rule rather than per file.
-            // The rules among them, which is what this is about: an entry that is not a rule is
-            // nobody's grant, so it is left out here and named for what is wrong with it below,
-            // under PERM-11, exactly as the same line in the home layer is.
-            let proposed = bravebot_agent::permissions::proposed(
-                &settings,
-                bravebot_agent::home::profile().as_deref(),
-            );
-            // The record is keyed on the workspace, so this answers about the directory `doctor` ran
-            // in. Canonicalized, because a session keys on the root the workspace resolved and a
-            // report keyed on the spelling would answer about a path that session never wrote: the
-            // two agree on Unix and do not on Windows, where resolving prefixes a name. No state
-            // directory, or one that cannot be read, is a record that says nothing, and a rule
-            // nobody granted is one that is dropped.
-            let here = std::env::current_dir().and_then(|cwd| cwd.canonicalize());
-            let granted: Vec<bravebot_agent::granted::Proposed> =
-                match (bravebot_agent::home::directory(), here) {
-                    (Some(home), Ok(cwd)) => bravebot_agent::granted::Store::new(&home, &cwd)
-                        .granted(&proposed)
-                        .into_iter()
-                        .cloned()
-                        .collect(),
-                    _ => Vec::new(),
-                };
-            for rule in &proposed {
-                let path = rule.path.display().to_string();
-                match granted.contains(rule) {
-                    true => fact(
-                        t!(doctor_settings_granted),
-                        t!(
-                            doctor_settings_allow_granted,
-                            rule = &rule.rule,
-                            path = path
-                        ),
-                    ),
-                    false => fact(
-                        t!(doctor_settings_ignored),
-                        t!(
-                            doctor_settings_allow_ignored,
-                            rule = &rule.rule,
-                            path = path
-                        ),
-                    ),
-                }
-            }
+            let granted = report_allow_rules(&settings);
             report_mcp_declared(&settings, &mut ending);
 
             // After the layers a person owns, because it is what answers for a name none of them
@@ -674,186 +873,10 @@ pub(crate) fn doctor() -> ExitCode {
                 println!("{line}");
             }
 
-            // Counted rather than listed: a rule is the user's own text and printing it back says
-            // nothing they cannot read in the file. What is worth saying is which of them this
-            // build could not act on, because those are the ones that look like protection and
-            // are not.
-            // The granted rules are in the count, because they are rules in force: a report that
-            // left them out would say a workspace had one rule where a session there has two.
-            let (permissions, rejected) = bravebot_agent::permissions::with_granted(
-                &settings,
-                &granted
-                    .iter()
-                    .map(|rule| rule.rule.clone())
-                    .collect::<Vec<_>>(),
-                bravebot_agent::home::profile().as_deref(),
-                // The directory `doctor` ran in, whose volume answers about case. Empty where it
-                // cannot be read, which the probe reads as a volume that compares bytes.
-                &std::env::current_dir()
-                    .and_then(|cwd| cwd.canonicalize())
-                    .unwrap_or_default(),
-            );
-            fact(
-                t!(doctor_permissions),
-                match permissions.is_empty() {
-                    true => t!(doctor_permissions_absent).to_string(),
-                    false => t!(doctor_permissions_count, count = permissions.len() as i64),
-                },
-            );
-            for problem in &rejected {
-                // The catch-all rather than the configuration status, which CLI-6 gives to a
-                // configuration nothing ran on: the rest of the file is honoured and a session
-                // here opens and works, so what is wrong is one line of it rather than the whole.
-                ending = ends_on(ending, Ending::Failed);
-                fact(
-                    t!(doctor_permissions_unreadable),
-                    bravebot_agent::permissions::describe(problem),
-                );
-            }
-
-            // Both, where both are reachable, because both are offered to a person choosing and a
-            // report naming one of them explains only the half of the picker they happened to use.
-            if config.serves_aichat() {
-                report_aichat(&config);
-            }
-            if let Some(bedrock) = config.bedrock.as_ref() {
-                report_bedrock(bedrock);
-            }
-            for provider in &config.providers {
-                report_gateway(provider);
-            }
-            // A file of gateway keys that cannot be read is read as none, so every gateway a key in
-            // it was for is reported above as having none, and this says why. The catch-all
-            // status, as for a rule above: a session opens and works, without those keys.
-            if let Some(directory) = bravebot_agent::home::directory()
-                && bravebot_config::keys::Keys::read(&directory).is_err()
-            {
-                ending = ends_on(ending, Ending::Failed);
-                fact(
-                    t!(doctor_gateway_keys),
-                    t!(
-                        doctor_gateway_keys_unreadable,
-                        path = bravebot_config::keys::file(&directory).display()
-                    ),
-                );
-            }
-
-            // What would end each credential this build holds for itself, and which tier the gate
-            // walk left it on. Reported beside the backends rather than kept for a leak, because it
-            // can only be written down while the arrangement is still understood, and the person
-            // reading it after a key appears somewhere public needs the surface that revokes it
-            // rather than the expiry, which is all anything here kept before.
-            //
-            // The batch is asked for here rather than inside the record, because the record is
-            // configuration and the file the batch sits in is a fact about the machine.
-            let subscription = bravebot_skus::store::load().ok();
-            for held in config.held(subscription.is_some()) {
-                fact(t!(doctor_ends), what_would_end(held));
-                fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
-                if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
-                    fact(t!(doctor_noticed), noticed);
-                }
-                if let Some(binding) = how_it_is_bound(held) {
-                    fact(t!(doctor_binding), binding);
-                }
-                if let Some(survives) = what_outlives_revoking(held) {
-                    fact(t!(doctor_outlives), survives);
-                }
-                // How it got here, after what would end it: the lines above name the credential
-                // and the address somebody acts on, and these say which gate each drop failed and
-                // whether anybody could have done otherwise.
-                for drop in held.walk() {
-                    if let Some(dropped) = why_it_dropped(held, *drop) {
-                        fact(t!(doctor_dropped), dropped);
-                    }
-                }
-            }
-
-            // What a run would actually request, since a choice made with `/model` overrides the
-            // configured default and reporting only the default would explain the wrong thing. Not
-            // where a checkout's settings outrank the choice, since naming it then would explain
-            // the wrong thing the other way round.
-            match bravebot_agent::backend::pick(
-                &config,
-                bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
-            ) {
-                bravebot_agent::backend::Pick::InForce(chosen) => {
-                    fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
-                }
-                bravebot_agent::backend::Pick::SetAside(pick) => fact(
-                    t!(doctor_model),
-                    t!(
-                        doctor_model_set_aside,
-                        model = &config.default_model,
-                        pick = pick
-                    ),
-                ),
-                // The configured model answers as it does above, and the reason differs: a model this
-                // machine does not request is one a configured service would have served, so the
-                // line above would name the wrong fault. Then the file, which is the one thing
-                // somebody in this case can act on, and which nothing at the end of this section
-                // names: that is asked about the model a run would request, the configured one by
-                // then (BACKEND-48).
-                bravebot_agent::backend::Pick::Refused { recorded, reason } => {
-                    fact(
-                        t!(doctor_model),
-                        t!(
-                            doctor_model_refused,
-                            model = &config.default_model,
-                            pick = &recorded
-                        ),
-                    );
-                    fact(
-                        t!(doctor_settings_ignored),
-                        t!(
-                            session_model_pick_refused,
-                            model = &recorded,
-                            reason = reason
-                        ),
-                    );
-                }
-                bravebot_agent::backend::Pick::Absent => fact(
-                    t!(doctor_model),
-                    t!(doctor_model_default, model = &config.default_model),
-                ),
-            }
-
-            // Only where a subscription means something. A Leo credential is what the premium half of
-            // the Brave roster needs, and it means nothing to Bedrock.
-            if config.serves_aichat() {
-                report_subscription(subscription.as_ref());
-            }
-
-            // Last of the configuration section, and a failure, because a report that said
-            // "configuration OK" about a machine where a session refuses to start is the one
-            // thing a person in that position is certain to read first.
-            //
-            // A model the machine-level layer refuses is the same failure read by the same person,
-            // and the one case where what they have to do is ask somebody else (BACKEND-48).
-            let model = model_for_this_run(None, &config);
-            match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
-                bravebot_agent::backend::Serving::NothingConfigured {
-                    subscription,
-                    a_service_is_configured,
-                } => {
-                    ending = ends_on(ending, Ending::Configuration);
-                    println!();
-                    println!(
-                        "{}",
-                        how_to_configure_a_model(
-                            subscription.as_deref(),
-                            a_service_is_configured,
-                            &import::looked(a_service_is_configured),
-                        )
-                    );
-                }
-                bravebot_agent::backend::Serving::Refused { file, why } => {
-                    ending = ends_on(ending, Ending::Configuration);
-                    println!();
-                    println!("{}", managed_refusal(&model, &file, why));
-                }
-                bravebot_agent::backend::Serving::Configured => {}
-            }
+            report_permissions(&settings, &granted, &mut ending);
+            let subscription = report_backends(&config, &mut ending);
+            report_model(&config, &settings, subscription.as_ref());
+            report_serving(&config, &mut ending);
         }
         Err(err) => {
             doctor_found(
