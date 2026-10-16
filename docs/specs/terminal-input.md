@@ -192,6 +192,15 @@ the person presses again, toward the presses at an empty box that end the sessio
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
 empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
 a failure or a completed answer.
+A prompt that returns leaves the conversation the planner reads as well as the transcript, together
+with whatever the turn read for it, so the request that follows a resend holds the prompt once
+rather than once for every send. That holds while the planner has done nothing. A turn it had
+answered or in which it had called a tool keeps its messages, because what it did is not undone by
+taking the prompt back, and so does a turn in which compaction ran. A message that reached the turn
+after its prompt, such as one from another session, stays. A prompt that stays sent stays in the
+conversation. What the planner was shown is not taken back: the conversation keeps the integrity
+and confidentiality it had reached and the references it had handed out. The turn is recorded with
+no prompt and no position for one in the conversation.
 Dropped files and pasted pictures return with their markers, keeping their identities and order
 within each attachment store. Resubmitting includes each once in the new submission, in the
 request order described by [dropping.md](dropping.md). Editor attachment stores remain in memory
@@ -278,6 +287,17 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
+`verified-by: bravebot_tui::undo_tests::a_prompt_stopped_before_any_reply_is_sent_once_when_it_is_sent_again`
+`verified-by: bravebot_tui::undo_tests::a_stopped_prompt_that_stays_sent_stays_in_the_conversation`
+`verified-by: bravebot_tui::undo_tests::a_prompt_stopped_after_a_round_of_tool_calls_keeps_the_round_in_the_conversation`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_leaves_the_messages_a_turn_that_never_ran_would_have`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_keeps_a_message_that_reached_it_after_its_opening`
+`verified-by: bravebot_agent::conversation::a_turn_the_planner_has_answered_is_not_taken_back`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_does_not_forget_what_the_planner_was_shown`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_keeps_the_note_a_resume_added`
+`verified-by: bravebot_agent::conversation::a_turn_that_put_in_no_opening_takes_back_nothing`
+`verified-by: bravebot_agent::conversation::a_turn_that_compacted_is_not_taken_back`
+`verified-by: bravebot_tui::app::a_prompt_taken_out_of_the_conversation_is_recorded_without_an_offset`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::sessions::cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent`

@@ -237,8 +237,10 @@ with one byte or with two. Stopping a turn still answers the first press.
 
 **Stopping shows a cancelled status**, which is its own outcome rather than a failure or an answer.
 The reply stops arriving, and the prompt comes back to the box for editing when the box can take it:
-no work had followed it, nothing is queued behind it, and the box is empty. What still finishes is a
-tool call already running, because stopping one part way could leave a file half written.
+no work had followed it, nothing is queued behind it, and the box is empty. Where the model had
+not yet replied, it also comes out of what the model reads, so sending it again does not repeat it
+in every later request. What still finishes is a tool call already running, because stopping one
+part way could leave a file half written.
 
 Otherwise the prompt stays in the transcript, marked stopped. That is any of three cases: the turn had
 already done something visible, there are prompts waiting behind it, or the box is not empty. The
