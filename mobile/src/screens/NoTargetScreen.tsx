@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { Composer } from '../components/Composer'
+import { DisabledComposer } from '../components/Composer'
 import { ConversationCard } from '../components/ConversationCard'
 import { Body } from '../components/primitives'
 import { TopBar } from '../components/TopBar'
@@ -22,17 +22,7 @@ export function NoTargetScreen() {
             A session runs on a target, such as a host machine. This build has none, so there is nothing to start.
           </Body>
         </View>
-        <Composer
-          draft=""
-          onDraft={() => undefined}
-          status="idle"
-          ended={REASON}
-          sending={false}
-          workspace="No workspace"
-          onSend={() => undefined}
-          onCancel={() => undefined}
-          error={null}
-        />
+        <DisabledComposer reason={REASON} workspace="No workspace" />
       </ConversationCard>
     </View>
   )
