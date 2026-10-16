@@ -318,6 +318,17 @@ pub enum AfterRepeatedCall {
     Unanswered,
 }
 
+/// Where the words of an output style came from (INSTR-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleOrigin {
+    /// Written into this program.
+    BuiltIn,
+    /// A file under `~/.bravebot/styles`, the person's own configuration.
+    Home,
+    /// A file under the workspace's `.bravebot/styles`, read only where the trust map vouches.
+    Project,
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
@@ -6502,17 +6513,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Record the output style whose words open a turn's system prompt, by name and by whether the
-    /// person's own file or this build supplied it (INSTR-12).
+    /// Record the output style whose words open a turn's system prompt, by name and by where its
+    /// words came from (INSTR-12).
     ///
     /// The style is a thing a person switches mid-session with no word in the transcript, and it
     /// changes how every later answer reads, so the trail is the only place to see which was in
     /// force. `name` is a built-in's static text or a slug, never the words of the file.
-    pub fn record_output_style(&mut self, name: &str, from_file: bool) {
-        let source = if from_file {
-            "a file of the person's own"
-        } else {
-            "built in"
+    pub fn record_output_style(&mut self, name: &str, origin: StyleOrigin) {
+        let source = match origin {
+            StyleOrigin::BuiltIn => "built in",
+            StyleOrigin::Home => "a file of the person's own",
+            StyleOrigin::Project => "a file of the project's the trust map vouches for",
         };
         self.allow(
             "output_style",

@@ -52514,6 +52514,86 @@ fn a_turn_records_the_output_style_that_opened_it() {
     )));
 }
 
+/// INSTR-12, TRUST-1. A style a project holds opens the prompt only where the trust map vouches for
+/// the file when the turn begins, and the trail says it came from the project and never shows its
+/// words. The control is the same pick under a map that vouches for nothing: the usual opening, no
+/// word of the file, no trail line, and a notice saying the style was not used.
+#[test]
+fn a_project_style_opens_the_prompt_only_where_the_trust_map_vouches() {
+    let scratch = Scratch::new("style-project");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/styles")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/styles/house.md"),
+        "PROJECT-STYLE-WORDS",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (vouched, label) in [(true, "vouched"), (false, "unvouched")] {
+        let (endpoint, received) = serve(&reply_with("done"));
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+        let trust = if vouched {
+            trusting_the_workspace()
+        } else {
+            bravebot_core::trust::TrustStore::new("/work")
+        };
+        let task = Task::new("go")
+            .with_permission_mode(bravebot_agent::PermissionMode::Plan)
+            .with_style(Some(bravebot_agent::styles::Style::project("house")));
+        let outcome = turns::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        let request = received.recv().expect("the request");
+        assert!(request.contains(PLANNING_MARKER), "{label}: {request}");
+        assert_eq!(
+            request.contains("PROJECT-STYLE-WORDS"),
+            vouched,
+            "{label}: {request}"
+        );
+        assert_eq!(request.contains(OPENING_MARKER), !vouched, "{label}");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "output_style",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<String> = if vouched {
+            vec![
+                "the turn began in the house style (a file of the project's the trust map vouches for)"
+                    .into(),
+            ]
+        } else {
+            vec![]
+        };
+        assert_eq!(recorded, expected, "{label}");
+        assert!(!format!("{:?}", sink.events()).contains("PROJECT-STYLE-WORDS"));
+        assert_eq!(
+            outcome
+                .notices
+                .iter()
+                .any(|n| n.contains("house style was not used")),
+            !vouched,
+            "{label}: {:?}",
+            outcome.notices
+        );
+    }
+}
+
 /// INSTR-10 and INSTR-4. The appended words are the last standing source, after the project's
 /// own instructions, so where the two disagree the person who typed the flag has the last word.
 #[test]

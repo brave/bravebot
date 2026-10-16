@@ -240,7 +240,14 @@ and plan mode still refuses them. The pick lasts for the session and is not writ
 Your own styles are files in `~/.bravebot/styles`: `terse.md` there is the style `terse`, and its
 words replace the opening in the same way. A name is lowercase letters and digits joined by hyphens.
 A file that is empty, longer than 4096 bytes or a symbolic link is not offered, and a file named
-after a built-in style is ignored. Styles are not read from a project.
+after a built-in style is ignored.
+
+A project can hold styles too, as files in `.bravebot/styles` under the workspace, with the same rules
+for the name and the file. They are read only where you trusted the project, the way its `AGENTS.md`
+is, and are listed after the others when you type `/style`. A project's file cannot take the place of
+a built-in style or one of your own. The file is read again at the start of each turn, so a style
+whose file is no longer trusted is not used and the turn says so. The `style` setting does not
+name a project's style.
 
 ## `/effort [level]`
 
