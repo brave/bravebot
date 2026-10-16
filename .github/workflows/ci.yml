@@ -595,6 +595,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The committed Gradle wrapper jar is a binary that runs on every Android build. This checks
+      # it against the checksums of Gradle's published wrappers.
+      - name: Validate the Gradle wrapper
+        # Pinned to a full commit SHA, which is the control this rule is really after.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
