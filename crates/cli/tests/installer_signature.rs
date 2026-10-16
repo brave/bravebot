@@ -205,6 +205,9 @@ struct Release {
     /// Over the substitute's checksum, by a key that is not the release key.
     substitute_signature: Vec<u8>,
     release_key: Vec<u8>,
+    /// The release key and the other one, armoured one after the other, as an installer that
+    /// embedded both would carry them.
+    both_keys: Vec<u8>,
     fingerprint: String,
 }
 
@@ -324,10 +327,17 @@ fn release(tools: &Tools) -> &'static Release {
         let substitute = b"#!/bin/sh\necho substituted\n".to_vec();
         let checksum_of_binary = checksum(tools, &binary);
         let substitute_checksum = checksum(tools, &substitute);
+        let release_key = gpg(tools, &home, &["--armor", "--export", &fingerprint]);
+        let both_keys = [
+            release_key.clone(),
+            gpg(tools, &home, &["--armor", "--export", &other]),
+        ]
+        .concat();
         let release = Release {
             signature: sign(&fingerprint, &checksum_of_binary),
             substitute_signature: sign(&other, &substitute_checksum),
-            release_key: gpg(tools, &home, &["--armor", "--export", &fingerprint]),
+            release_key,
+            both_keys,
             binary,
             checksum: checksum_of_binary,
             substitute,
@@ -416,6 +426,13 @@ impl<'a> Install<'a> {
             authenticode: ("Valid", "Brave Software, Inc."),
             arguments: Vec::new(),
         }
+    }
+
+    /// Hands the installer both keys to embed while it still names only the release key's
+    /// fingerprint, so a signature by the other key verifies and only the name can refuse it.
+    fn embedding_both_keys(mut self, release: &'a Release) -> Self {
+        self.release_key = std::str::from_utf8(&release.both_keys).expect("utf-8 keys");
+        self
     }
 
     fn with_arguments(mut self, arguments: &[&'static str]) -> Self {
@@ -864,6 +881,41 @@ fn a_checksum_signed_by_any_key_but_the_release_key_installs_nothing() {
         ),
     ]) {
         assert_refused(installer, &outcome, "signature verification failed");
+    }
+}
+
+/// The signature counts only when it was made by the key the installer names by its fingerprint.
+/// Here the other key is in the keyring the check imports, so its signature over the substitute's
+/// checksum verifies as far as gpg is concerned, and nothing but the comparison with the named
+/// fingerprint refuses it. The release key's own signature still installs from the same keyring,
+/// which is what shows the refusal is the comparison and not an unreadable key block.
+///
+/// The regression it rejects: accepting any signature that verifies against what the installer
+/// embeds, which the test above cannot see because the other key is then not in the keyring.
+#[test]
+fn a_signature_that_verifies_but_was_made_by_a_key_the_installer_does_not_name_installs_nothing() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let install = Install::new(tools, release, "named-key").embedding_both_keys(release);
+    for (installer, outcome) in install.each(&[
+        ("bravebot-linux-arm64", &release.substitute),
+        ("bravebot-linux-arm64.sha256", &release.substitute_checksum),
+        (
+            "bravebot-linux-arm64.sha256.asc",
+            &release.substitute_signature,
+        ),
+    ]) {
+        assert_refused(installer, &outcome, "signature verification failed");
+    }
+
+    let install = Install::new(tools, release, "named-key-control").embedding_both_keys(release);
+    for (installer, outcome) in install.each(&[
+        ("bravebot-linux-arm64", &release.binary),
+        ("bravebot-linux-arm64.sha256", &release.checksum),
+        ("bravebot-linux-arm64.sha256.asc", &release.signature),
+    ]) {
+        assert_installed(installer, &outcome, &release.binary);
     }
 }
 
