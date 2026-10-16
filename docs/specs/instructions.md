@@ -451,6 +451,7 @@ change of the file.
 `verified-by: bravebot_agent::styles::a_project_style_is_read_only_where_the_trust_map_vouches`
 `verified-by: bravebot_agent::styles::a_project_file_cannot_take_the_place_of_a_built_in_or_a_home_style`
 `verified-by: bravebot_agent::styles::a_project_link_an_empty_file_a_long_file_and_a_bad_name_are_not_styles`
+`verified-by: bravebot_agent::styles::a_deny_rule_over_a_project_style_neither_offers_nor_resolves_it`
 `verified-by: bravebot_agent::turn::a_project_style_opens_the_prompt_only_where_the_trust_map_vouches`
 `verified-by: bravebot_tui::app::a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for`
 `verified-by: bravebot_tui::state::the_project_styles_are_read_once_per_style_line_and_held_after_it`
