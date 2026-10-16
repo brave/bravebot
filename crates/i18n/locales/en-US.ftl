@@ -3789,6 +3789,12 @@ session-offered-tools =
         [one] offering { $alias }'s one tool to the model
        *[other] offering { $alias }'s { $count } tools to the model
     }
+# Said when a person agrees to offer a server's resources to the model.
+session-offered-resources =
+    { $count ->
+        [one] offering { $alias }'s one resource to the model
+       *[other] offering { $alias }'s { $count } resources to the model
+    }
 # Said when a person answers that a server's tool may be called without asking, in this project.
 session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
@@ -4464,6 +4470,8 @@ verb-read-output = Read output
 verb-vet-content = Vet
 verb-fetch-url = Fetch
 verb-download-url = Download
+verb-list-mcp-resources = Resources
+verb-read-mcp-resource = Read resource
 verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule

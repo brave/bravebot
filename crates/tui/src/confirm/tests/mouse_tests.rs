@@ -220,6 +220,28 @@ fn questions_of(kind: Kind) -> Vec<Row> {
         Kind::ToolList => vec![row("tool list", vec![interrupt()], |terminal| {
             format!("{:?}", ask_tool_list(terminal, &tool_list()))
         })],
+        Kind::ResourceList => vec![row("resource list", vec![interrupt()], |terminal| {
+            let request = ResourceListRequest {
+                alias: "weather".into(),
+                resources: vec![bravebot_agent::confirm::ListedResource {
+                    uri: "memo://weather/today".into(),
+                    name: "Today".into(),
+                    description: Some("Today's forecast.".into()),
+                    mime_type: Some("text/plain".into()),
+                }],
+                refused: 0,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+            };
+            format!("{:?}", ask_resource_list(terminal, &request))
+        })],
+        Kind::ResourceRead => vec![row("resource read", vec![interrupt()], |terminal| {
+            let request = ResourceReadRequest {
+                alias: "weather".into(),
+                uri: "memo://weather/today".into(),
+            };
+            format!("{:?}", ask_resource_read(terminal, &request))
+        })],
         Kind::McpCall => {
             let plain = || {
                 row("mcp call", vec![interrupt()], |terminal| {

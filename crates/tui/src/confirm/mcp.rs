@@ -1,7 +1,8 @@
 //! The MCP prompts: a server, a move, a tool list and a call.
 
 use bravebot_agent::confirm::{
-    CallDecision, McpCallRequest, MoveRequest, ServerRequest, ToolListRequest,
+    CallDecision, McpCallRequest, MoveRequest, ResourceListRequest, ResourceReadRequest,
+    ServerRequest, ToolListRequest,
 };
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -406,6 +407,159 @@ pub(super) fn draw_tool_list(
             Span::raw(format!(" {}    ", t!(mcp_tools_yes))),
             Span::styled("2", refusing()),
             Span::raw(format!(" {}    ", t!(mcp_tools_no))),
+        ];
+        spans.extend(stopping());
+        vec![Line::from(spans)]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// Put the resources an MCP server offers to the person, blocking until answered (SERVERS-21).
+pub fn ask_resource_list<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &ResourceListRequest,
+) -> Answer {
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_resource_list(frame, request, scroll, seen),
+        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+    )
+}
+
+pub(super) fn draw_resource_list(
+    frame: &mut ratatui::Frame,
+    request: &ResourceListRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(
+        frame,
+        area,
+        theme::ok(),
+        "offer these resources to the model?",
+    );
+    let width = inside.width as usize;
+
+    let marked = Style::default().fg(theme::running());
+    let margin = Span::styled("┃ ", marked);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme::muted());
+
+    let heading = match request.resources.is_empty() {
+        true => format!("{} lists no resources it can offer", request.alias),
+        false => format!(
+            "{} offers {} resource(s)",
+            request.alias,
+            request.resources.len()
+        ),
+    };
+    let mut lines = indented(heading, bold, width);
+    lines.push(Line::raw(""));
+    lines.extend(verdict_rows(
+        request.verdict,
+        request.reason.as_ref(),
+        &margin,
+        width,
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        "A yes makes these resources available to the planner for this session.",
+        muted,
+        width,
+    ));
+
+    for resource in &request.resources {
+        lines.push(Line::raw(""));
+        lines.extend(indented(
+            format!("{} ({})", resource.name, resource.uri),
+            bold,
+            width,
+        ));
+        if let Some(description) = &resource.description {
+            for line in description.lines() {
+                lines.extend(marked_rows(&margin, &[Span::raw(line.to_string())], width));
+            }
+        }
+    }
+    if request.refused > 0 {
+        lines.push(Line::raw(""));
+        lines.extend(indented(
+            format!("{} resources were not listed", request.refused),
+            muted,
+            width,
+        ));
+    }
+
+    let keys = |answerable: bool| {
+        let mut spans = vec![
+            Span::styled("  1", approving(theme::ok(), answerable)),
+            Span::raw(" Yes, offer them    "),
+            Span::styled("2", refusing()),
+            Span::raw(" No, continue without them    "),
+        ];
+        spans.extend(stopping());
+        vec![Line::from(spans)]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// Ask whether to read a resource from an MCP server (SERVERS-21).
+pub fn ask_resource_read<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &ResourceReadRequest,
+) -> Answer {
+    ask_scrolled(
+        terminal,
+        Answer::Reject,
+        |frame, scroll, seen| draw_resource_read(frame, request, scroll, seen),
+        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+    )
+}
+
+pub(super) fn draw_resource_read(
+    frame: &mut ratatui::Frame,
+    request: &ResourceReadRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::ok(), "read this resource?");
+    let width = inside.width as usize;
+
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme::muted());
+
+    let heading = format!("Read resource from MCP server '{}'", request.alias);
+    let mut lines = indented(heading, bold, width);
+    lines.push(Line::raw(""));
+    lines.extend(indented(format!("URI: {}", request.uri), bold, width));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        "Content read from the resource is placed into quarantine as untrusted and private.",
+        muted,
+        width,
+    ));
+
+    let keys = |answerable: bool| {
+        let mut spans = vec![
+            Span::styled("  1", approving(theme::ok(), answerable)),
+            Span::raw(" Yes, allow reading    "),
+            Span::styled("2", refusing()),
+            Span::raw(" No, refuse    "),
         ];
         spans.extend(stopping());
         vec![Line::from(spans)]

@@ -15,8 +15,9 @@
 //! and a new [`HttpServer`] rather than this one following the header.
 
 use crate::protocol::{
-    Listing, PromptListing, PromptResult, RpcRequest, RpcResponse, ToolResult, call_params,
-    declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
+    Listing, PromptListing, PromptResult, ReadResourceResult, ResourceListing, RpcRequest,
+    RpcResponse, ToolResult, call_params, declares_prompts, get_prompt_params, initialize_params,
+    listed_resources_or_none, paged, paged_prompts, paged_resources, read_resource_params,
 };
 use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::capability::{Capability, ServerAlias};
@@ -311,6 +312,51 @@ impl HttpServer {
         }
 
         Ok(Labelled::new(parsed.text(), label))
+    }
+
+    /// Servers serving only tools or prompts may omit `resources/list`; reading those yields an
+    /// empty list rather than failing the call. MCP-13, SERVERS-21.
+    pub fn list_resources<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &Egress,
+    ) -> McpResult<ResourceListing> {
+        let list = paged_resources(|params| self.send(policy, egress, "resources/list", params));
+        listed_resources_or_none(&self.name, list.map(|l| l.listing(&self.name)))
+    }
+
+    /// Extracts text payload for quarantine and attaches a private label. MCP-1, MCP-6, MCP-13.
+    pub fn read_resource<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &Egress,
+        uri: &str,
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let result = self
+            .send(
+                policy,
+                egress,
+                "resources/read",
+                Some(read_resource_params(uri)),
+            )
+            .map_err(|error| named(error, uri))?;
+
+        let parsed: ReadResourceResult =
+            serde_json::from_value(result).map_err(|e| malformed("resource result", &e))?;
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let text = parsed.text().ok_or_else(|| {
+            McpError::Transport(format!("resource '{uri}' contained no text content"))
+        })?;
+
+        Ok(Labelled::new(text, label))
     }
 }
 
