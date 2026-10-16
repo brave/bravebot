@@ -789,6 +789,61 @@ def check_network_clients_are_recorded(sources):
                 )
 
 
+BARE_PROGRAM = re.compile(r"""\bCommand::new\(\s*(?:&\s*)?"([^"]*)"\s*[,)]""")
+
+# Production files where a program may be started by a bare name, with who chose the name. A name
+# is looked up through `PATH`, so this list is the whole of the places bravebot trusts that lookup.
+BARE_PROGRAM_ALLOWED = {}
+
+
+def check_programs_are_resolved(sources):
+    """A program bravebot starts itself is named by an absolute path, never by a bare name.
+
+    SANDBOX-30 keeps the programs bravebot starts unconfined from being a file a confined stage
+    wrote into a `PATH` directory. It was applied one report at a time (`aws`, the clipboard tools,
+    hooks, language servers, the editor, the inhibitor's `cat`, `doctor --push-identity`), because
+    nothing asked of a new spawn whether it was resolved first. `Command::new("name")` in
+    production code is that lookup left to the operating system, so every one is an error unless
+    `BARE_PROGRAM_ALLOWED` records it.
+
+    A name held in a variable, a program that looks up a second one through the `PATH` it inherited,
+    and one started through a helper this pattern does not match are not seen here, and
+    `docs/best_practices/security.md` asks for them in review.
+    """
+    for path in sorted(sources):
+        text = str(path)
+        if (
+            "/tests/" in text
+            or "/test-support/" in text
+            or text.endswith(("_tests.rs", "build.rs"))
+        ):
+            continue
+        spans = test_regions(sources[path])
+        for number, raw in enumerate(mechanics.strip_comments(sources[path]), start=1):
+            match = BARE_PROGRAM.search(raw)
+            if not match or match.group(1).startswith("/"):
+                continue
+            if any(low <= number <= high for low, high in spans):
+                continue
+            if text in BARE_PROGRAM_ALLOWED:
+                continue
+            yield finding(
+                ERROR,
+                "program-started-by-bare-name",
+                "production code starts a program by a bare name, so `PATH` decides what runs "
+                "unconfined and a file a stage wrote can be the one",
+                f"`{path}:{number}` starts `{match.group(1)}` with `Command::new` and no "
+                "absolute path",
+                "sandbox",
+                "high",
+                evidence=[f"{path}:{number} {raw.strip()[:160]}"],
+                fix="resolve it first with `bravebot_sandbox::programs` and start the absolute "
+                "path ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30)), or record the file in "
+                "`BARE_PROGRAM_ALLOWED` with who chose the name",
+                gain="a stage-written program run with the person's access to `~/.ssh` and `~/.aws`",
+            )
+
+
 def paragraphs(lines):
     """Every block between blank lines, joined into one line, with the line it starts at.
 
@@ -1355,7 +1410,7 @@ def test_regions(lines):
     counter = 0
     armed = False
     for number, raw in enumerate(lines, start=1):
-        if depth is None and raw.strip().startswith("#[cfg(test)]"):
+        if depth is None and raw.strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
             armed = True
         opens = raw.count("{")
         closes = raw.count("}")
@@ -3107,6 +3162,7 @@ def mechanical_findings(specs, sources):
     findings = list(check_exception_counts())
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
+    findings += list(check_programs_are_resolved(sources))
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))

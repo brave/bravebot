@@ -2945,6 +2945,9 @@ The programs bravebot starts on its own account, unconfined and with the person'
 inhibitor `/caffeinate` starts, a hook's program, a language server, and the editor Ctrl-G opens.
 Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
 lie outside every directory a confined stage may write.
+That list is the whole of it: a program started by a bare name in production code is one this
+clause does not cover, and `make check-security` fails on a `Command::new("name")` outside tests, so
+a new spawn is added to the list here, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
