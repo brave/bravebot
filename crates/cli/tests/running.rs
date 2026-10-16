@@ -6695,6 +6695,53 @@ fn doctor_names_a_skill_key_nothing_reads() {
     );
 }
 
+/// SKILL-16's other two sentences: `doctor` says nothing about a skill whose every key is read, and
+/// omits a skill a turn would drop. The three skills sit beside one that does carry an unread key, so
+/// the report is built and each of the others could have been named in it. A report that listed every
+/// skill, or that read the files without the gate a turn reads them through, names `tidy` or `broken`.
+#[test]
+fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
+    let scratch = Scratch::new("cli-running-skill-unread-quiet")
+        .with_file(
+            ".bravebot/skills/ported/SKILL.md",
+            "---\nname: ported\ndescription: written for another agent\nallowed-tools: \
+             Read\n---\n\nthe body\n",
+        )
+        .with_file(
+            ".bravebot/skills/tidy/SKILL.md",
+            "---\nname: tidy\ndescription: every key is one this reads\nmodel: haiku\n\
+             argument-hint: <file>\n---\n\nthe body\n",
+        )
+        .with_file(
+            ".bravebot/skills/broken/SKILL.md",
+            "---\nname: broken\nallowed-tools: Read\n---\n\nno description, so no skill\n",
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("skills/ported/SKILL.md"),
+        "doctor did not report the skill that has an unread key: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("skills/tidy/SKILL.md"),
+        "doctor named a skill whose every key is read: {stdout}"
+    );
+    assert!(
+        !stdout.contains("skills/broken/SKILL.md"),
+        "doctor named a skill a turn would drop: {stdout}"
+    );
+}
+
 /// A definition as a person keeps one under this home's own directory, which a run reads without
 /// asking anybody, since nobody but the person writes there (DELEGATE-20).
 fn a_definition(name: &str, fields: &str) -> String {
