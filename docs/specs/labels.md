@@ -18,7 +18,7 @@ guards:
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 38
+      - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
@@ -41,7 +41,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 58
+      - crates/agent/tests/workspace.rs: 59
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/connector/src/lib.rs: 1
@@ -63,7 +63,7 @@ guards:
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 274
+      - crates/agent/tests/workspace.rs: 280
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -135,6 +135,7 @@ guards:
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 34
       - crates/agent/src/turn.rs: 1
+      - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
     sites:
