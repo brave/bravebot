@@ -165,9 +165,18 @@ that reports a moved token as a changed file is claiming more than the token sai
 with the person's line sent unchanged, and say that this is how a request to be told when a file
 changes is answered: read it now, and schedule the look that would catch a change. It must say to do
 that rather than to tell somebody to arrange it themselves. Inside a loop the next tick is already the
-next look, and the description must say there is nothing to arrange there. And where a look has been
-taken and no other scheduled, the description must have the planner say so, or no change reads as a
-promise to report the next one.
+next look, and the description must say there is nothing to arrange there. And where the request is
+to watch something or to be told when it changes, and a look has been taken and no other scheduled,
+the description must have the planner say so, or no change reads as a promise to report the next one.
+The sentence opens with that condition, and the description must say that any other request gets no
+sentence about a later look. A turn nothing will ask again is told to say plainly that no later look
+is coming under the same condition.
+
+**Why the line is conditional.** An unconditional statement that no later look was scheduled, on a
+request that has nothing to do with watching or being told of a change, reads as if a first look had
+been taken and a repeat could have been arranged, and it tells the person nothing they asked about.
+The condition names a request and not the user, because a delegate holds a task and never sees the
+user's line.
 
 **Why the planner arranges it rather than the person.** This clause used to have the description hand
 over a `/loop` line for the person to type, on the grounds that only a loop outlives a turn. A session
@@ -202,6 +211,8 @@ to a technique has to say which end of it happens in the turn that read it.
 `verified-by: bravebot_agent::tools::read_file_sends_a_question_about_change_to_a_token_it_can_compare`
 `verified-by: bravebot_agent::tools::read_file_says_what_a_change_token_does_and_does_not_settle`
 `verified-by: bravebot_agent::tools::inside_a_loop_read_file_says_there_is_nothing_to_arrange`
+`verified-by: bravebot_agent::tools::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
+`verified-by: bravebot_agent::tools::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
 
 <a id="READ-7"></a>
 ### READ-7: a read carries a token that differs once the file has been written

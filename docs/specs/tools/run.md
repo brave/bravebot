@@ -975,8 +975,12 @@ and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reache
 itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
 the description must say to take the first look now and call `schedule_next` at the end of the turn,
 which has the planner asked again after the wait with the person's line unchanged
-([SCHED-6](schedule-next.md#SCHED-6), [LOOP-14](../loop.md#LOOP-14)); and that where no further look
-has been scheduled, the answer says so.
+([SCHED-6](schedule-next.md#SCHED-6), [LOOP-14](../loop.md#LOOP-14)); and that where the request is
+to watch something or to be told when it changes, and no further look has been scheduled, the answer
+says so. The sentence opens with that condition, and the description must say that any other request
+gets no sentence about a later look. A turn nothing will ask again is told to say plainly that no
+later look is coming under the same condition, as [READ-6](read-file.md#READ-6) has it for
+`read_file`.
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
@@ -1019,6 +1023,8 @@ worse answer than the single read this pair of clauses set out to correct, becau
 without even the file. Hence the first look happens in the turn that was asked.
 
 `verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+`verified-by: bravebot_agent::tools::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
+`verified-by: bravebot_agent::tools::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
 
 <a id="RUN-19"></a>
 ### RUN-19: a prompt may record its answer past the session, and it stops only the asking

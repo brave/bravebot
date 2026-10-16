@@ -204,8 +204,8 @@ fn table(
             "Inside a loop that is already what happens, so take this tick's look, report what it saw and leave the rest to the next one.",
         ),
         Scheduling::NoLaterLook => (
-            "Comparing a second token needs a later turn, and nothing will ask you again: this turn is the last one asked about the user's line. Report what this look found and say so plainly, rather than promising a later report or telling the user to arrange one.",
-            "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it and say plainly that no later one is coming.",
+            "Comparing a second token needs a later turn, and nothing will ask you again: this turn is the last one asked about the user's line. Where the request is to watch something or to be told when it changes, report what this look found and say plainly that no later look is coming, rather than promising a later report or telling the user to arrange one.",
+            "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it. Where the request is to watch something or to be told when it changes, say plainly that no later one is coming.",
         ),
     };
     // The two figures `run` quotes, in seconds, wherever its description names them. Written out
@@ -260,8 +260,10 @@ fn table(
              says the file was written, not what changed: a rewrite of the same bytes moves it \
              too, and a change that leaves the file's modification time alone moves nothing. \
              {look_again_after_a_read} \
-             Where you have taken a look and not scheduled another, say so, because no change with \
-             nothing watching reads as a promise to report the next one.{watching} \
+             Where the request is to watch something or to be told when it changes, and you \
+             have taken a look and not scheduled another, say so, because no change with \
+             nothing watching reads as a promise to report the next one. Any other request gets \
+             no sentence about a later look.{watching} \
              \
              Ask for the same window of a file again while it is as it was and the answer is a \
              short notice carrying the same token, because the lines are already earlier in this \
@@ -975,8 +977,9 @@ fn table(
              needs a later look. "
                 + look_again_after_a_run
                 + " And say which window you watched, or which looks you compared, rather than \
-                   a time of day, which you have no clock for; where you have scheduled no \
-                   further look, say that too.",
+                   a time of day, which you have no clock for. Where the request is to watch \
+                   something or to be told when it changes, and you have scheduled no further \
+                   look, say that too. Any other request gets no sentence about a later look.",
             json!({
                 "type": "object",
                 "properties": {
@@ -14315,17 +14318,7 @@ mod tests {
     }
 
     fn run_description() -> String {
-        available(
-            Scheduling::ArrangingALook,
-            Arming::Allowed { free: 1 },
-            Deadlines::BUILT_IN,
-            Running::Offered,
-        )
-        .into_iter()
-        .find(|t| t.function.name == "run")
-        .expect("run is offered")
-        .function
-        .description
+        tool_description(Scheduling::ArrangingALook, "run")
     }
 
     /// Blind output is the default, not the rule, and describing it as the rule is what made
@@ -14459,6 +14452,10 @@ mod tests {
     }
 
     fn read_file_description(scheduling: Scheduling) -> String {
+        tool_description(scheduling, "read_file")
+    }
+
+    fn tool_description(scheduling: Scheduling, name: &str) -> String {
         available(
             scheduling,
             Arming::Allowed { free: 1 },
@@ -14466,11 +14463,91 @@ mod tests {
             Running::Offered,
         )
         .into_iter()
-        .find(|t| t.function.name == "read_file")
-        .expect("read_file is offered")
+        .find(|t| t.function.name == name)
+        .unwrap_or_else(|| panic!("{name} is offered"))
         .function
         .description
-        .clone()
+    }
+
+    /// The sentence of `description` that holds `needle`. A condition counts only when it opens
+    /// that sentence: one placed in a neighbour, or trailing after the instruction, leaves the
+    /// instruction unconditional for a planner that acts on the sentence it is reading.
+    fn sentence_with<'a>(description: &'a str, needle: &str) -> &'a str {
+        description
+            .split(". ")
+            .find(|sentence| sentence.contains(needle))
+            .unwrap_or_else(|| panic!("no sentence says '{needle}': {description}"))
+    }
+
+    const WATCH_REQUEST: &str =
+        "Where the request is to watch something or to be told when it changes";
+
+    /// An answer to a request that had nothing to do with watching or change ended on a line
+    /// saying no later look was scheduled, which reads as if a first look had been taken and a
+    /// repeat could have been arranged. The line is for a request to watch, so the sentence that
+    /// asks for it opens with that condition, and every other request is told it gets none.
+    #[test]
+    fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change() {
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for (name, instruction) in [
+                ("read_file", "not scheduled another, say so"),
+                ("run", "scheduled no further look, say that too"),
+            ] {
+                let description = tool_description(scheduling, name);
+                assert!(
+                    sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
+                    "{name} has the planner report no further look for any request: {description}"
+                );
+                assert!(
+                    description.contains("Any other request gets no sentence about a later look"),
+                    "{name} does not tell the planner a request that did not ask gets no such line: \
+                     {description}"
+                );
+            }
+        }
+    }
+
+    /// A turn nothing will ask again, which is what a delegate and the desktop app's turns are,
+    /// is told to say plainly that no later look is coming. A delegate that read a file and ran
+    /// one command for a request that had nothing to do with change ended its report on that
+    /// line, and the planner repeated it in the final answer. The request a delegate holds is
+    /// its task, so the condition names a request and not the user.
+    #[test]
+    fn a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request() {
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        let delegate = for_delegate(
+            &CapabilitySet::from_iter([Capability::FileRead, Capability::ShellExec]),
+            None,
+            None,
+            Deadlines::BUILT_IN,
+        );
+        for (name, announcement) in [
+            ("read_file", "no later look is coming"),
+            ("run", "no later one is coming"),
+        ] {
+            let given_to_a_delegate = delegate
+                .iter()
+                .find(|t| t.function.name == name)
+                .unwrap_or_else(|| panic!("{name} is offered to this delegate"))
+                .function
+                .description
+                .clone();
+            for description in [
+                tool_description(Scheduling::NoLaterLook, name),
+                given_to_a_delegate,
+            ] {
+                assert!(
+                    sentence_with(&description, announcement).starts_with(WATCH_REQUEST),
+                    "{name} has a turn nothing asks again announce it for any request: \
+                     {description}"
+                );
+            }
+        }
     }
 
     /// A read hands the token over and a slot fill does not. What a slot holds is the file's text,
