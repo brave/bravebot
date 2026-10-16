@@ -2741,6 +2741,22 @@ mod tests {
         assert!(sources([].iter(), "managed").is_empty());
     }
 
+    /// Two paths that differ only in a byte no UTF-8 name holds print the same, so the note names
+    /// them once: a list of what the person sees has no use for two identical words. The fault it
+    /// rejects is a dedup keyed on the path, which would print the same file twice.
+    #[cfg(unix)]
+    #[test]
+    fn sources_that_print_alike_are_named_once() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            b"/tool-\xff",
+        )));
+        let lossy = Some(std::path::PathBuf::from("/tool-\u{FFFD}"));
+        assert_ne!(raw, lossy);
+
+        assert_eq!(sources([raw, lossy].iter(), "managed"), ["/tool-\u{FFFD}"]);
+    }
+
     /// The four filesystem lists are read in the order `allow_read`, `deny_read`, `allow_write`,
     /// `deny_write`, so the files in the note come in that order, not sorted and not by list size.
     #[test]
