@@ -230,10 +230,10 @@ pub fn draw(frame: &mut Frame, list: &List) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title
-            Constraint::Min(1),    // list
+            Constraint::Length(1),
+            Constraint::Min(1),
             Constraint::Length(2), // directory and last prompt of the row under the cursor
-            Constraint::Length(1), // keys
+            Constraint::Length(1),
         ])
         .split(area);
 
