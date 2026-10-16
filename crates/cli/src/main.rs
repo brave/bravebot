@@ -1367,6 +1367,56 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     })
 }
 
+/// The first of the flags a manifest run cannot take that this invocation gave, as the sentence that
+/// refuses it, in the order the checks run: agent, advisor, output schema, tools, system prompts,
+/// resume. `None` for any other mode.
+fn manifest_conflict(
+    mode: Mode,
+    has_agent: bool,
+    has_advisor: bool,
+    has_output_schema: bool,
+    prompts: &SystemPrompts,
+    resume: Option<&continued::Resume>,
+) -> Option<String> {
+    if mode != Mode::Manifest {
+        return None;
+    }
+    // A manifest run's plan is written by the planner before any step runs, and an addressed
+    // definition is matched a turn at a time by the turn's own kernel, so the name would be taken
+    // and nothing would be addressed to it.
+    if has_agent {
+        return Some(t!(cli_agent_not_with_a_manifest).to_string());
+    }
+    // A manifest run's steps are run from the plan, not chosen by a planner that could ask, so an
+    // advisor would be named and never consulted.
+    if has_advisor {
+        return Some(t!(cli_advisor_not_with_a_manifest).to_string());
+    }
+    // A manifest run has a reply per step and none for the run, so there is no one reply to hold to
+    // a schema.
+    if has_output_schema {
+        return Some(t!(cli_output_schema_not_with_a_manifest).to_string());
+    }
+    // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
+    // the flags would be taken and limit nothing.
+    if !bravebot_core::tool_set::settled().is_none() {
+        return Some(t!(cli_tools_not_with_a_manifest).to_string());
+    }
+    // Neither reaches the planner of a manifest run, which is given no standing instructions from
+    // the command line, and words a run would drop are refused instead (CLI-19).
+    if let Some(flag) = flag_named(prompts) {
+        return Some(t!(cli_system_prompt_not_with_a_manifest, flag = flag));
+    }
+    // A manifest run has no conversation to carry a recorded one into.
+    resume.map(|asked| {
+        let flag = match asked {
+            continued::Resume::Id(_) => "--resume",
+            continued::Resume::Latest => "--continue",
+        };
+        t!(cli_resume_not_with_a_manifest, flag = flag)
+    })
+}
+
 fn run_task(
     args: &[String],
     skip_permissions: bool,
@@ -1415,33 +1465,15 @@ fn run_task(
         return stopped_before_the_turn(as_json, Ending::Argument, t!(cli_task_required));
     }
 
-    // A manifest run's plan is written by the planner before any step runs, and an addressed
-    // definition is matched a turn at a time by the turn's own kernel, so the name would be taken
-    // and nothing would be addressed to it.
-    if agent.is_some() && mode == Mode::Manifest {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Argument,
-            t!(cli_agent_not_with_a_manifest),
-        );
-    }
-    // A manifest run's steps are run from the plan, not chosen by a planner that could ask, so an
-    // advisor would be named and never consulted.
-    if advisor.is_some() && mode == Mode::Manifest {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Argument,
-            t!(cli_advisor_not_with_a_manifest),
-        );
-    }
-    // A manifest run has a reply per step and none for the run, so there is no one reply to hold to
-    // a schema.
-    if output_schema.is_some() && mode == Mode::Manifest {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Argument,
-            t!(cli_output_schema_not_with_a_manifest),
-        );
+    if let Some(conflict) = manifest_conflict(
+        mode,
+        agent.is_some(),
+        advisor.is_some(),
+        output_schema.is_some(),
+        &prompts,
+        resume.as_ref(),
+    ) {
+        return stopped_before_the_turn(as_json, Ending::Argument, conflict);
     }
     // Read and vetted before anything is sent, so a schema outside what is checked is a refused
     // argument and not a constraint the run quietly did not hold the reply to.
@@ -1451,41 +1483,6 @@ fn run_task(
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
         }
     };
-    // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
-    // the flags would be taken and limit nothing.
-    if !bravebot_core::tool_set::settled().is_none() && mode == Mode::Manifest {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Argument,
-            t!(cli_tools_not_with_a_manifest),
-        );
-    }
-    // Neither reaches the planner of a manifest run, which is given no standing instructions from
-    // the command line, and words a run would drop are refused instead (CLI-19).
-    if let Some(flag) = flag_named(&prompts)
-        && mode == Mode::Manifest
-    {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Argument,
-            t!(cli_system_prompt_not_with_a_manifest, flag = flag),
-        );
-    }
-
-    // A manifest run has no conversation to carry a recorded one into.
-    if let Some(asked) = &resume {
-        let flag = match asked {
-            continued::Resume::Id(_) => "--resume",
-            continued::Resume::Latest => "--continue",
-        };
-        if mode == Mode::Manifest {
-            return stopped_before_the_turn(
-                as_json,
-                Ending::Argument,
-                t!(cli_resume_not_with_a_manifest, flag = flag),
-            );
-        }
-    }
 
     let mut config = match Config::from_env() {
         Ok(c) => c,
@@ -1701,43 +1698,14 @@ fn run_task(
         .with_model(model_asked_for(named, pick.into_model()))
         .with_advisor(advisor)
         .with_output_schema(output_schema)
-        // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
-        // The layers are the only route a machine where nobody ever opens the interface has to a
-        // level that outlives one run.
-        .with_effort(effort.or_else(|| {
-            bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings)
-        }))
         .with_permissions(permissions)
         .with_permission_mode(permission_mode)
-        // What the settings say this run may add to a commit message or a pull request it writes
-        // (BACKEND-30). Read off the same resolved settings the permission rules came from.
-        .with_attribution(settings.attribution().clone())
         // The words the command line put in the planner's system prompt (CLI-19). A manifest run
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)
-        // And what they say a command's output may spend of this run's context (RUN-21), off the
-        // same resolved settings.
-        .with_output_cap(settings.run_output_cap())
-        // And what they say one download may write to a file (DOWNLOAD-4).
-        .with_download_cap(settings.download_max_bytes())
-        // And how long one may take, resolved here because this is where the settings were read
-        // (RUN-23).
-        .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-            settings.run_deadlines(),
-        ))
-        .with_confined_runs(true)
-        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
-        // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
-        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
-        // any of the three again. A run nobody is watching has no prompt to fall back to, so
-        // without this every check on this path ends in a refusal.
-        .with_auto_vetting(bravebot_core::vetting::auto(
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ))
         .addressing(agent.clone())
         .model_outranks_a_definition(named_on_the_command_line);
+    task = task_from_the_settings(task, &settings, effort);
     for file in files {
         task = task.with_file(file);
     }
@@ -2073,47 +2041,90 @@ fn run_task(
         // whether or not --trace was asked for. Without it a failed plan is a one-line
         // complaint about a document nobody can see.
         Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
-            let ending = exit::ending_of(&cause);
-            let stopped = fail(ending, &cause);
-            say_notices(&mut std::io::stderr().lock(), reporter.notices());
-            say_what_a_stopped_manifest_produced(
-                &mut std::io::stderr().lock(),
-                &attempt,
-                trace.then(|| sink.recorded()),
-            );
-            if as_json {
-                say_the_result(&what_ran(
-                    ending,
-                    &cause.to_string(),
-                    reporter.spent(),
-                    reporter.calls(),
-                    &refusals(sink.recorded()),
-                    reporter.notices(),
-                ));
-            }
-            stopped
+            report_a_failed_turn(&cause, Some(&attempt), trace, as_json, &reporter, &sink)
         }
-        Err(err) => {
-            let ending = exit::ending_of(&err);
-            let stopped = fail(ending, &err);
-            say_notices(&mut std::io::stderr().lock(), reporter.notices());
+        Err(err) => report_a_failed_turn(&err, None, trace, as_json, &reporter, &sink),
+    }
+}
+
+/// What a turn that stopped says: the notices, then what it produced and the trail, then the result
+/// object where one was asked for. A manifest run passes the cause and the attempt, and prints the
+/// attempt whether or not `--trace` was given, after the notices and before the trail (MANIFEST-3).
+fn report_a_failed_turn(
+    error: &bravebot_agent::TurnError,
+    attempt: Option<&bravebot_agent::manifest::Attempt>,
+    trace: bool,
+    as_json: bool,
+    reporter: &progress::Progress<std::io::Stderr>,
+    sink: &json::Streaming,
+) -> ExitCode {
+    let ending = exit::ending_of(error);
+    let stopped = fail(ending, error);
+    say_notices(&mut std::io::stderr().lock(), reporter.notices());
+    match attempt {
+        Some(attempt) => say_what_a_stopped_manifest_produced(
+            &mut std::io::stderr().lock(),
+            attempt,
+            trace.then(|| sink.recorded()),
+        ),
+        None => {
             if trace {
                 eprintln!();
                 print_trace(&mut std::io::stderr().lock(), sink.recorded());
             }
-            if as_json {
-                say_the_result(&what_ran(
-                    ending,
-                    &err.to_string(),
-                    reporter.spent(),
-                    reporter.calls(),
-                    &refusals(sink.recorded()),
-                    reporter.notices(),
-                ));
-            }
-            stopped
         }
     }
+    if as_json {
+        say_the_result(&what_ran(
+            ending,
+            &error.to_string(),
+            reporter.spent(),
+            reporter.calls(),
+            &refusals(sink.recorded()),
+            reporter.notices(),
+        ));
+    }
+    stopped
+}
+
+/// The calls that build a one-shot run's task off the settings, and the sandbox and vetting state
+/// beside them, apart from the ones that name the run itself.
+fn task_from_the_settings(
+    task: Task,
+    settings: &bravebot_config::Settings,
+    effort: Option<bravebot_session::store::Effort>,
+) -> Task {
+    task
+        // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
+        // The layers are the only route a machine where nobody ever opens the interface has to a
+        // level that outlives one run.
+        .with_effort(effort.or_else(|| {
+            bravebot_session::store::effort(bravebot_session::store::load_effort(), settings)
+        }))
+        // What the settings say this run may add to a commit message or a pull request it writes
+        // (BACKEND-30). Read off the same resolved settings the permission rules came from.
+        .with_attribution(settings.attribution().clone())
+        // And what they say a command's output may spend of this run's context (RUN-21), off the
+        // same resolved settings.
+        .with_output_cap(settings.run_output_cap())
+        // And what they say one download may write to a file (DOWNLOAD-4).
+        .with_download_cap(settings.download_max_bytes())
+        // And how long one may take, resolved here because this is where the settings were read
+        // (RUN-23).
+        .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
+            settings.run_deadlines(),
+        ))
+        .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
+        // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
+        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
+        // any of the three again. A run nobody is watching has no prompt to fall back to, so
+        // without this every check on this path ends in a refusal.
+        .with_auto_vetting(bravebot_core::vetting::auto(
+            bravebot_core::vetting::asked_for(),
+            bravebot_session::store::load_vetting(),
+            settings.auto_vetting(),
+        ))
 }
 
 /// The schema a path names, read and vetted, or the sentence that says why it cannot be used.
@@ -4752,6 +4763,56 @@ mod tests {
         assert!(
             sentence.contains("strict writes more than read-only. Change it to read-only there"),
             "{sentence}"
+        );
+    }
+
+    /// The refusals a manifest run gives for flags it cannot take: none outside a manifest run,
+    /// and the first in the order the checks run where several are given.
+    #[test]
+    fn a_manifest_run_is_refused_the_flags_it_cannot_take_in_order() {
+        let words = SystemPrompts {
+            replacing: Some("words".to_string()),
+            ..SystemPrompts::default()
+        };
+        let none = SystemPrompts::default();
+        let latest = continued::Resume::Latest;
+
+        assert_eq!(
+            manifest_conflict(Mode::Turn, true, true, true, &words, Some(&latest)),
+            None,
+            "a turn is refused nothing here"
+        );
+        assert_eq!(
+            manifest_conflict(Mode::Manifest, false, false, false, &none, None),
+            None
+        );
+        let first = manifest_conflict(Mode::Manifest, true, true, true, &words, Some(&latest));
+        assert_eq!(first.as_deref(), Some(t!(cli_agent_not_with_a_manifest)));
+        let first = manifest_conflict(Mode::Manifest, false, true, true, &words, Some(&latest));
+        assert_eq!(first.as_deref(), Some(t!(cli_advisor_not_with_a_manifest)));
+        let first = manifest_conflict(Mode::Manifest, false, false, true, &words, Some(&latest));
+        assert_eq!(
+            first.as_deref(),
+            Some(t!(cli_output_schema_not_with_a_manifest))
+        );
+        let first = manifest_conflict(Mode::Manifest, false, false, false, &words, Some(&latest));
+        assert_eq!(
+            first,
+            Some(t!(
+                cli_system_prompt_not_with_a_manifest,
+                flag = "--system-prompt"
+            ))
+        );
+        let first = manifest_conflict(Mode::Manifest, false, false, false, &none, Some(&latest));
+        assert_eq!(
+            first,
+            Some(t!(cli_resume_not_with_a_manifest, flag = "--continue"))
+        );
+        let id = continued::Resume::Id("abc".to_string());
+        let named = manifest_conflict(Mode::Manifest, false, false, false, &none, Some(&id));
+        assert_eq!(
+            named,
+            Some(t!(cli_resume_not_with_a_manifest, flag = "--resume"))
         );
     }
 }
