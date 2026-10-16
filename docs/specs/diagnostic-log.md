@@ -94,7 +94,7 @@ had been would be the trace the mode exists to avoid.
 **Why.** Asking somebody to attach the log is no use if they cannot be told where it is, and the
 state directory moves with the profile variable, so the path is not one to be assumed.
 
-`verified-by: bravebot_cli::main::doctor_names_the_diagnostic_log_directory`
+`verified-by: bravebot_cli::doctor::doctor_names_the_diagnostic_log_directory`
 `verified-by: bravebot_cli::running::doctor_names_the_log_directory`
 
 <a id="DIAG-6"></a>

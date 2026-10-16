@@ -284,7 +284,7 @@ whatever its tier, which is why the record reaches past the two tiers CRED-25 as
 
 `verified-by: bravebot_config::lib::every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at`
 `verified-by: bravebot_config::lib::an_imported_subscription_is_a_credential_this_configuration_holds`
-`verified-by: bravebot_cli::main::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
+`verified-by: bravebot_cli::doctor::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
 `verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
 `verified-by: bravebot_cli::running::doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at`
 
@@ -306,9 +306,9 @@ disagree are a disagreement rather than a silence.
 
 `verified-by: bravebot_config::lib::a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier`
 `verified-by: bravebot_config::lib::every_drop_this_configuration_records_is_one_nobody_attempted`
-`verified-by: bravebot_cli::main::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
-`verified-by: bravebot_cli::main::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
-`verified-by: bravebot_cli::main::every_drop_has_its_own_account_of_the_condition_it_failed`
+`verified-by: bravebot_cli::doctor::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
+`verified-by: bravebot_cli::doctor::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
+`verified-by: bravebot_cli::doctor::every_drop_has_its_own_account_of_the_condition_it_failed`
 `verified-by: bravebot_cli::running::doctor_accounts_for_every_drop_of_each_credentials_walk`
 
 <a id="CRED-4"></a>
@@ -436,7 +436,7 @@ a leak runs before anybody goes to the surface [CRED-25](#CRED-25) names. So a c
 briefly has a figure and one at Held may, which is one direction rather than two.
 
 `verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection`
-`verified-by: bravebot_cli::main::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
+`verified-by: bravebot_cli::doctor::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
 
 <a id="CRED-11"></a>
 ### CRED-11: a turn does not copy a credential somewhere weaker than where it was
@@ -1073,10 +1073,10 @@ writing a second one.
 `verified-by: bravebot_config::lib::a_gateway_token_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_config::provider::the_host_a_token_would_be_ended_at_carries_no_other_part_of_the_endpoint`
 `verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
-`verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
-`verified-by: bravebot_cli::main::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
-`verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
-`verified-by: bravebot_cli::main::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::doctor::every_held_credential_has_its_own_account_of_what_would_end_it`
+`verified-by: bravebot_cli::doctor::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
+`verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
+`verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
 `verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
 
@@ -1128,7 +1128,7 @@ it is recorded like everything else the walk decides.
 
 `verified-by: bravebot_config::lib::a_derived_credential_records_whether_it_is_bound_to_its_presenter`
 `verified-by: bravebot_config::lib::a_credentials_binding_does_not_move_its_tier`
-`verified-by: bravebot_cli::main::a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart`
+`verified-by: bravebot_cli::doctor::a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart`
 
 **What exists.** The record carries `Held::binding`, which says `Bearer` with the answer the gate
 walk uses (`Refused` for an AWS session, whose issuer offers no bound form, and `NotAttempted` for an
