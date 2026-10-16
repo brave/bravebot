@@ -235,8 +235,9 @@ impl Command {
 /// What Enter on a command does while a turn is running, which turns on what the command touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
-    /// Carried out as it is typed. It reads what the session keeps or ends something it has
-    /// standing, which the turn does not hold, or sets a token the turn reads at its own next step.
+    /// Carried out as it is typed. It reads what the session keeps, ends something it has standing,
+    /// sets a token the turn reads at its own next step, or adds a file under the working directory,
+    /// none of which changes what the turn is running under.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
     /// would start something: a loop or a goal armed mid-turn needs a look of its own.
@@ -505,7 +506,7 @@ pub fn commands() -> [Command; 47] {
             name: EXPORT_COMMAND,
             argument: "[path]",
             description: t!(command_export),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: COPY_COMMAND,

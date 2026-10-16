@@ -285,7 +285,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox` in every form, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -376,6 +376,17 @@ does not read:
   may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
   tool call, since that is in the transcript once it is drawn.
 
+- **`/export`.** It reads the transcript, which the session keeps, and writes a file under the
+  working directory by the rules it has at rest ([SESSION-17](sessions.md#SESSION-17)): a path that
+  leaves the directory or names a file that is already there is refused, and the refusal is said
+  under the turn. The turn works in that directory, but a new file there changes neither the
+  directory it works in nor what it may reach, and a name that is taken is never replaced, so
+  nothing the turn wrote is lost to it. The file holds the transcript as it stands when the line is
+  typed, so a reply the turn is still writing is not in it, and neither is a prompt waiting behind
+  the turn. The prompt the turn is working on is marked as still running. A waiting `/cd` or
+  `/clear` has not happened yet, so the file goes where the turn is working and holds what the
+  transcript holds now, as `/copy` copies the reply it holds now.
+
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
@@ -418,6 +429,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
+`verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
 `verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_under_the_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`

@@ -2784,6 +2784,49 @@ mod preserved_history {
         assert!(!final_turn.contains("**Tasks:**"));
     }
 
+    /// An export written while a turn runs ends at what the transcript holds, so it has to say the
+    /// last prompt had not ended, and say it of that prompt alone: the ones before it carry the
+    /// endings they were recorded with.
+    #[test]
+    fn exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other() {
+        let scratch = Scratch::new("export-running");
+        let (session, conversation) = fixture();
+        let mut reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        submit(&mut reopened, "running prompt");
+        assert!(reopened.a_turn_is_running());
+
+        let markdown = bravebot_tui::render::as_markdown(&reopened, "history");
+
+        let running = "**Outcome:** still running when exported";
+        assert_eq!(markdown.matches(running).count(), 1, "{markdown}");
+        let (earlier, last) = markdown.split_once("running prompt").unwrap();
+        assert!(!earlier.contains(running), "{earlier}");
+        assert!(earlier.contains("**Outcome:** completed"), "{earlier}");
+        assert!(last.contains(running), "{last}");
+    }
+
+    /// A turn whose record kept no ending is not one that is running. Its outcome is left out, as
+    /// an older record's always were, and nothing is said of it.
+    #[test]
+    fn exporting_a_turn_with_no_recorded_ending_does_not_call_it_running() {
+        let scratch = Scratch::new("export-no-ending");
+        let (session, conversation) = fixture();
+        let mut record = save(&scratch.project, &session, &conversation);
+        record.history.as_mut().expect("a kept history")[3].outcome = None;
+        let reopened = reopen(&scratch.project, &record);
+        assert!(!reopened.a_turn_is_running());
+
+        let markdown = bravebot_tui::render::as_markdown(&reopened, "history");
+
+        assert!(!markdown.contains("still running"), "{markdown}");
+        let last = markdown.split("no plan prompt").nth(1).unwrap();
+        assert!(!last.contains("**Outcome:**"), "{last}");
+        assert!(markdown.contains("**Outcome:** failed"), "{markdown}");
+    }
+
     /// Distinct values reject shifting one turn's plan or measurements onto its neighbour.
     #[test]
     fn reopening_keeps_task_ownership_and_recorded_measurements() {

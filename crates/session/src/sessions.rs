@@ -2787,6 +2787,11 @@ pub(crate) fn new_id() -> String {
 /// Anything already at the path is refused rather than replaced, a dangling symlink included:
 /// following one would write outside the tree past every check above, and a person naming a path
 /// that is already taken meant a different path.
+///
+/// The name is also created exclusively, because a turn can be writing in the same directory while
+/// this runs: one that appears after the check above is refused rather than written through or
+/// replaced. Only the final name is held this way. A directory on the way that is swapped for a
+/// link after the check is not caught.
 pub fn export(
     project: &Path,
     session_id: &str,
@@ -2823,10 +2828,7 @@ pub fn export(
     // `exists` follows a symlink and so reports nothing for one whose target is missing, which is
     // exactly the case that would escape.
     if target.symlink_metadata().is_ok() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("'{}' already exists", relative.display()),
-        ));
+        return Err(taken(&relative));
     }
 
     let root = project
@@ -2848,8 +2850,26 @@ pub fn export(
         std::fs::create_dir_all(parent)?;
     }
 
-    bravebot_agent::home::write_file(&target, content.as_bytes())?;
+    create_export(&target, &relative, content)?;
     Ok(target)
+}
+
+fn taken(relative: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("'{}' already exists", relative.display()),
+    )
+}
+
+/// Create the export file, refusing a name that is taken, a link included.
+fn create_export(target: &Path, relative: &Path, content: &str) -> std::io::Result<()> {
+    bravebot_agent::home::create_new_file(target, content.as_bytes()).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            taken(relative)
+        } else {
+            error
+        }
+    })
 }
 
 /// Fork a session, creating a new session record that starts with the same transcript.
@@ -5491,6 +5511,38 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A turn can create the name between `export` looking and `export` writing. The step after the
+    /// look refuses a name taken by then in the words the look uses, leaves the file that is there
+    /// as it was, and follows no link out of the tree.
+    #[test]
+    #[cfg(unix)]
+    fn a_name_taken_after_the_check_is_refused_and_left_as_it_was() {
+        let root = crate::testutil::scratch_dir("bravebot-export-test-taken-after-check");
+        let outside = crate::testutil::scratch_dir("bravebot-export-test-taken-after-check-out");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&outside);
+        std::fs::create_dir_all(&root).expect("create");
+        std::fs::write(root.join("kept.md"), "existing").expect("write");
+        std::os::unix::fs::symlink(&outside, root.join("link.md")).expect("symlink");
+
+        let kept = create_export(&root.join("kept.md"), Path::new("kept.md"), "# New")
+            .expect_err("a file that is there was written over");
+        assert_eq!(kept.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(kept.to_string(), "'kept.md' already exists");
+        assert_eq!(
+            std::fs::read_to_string(root.join("kept.md")).unwrap(),
+            "existing"
+        );
+
+        let linked = create_export(&root.join("link.md"), Path::new("link.md"), "# New")
+            .expect_err("a link was followed");
+        assert_eq!(linked.to_string(), "'link.md' already exists");
+        assert!(!outside.exists(), "nothing was written through the link");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&outside);
     }
 
     /// A symlink whose target does not exist reports nothing to `exists`, so a check written in

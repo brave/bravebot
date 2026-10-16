@@ -113,24 +113,6 @@ impl Held<'_> {
         );
     }
 
-    pub(super) fn export(&mut self, path: Option<&str>) {
-        let markdown = crate::render::as_markdown(self.session, self.stored.title());
-        let exported_path = bravebot_session::sessions::export(
-            self.workspace.root(),
-            self.stored.id(),
-            path,
-            &markdown,
-        );
-        match exported_path {
-            Ok(p) => self
-                .session
-                .note(t!(session_exported, path = p.display().to_string())),
-            Err(e) => self
-                .session
-                .note(t!(session_export_failed, problem = e.to_string())),
-        }
-    }
-
     /// Put the session back to where it stood `steps` turns ago, for `/undo` and `/rewind`.
     pub(super) fn rewind_steps(&mut self, steps: usize) {
         let (trust, programs, language_servers) = self.answers.what_a_rewind_takes_back();
