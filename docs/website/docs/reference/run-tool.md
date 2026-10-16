@@ -389,6 +389,10 @@ quarantined document as trusted text, which is the thing the split exists to pre
 or the other and not both, and a background line may have neither: nothing is waited for there and
 nothing is fed either.
 
+Output the planner may already read needs none of this to be narrowed: `read_output` takes a
+[`pattern`](tools.md#read_output) over it and answers with the matching lines, so no second line is
+run and nobody is asked.
+
 ## What a program is handed
 
 A step gets the environment bravebot is running in, **less the credentials bravebot authenticates to

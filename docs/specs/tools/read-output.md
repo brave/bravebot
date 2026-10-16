@@ -15,8 +15,9 @@ documented-by:
 
 Letting the planner read what a program printed. The reference naming the result is routing; the
 only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). `offset` is
-a literal, a byte count that names no destination. What a program's output is labelled in the first
-place is [run.md](run.md).
+a literal, a byte count that names no destination. `pattern` is a routing string, so it comes
+through the gate every routing string comes through rather than being read off the call. What a
+program's output is labelled in the first place is [run.md](run.md).
 
 ## Clauses
 
@@ -128,12 +129,13 @@ was asked for. Without the screening asked for the output is released unshown an
 
 Where what a run or a job printed was output the planner may read and too long for its result, the
 planner was given the beginning and the end, and a reference to the whole
-([RUN-21](run.md#RUN-21)). `read_output` on that reference hands back one page. It starts at the
-byte `offset` names, or at zero where it names none, and is no longer than the cap the result was
-cut to. A line after it says which bytes it holds and the offset the next page starts at, or that
-it reached the end. Both ends land on a character boundary. Nobody is asked, no check is made and
-nothing is endorsed. The page keeps the slot's label, and reaches the planner through the
-presentation that decides from the label alone, as the whole would have without the cap.
+([RUN-21](run.md#RUN-21)). `read_output` on that reference hands back one page, or the matching
+lines where the call names a `pattern` ([OUTPUT-5](#OUTPUT-5)). A page starts at the byte `offset`
+names, or at zero where it names none, and is no longer than the cap the result was cut to. A line
+after it says which bytes it holds and the offset the next page starts at, or that it reached the
+end. Both ends land on a character boundary. Nobody is asked, no check is made and nothing is
+endorsed. The page keeps the slot's label, and reaches the planner through the presentation that
+decides from the label alone, as the whole would have without the cap.
 
 What decides which of this and [OUTPUT-1](#OUTPUT-1) applies is the slot's label, never a byte it
 holds. An `offset` on a slot the planner may not read is refused before anybody is asked or anything
@@ -163,3 +165,40 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_agent::turn::an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
+
+<a id="OUTPUT-5"></a>
+### OUTPUT-5: a pattern searches output the planner may read, and is refused on output it may not
+
+`read_output` takes an optional `pattern`, one string or a list of them, in the regular-expression
+subset [SEARCH-1](search.md#SEARCH-1) gives. On a slot whose label already lets the planner read it
+([OUTPUT-4](#OUTPUT-4)) the call answers with the lines matching any of them instead of a page. Each
+line carries its line number and the byte it starts at, so a following call with that byte as
+`offset` reads the page from there. Two lines of context are drawn either side of a match and a run
+of lines left out is marked. At most 100 matches are drawn, and no more bytes than the cap the
+result was cut to; a closing line says how many lines matched, how many were drawn, and the byte
+the next undrawn match starts at. Where nothing matches the answer says so and gives the line and
+byte counts of the slot. Nobody is asked, no check is made and nothing is endorsed, for the reason
+[OUTPUT-4](#OUTPUT-4) gives.
+
+A `pattern` on a slot the planner may not read is refused before anybody is asked or anything is
+checked, as an `offset` is. The match set, the count and the point the result stopped at are all
+worked out from the bytes, so answering would hand the planner numbers nobody vouched for. The
+refusal says what to do instead: ask for the whole of it, or put the output through a program with
+`run`.
+
+The pattern is compiled before any byte of the slot is opened, as [SEARCH-4](search.md#SEARCH-4)
+requires, and a pattern that will not compile is reported as a pattern error. An empty pattern is
+refused. `pattern` with `offset` is refused: a pattern searches the whole of the output, and the
+byte it names for a match is what an `offset` call starts from.
+
+**Why.** Narrowing a long log with `run` asks a person about the line and hands back another capped
+result. The bytes here are ones the planner may already read, so a search over them releases nothing
+a page would not.
+
+`verified-by: bravebot_agent::turn::a_pattern_over_output_the_planner_may_read_answers_with_matching_lines_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::a_pattern_over_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::an_empty_pattern_is_refused_before_the_slot_is_opened`
+`verified-by: bravebot_agent::turn::a_pattern_that_will_not_compile_is_refused_before_the_slot_is_opened`
+`verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
+`verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
+`verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
