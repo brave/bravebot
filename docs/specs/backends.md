@@ -2661,6 +2661,10 @@ as the `model` key is, and the switch is decided by a category the driver derive
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
   the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
   `NotInstalled`.
+  An editor found outside those directories still starts, with a `PATH` of the searched entries
+  alone, so a program it starts by name that lives only in a directory left out is not found by it:
+  a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
+  session opened on the home directory. A program the editor leaves running keeps that `PATH`.
 
 - **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
   states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has

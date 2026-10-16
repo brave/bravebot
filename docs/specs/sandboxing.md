@@ -2973,7 +2973,8 @@ a new spawn is added to the list here, in the same change, or resolved first.
   shebang in the editor, a launcher script, or an `$EDITOR` of `env vim` finds the program it starts
   only among them. Where no entry is searched the editor is started with no `PATH` variable. An empty
   `PATH` would be read as the current directory. A program the editor starts by name that is found
-  only in a directory left out is not found by it.
+  only in a directory left out is not found by it. A `PATH` names directories, so a file in a
+  searched entry that links into a directory left out is still found by those lookups.
 - **A program named in another started program's arguments is resolved first.** A started program
   other than the editor keeps bravebot's own `PATH`, which can hold those directories, so an argument
   that names a program for it to start is that program's absolute path, found the same way. The
