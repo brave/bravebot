@@ -1402,6 +1402,85 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
     }
 }
 
+/// The input box draws names and descriptions and never loads a skill, so it does not walk each
+/// skill's directory for the files beside it. It still offers exactly the skills a turn resolves,
+/// and the turn's own set keeps the listing `load_skill` hands back.
+#[test]
+fn the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill() {
+    let scratch = Scratch::new("offered");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "commit-style",
+        "commit-style",
+        "how commits read",
+        "sign",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "draft the notes",
+        "draft",
+    );
+    for beside in [
+        home.join("skills/commit-style/template.md"),
+        project.join(".bravebot/skills/release-notes/template.md"),
+    ] {
+        std::fs::write(beside, "template").expect("write file beside a skill");
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let trusted = || {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store
+    };
+    let mut sink = RecordingSink::new();
+    let resolved = skills::resolved(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+    let offered = skills::offered(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+
+    let names = |catalogue: &skills::Catalogue| {
+        catalogue
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.description.clone(), skill.source))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&offered), names(&resolved));
+    assert_eq!(
+        from_disk(&offered),
+        ["commit-style", "release-notes"],
+        "both skills are offered"
+    );
+    for skill in resolved.iter().filter(|skill| skill.origin != "built-in") {
+        assert_eq!(
+            skill.files,
+            ["template.md"],
+            "{} in the turn's set",
+            skill.name
+        );
+    }
+    for skill in offered.iter() {
+        assert!(
+            skill.files.is_empty(),
+            "{} was walked for its files",
+            skill.name
+        );
+    }
+}
+
 /// A skill is read before anything is asked, so nobody named the file, and a link from the skills
 /// directory to a file a deny rule covers would put that file in the prompt of a project the person
 /// trusted (PERM-7). The interface reads the same rules, so it does not offer the skill either

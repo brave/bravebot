@@ -658,6 +658,20 @@ pub fn discover<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
 ) -> (Catalogue, Vec<Notice>) {
+    discover_listing(policy, workspace, home, true)
+}
+
+/// [`discover`], with the files beside each skill listed only where `list_files` says so.
+///
+/// The listing walks every skill's directory and asks the rules and the trust map about each file in
+/// it, and only `load_skill` reads the result. A caller that draws names and descriptions leaves it
+/// out.
+fn discover_listing<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    home: Option<&Path>,
+    list_files: bool,
+) -> (Catalogue, Vec<Notice>) {
     let mut catalogue = Catalogue::default();
     let mut notices = Vec::new();
 
@@ -693,10 +707,17 @@ pub fn discover<S: Sink>(
 
     let home_skills = home.map(|home| home.join(SKILLS));
     let passed_over = match &home_skills {
-        Some(root) => discover_home(policy, workspace, root, &mut catalogue, &mut notices),
+        Some(root) => discover_home(
+            policy,
+            workspace,
+            root,
+            list_files,
+            &mut catalogue,
+            &mut notices,
+        ),
         None => 0,
     };
-    let read = discover_workspace(policy, workspace, &mut catalogue, &mut notices);
+    let read = discover_workspace(policy, workspace, list_files, &mut catalogue, &mut notices);
     // Not where the project's pass read the same directory, as it does in a session started in the
     // home directory: that pass has already said what it did with each of them (SKILL-6). Compared
     // by the directories alone, so no entry's name is held or compared.
@@ -726,6 +747,32 @@ pub fn resolved<S: Sink>(
     permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Catalogue {
+    resolve(workspace, home, trust, permissions, sink, true)
+}
+
+/// [`resolved`] without the files beside each skill, for an interface that offers the names as they
+/// are typed and never loads a skill.
+///
+/// Every other field is what [`resolved`] returns, so the same skills are offered. Reading the
+/// files of every skill on each slash would make the list lag behind the keys.
+pub fn offered<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+) -> Catalogue {
+    resolve(workspace, home, trust, permissions, sink, false)
+}
+
+fn resolve<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+    list_files: bool,
+) -> Catalogue {
     let mut routing = bravebot_core::policy::Routing::new();
     routing.insert_trusted("skills", WORKSPACE_SKILL_ROOTS.join(", "));
     let Ok(policy) = Policy::begin(
@@ -741,7 +788,7 @@ pub fn resolved<S: Sink>(
         .with_permissions(permissions)
         .with_root(workspace.root())
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
-    discover(&mut policy, workspace, home).0
+    discover_listing(&mut policy, workspace, home, list_files).0
 }
 
 /// Skills from `~/.bravebot/skills`, labelled from where they sit.
@@ -754,6 +801,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> usize {
@@ -791,10 +839,14 @@ fn discover_home<S: Sink>(
                 let directory = root.join(&name);
                 // Trusted by provenance like the file beside them (SKILL-3), so only a deny rule
                 // keeps one off the list.
-                let files = files_beside(&directory, |relative| {
-                    let named = directory.join(relative);
-                    !workspace.rule_denies_reading(policy, &named.to_string_lossy())
-                });
+                let files = if list_files {
+                    files_beside(&directory, |relative| {
+                        let named = directory.join(relative);
+                        !workspace.rule_denies_reading(policy, &named.to_string_lossy())
+                    })
+                } else {
+                    Vec::new()
+                };
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
@@ -882,6 +934,7 @@ fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
 fn discover_workspace<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> Vec<PathBuf> {
@@ -904,7 +957,9 @@ fn discover_workspace<S: Sink>(
         .collect();
     let mut skipped = Vec::new();
     for (position, root) in roots.iter().enumerate() {
-        if let Some(held) = discover_workspace_root(policy, workspace, root, catalogue, notices) {
+        if let Some(held) =
+            discover_workspace_root(policy, workspace, root, list_files, catalogue, notices)
+        {
             skipped.push((position, held));
         }
     }
@@ -956,6 +1011,7 @@ fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     skills_root: &str,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> Option<usize> {
@@ -1012,10 +1068,14 @@ fn discover_workspace_root<S: Sink>(
                 let directory = format!("{skills_root}/{name}");
                 // A file name is content, so each is asked of the rules and of the trust map as the
                 // file itself would be before it is named (SKILL-4).
-                let files = files_beside(&root.join(&name), |beside| {
-                    let named = format!("{directory}/{beside}");
-                    !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
-                });
+                let files = if list_files {
+                    files_beside(&root.join(&name), |beside| {
+                        let named = format!("{directory}/{beside}");
+                        !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
+                    })
+                } else {
+                    Vec::new()
+                };
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
