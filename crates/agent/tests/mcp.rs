@@ -10,7 +10,10 @@
 #[path = "../test-support/turns.rs"]
 mod turns;
 
-use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
+use bravebot_agent::confirm::{
+    CallDecision, McpCallRequest, MoveRequest, ResourceListRequest, ResourceReadRequest,
+    ToolListRequest,
+};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{
@@ -278,6 +281,17 @@ fn answered(body: &str, word: &str) -> String {
             },
         }]}),
         Some("tools/call") => json!({"content": [{"type": "text", "text": PAYLOAD}]}),
+        Some("resources/list") => json!({"resources": [{
+            "uri": "memo://weather/today",
+            "name": "Today's Weather",
+            "description": "Current weather report",
+            "mimeType": "text/plain",
+        }]}),
+        Some("resources/read") => json!({"contents": [{
+            "uri": "memo://weather/today",
+            "mimeType": "text/plain",
+            "text": PAYLOAD,
+        }]}),
         _ => json!({}),
     };
     let reply = json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
@@ -350,10 +364,14 @@ struct Answering {
     call: CallDecision,
     moved: Decision,
     vetted: Decision,
+    resource_list: Decision,
+    resource_read: Decision,
     writes: bool,
     lists: Vec<ToolListRequest>,
     calls: Vec<McpCallRequest>,
     moves: Vec<MoveRequest>,
+    resource_lists: Vec<ResourceListRequest>,
+    resource_reads: Vec<ResourceReadRequest>,
     runs: Vec<bravebot_agent::RunRequest>,
     vets: usize,
     asked: usize,
@@ -367,15 +385,29 @@ impl Answering {
             call,
             moved: Decision::Reject,
             vetted: Decision::Reject,
+            resource_list: Decision::Reject,
+            resource_read: Decision::Reject,
             writes: false,
             lists: Vec::new(),
             calls: Vec::new(),
             moves: Vec::new(),
+            resource_lists: Vec::new(),
+            resource_reads: Vec::new(),
             runs: Vec::new(),
             vets: 0,
             asked: 0,
             stop: None,
         }
+    }
+
+    fn with_resource_list(mut self, decision: Decision) -> Self {
+        self.resource_list = decision;
+        self
+    }
+
+    fn with_resource_read(mut self, decision: Decision) -> Self {
+        self.resource_read = decision;
+        self
     }
 }
 
@@ -441,6 +473,16 @@ impl Confirmer for Answering {
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.calls.push(request.clone());
         self.call
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        self.resource_lists.push(request.clone());
+        self.resource_list
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        self.resource_reads.push(request.clone());
+        self.resource_read
     }
 
     /// Refuses. This double answers no question about reach.
@@ -3566,3 +3608,237 @@ fn reply_for_two_tools(body: &str) -> String {
         reply.len()
     )
 }
+
+/// MCP-10, SERVERS-19: listing resources puts the server to the person, promotes the list on
+/// approval so the planner can inspect it, and reading a resource returns quarantined content
+/// without re-asking confirmation because the server's resources were already approved.
+#[test]
+fn a_resource_list_is_vetted_and_reading_it_returns_a_quarantined_reference() {
+    let scratch = Scratch::new("resource-vet-and-read");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("list_mcp_resources", r#"{"server":"weather"}"#),
+        tool_request(
+            "read_mcp_resource",
+            r#"{"server":"weather","uri":"memo://weather/today"}"#,
+        ),
+        reply_with("finished reading resources"),
+    ]);
+
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve())
+        .with_resource_list(Decision::Approve)
+        .with_resource_read(Decision::Reject);
+
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("inspect today's weather resource").with_mcp(Some(session.clone())),
+        &mut confirmer,
+    );
+
+    let [list_req] = confirmer.resource_lists.as_slice() else {
+        panic!(
+            "expected exactly one resource list confirmation request, got: {:?}",
+            confirmer.resource_lists
+        );
+    };
+    assert_eq!(list_req.alias, "weather");
+
+    // Reading resource does not ask for confirmation since the server's resources were approved.
+    assert!(
+        confirmer.resource_reads.is_empty(),
+        "unexpected resource read confirmation: {:?}",
+        confirmer.resource_reads
+    );
+
+    let sent = rounds(&chat);
+    assert!(
+        sent.len() >= 3,
+        "expected at least 3 rounds, got {}",
+        sent.len()
+    );
+
+    // The second round prompt holds the promoted resource list:
+    let second = &sent[1];
+    assert!(
+        second.contains("memo://weather/today"),
+        "promoted resource list missing uri: {second}"
+    );
+    assert!(
+        second.contains("Today's Weather"),
+        "promoted resource list missing name: {second}"
+    );
+
+    // The third round prompt holds the quarantined ref and never the raw payload:
+    let third = &sent[2];
+    assert!(
+        !third.contains(PAYLOAD),
+        "raw payload from read_mcp_resource leaked to planner: {third}"
+    );
+    assert!(
+        third.contains("quarantined"),
+        "planner was not given quarantined reference: {third}"
+    );
+
+    let called: Vec<String> = methods(&server);
+    assert!(
+        called.contains(&"resources/list".to_string()),
+        "resources/list was not called on the server: {called:?}"
+    );
+    assert!(
+        called.contains(&"resources/read".to_string()),
+        "resources/read was not called on the server: {called:?}"
+    );
+}
+
+/// Reading an MCP resource without prior list approval prompts the user (MCP-10, SERVERS-19).
+/// When rejected, the tool call fails; when approved, it succeeds and returns quarantined content.
+#[test]
+fn read_mcp_resource_prompts_when_unapproved() {
+    let scratch = Scratch::new("resource-read-unapproved");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+
+    // Case 1: Person rejects
+    {
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(
+                "read_mcp_resource",
+                r#"{"server":"weather","uri":"memo://weather/today"}"#,
+            ),
+            reply_with("handled rejection"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve())
+            .with_resource_read(Decision::Reject);
+
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("read resource directly").with_mcp(Some(session.clone())),
+            &mut confirmer,
+        );
+
+        let [read_req] = confirmer.resource_reads.as_slice() else {
+            panic!(
+                "expected one read confirmation request, got: {:?}",
+                confirmer.resource_reads
+            );
+        };
+        assert_eq!(read_req.alias, "weather");
+        assert_eq!(read_req.uri, "memo://weather/today");
+
+        let sent = rounds(&chat);
+        assert!(
+            sent.len() >= 2,
+            "expected at least 2 rounds, got {}",
+            sent.len()
+        );
+        let second = &sent[1];
+        assert!(
+            second.contains("refused") || second.contains("rejected"),
+            "planner was not told of rejection: {second}"
+        );
+    }
+
+    // Case 2: Person approves
+    {
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(
+                "read_mcp_resource",
+                r#"{"server":"weather","uri":"memo://weather/today"}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve())
+            .with_resource_read(Decision::Approve);
+
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("read resource directly").with_mcp(Some(session.clone())),
+            &mut confirmer,
+        );
+
+        let [read_req] = confirmer.resource_reads.as_slice() else {
+            panic!(
+                "expected one read confirmation request, got: {:?}",
+                confirmer.resource_reads
+            );
+        };
+        assert_eq!(read_req.alias, "weather");
+        assert_eq!(read_req.uri, "memo://weather/today");
+
+        let sent = rounds(&chat);
+        assert!(
+            sent.len() >= 2,
+            "expected at least 2 rounds, got {}",
+            sent.len()
+        );
+        let second = &sent[1];
+        assert!(
+            !second.contains(PAYLOAD),
+            "raw payload leaked to planner: {second}"
+        );
+        assert!(
+            second.contains("quarantined"),
+            "planner was not given quarantined reference: {second}"
+        );
+    }
+}
+
+/// LSP-9 parity: Checker and Worker hold resource tools via LanguageServer capability,
+/// while Reader does not.
+#[test]
+fn delegate_resource_tools_are_gated_by_kind() {
+    for (kind, expected) in [
+        ("reader", false),
+        ("checker", true),
+        ("worker", true),
+    ] {
+        let scratch = Scratch::new(&format!("delegate-gating-{kind}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let spawn = format!(r#"{{"kind":"{kind}","task":"{DELEGATED}"}}"#);
+        let (endpoint, chat) = serve_chat_by_marker(vec![
+            (
+                PARENT,
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                DELEGATED,
+                vec![reply_with("delegate finished")],
+            ),
+        ]);
+        let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new(PARENT).with_mcp(Some(session)),
+            &mut asked,
+        );
+        let sent = rounds(&chat);
+        let delegate = sent
+            .iter()
+            .find(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+            .unwrap_or_else(|| panic!("{kind}: delegate never asked"));
+
+        assert_eq!(
+            delegate.contains("list_mcp_resources"),
+            expected,
+            "{kind}: list_mcp_resources offered mismatch"
+        );
+        assert_eq!(
+            delegate.contains("read_mcp_resource"),
+            expected,
+            "{kind}: read_mcp_resource offered mismatch"
+        );
+    }
+}
+

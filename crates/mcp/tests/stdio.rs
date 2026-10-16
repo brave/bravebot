@@ -1101,3 +1101,52 @@ fn a_handshake_is_written_to_the_diagnostic_log() {
     }
     assert!(!log.contains("tool output"), "{log}");
 }
+
+const RESOURCE_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"resources/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resources":[{"uri":"custom://res1","name":"Resource One","description":"First resource"}]}}\n' "$id"
+      ;;
+    *'"resources/read"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":[{"uri":"custom://res1","mimeType":"text/plain","text":"stdio resource text"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
+#[test]
+fn a_stdio_server_lists_and_reads_resources() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("resources", RESOURCE_SERVER);
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_for_fake(&mut sink);
+
+    let listing = server.list_resources().expect("resources listed");
+    assert_eq!(listing.offered(), 1);
+    assert_eq!(listing.refused(), 0);
+    assert_eq!(listing.resources()[0].uri, "custom://res1");
+    assert_eq!(listing.resources()[0].name, "Resource One");
+
+    let result = server
+        .read_resource(&mut policy, "custom://res1")
+        .expect("resource read");
+    assert_eq!(result.label(), Label::untrusted_private());
+    let proof = policy.authorise_display_release("test reads resource content");
+    assert_eq!(result.declassify(&proof), "stdio resource text");
+
+    let _ = std::fs::remove_file(&script);
+    assert!(policy.finish());
+}

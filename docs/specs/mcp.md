@@ -185,3 +185,17 @@ statement of which ones rather than a switch that restores them all.
 
 `verified-by: bravebot_mcp::stdio::a_server_does_not_receive_this_processes_environment`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+
+<a id="MCP-10"></a>
+### MCP-10: resources are listed within bounds and read into quarantine
+
+A server's resources are listed with `resources/list`, paged up to 8 pages and at most 128
+entries, with malformed entries refused and counted. Reading a resource with `resources/read`
+extracts only text content (ignoring binary blobs per MCP-6) and places the content into
+quarantine as untrusted and private (MCP-1), returning an opaque reference token to the planner.
+Reading requires approval unless the server's resource list was already approved (SERVERS-19).
+
+`verified-by: bravebot_mcp::protocol::resource_list_is_paged_and_bounded`
+`verified-by: bravebot_mcp::protocol::read_resource_extracts_text_content`
+`verified-by: bravebot_mcp::stdio::list_resources_lists_resources_from_server`
+`verified-by: bravebot_mcp::http::list_resources_lists_resources_from_server`

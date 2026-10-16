@@ -478,6 +478,24 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    fn confirm_resource_list(&mut self, request: &crate::confirm::ResourceListRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_resource_list(request)
+            }
+        }
+    }
+
+    fn confirm_resource_read(&mut self, request: &crate::confirm::ResourceReadRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_resource_read(request)
+            }
+        }
+    }
+
     /// Asked in every mode but bypass, including plan mode and accepting edits. SERVERS-13.
     ///
     /// Accepting edits does not accept a call: what the server does with it happens off this tree,

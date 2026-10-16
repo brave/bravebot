@@ -1550,6 +1550,22 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
 
+<a id="SERVERS-19"></a>
+### SERVERS-19: resource lists and resource reads are put to the person
+
+A server's resources are put to the person before the planner receives the list. On the first turn
+the planner calls `list_mcp_resources`, the resource list is vetted under CHECK-10 and put to the
+person with a confirmation prompt showing the resource URIs and names. On approval, the list is
+promoted to trusted public under LABEL-8 for the rest of the session, and reading any resource from
+that server requires no further confirmation.
+
+If `read_mcp_resource` is called before the server's resource list has been approved, an interactive
+prompt is put to the person asking to approve reading that specific resource URI. On rejection, the
+read is refused. Content read from a resource is placed into quarantine as untrusted and private,
+returning an opaque reference (ref:N) to the planner (MCP-1, MCP-10).
+
+`verified-by: bravebot_agent::tools::list_mcp_resources_and_read_mcp_resource`
+
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below

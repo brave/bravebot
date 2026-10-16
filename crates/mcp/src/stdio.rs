@@ -10,8 +10,8 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
-    paged,
+    Listing, ReadResourceResult, ResourceListing, RpcNotification, RpcRequest, RpcResponse,
+    ToolResult, call_params, initialize_params, paged, paged_resources, read_resource_params,
 };
 use crate::{McpError, McpResult, malformed, named};
 use bravebot_core::event::Sink;
@@ -354,5 +354,40 @@ impl StdioServer {
         }
 
         Ok(Labelled::new(parsed.text(), label))
+    }
+
+    /// List the resources this server offers (MCP-10, SERVERS-19).
+    pub fn list_resources(&mut self) -> McpResult<ResourceListing> {
+        let listed = paged_resources(|params| self.send_request("resources/list", params));
+        log_step("mcp.list_resources", &listed);
+        Ok(listed?.listing(&self.name))
+    }
+
+    /// Read a resource's text content by its URI (MCP-1, MCP-6, MCP-10).
+    pub fn read_resource<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        uri: &str,
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let result = self
+            .send_request("resources/read", Some(read_resource_params(uri)))
+            .map_err(|error| named(error, uri))?;
+
+        let parsed: ReadResourceResult =
+            serde_json::from_value(result).map_err(|e| malformed("resource result", &e))?;
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+
+        let text = parsed.text().ok_or_else(|| {
+            McpError::Transport(format!("resource '{uri}' contained no text content"))
+        })?;
+
+        Ok(Labelled::new(text, label))
     }
 }
