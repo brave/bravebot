@@ -4,6 +4,7 @@ title: download_url
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
   - crates/net/src/lib.rs
   - crates/config/src/settings.rs

@@ -433,7 +433,8 @@ Smaller, uncontroversial, mostly parity with other agent harnesses:
 | Commands a user vouched for | `crates/core/src/programs.rs` |
 | Name → resolved binary path | `crates/agent/src/programs.rs` |
 | The label lattice and the gates | `crates/core/src/policy.rs` |
-| Tool definitions the model sees | `crates/agent/src/tools.rs` |
+| Tool definitions the model sees | `crates/agent/src/tools/offered.rs` |
+| Tool dispatch and the tool bodies | `crates/agent/src/tools.rs` |
 | The turn loop | `crates/agent/src/turn.rs` |
 
 Specs worth reading, in this order: `labels.md`, `routing.md`, `tools/run.md`, then

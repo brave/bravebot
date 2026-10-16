@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
 documented-by: docs/website/docs/using/watches.md
 ---

@@ -4,6 +4,7 @@ title: The tool surface
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 guards:
   - symbol: Produced::problem
     sites:

@@ -4,6 +4,7 @@ title: request_path
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 guards:
   - symbol: Policy::record_path_reach
 documented-by: docs/website/docs/reference/tools.md
