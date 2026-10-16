@@ -22,6 +22,7 @@ GITHUB_URL = re.compile(r"(?:^|[@/])github(?:\.com|-[\w-]+)[:/]+([\w.-]+)/([\w.-
 # A directory to hold the pull request worktrees. Relative to the main clone unless absolute.
 WORKTREES_ENV = "BRAVEBOT_PR_WORKTREES"
 PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
+ISSUE_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)")
 OURS = re.compile(r"^<{7}(?: |$)")
 THEIRS = re.compile(r"^>{7}(?: |$)")
 MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
@@ -82,6 +83,19 @@ def pr_number(arg):
     return int(bare[1])
 
 
+def issue_number(arg):
+    """The number of a brave/bravebot issue named by a link, `#12` or `12`."""
+    url = ISSUE_URL.search(arg)
+    if url:
+        if f"{url[1]}/{url[2]}".lower() != BASE_REPO:
+            die(f"{arg} is not a {BASE_REPO} issue")
+        return int(url[3])
+    bare = re.fullmatch(r"#?(\d+)", arg.strip())
+    if bare is None:
+        die(f"{arg} is neither an issue number nor a {BASE_REPO} issue URL")
+    return int(bare[1])
+
+
 def github_remotes(listing):
     """`git remote -v` as {owner/repo: (remote, url)}, the first remote naming a repo winning."""
     found = {}
@@ -102,16 +116,23 @@ def fork_url(repo, like):
     return f"git@github.com:{repo}.git"
 
 
-def worktree_path(main, number):
+def worktree_path(main, number, issue=False):
     """Where a pull request's worktree goes: `.worktrees/pr-<n>` in the main clone, which git ignores.
 
     That is inside the workspace, so the file tools reach it. `BRAVEBOT_PR_WORKTREES` names another
-    directory, where the name also carries the clone's so that clones can share one.
+    directory, where the name also carries the clone's so that clones can share one. An issue's
+    worktree is `issue-<n>` in either place, so it never shares a name with a pull request of the
+    same number.
     """
     chosen = os.environ.get(WORKTREES_ENV)
     if chosen:
-        return main / Path(chosen).expanduser() / f"{main.name}-{number}"
-    return main / ".worktrees" / f"pr-{number}"
+        return main / Path(chosen).expanduser() / f"{main.name}-{'issue-' if issue else ''}{number}"
+    return main / ".worktrees" / f"{'issue' if issue else 'pr'}-{number}"
+
+
+def standard_path(pr):
+    """Where the worktree of `pr` would be made, which an issue's plan states itself."""
+    return getattr(pr, "standard", None) or worktree_path(pr.main, pr.number)
 
 
 def local_branch(head, base, number):
@@ -187,7 +208,7 @@ def same_place(one, other):
 
 def reuse_note(pr):
     """One line for a branch already checked out where a new worktree would not go, else an empty string."""
-    standard = worktree_path(pr.main, pr.number)
+    standard = standard_path(pr)
     if not pr.checked_out or same_place(pr.tree, standard):
         return ""
     tree, main, here = (Path(os.path.realpath(one)) for one in (pr.tree, pr.main, pr.here))
@@ -230,7 +251,7 @@ def refuse_locked(pr, script, words, allowed):
         f"{pr.tree} is locked ({lock_reason(pr.held)}), so something else may be using it, and no worktree "
         f"was touched. Ask the person, unless they have already agreed for this pull request: to work in it "
         f"anyway, run `{script} {shlex.join([*words, '--use-locked'])}`; to use "
-        f"{worktree_path(pr.main, pr.number)} instead, they unlock and remove it themselves: "
+        f"{standard_path(pr)} instead, they unlock and remove it themselves: "
         f"git worktree unlock {quoted}; git worktree remove {quoted}"
     )
 
