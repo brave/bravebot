@@ -17,7 +17,7 @@ pnpm install --frozen-lockfile
 pnpm run check                                  # tsc --noEmit, then jest
 ```
 
-`make check-mobile` from the repository root does the same. It builds no native code.
+`make check-mobile` from the repository root does the same. It builds no native code. Run these steps once on a fresh checkout and again after the client changes, before `pnpm start` or either run command below. Without the client's `dist`, Metro cannot resolve `@brave/agent-client` and the bundle fails.
 
 `pnpm-workspace.yaml` sets `nodeLinker: hoisted`. Gradle includes `@react-native/gradle-plugin` from `../node_modules`, a package react-native depends on rather than the app, and pnpm's default layout does not put it there. Metro and jest work with either layout.
 
