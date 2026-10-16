@@ -958,6 +958,16 @@ fn gateway(
     if !speaks_the_protocol(id, npm) {
         return Err(Reason::AnotherSdk);
     }
+    if id == GOOGLE_VERTEX_ID {
+        // The OpenAI-compatible endpoint exists only for a stated project; a `baseURL` does not
+        // substitute for one, so an entry naming none is left regardless of what it states.
+        let options = entry.get("options").and_then(Value::as_object);
+        let project = string(options.and_then(|options| options.get("project")));
+        let location = string(options.and_then(|options| options.get("location")));
+        if provider::vertex_endpoint(project.as_deref(), location.as_deref()).is_none() {
+            return Err(Reason::Vertex);
+        }
+    }
     let aws = id == AWS_PROVIDER_ID;
     let mut probe = Parsed::default();
     let mut block = Map::new();
@@ -1690,6 +1700,23 @@ mod tests {
         home.write(
             ".config/opencode/opencode.json",
             r#"{"provider": {"google-vertex": {"options": {"project": "{env:GOOGLE_CLOUD_PROJECT}"}}}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty());
+        assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
+    }
+
+    /// IMPORT-3: a `baseURL` is not a project. opencode still serves this id through its own SDK
+    /// when the entry names no project, so a stated proxy host must not make it look like the
+    /// OpenAI-compatible gateway `google-vertex` only becomes with one.
+    #[test]
+    fn a_google_vertex_entry_naming_a_base_url_and_no_project_is_left_and_said() {
+        let home = Scratch::new("import-vertex-baseurl-no-project");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {
+                "options": {"baseURL": "https://vertex-proxy.example/v1"}
+            }}}"#,
         );
         let found = one(&home.path, &[], Source::Opencode);
         assert!(ids(&found).is_empty());
