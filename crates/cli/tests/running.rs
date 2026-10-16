@@ -3907,6 +3907,34 @@ fn doctor_says_a_checkouts_provider_block_is_not_obeyed() {
     assert!(!stdout.contains("attacker.invalid"), "{stdout}");
 }
 
+/// A setting a checkout cannot give is said under the label for an ignored setting, and a key this
+/// build never reads under the label for an unread one, each beside the file that held it, in the
+/// order the report lists them (CLI-7).
+#[test]
+fn doctor_labels_an_ignored_setting_and_an_unread_key_apart() {
+    let scratch = Scratch::new("cli-running-doctor-ignored-labels");
+    let cwd = a_checkout_saying(&scratch, r#"{"agent": "x", "autoVetting": true}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let ignored = stdout.find("  ignored   agent in ");
+    let unread = stdout.find("  unread key autoVetting in ");
+    assert!(
+        matches!((ignored, unread), (Some(ignored), Some(unread)) if ignored < unread),
+        "{stdout}{stderr}"
+    );
+}
+
 /// A checkout's `advisorModel` is dropped, and `doctor` says so rather than leaving whoever wrote
 /// it to conclude the conversation is being sent to the model it names (BACKEND-24).
 #[test]
