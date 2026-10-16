@@ -146,6 +146,25 @@ export const CASES = {
     tokens: ['zqt01', 'zqt30', 'zqt31', 'zqt32'],
     standing: [],
   },
+  'mcp-resources': {
+    kind: 'mcp-resources',
+    event: 'mcp-resources.request',
+    request: {
+      request: 117, alias: 'zqr31', refused: 0, vetting: { verdict: 'safe', reason: `zqr32 ${filler(80)}` },
+      resources: range(30).map((n) => ({ uri: n === 0 ? 'memo://zqr01' : n === 29 ? 'memo://zqr30' : `memo://${n}`, name: `Resource ${n}`, description: 'A resource.', mimeType: 'text/plain' })),
+    },
+    tokens: ['zqr01', 'zqr30', 'zqr31', 'zqr32'],
+    standing: [],
+  },
+  'mcp-resource-read': {
+    kind: 'mcp-resource-read',
+    event: 'mcp-resource-read.request',
+    request: {
+      request: 118, alias: 'zqs01', uri: 'memo://zqs02',
+    },
+    tokens: ['zqs01', 'zqs02'],
+    standing: [],
+  },
   'mcp-call': {
     kind: 'mcp-call',
     event: 'mcp-call.request',

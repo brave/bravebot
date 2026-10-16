@@ -230,6 +230,16 @@ const CARDS = {
     entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
     marks: 'class="mcp-tool-description"',
   },
+  // SERVERS-19: a resource's description is the server's own text, released for a person to read.
+  'mcp-resources': {
+    entry: () => t.askedMcpResources({ request: 1, alias: 'weather', resources: [{ uri: 'memo://forecast', name: 'Forecast', description: FORGED_CHROME, mimeType: 'text/plain' }], refused: 0, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
+    marks: 'class="mcp-resource-description"',
+  },
+  'mcp-resource-read': {
+    entry: () => t.askedMcpResourceRead({ request: 1, alias: 'weather', uri: FORGED_CHROME }),
+    marks: null,
+    why: 'the alias and the URI the model asked to read, checked and asked about before anything is read',
+  },
   'mcp-call': {
     entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true }),
     marks: 'class="mcp-tool-description"',

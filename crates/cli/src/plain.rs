@@ -24,8 +24,9 @@ use crate::exit::{Ending, fail};
 use bravebot_agent::answers::Answers;
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, ResourceListRequest, ResourceReadRequest,
+    RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+    WriteDecision, WriteRequest,
 };
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
@@ -1511,6 +1512,42 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         });
         self.about(Held::Tools);
         self.ask(&lines, t!(mcp_tools_title))
+    }
+
+    fn confirm_resource_list(
+        &mut self,
+        request: &ResourceListRequest,
+    ) -> Decision {
+        let resources: Vec<bravebot_approval::Resource<'_>> = request
+            .resources
+            .iter()
+            .map(|res| bravebot_approval::Resource {
+                uri: &res.uri,
+                name: &res.name,
+                description: res.description.as_deref(),
+                mime_type: res.mime_type.as_deref(),
+            })
+            .collect();
+        let lines = bravebot_approval::resources_lines(&bravebot_approval::Resources {
+            alias: &request.alias,
+            resources: &resources,
+            refused: request.refused,
+            check: checked(request.verdict),
+        });
+        self.about(Held::Tools);
+        self.ask(&lines, "offer these resources to the model?")
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        request: &ResourceReadRequest,
+    ) -> Decision {
+        let lines = bravebot_approval::resource_read_lines(&bravebot_approval::ResourceRead {
+            alias: &request.alias,
+            uri: &request.uri,
+        });
+        self.about(Held::Tools);
+        self.ask(&lines, "allow reading this resource?")
     }
 
     /// Approves this call once and nothing else, for the reason a run is approved once here: a
@@ -3300,6 +3337,27 @@ mod tests {
         );
         assert_eq!(
             asked(&mut |asking| {
+                asking.confirm_resource_list(&ResourceListRequest {
+                    alias: "weather".to_string(),
+                    resources: Vec::new(),
+                    refused: 0,
+                    verdict,
+                    reason: None,
+                });
+            }),
+            held(Held::Tools)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_resource_read(&ResourceReadRequest {
+                    alias: "weather".to_string(),
+                    uri: "memo://weather/today".to_string(),
+                });
+            }),
+            held(Held::Tools)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
                 asking.confirm_mcp_call(&McpCallRequest {
                     alias: "weather".to_string(),
                     tool: "forecast".to_string(),
@@ -3425,6 +3483,35 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn plain_prompting_answers_resource_list_and_read() {
+        let mut approving = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\ny\n".to_vec())),
+            Vec::new(),
+        );
+        let list_req = ResourceListRequest {
+            alias: "weather".to_string(),
+            resources: Vec::new(),
+            refused: 0,
+            verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
+            reason: None,
+        };
+        assert_eq!(approving.confirm_resource_list(&list_req), Decision::Approve);
+
+        let read_req = ResourceReadRequest {
+            alias: "weather".to_string(),
+            uri: "memo://weather/today".to_string(),
+        };
+        assert_eq!(approving.confirm_resource_read(&read_req), Decision::Approve);
+
+        let mut rejecting = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\nn\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(rejecting.confirm_resource_list(&list_req), Decision::Reject);
+        assert_eq!(rejecting.confirm_resource_read(&read_req), Decision::Reject);
     }
 
     /// The rows a question put behind the margin, in order.

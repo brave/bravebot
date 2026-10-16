@@ -1814,6 +1814,20 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_resource_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceListRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceReadRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn confirm_mcp_call(
         &mut self,
         _request: &bravebot_agent::confirm::McpCallRequest,
@@ -2038,6 +2052,20 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::ToolListRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_resource_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceListRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceReadRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
     }
 
     fn confirm_mcp_call(

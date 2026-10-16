@@ -414,6 +414,20 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_resource_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_resource_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ResourceReadRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_mcp_call(
         &mut self,
         _request: &bravebot_agent::confirm::McpCallRequest,

@@ -218,9 +218,12 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
     match tool {
         "write_file" | "edit_file" => Some(Capability::FileWrite),
         "run" | "read_output" | "job_output" => Some(Capability::ShellExec),
-        // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
-        // thereby been given one.
-        "lsp" => Some(Capability::LanguageServer),
+        // LSP-9, SERVERS-19: asking a language server or MCP server for resources is its own grant,
+        // so a delegate holding file reads has not thereby been given one. Held by checker and worker;
+        // withheld from reader.
+        "lsp" | "list_mcp_resources" | "read_mcp_resource" => {
+            Some(Capability::LanguageServer)
+        }
         "read_file" | "list_files" | "search" | "read_git" | "repo_map" | "spawn_processor"
         | "load_skill" => Some(Capability::FileRead),
         // A delegate is a model call, and every kind holds this so it can make its own. What a
@@ -2511,6 +2514,14 @@ mod tests {
         assert_eq!(gating_capability("write_file"), Some(Capability::FileWrite));
         assert_eq!(gating_capability("run"), Some(Capability::ShellExec));
         assert_eq!(gating_capability("lsp"), Some(Capability::LanguageServer));
+        assert_eq!(
+            gating_capability("list_mcp_resources"),
+            Some(Capability::LanguageServer)
+        );
+        assert_eq!(
+            gating_capability("read_mcp_resource"),
+            Some(Capability::LanguageServer)
+        );
     }
 
     /// A definition whose whole `tools:` line is another agent's vocabulary starts a delegate

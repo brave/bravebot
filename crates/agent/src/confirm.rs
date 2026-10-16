@@ -1187,6 +1187,43 @@ pub struct ListedTool {
     pub description: Option<String>,
 }
 
+/// The resources an MCP server offers, put to the person before any of them is offered (SERVERS-19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceListRequest {
+    /// The alias the person gave the server.
+    pub alias: String,
+    /// Each resource, in the order the list holds them.
+    pub resources: Vec<ListedResource>,
+    /// How many resources the server listed that are not drawn, because this client refused them.
+    pub refused: usize,
+    /// What a check said about the list, or that none was made.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
+}
+
+/// One resource on a server's list, as it is drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedResource {
+    /// The URI of the resource.
+    pub uri: String,
+    /// The name of the resource.
+    pub name: String,
+    /// The server's description of the resource, if any.
+    pub description: Option<String>,
+    /// The MIME type of the resource, if any.
+    pub mime_type: Option<String>,
+}
+
+/// A request to read an MCP server's resource (SERVERS-19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceReadRequest {
+    /// The alias the person gave the server.
+    pub alias: String,
+    /// The URI of the resource being read.
+    pub uri: String,
+}
+
 /// A call to an MCP server's tool the planner has asked for (SERVERS-7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpCallRequest {
@@ -1807,6 +1844,21 @@ pub trait Confirmer {
     /// records nothing, so the next session asks again.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
 
+    /// Ask whether the resources an MCP server offers may be offered to the planner (SERVERS-19).
+    ///
+    /// A yes promotes the list as drawn, URIs and names, for the rest of the session and records
+    /// nothing. Implementations must default to refusal when they cannot ask.
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Ask whether to read a resource from an MCP server whose resources have not been approved (SERVERS-19).
+    ///
+    /// Implementations must default to refusal when they cannot ask.
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
     /// to recording nothing, when they cannot ask.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision;
@@ -1962,6 +2014,14 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }
@@ -2028,6 +2088,14 @@ impl Confirmer for ApproveWrites {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2107,6 +2175,14 @@ impl Confirmer for ChoosesFirst {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2205,6 +2281,14 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }
@@ -2284,6 +2368,14 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }
@@ -2360,6 +2452,14 @@ impl Confirmer for ReadsOutput {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2444,6 +2544,14 @@ impl Confirmer for VetsContent {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2534,6 +2642,14 @@ impl Confirmer for ExposesReads {
         Decision::Reject
     }
 
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }
@@ -2609,6 +2725,14 @@ impl Confirmer for ApproveFetches {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2689,6 +2813,14 @@ impl Confirmer for ApprovePlans {
     }
 
     fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2791,6 +2923,14 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.timing(|inner| inner.confirm_tool_list(request))
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        self.timing(|inner| inner.confirm_resource_list(request))
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        self.timing(|inner| inner.confirm_resource_read(request))
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
@@ -3171,6 +3311,16 @@ mod tests {
         }
 
         fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_resource_list(&mut self, _request: &ResourceListRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_resource_read(&mut self, _request: &ResourceReadRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }
