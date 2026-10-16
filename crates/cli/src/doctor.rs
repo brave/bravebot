@@ -1813,3 +1813,1228 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
 pub(crate) fn network_namespace_note(unavailable: Option<&str>) -> Option<String> {
     unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::*;
+    use bravebot_net::Transport;
+    use bravebot_net::transport::{
+        CERTIFICATE_DIRECTORY, CERTIFICATE_FILE, PROXY_VARIABLES, TrustRoots,
+    };
+    use bravebot_sandbox::SandboxError;
+    use bravebot_sandbox::policy::Capabilities;
+    use bravebot_sandbox::policy::ConfinementLevel;
+    use std::path::PathBuf;
+
+    /// The two facts about the network nothing else in the report carries. A machine behind a
+    /// TLS-inspecting proxy refuses every connection over an authority its user already installed,
+    /// and a machine with a proxy variable set sends every request through somebody else's
+    /// machine; neither is visible in any other line.
+    #[test]
+    fn the_network_section_names_the_roots_in_force_and_the_proxy() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/ca.pem")),
+                directory: None,
+            },
+            Some("http://proxy.corp.example:8080"),
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("/etc/corp/ca.pem"), "{report}");
+        assert!(
+            report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// A proxy that requires a credential carries it in the uri. A diagnostic that echoed one would
+    /// put a live password in every issue somebody pastes this into, so the report says a credential
+    /// is in use and never what it is.
+    #[test]
+    fn the_network_section_never_prints_a_proxy_credential() {
+        let transport = Transport::stated(
+            TrustRoots::Bundled,
+            Some("http://alice:s3cret@proxy.corp.example:8080"),
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(!report.contains("s3cret"), "{report}");
+        assert!(!report.contains("alice"), "{report}");
+        assert!(
+            report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// Nothing named means the built-in set, and the variables that would name another are the whole
+    /// of the remedy: which variables a machine states an authority in is not something the reader
+    /// is expected to know.
+    #[test]
+    fn the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy() {
+        let report = network(&Transport::stated(TrustRoots::Bundled, None, None)).join("\n");
+
+        assert!(report.contains(CERTIFICATE_FILE), "{report}");
+        assert!(report.contains(CERTIFICATE_DIRECTORY), "{report}");
+        for variable in PROXY_VARIABLES {
+            assert!(report.contains(variable), "{report}");
+        }
+    }
+
+    /// A named path that yields no certificate leaves nothing trusted, so every connection this
+    /// program makes is about to fail. Reported as a path in force it would read as working
+    /// configuration, and the one command run to explain the failure would explain nothing.
+    #[test]
+    fn a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/absent.pem")),
+                directory: None,
+            },
+            None,
+            None,
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(transport.trusts_nothing());
+        assert!(report.contains("/etc/corp/absent.pem"), "{report}");
+        assert!(report.contains("fail"), "{report}");
+    }
+
+    /// Both variables failing is one machine with two paths to fix. Naming only the first would have
+    /// whoever fixed it run this again to be told about the second, and the roots line says nothing
+    /// is trusted without saying which path was asked for.
+    #[test]
+    fn the_network_section_names_every_path_that_yielded_nothing() {
+        let transport = Transport::stated(
+            TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/absent.pem")),
+                directory: Some(PathBuf::from("/etc/corp/absent-dir")),
+            },
+            None,
+            None,
+        );
+
+        let lines = network(&transport);
+
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("/etc/corp/"))
+            .collect();
+        assert_eq!(named.len(), 2, "one line each: {lines:?}");
+        assert!(named[0].contains("/etc/corp/absent.pem"), "{lines:?}");
+        assert!(named[1].contains("/etc/corp/absent-dir"), "{lines:?}");
+    }
+
+    /// A protocol this build cannot connect through is not the route requests take, so naming it as
+    /// the proxy in force would send whoever ran this looking at a proxy that is seeing nothing.
+    #[test]
+    fn a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route() {
+        let transport =
+            Transport::stated(TrustRoots::Bundled, Some("socks5://proxy.corp:1080"), None);
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("socks5"), "{report}");
+        assert!(report.contains("direct"), "{report}");
+    }
+
+    /// A variable the reader passed over is a route somebody stated, and the proxy line describes a
+    /// different one. Saying nothing leaves them reading a report that denies the proxy they set.
+    #[test]
+    fn the_network_section_names_a_proxy_variable_that_cannot_be_parsed() {
+        let transport = Transport::stated_with_unparseable_proxies(
+            TrustRoots::Bundled,
+            None,
+            None,
+            &["HTTPS_PROXY"],
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("HTTPS_PROXY"), "{report}");
+        assert!(
+            !report.contains("alice") && !report.contains("s3cret"),
+            "the value is never printed: {report}"
+        );
+    }
+
+    /// Every one of them, in the order the variables are read. A reader who fixed the only variable
+    /// named would run this again to be told about the next.
+    #[test]
+    fn the_network_section_names_every_proxy_variable_that_cannot_be_parsed() {
+        let transport = Transport::stated_with_unparseable_proxies(
+            TrustRoots::Bundled,
+            None,
+            None,
+            &["ALL_PROXY", "HTTP_PROXY"],
+        );
+
+        let lines = network(&transport);
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("_PROXY is set"))
+            .collect();
+
+        assert_eq!(named.len(), 2, "one line each: {named:?}");
+        assert!(named[0].contains("ALL_PROXY"), "{named:?}");
+        assert!(named[1].contains("HTTP_PROXY"), "{named:?}");
+    }
+
+    /// A remedy naming three variables is read, not parsed, so the list is punctuated the way a
+    /// sentence is.
+    #[test]
+    fn a_list_of_variables_is_punctuated_as_a_sentence() {
+        assert_eq!(listed(&[]), "");
+        assert_eq!(listed(&["ONE"]), "ONE");
+        assert_eq!(listed(&["ONE", "TWO"]), "ONE or TWO");
+        assert_eq!(listed(&["ONE", "TWO", "THREE"]), "ONE, TWO or THREE");
+    }
+
+    /// Which hosts a proxy is not used for decides whether the one in force applies to the host
+    /// that is failing, and `NO_PROXY=*` leaves a proxy configured and used for nothing.
+    #[test]
+    fn the_network_section_names_the_hosts_a_proxy_is_not_used_for() {
+        let transport = Transport::stated(
+            TrustRoots::Bundled,
+            Some("http://proxy.corp.example:8080"),
+            Some("localhost,.internal.example"),
+        );
+
+        let report = network(&transport).join("\n");
+
+        assert!(report.contains("localhost,.internal.example"), "{report}");
+    }
+
+    /// The column the English names were hand-spaced into, so extracting them changed nothing
+    /// about what `doctor` prints.
+    #[test]
+    fn a_name_shorter_than_its_column_is_padded_out_to_it() {
+        assert_eq!(
+            aligned("endpoint", "https://example", FACT),
+            "  endpoint  https://example"
+        );
+        assert_eq!(aligned("key id", "abc", FACT), "  key id    abc");
+        assert_eq!(
+            aligned("network denial", "kernel-enforced", DETAIL),
+            "  network denial   kernel-enforced"
+        );
+    }
+
+    /// A translation is not the length the English was, and a name that fills the column has to
+    /// stay a name rather than running into what it is naming.
+    #[test]
+    fn a_name_longer_than_its_column_still_leaves_a_gap() {
+        let line = aligned("point de terminaison", "https://example", FACT);
+        assert_eq!(line, "  point de terminaison https://example");
+    }
+
+    /// The lines `doctor` prints for a set of capabilities, for the two tests below.
+    fn confinement_report(level: ConfinementLevel, network_denial_enforced: bool) -> Vec<String> {
+        confinement(Ok(Capabilities {
+            level,
+            mechanisms: vec!["a mechanism"],
+            network_denial_enforced,
+            egress_limited_to_a_port: false,
+            // Nothing `doctor` prints depends on this, so the report reads the same either way.
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
+        }))
+        .lines
+    }
+
+    /// The guarantee genuinely differs by platform and kernel, so which of the three is in force
+    /// is what somebody runs `doctor` to learn before trusting the sandbox with untrusted work. A
+    /// level it does not name is one they have to assume.
+    #[test]
+    fn doctor_names_the_confinement_level_in_force() {
+        // The opening line rather than the report, because "kernel-enforced" is also what the
+        // network denial line says, and a level reported into the wrong field is not reported.
+        let opening = |level| {
+            confinement_report(level, false)
+                .first()
+                .expect("the report opens with the level")
+                .clone()
+        };
+
+        for level in [
+            ConfinementLevel::Kernel,
+            ConfinementLevel::Partial,
+            ConfinementLevel::None,
+        ] {
+            let line = opening(level);
+            assert!(
+                line.contains(&confinement_name(level)),
+                "the level in force is not in the line that reports it: {line}"
+            );
+        }
+
+        // Three openings that read the same would satisfy the loop above while telling a reader
+        // nothing about which of the three they have.
+        assert_ne!(
+            opening(ConfinementLevel::Kernel),
+            opening(ConfinementLevel::Partial)
+        );
+        assert_ne!(
+            opening(ConfinementLevel::Partial),
+            opening(ConfinementLevel::None)
+        );
+        assert_ne!(
+            opening(ConfinementLevel::Kernel),
+            opening(ConfinementLevel::None)
+        );
+    }
+
+    /// An overstated capability is the failure this report exists to prevent. A backend that
+    /// leaves network denial to convention rather than to the kernel is the case somebody most
+    /// needs told, since it is the one where the guarantee they assume is not the one they have.
+    #[test]
+    fn doctor_says_whether_the_kernel_enforces_network_denial() {
+        // One level, so the difference can only be the answer to that question.
+        assert_ne!(
+            confinement_report(ConfinementLevel::Kernel, true).last(),
+            confinement_report(ConfinementLevel::Kernel, false).last(),
+            "the report reads the same whether or not the kernel enforces network denial"
+        );
+    }
+
+    /// A person whose kernel refuses user namespaces is refused every stage with no network or
+    /// under an allowed-hosts list, and is told why only here. The regressions it rejects: no word
+    /// at all, and a word that omits the reason or the setting it costs.
+    #[test]
+    fn doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs() {
+        assert_eq!(network_namespace_note(None), None);
+        let note = network_namespace_note(Some("Permission denied (os error 13)"))
+            .expect("a note where the namespace cannot be made");
+        assert!(note.contains("Permission denied (os error 13)"), "{note}");
+        assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
+    }
+
+    /// SANDBOX-3: below Landlock ABI 9 a program under read-only or workspace-write reaches every unix socket that has
+    /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
+    /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
+    /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
+    #[test]
+    fn doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs() {
+        let report = |governs_sockets_with_a_path| {
+            confinement(Ok(Capabilities {
+                level: ConfinementLevel::Partial,
+                mechanisms: vec!["landlock"],
+                network_denial_enforced: true,
+                egress_limited_to_a_port: true,
+                grants_paths_that_do_not_exist: false,
+                subtracts_from_a_grant: true,
+                governs_sockets_with_a_path,
+            }))
+            .lines
+        };
+        let (governed, reachable) = (report(true), report(false));
+
+        let expected = t!(doctor_sockets_with_a_path_reachable).to_string();
+        assert!(!governed.contains(&expected), "{governed:?}");
+        assert_eq!(reachable.len(), governed.len() + 1, "{reachable:?}");
+        assert_eq!(reachable.last(), Some(&expected));
+        for word in [
+            "D-Bus",
+            "SSH_AUTH_SOCK",
+            "docker.sock",
+            "ABI 9",
+            "Linux 7.1",
+            "strict",
+        ] {
+            assert!(expected.contains(word), "{word}: {expected}");
+        }
+    }
+
+    /// Without a backend, untrusted work is refused rather than run unconfined, so this is a thing
+    /// the user has to go and fix: a `doctor` that reported it and still exited successfully would
+    /// present it as one finding among the others, and one that did not say what was missing would
+    /// leave them nothing to act on.
+    #[test]
+    fn confinement_that_could_not_be_established_fails_the_run() {
+        let missing = || SandboxError::Unavailable {
+            platform: "test",
+            detail: "no backend is implemented here".into(),
+        };
+
+        let refusal = report_confinement(Err(missing()))
+            .expect("doctor reported no confinement and still passed");
+        assert!(
+            refusal.contains(&missing().to_string()),
+            "the refusal handed back does not say what was missing: {refusal}"
+        );
+
+        let lines = confinement(Err(missing())).lines;
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&missing().to_string())),
+            "the refusal does not say what was missing: {lines:?}"
+        );
+    }
+
+    /// `doctor` reports the whole machine rather than stopping at the first thing wrong with it,
+    /// so a run can reach the end holding a configuration it cannot use and a platform that
+    /// confines nothing at once, and one status has to be chosen for both.
+    ///
+    /// Either order, because the failure this rejects is the obvious implementation: keeping the
+    /// first ending found, or keeping the last. Both report a machine whose endpoint is
+    /// unparseable as CLI-6's catch-all for half the reports that find one, which is the status
+    /// meaning "a reason none of the others name" applied to a reason row 3 names.
+    #[test]
+    fn a_report_that_found_a_configuration_error_ends_on_it() {
+        assert_eq!(
+            ends_on(Ending::Configuration, Ending::Failed),
+            Ending::Configuration,
+            "a later catch-all displaced the configuration error in front of it"
+        );
+        assert_eq!(
+            ends_on(Ending::Failed, Ending::Configuration),
+            Ending::Configuration,
+            "a configuration error found after a catch-all was dropped"
+        );
+
+        // And nothing else moves: a report with one kind of problem ends on that kind, and one
+        // with none is still a success.
+        assert_eq!(ends_on(Ending::Done, Ending::Failed), Ending::Failed);
+        assert_eq!(ends_on(Ending::Failed, Ending::Failed), Ending::Failed);
+        assert_eq!(
+            ends_on(Ending::Done, Ending::Configuration),
+            Ending::Configuration
+        );
+        assert_eq!(ends_on(Ending::Done, Ending::Done), Ending::Done);
+    }
+
+    /// A managed layer somebody cannot change has to say so somewhere, or "why is the variable I
+    /// exported doing nothing" has no answer anywhere on the machine. The names and the file, since
+    /// the file is what whoever can lift the pin has to be pointed at.
+    #[test]
+    fn doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from() {
+        let scratch = Scratch::new("doctor-managed-pinned");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(
+            &path,
+            r#"{"env": {"BRAVE_AI_CHAT_ENDPOINT": "https://approved.example"}}"#,
+        )
+        .expect("a managed file");
+
+        let lines = managed_layer(&Managed::at(&path));
+
+        assert_eq!(lines.len(), 1, "one line, or the report grew: {lines:?}");
+        assert!(
+            lines[0].contains("BRAVE_AI_CHAT_ENDPOINT"),
+            "the pinned name is not reported: {lines:?}"
+        );
+        assert!(
+            lines[0].contains(&path.display().to_string()),
+            "the file that pinned it is not named: {lines:?}"
+        );
+        assert!(
+            !lines[0].contains("https://approved.example"),
+            "the value is printed, and on some machines that is a credential: {lines:?}"
+        );
+    }
+
+    /// The case every machine without an administrator is in. A report listing every place a file
+    /// could have been is a report where the lines that matter are the hard ones to find.
+    #[test]
+    fn doctor_says_nothing_about_a_managed_layer_that_is_not_there() {
+        let scratch = Scratch::new("doctor-managed-absent");
+        let absent = scratch.path.join("managed.json");
+        assert!(managed_layer(&Managed::at(&absent)).is_empty());
+    }
+
+    /// A file holding only names this layer may not pin did nothing, and saying nothing about it
+    /// would leave whoever wrote it unable to tell that from a file this program never found.
+    #[test]
+    fn doctor_names_a_managed_file_that_pinned_nothing() {
+        let scratch = Scratch::new("doctor-managed-nothing");
+        let path = scratch.path.join("managed.json");
+        std::fs::write(&path, r#"{"env": {"BRAVEBOT_CONTEXT_BUDGET": "4096"}}"#)
+            .expect("a managed file");
+
+        let lines = managed_layer(&Managed::at(&path));
+
+        assert_eq!(lines.len(), 1, "the file is not reported: {lines:?}");
+        assert!(
+            lines[0].contains(
+                &t!(doctor_managed_nothing, path = path.display().to_string()).to_string()
+            ),
+            "the line does not say the file pinned nothing: {lines:?}"
+        );
+    }
+
+    /// Which directory this is depends on the environment of whoever started the process, so a
+    /// person under `sudo`, or running the same binary from a service manager, has a different one
+    /// from the session they are looking for. Naming it is what settles which of them is in force.
+    ///
+    /// The variable it came from is named with it, because more than one can name a profile
+    /// directory and only the one that answered is worth changing: told the path alone, somebody
+    /// moving the directory on Windows sets `USERPROFILE` and watches a `HOME` they forgot they had
+    /// go on winning.
+    #[test]
+    fn doctor_names_the_state_directory_it_resolved() {
+        let lines = state_directory(
+            Some(("HOME", Path::new("/home/someone/.bravebot"))),
+            &["HOME"],
+            true,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/home/someone/.bravebot")),
+            "the state directory in use is not in the section that reports it: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("HOME")),
+            "the section does not say which variable named the directory: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains(&t!(doctor_state_directory_forgotten).to_string())),
+            "a machine with a state directory was told what it is not keeping: {lines:?}"
+        );
+    }
+
+    /// A person filing a bug is told where the logs are, and the place is the one the log is
+    /// written to, since a line naming a different directory sends them to look in an empty one.
+    #[test]
+    fn doctor_names_the_diagnostic_log_directory() {
+        let lines = state_directory(
+            Some(("HOME", Path::new("/home/someone/.bravebot"))),
+            &["HOME"],
+            true,
+        );
+        let expected = Path::new("/home/someone/.bravebot")
+            .join(bravebot_diag::DIRECTORY)
+            .display()
+            .to_string();
+        assert!(
+            lines.iter().any(|line| line.contains(&expected)),
+            "the log directory is not in the report: {lines:?}"
+        );
+    }
+
+    /// The mode `home` asks for as it creates is what keeps a prompt history out of another
+    /// account's reach, and on a platform that is given no mode the same files are written carrying
+    /// whatever the profile directory grants. Somebody typing a token into a prompt on a shared or
+    /// synced profile is entitled to know which of the two they have, and no other line in the
+    /// report distinguishes them: the section reads identically either way.
+    #[test]
+    fn doctor_says_when_the_files_are_left_unrestricted() {
+        let path = Path::new("C:\\Users\\someone\\.bravebot");
+        let named = ["HOME", "USERPROFILE"];
+        let unrestricted = state_directory(Some(("USERPROFILE", path)), &named, false).join("\n");
+
+        assert!(
+            unrestricted.contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows nothing said nothing about it: {unrestricted}"
+        );
+        assert!(
+            !state_directory(Some(("USERPROFILE", path)), &named, true)
+                .join("\n")
+                .contains(&t!(doctor_state_directory_permissions).to_string()),
+            "a platform that narrows every file reported them as unrestricted"
+        );
+    }
+
+    /// The loss this reports is silent: the session records behind `--resume`, the prompt history
+    /// and the recorded model are neither read nor written, every subsystem treats that as absence
+    /// by design, and somebody whose `/model` choice does not survive the session has nothing else
+    /// in the report to explain it. A stripped environment, a service manager and a container all
+    /// reach it.
+    ///
+    /// What is still read has to be said in the same breath, because the absence is partial: a
+    /// checkout's own settings, skills and `AGENTS.md` load with no home at all, and a report that
+    /// left that out would send somebody looking for why a file that is in force is ignored.
+    #[test]
+    fn a_missing_state_directory_is_reported_with_what_it_costs() {
+        let variables = bravebot_agent::home::PROFILE_VARIABLES;
+        let lines = state_directory(None, variables, RESTRICTED);
+        let section = lines.join("\n");
+
+        for lost in ["sessions", "--resume", "prompt history", "model"] {
+            assert!(
+                section.contains(lost),
+                "the section does not say that {lost} is not kept: {section}"
+            );
+        }
+        assert!(
+            section.contains("checkout"),
+            "the section does not say that a checkout's own files are still read: {section}"
+        );
+        assert_ne!(
+            lines,
+            state_directory(
+                Some(("HOME", Path::new("/home/someone/.bravebot"))),
+                variables,
+                RESTRICTED
+            ),
+            "a machine with no state directory reads the same as one with a state directory"
+        );
+    }
+
+    /// Which variables a platform states a profile directory in is not something the reader knows,
+    /// so the report names every one that was looked at: told only that `HOME` names nothing,
+    /// somebody on a platform that answers with another variable is being sent to set the one that
+    /// was never going to be consulted. The remedy carries the same list as the line above it, since
+    /// the remedy is the half somebody acts on.
+    ///
+    /// Held against two variables rather than this host's own, which states one. Against a list of
+    /// one, an assertion that the report names `HOME` is satisfied by the remedy's own wording
+    /// whatever the report does with the list, which is a test that passes having pinned nothing.
+    #[test]
+    fn a_missing_state_directory_names_every_variable_it_looked_at() {
+        let lines = state_directory(None, &["HOME", "USERPROFILE"], RESTRICTED);
+        let absent = lines.first().expect("the absence is reported");
+        let remedy = lines
+            .iter()
+            .find(|line| line.contains(&t!(doctor_state_directory_remedy).to_string()))
+            .expect("the report says how to keep them");
+
+        for line in [absent, remedy] {
+            assert!(
+                line.contains("HOME or USERPROFILE"),
+                "a line of the report names fewer than the two variables looked at: {line}"
+            );
+        }
+    }
+
+    /// A host to stand in for a configured gateway in the accounts below. One that cannot resolve,
+    /// so a test that started reaching it would fail rather than reach somebody's service.
+    const GATEWAY_HOST: &str = "gateway.invalid";
+
+    /// CRED-25: a gateway token is ended at the gateway, so its account names which one. A
+    /// sentence that left the host out would be a record of the same arrangement for every
+    /// gateway a settings file configured, which is the fact the person going to revoke it needs
+    /// and the one a machine with two gateways cannot supply from the rest of the report: the
+    /// lines above it name each gateway by the id somebody chose for a section of their own file.
+    #[test]
+    fn a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it() {
+        let one = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway-one.invalid",
+        });
+        let two = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway-two.invalid",
+        });
+
+        assert!(
+            one.contains("gateway-one.invalid"),
+            "the account does not name the gateway that would end the token: {one}"
+        );
+        assert!(
+            two.contains("gateway-two.invalid"),
+            "the account does not name the gateway that would end the token: {two}"
+        );
+        assert_ne!(
+            one, two,
+            "two gateways are given one account of what would end their tokens"
+        );
+    }
+
+    /// CRED-25: each credential this build holds gets its own account of what would end it. One
+    /// arm copied to the next is the failure this catches, and it is the failure the report
+    /// already had before this existed: the sentences a person was shown named `aws sso login`
+    /// and `aws configure sso`, which are how to obtain a credential and say nothing about ending
+    /// one, so the three arrangements were answered identically and none of them was answered.
+    #[test]
+    fn every_held_credential_has_its_own_account_of_what_would_end_it() {
+        let every = bravebot_config::Held::all(GATEWAY_HOST);
+        let accounts: Vec<String> = every.iter().map(|held| what_would_end(*held)).collect();
+
+        for (held, account) in every.iter().zip(&accounts) {
+            assert!(!account.is_empty(), "{held:?} is reported with nothing");
+        }
+        for (at, account) in accounts.iter().enumerate() {
+            assert!(
+                !accounts[at + 1..].contains(account),
+                "two credentials share one account of what would end them: {account}"
+            );
+        }
+    }
+
+    /// CRED-25: the third thing a held credential records is what revoking it would not reach, and
+    /// which credentials have one is the record's answer rather than this report's. Kept apart so
+    /// they can disagree, and pinned together so they cannot: a credential given a line here that
+    /// the record says nothing survives for tells somebody to chase a session that does not exist,
+    /// and one the record says something survives for and that is reported without it leaves the
+    /// live credential behind after the leak has been dealt with.
+    #[test]
+    fn what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            assert_eq!(
+                what_outlives_revoking(held).is_some(),
+                held.outlives_revocation(),
+                "{held:?} is reported and recorded differently"
+            );
+        }
+    }
+
+    /// CRED-2: the tier a credential stands at reaches the person reading the record, and each tier
+    /// reads as itself. One arm copied to the next is the failure this catches, and it is the
+    /// failure that costs the most here: a permanent secret reported in the words of a bounded one
+    /// tells somebody the issuer will refuse a use nobody can refuse.
+    ///
+    /// Every tier the record can express rather than only the ones a credential stands at today,
+    /// because the sentence a tier is missing is the one nobody notices until a credential arrives
+    /// at it, and by then the report has answered it with a neighbouring tier.
+    #[test]
+    fn each_tier_a_credential_can_stand_at_is_reported_in_its_own_words() {
+        let sentences: Vec<&str> = bravebot_config::Tier::ALL
+            .iter()
+            .map(|tier| what_tier_it_stands_at(*tier))
+            .collect();
+
+        for (tier, sentence) in bravebot_config::Tier::ALL.iter().zip(&sentences) {
+            assert!(!sentence.is_empty(), "{tier:?} is reported with nothing");
+        }
+        for (at, sentence) in sentences.iter().enumerate() {
+            assert!(
+                !sentences[at + 1..].contains(sentence),
+                "two tiers share one sentence: {sentence}"
+            );
+        }
+
+        // The record is what decides which sentence a credential gets, so two credentials the
+        // record separates are separated in the report. Reported alike, the tier line would be
+        // decoration beside an account that already names the credential.
+        assert_ne!(
+            what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
+            what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
+            "a bounded credential and a permanent one are reported alike"
+        );
+    }
+
+    /// CRED-26: the binding reaches the person reading the record, for exactly the credentials the
+    /// record gives one, and each answer reads as itself. A session STS offers no bound form of and
+    /// a batch nobody asked a bound form of are different facts, and only the second is a decision
+    /// made here, so a report that printed one sentence for both would hide which one to revisit.
+    /// Both say bearer, since that is the word the clause asks the record to use.
+    #[test]
+    fn a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            assert_eq!(
+                how_it_is_bound(held).is_some(),
+                held.binding().is_some(),
+                "{held:?} is reported and recorded differently"
+            );
+        }
+
+        let session =
+            how_it_is_bound(bravebot_config::Held::AwsSession).expect("a derived credential");
+        let batch = how_it_is_bound(bravebot_config::Held::SubscriptionBatch)
+            .expect("a derived credential");
+        assert!(session.contains("bearer"), "{session}");
+        assert!(batch.contains("bearer"), "{batch}");
+        assert_ne!(session, batch);
+        assert_ne!(
+            how_it_is_bound(bravebot_config::Held::SigningKey),
+            Some(session)
+        );
+    }
+
+    /// CRED-10: the figure for how quickly a leak would be noticed and acted on is reported for
+    /// the credentials the record sizes and no others, and the number a person reads is the one
+    /// the record holds. A sentence stating its own figure drifts from the record the first time
+    /// either is revised, and the reader has no way to tell which of the two they are holding.
+    #[test]
+    fn how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            let reported = how_soon_a_leak_is_noticed(held);
+            assert_eq!(
+                reported.is_some(),
+                held.noticed_within().is_some(),
+                "{held:?} is reported and recorded differently"
+            );
+
+            let (Some(sentence), Some(window)) = (reported, held.noticed_within()) else {
+                continue;
+            };
+            let minutes = (window.as_secs() / 60).to_string();
+            assert!(
+                sentence.contains(&minutes),
+                "{held:?} is reported with a figure the record does not hold: {sentence}"
+            );
+        }
+    }
+
+    /// CRED-3: a reason is reported for exactly the drops the record holds. A credential whose
+    /// drops go unreported leaves the tier an assertion, which is the state the clause exists to
+    /// end. A reason reported for a drop the record does not hold is the other half and the worse
+    /// one: the subscription batch's bound is enforced by the backend that verifies it, and a line
+    /// saying it failed gate 2 sends somebody looking for a bound nothing is missing, while a gate
+    /// 3 line naming a condition the walk did not fail is a stated reason that is not the reason.
+    ///
+    /// Asked of every condition of every gate rather than of the walk alone, since the walk is
+    /// what both sides read and a report keyed on something coarser agrees with it by accident.
+    #[test]
+    fn a_reason_is_reported_for_exactly_the_drops_the_record_holds() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            for condition in bravebot_config::Condition::all() {
+                let recorded = held.walk().iter().any(|drop| drop.condition == condition);
+                let reported = why_it_dropped(
+                    held,
+                    bravebot_config::GateDrop {
+                        condition,
+                        attempt: bravebot_config::Attempt::NotAttempted,
+                    },
+                );
+
+                assert_eq!(
+                    reported.is_some_and(|line| !line.is_empty()),
+                    recorded,
+                    "{held:?} is reported and recorded differently at gate {}, on {condition:?}",
+                    condition.gate().number()
+                );
+            }
+        }
+    }
+
+    /// CRED-3: a reported drop states the gate and the answer the record holds. A sentence
+    /// carrying its own gate number drifts from the walk the first time either is revised, and one
+    /// carrying its own answer is the failure that matters: the counterparty refusing and nobody
+    /// attempting end at the same tier, and only the second is anybody's here to revisit, so a
+    /// report that always says one of them tells a reader nothing they can act on.
+    #[test]
+    fn a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            for drop in held.walk() {
+                let line = why_it_dropped(held, *drop).expect("a drop the record holds");
+                let gate = drop.condition.gate().number().to_string();
+                assert!(
+                    line.contains(&gate),
+                    "{held:?} is reported at a gate the record does not name: {line}"
+                );
+
+                // The same condition with the other answer, which is the only difference between
+                // a fact about the world and a decision made here.
+                let other = bravebot_config::GateDrop {
+                    attempt: match drop.attempt {
+                        bravebot_config::Attempt::Refused => bravebot_config::Attempt::NotAttempted,
+                        bravebot_config::Attempt::NotAttempted => bravebot_config::Attempt::Refused,
+                    },
+                    ..*drop
+                };
+                assert_ne!(
+                    Some(line),
+                    why_it_dropped(held, other),
+                    "{held:?} reads the same at gate {gate} whether the counterparty refused or \
+                     nobody attempted it"
+                );
+            }
+        }
+    }
+
+    /// CRED-3: each drop has its own account of the condition that failed. One arm copied to the
+    /// next is what this catches, and a walk reported as three identical sentences says which gates
+    /// failed without saying what about them failed, which is the half of the clause that is not
+    /// the tier.
+    ///
+    /// Compared with the gate numbers taken out, because the number is passed in from the record:
+    /// an account copied from another gate is told apart by the digit the caller supplied rather
+    /// than by anything it says, and the sentence a person reads is then about the wrong
+    /// condition.
+    #[test]
+    fn every_drop_has_its_own_account_of_the_condition_it_failed() {
+        let reported: Vec<String> = bravebot_config::Held::all(GATEWAY_HOST)
+            .iter()
+            .flat_map(|held| {
+                held.walk()
+                    .iter()
+                    .filter_map(|drop| why_it_dropped(*held, *drop))
+            })
+            .map(|line| line.replace(|c: char| c.is_ascii_digit(), ""))
+            .collect();
+
+        for (at, line) in reported.iter().enumerate() {
+            assert!(
+                !reported[at + 1..].contains(line),
+                "two drops share one account of the condition that failed: {line}"
+            );
+        }
+    }
+
+    /// The gateway a settings file configured, for the `doctor` tests below.
+    fn configured_gateway(text: &str) -> bravebot_config::provider::Provider {
+        bravebot_config::Settings::parse(text)
+            .providers()
+            .first()
+            .expect("one provider")
+            .clone()
+    }
+
+    /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put
+    /// a live credential in every issue somebody pastes this into.
+    #[test]
+    fn a_gateway_credential_is_reported_as_found_and_never_printed() {
+        let provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://example.invalid/v1", "apiKey": "in-the-file"}
+            }}}"#,
+        );
+
+        let from_variable = gateway_credential(&provider, |name| match name {
+            "A_TOKEN_VARIABLE" => Some("secret-from-the-environment".to_string()),
+            _ => None,
+        });
+        assert!(!from_variable.contains("secret-from-the-environment"));
+
+        // A token written into the file is found too, and is withheld on the same footing.
+        let from_file = gateway_credential(&provider, |_| None);
+        assert!(!from_file.contains("in-the-file"));
+        assert_eq!(from_variable, from_file);
+    }
+
+    /// A gateway nothing holds a credential for says so. Reporting one as found would answer the
+    /// question `doctor` exists to answer wrongly, and the request then fails somewhere further away.
+    #[test]
+    fn a_gateway_with_no_credential_is_reported_as_having_none() {
+        let provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["ABSENT_ONE"],
+                "options": {"baseURL": "https://example.invalid/v1"}
+            }}}"#,
+        );
+
+        assert_ne!(
+            gateway_credential(&provider, |_| None),
+            gateway_credential(&provider, |_| Some("anything".to_string()))
+        );
+    }
+
+    /// A gateway whose block names no credential needs none, and saying "none found" of it reads as
+    /// something to go and set on a gateway that is working. Distinct from the case above, which names
+    /// a variable and really does want a token in it.
+    #[test]
+    fn a_gateway_needing_no_credential_is_reported_as_needing_none() {
+        let needs_none = configured_gateway(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1"}
+            }}}"#,
+        );
+        let names_one = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["ABSENT_ONE"],
+                "options": {"baseURL": "https://example.invalid/v1"}
+            }}}"#,
+        );
+
+        assert_eq!(
+            gateway_credential(&needs_none, |_| None),
+            t!(doctor_gateway_token_not_needed)
+        );
+        assert_eq!(
+            gateway_credential(&names_one, |_| None),
+            t!(doctor_gateway_token_absent, id = "gw")
+        );
+    }
+
+    /// CRED-25: a key `bravebot auth login gateway` stored is named as stored, since neither the
+    /// environment nor the settings file shows it, and is withheld like any other. A variable the
+    /// block names is sent before it, and is what the report then names.
+    #[test]
+    fn a_stored_gateway_key_is_named_as_stored_and_never_printed() {
+        let mut provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://example.invalid/v1"}
+            }}}"#,
+        );
+        provider.stored_key = Some(bravebot_config::Secret::new("placeholder-stored-key"));
+
+        let stored = gateway_credential(&provider, |_| None);
+        assert_eq!(stored, t!(doctor_gateway_token_stored));
+        assert!(!stored.contains("placeholder-stored-key"));
+        assert_eq!(
+            gateway_credential(&provider, |_| Some("from-the-environment".to_string())),
+            t!(doctor_gateway_token)
+        );
+    }
+
+    /// A Google Vertex block naming no models is offered the compiled list, so `doctor` names those
+    /// rather than saying the service is asked, which it never is, and names them as they are typed:
+    /// a bare compiled id routes nowhere. A block naming models is offered those alone, and is
+    /// reported so.
+    #[test]
+    fn doctor_names_the_compiled_models_a_google_vertex_service_is_offered() {
+        let names_none = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        let reported = gateway_models(&names_none);
+        let compiled = names_none.compiled_roster().expect("a compiled list");
+        assert!(!compiled.is_empty());
+        for id in compiled {
+            let qualified = format!("google-vertex/{id}");
+            assert!(
+                reported.contains(&qualified),
+                "{qualified} is not in {reported:?}"
+            );
+        }
+
+        let names_one = configured_gateway(
+            r#"{"provider": {"google-vertex": {
+                "options": {"project": "example-project-1"},
+                "models": {"google/gemini-3-flash-preview": {}}
+            }}}"#,
+        );
+        assert_eq!(gateway_models(&names_one), "google/gemini-3-flash-preview");
+    }
+
+    fn development_fixture(name: &str) -> Scratch {
+        let scratch = Scratch::new(name);
+        for marker in [
+            "Cargo.toml",
+            "crates/cli/Cargo.toml",
+            "agents/setup.py",
+            "agents/AGENTS.md",
+            "docs/development/agent-configuration.md",
+        ] {
+            let file = scratch.path.join(marker);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "source instructions").unwrap();
+        }
+        scratch
+    }
+
+    /// A user's workspace needs neither the repository's links nor its build tools.
+    #[test]
+    fn doctor_development_checks_only_apply_to_the_source_tree() {
+        let scratch = Scratch::new("doctor-ordinary-workspace");
+        scratch.directory(".git");
+        std::fs::write(scratch.path.join("AGENTS.md"), "user instructions").unwrap();
+        assert!(development(&scratch.path, None, false).is_empty());
+        std::fs::remove_dir(scratch.path.join(".git")).unwrap();
+        std::fs::write(scratch.path.join(".git"), "gitdir: elsewhere").unwrap();
+        assert!(development(&scratch.path, None, false).is_empty());
+        let source = development_fixture("doctor-source-tree");
+        std::fs::write(source.path.join(".git"), "gitdir: elsewhere").unwrap();
+        for windows in [false, true] {
+            assert!(agent_discovery(&source.path, windows).starts_with("missing;"));
+        }
+        let nested = source.directory("crates/cli/src");
+        let report = development(&nested, None, false).join("\n");
+        assert!(report.contains("development environment"));
+        assert!(report.contains("AGENTS.md"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert!(report.contains("direnv"));
+        assert!(report.contains("https://direnv.net/"));
+        assert!(report.contains("brew install direnv"));
+        assert!(!source.path.join("AGENTS.md").exists());
+    }
+
+    /// A hand-written path must survive a diagnostic and must not look healthy.
+    #[test]
+    fn doctor_reports_agent_discovery_conflicts_without_changing_them() {
+        let scratch = development_fixture("doctor-conflicts");
+        let destination = scratch.path.join("AGENTS.md");
+        std::fs::write(&destination, "personal instructions").unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("conflict"));
+        assert!(report.contains("resolve the existing file or directory first"));
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "personal instructions"
+        );
+        std::fs::remove_file(&destination).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        for windows in [false, true] {
+            assert!(agent_discovery(&scratch.path, windows).contains("conflict"));
+            assert!(destination.is_dir());
+        }
+    }
+
+    /// Windows setup copies the source, so a current copy is healthy and a stale one is repairable.
+    #[test]
+    fn doctor_accepts_current_windows_copies_and_reports_stale_ones() {
+        let scratch = development_fixture("doctor-windows-copy");
+        let destination = scratch.path.join("AGENTS.md");
+        std::fs::copy(scratch.path.join("agents/AGENTS.md"), &destination).unwrap();
+        assert_eq!(
+            agent_discovery(&scratch.path, true),
+            "OK (Windows copy of agents/AGENTS.md)"
+        );
+        std::fs::write(&destination, "old instructions").unwrap();
+        let report = agent_discovery(&scratch.path, true);
+        assert!(report.contains("stale"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            "old instructions"
+        );
+    }
+
+    /// Existence alone does not mean an agent will read this repository's instructions.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_checks_resolved_agent_link_targets() {
+        use std::os::unix::fs::symlink;
+        let scratch = development_fixture("doctor-links");
+        let destination = scratch.path.join("AGENTS.md");
+        for target in [
+            std::path::PathBuf::from("agents/AGENTS.md"),
+            std::path::PathBuf::from("agents/../agents/AGENTS.md"),
+            scratch.path.join("agents/AGENTS.md"),
+        ] {
+            symlink(target, &destination).unwrap();
+            assert_eq!(
+                agent_discovery(&scratch.path, false),
+                "OK (link to agents/AGENTS.md)"
+            );
+            std::fs::remove_file(&destination).unwrap();
+        }
+        std::fs::write(scratch.path.join("other.md"), "source instructions").unwrap();
+        symlink("other.md", &destination).unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("wrong target"), "{report}");
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert_eq!(
+            std::fs::read_link(&destination).unwrap(),
+            Path::new("other.md")
+        );
+        std::fs::remove_file(scratch.path.join("other.md")).unwrap();
+        let report = agent_discovery(&scratch.path, false);
+        assert!(report.contains("broken"));
+        assert!(report.contains("python3 agents/setup.py link"));
+        assert!(destination.is_symlink());
+    }
+
+    /// PATH is supplied by the fixture, so an installed host tool cannot hide a missing-tool bug.
+    #[test]
+    fn doctor_finds_direnv_only_when_path_contains_an_executable() {
+        let scratch = development_fixture("doctor-direnv");
+        let bin = scratch.directory("bin");
+        let path = std::env::join_paths([&bin]).unwrap();
+        assert!(!direnv_available(None));
+        assert!(!direnv_available(Some(&path)));
+        let executable = bin.join(if cfg!(windows) {
+            "direnv.exe"
+        } else {
+            "direnv"
+        });
+        std::fs::create_dir(&executable).unwrap();
+        assert!(!direnv_available(Some(&path)));
+        std::fs::remove_dir(&executable).unwrap();
+        std::fs::write(&executable, "not executed").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!direnv_available(Some(&path)));
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(direnv_available(Some(&path)));
+        let report = development(&scratch.path, Some(&path), false).join("\n");
+        assert!(report.contains("available on PATH"));
+        assert!(!report.contains("brew install"));
+    }
+
+    /// SANDBOX-25: where the backend cannot hold a path back from the session directory, `doctor`
+    /// says a denial inside it is not in force and why, so the report does not call "in force" an
+    /// entry whose only effect is that every stage is refused. The regression it rejects is the line
+    /// a stage that would run with the file reachable gets today: the bare entry.
+    #[test]
+    fn doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let directory = scratch("cannot-subtract").canonicalize().unwrap();
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: None,
+            pinned: false,
+        };
+        let outside = directory.parent().unwrap().join("outside.env");
+        let outside = outside.to_str().unwrap();
+        let lists = Lists {
+            deny_read: vec![entry("secret.env")],
+            deny_write: vec![entry("secret.env"), entry(outside)],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &directory);
+        let backend = |subtracts_from_a_grant| Capabilities {
+            level: ConfinementLevel::Partial,
+            mechanisms: vec!["a mechanism"],
+            network_denial_enforced: true,
+            egress_limited_to_a_port: false,
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant,
+            governs_sockets_with_a_path: true,
+        };
+        let cannot = t!(sandbox_rule_cannot_subtract).to_string();
+        let flag = t!(doctor_sandbox_filesystem_source_flag);
+
+        let refused = sandbox_filesystem_lines(&rules, &directory, Some(&backend(false)));
+        assert_eq!(
+            refused,
+            [
+                format!("denyRead secret.env is not in force: {cannot} ({flag})"),
+                format!("denyWrite secret.env is not in force: {cannot} ({flag})"),
+                format!("denyWrite {outside} ({flag})"),
+            ]
+        );
+        for held in [
+            sandbox_filesystem_lines(&rules, &directory, Some(&backend(true))),
+            sandbox_filesystem_lines(&rules, &directory, None),
+        ] {
+            assert_eq!(
+                held,
+                [
+                    format!("denyRead secret.env ({flag})"),
+                    format!("denyWrite secret.env ({flag})"),
+                    format!("denyWrite {outside} ({flag})"),
+                ]
+            );
+        }
+    }
+
+    /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the
+    /// managed file when the settings went under its pin. The regression it rejects is a report
+    /// that says `workspace-write` where a machine pins `strict`.
+    #[test]
+    fn doctor_names_the_sandbox_mode_and_where_it_came_from() {
+        let unset = sandbox_mode_line(&bravebot_config::Settings::default(), &Managed::default())
+            .expect("nothing to refuse");
+        assert!(unset.contains("workspace-write"), "{unset}");
+        assert!(unset.contains("default"), "{unset}");
+
+        let pin = pin_file("pinned", r#"{"sandbox": {"mode": "strict"}}"#);
+        let pinned = sandbox_mode_line(&bravebot_config::Settings::default(), &pin)
+            .expect("the pin alone is not a refusal");
+        assert!(pinned.contains("strict"), "{pinned}");
+        assert!(
+            pinned.contains(&pin.path().expect("a pin").display().to_string()),
+            "{pinned}"
+        );
+    }
+
+    /// SANDBOX-22: a setting under the managed floor is reported with both files rather than as
+    /// the pin. The regression it rejects is `doctor` calling a machine fine whose next session
+    /// would be refused.
+    #[test]
+    fn doctor_reports_a_mode_the_managed_file_refuses() {
+        let home = scratch("refused");
+        let file = home.join("settings.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let pin = pin_file("floor", r#"{"sandbox": {"mode": "strict"}}"#);
+
+        let refused = sandbox_mode_line(&settings, &pin).expect_err("under the floor");
+        assert!(refused.contains(&file.display().to_string()), "{refused}");
+        assert!(
+            refused.contains(&pin.path().expect("a pin").display().to_string()),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("strict") && refused.contains("off"),
+            "{refused}"
+        );
+    }
+}

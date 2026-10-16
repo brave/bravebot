@@ -769,10 +769,12 @@ mod tests {
     /// from then nothing is taken that it would not read: a reply and an attach are each told so.
     #[test]
     fn an_idle_session_ends_and_refuses_what_it_would_not_read() {
-        let shared = an_idle_session(SHORT);
+        // Taken before the session starts counting, so a pause between the two cannot make the
+        // time measured shorter than the time the session was allowed.
         let started = Instant::now();
+        let shared = an_idle_session(SHORT);
         assert_eq!(ended_within_a_bound(&shared), None);
-        assert!(started.elapsed() >= SHORT / 2, "{:?}", started.elapsed());
+        assert!(started.elapsed() >= SHORT, "{:?}", started.elapsed());
 
         assert_eq!(shared.reply("too late"), Replied::Stopping);
         assert!(!shared.offer("too late".to_string()));
@@ -899,10 +901,12 @@ mod tests {
         assert_eq!(shared.next_line().as_deref(), Some("fix the build"));
         watching.received(Waiting::Prompt, Some("fix the build"));
         std::thread::sleep(WELL_PAST);
-        watching.waiting(Waiting::Prompt);
+        // Taken before the prompt is asked for, so a pause after it cannot shorten the time
+        // measured below the time the session was allowed.
         let asked = Instant::now();
+        watching.waiting(Waiting::Prompt);
         assert_eq!(ended_within_a_bound(&shared), None);
-        assert!(asked.elapsed() >= SHORT / 2, "{:?}", asked.elapsed());
+        assert!(asked.elapsed() >= SHORT, "{:?}", asked.elapsed());
     }
 
     fn queued(shared: &Shared) -> Vec<String> {
