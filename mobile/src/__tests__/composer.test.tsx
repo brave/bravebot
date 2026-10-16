@@ -2,7 +2,25 @@ import { StyleSheet } from 'react-native'
 import { Composer, composerState } from '../components/Composer'
 import { byTestId, has, isDisabled, press, render, textOf } from './helpers'
 
-function props(over: Partial<Parameters<typeof Composer>[0]> = {}) {
+type ComposerProps = Parameters<typeof Composer>[0]
+
+function composer(v: ComposerProps) {
+  return (
+    <Composer
+      draft={v.draft}
+      onDraft={v.onDraft}
+      status={v.status}
+      ended={v.ended}
+      sending={v.sending}
+      workspace={v.workspace}
+      onSend={v.onSend}
+      onCancel={v.onCancel}
+      error={v.error}
+    />
+  )
+}
+
+function props(over: Partial<ComposerProps> = {}) {
   const calls: string[] = []
   return {
     calls,
@@ -24,12 +42,12 @@ function props(over: Partial<Parameters<typeof Composer>[0]> = {}) {
 describe('composer', () => {
   it('sends only when there is text', async () => {
     const empty = props()
-    const tree = await render(<Composer {...empty.value} />)
+    const tree = await render(composer(empty.value))
     expect(isDisabled(tree, 'send')).toBe(true)
     await press(tree, 'send')
     expect(empty.calls).toEqual([])
     const filled = props({ draft: 'hello' })
-    const tree2 = await render(<Composer {...filled.value} />)
+    const tree2 = await render(composer(filled.value))
     expect(isDisabled(tree2, 'send')).toBe(false)
     await press(tree2, 'send')
     expect(filled.calls).toEqual(['send'])
@@ -37,7 +55,7 @@ describe('composer', () => {
 
   it.each(['running', 'waiting'] as const)('turns Send into Cancel while the turn is %s and keeps the draft editable', async (status) => {
     const { calls, value } = props({ status, draft: 'next thing' })
-    const tree = await render(<Composer {...value} />)
+    const tree = await render(composer(value))
     expect(has(tree, 'send')).toBe(false)
     expect(byTestId(tree, 'cancel-turn').props.accessibilityLabel).toBe('Cancel')
     expect(byTestId(tree, 'composer-input').props.value).toBe('next thing')
@@ -47,8 +65,8 @@ describe('composer', () => {
   })
 
   it('draws one round control for both states, so nothing moves when Send becomes Cancel', async () => {
-    const send = await render(<Composer {...props({ draft: 'x' }).value} />)
-    const cancel = await render(<Composer {...props({ status: 'running' }).value} />)
+    const send = await render(composer(props({ draft: 'x' }).value))
+    const cancel = await render(composer(props({ status: 'running' }).value))
     const box = (tree: typeof send, id: string) => {
       const { width, height, borderRadius } = StyleSheet.flatten(byTestId(tree, id).props.style)
       return { width, height, borderRadius }
@@ -59,7 +77,7 @@ describe('composer', () => {
   })
 
   it('names the folder the session works in under the message box', async () => {
-    const tree = await render(<Composer {...props().value} />)
+    const tree = await render(composer(props().value))
     expect(textOf(byTestId(tree, 'composer-workspace'))).toBe('storefront')
     expect(byTestId(tree, 'composer-workspace').props.accessibilityLabel).toBe('Project storefront')
   })
@@ -68,13 +86,13 @@ describe('composer', () => {
     expect(composerState('awaiting_trust', null)).toEqual({ editable: false, reason: 'Answer the trust question to start.' })
     expect(composerState('detached', null).editable).toBe(false)
     expect(composerState('completed', 'The connection was lost. Start a new session to continue.').editable).toBe(false)
-    const tree = await render(<Composer {...props({ status: 'awaiting_trust' }).value} />)
+    const tree = await render(composer(props({ status: 'awaiting_trust' }).value))
     expect(textOf(byTestId(tree, 'composer-note'))).toBe('Answer the trust question to start.')
     expect(byTestId(tree, 'composer-input').props.editable).toBe(false)
   })
 
   it('shows an error instead of the reason', async () => {
-    const tree = await render(<Composer {...props({ error: 'A turn is already running.' }).value} />)
+    const tree = await render(composer(props({ error: 'A turn is already running.' }).value))
     expect(textOf(byTestId(tree, 'composer-note'))).toBe('A turn is already running.')
   })
 })

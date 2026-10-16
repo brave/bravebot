@@ -16,29 +16,29 @@ interface TextOwn {
 }
 
 /** The conversation's own type: the large role, 16 on 24. */
-export function Body({ children, style, testID, ...extras }: TextOwn & TextExtras) {
+export function Body({ children, style, testID, numberOfLines, accessibilityLiveRegion }: TextOwn & TextExtras) {
   const theme = useTheme()
   return (
-    <Text testID={testID} {...extras} style={[type.body, { color: theme.ink.primary }, style]}>
+    <Text testID={testID} numberOfLines={numberOfLines} accessibilityLiveRegion={accessibilityLiveRegion} style={[type.body, { color: theme.ink.primary }, style]}>
       {children}
     </Text>
   )
 }
 
 /** Interface text inside cards and controls: the default role, 14 on 22. */
-export function UI({ children, style, testID, ...extras }: TextOwn & TextExtras) {
+export function UI({ children, style, testID, numberOfLines, accessibilityLiveRegion }: TextOwn & TextExtras) {
   const theme = useTheme()
   return (
-    <Text testID={testID} {...extras} style={[type.ui, { color: theme.ink.primary }, style]}>
+    <Text testID={testID} numberOfLines={numberOfLines} accessibilityLiveRegion={accessibilityLiveRegion} style={[type.ui, { color: theme.ink.primary }, style]}>
       {children}
     </Text>
   )
 }
 
-export function Meta({ children, style, testID, ...extras }: TextOwn & TextExtras) {
+export function Meta({ children, style, testID, numberOfLines, accessibilityLiveRegion }: TextOwn & TextExtras) {
   const theme = useTheme()
   return (
-    <Text testID={testID} {...extras} style={[type.meta, { color: theme.ink.secondary }, style]}>
+    <Text testID={testID} numberOfLines={numberOfLines} accessibilityLiveRegion={accessibilityLiveRegion} style={[type.meta, { color: theme.ink.secondary }, style]}>
       {children}
     </Text>
   )
