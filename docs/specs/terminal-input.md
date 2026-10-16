@@ -811,7 +811,8 @@ cannot write ([SANDBOX-30](sandboxing.md#SANDBOX-30)), and what runs is that nam
 symlink behind it points at. The name is only kept while it still reaches the same program: a link
 that now points elsewhere, or one that no longer resolves, is started by resolved path instead. This
 is the editor alone. Everywhere a program is approved before it runs, the approval names the file
-that ran, because a name can be repointed afterwards.
+that ran, because a name can be repointed afterwards. The editor's own lookups of other programs
+search the same directories alone ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **Why.** MacVim installs `vim`, `vi` and `gvim` as links to a single shim that reads its own
 `argv[0]`, stays in the terminal for the `vi*` spellings and forks a detached GUI window for the

@@ -336,6 +336,10 @@ fn waiting_flag(program: &Path) -> Option<String> {
 /// A non-zero exit is taken at its word and the line is left alone. `vi` spells "discard this"
 /// as `:cq`, which exits 1, and honouring that is the difference between an editor that can be
 /// abandoned and one that cannot.
+///
+/// The editor's own lookups of other programs by name (an `env` shebang, a wrapper script, an
+/// `$EDITOR` of `env vim`) search only the `PATH` entries the lookup that found it searches
+/// (SANDBOX-30).
 fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failure> {
     let name = program
         .file_name()
@@ -343,7 +347,9 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
-    match Command::new(program).args(arguments).arg(path).status() {
+    let mut command = Command::new(program);
+    bravebot_sandbox::programs::restrict_path(&mut command);
+    match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(match status.code() {
             Some(code) => t!(editor_exited_badly, editor = name, code = code),
@@ -672,6 +678,225 @@ mod tests {
         let _ = std::fs::remove_dir_all(&session);
         assert!(ran, "the child did not run the test: {report}");
         assert!(child.status.success(), "{report}");
+    }
+
+    /// What an editor did when [`start`] ran it in a child process of the test binary, with programs
+    /// of the same name planted in a directory the session keeps out.
+    #[cfg(unix)]
+    struct Started {
+        /// The editor ran to its end.
+        edited: bool,
+        /// A program planted in the directory the session keeps out ran.
+        planted: bool,
+        /// What the child printed, for a failure.
+        report: String,
+        succeeded: bool,
+    }
+
+    #[cfg(unix)]
+    const STARTED_SESSION: &str = "BRAVEBOT_TEST_EDITOR_STARTED_SESSION";
+    #[cfg(unix)]
+    const STARTED_IN_SESSION: &str = "BRAVEBOT_TEST_EDITOR_STARTED_IN_SESSION";
+    #[cfg(unix)]
+    const STARTED_COMMAND: &str = "BRAVEBOT_TEST_EDITOR_STARTED_COMMAND";
+
+    /// The child half of [`run_started_editor`]: reports whether it ran, so a test returns at once
+    /// when it is the child.
+    #[cfg(unix)]
+    fn started_child() -> bool {
+        let Some(session) = std::env::var_os(STARTED_SESSION) else {
+            return false;
+        };
+        let session = PathBuf::from(session);
+        bravebot_sandbox::programs::keep_out(&session);
+        if std::env::var_os(STARTED_IN_SESSION).is_some() {
+            std::env::set_current_dir(&session).unwrap();
+        }
+        let file = session.join("prompt.md");
+        std::fs::write(&file, "").unwrap();
+        match std::env::var(STARTED_COMMAND) {
+            Ok(command) => {
+                let (program, arguments) = command_line(&command).expect("the editor is found");
+                start(&program, &arguments, &file)
+            }
+            Err(_) => start(&session.join("editor"), &[], &file),
+        }
+        .expect("the editor starts and exits cleanly");
+        true
+    }
+
+    /// Run `start` in a child of this test binary whose `PATH` is `entries` (given the session
+    /// directory and a directory of installed tools). The editor is a script with an `env` shebang,
+    /// or the configured `command` where one is given. A `sh` and a `bravebot-env-tool` that record
+    /// that they ran are planted at `<session>/.venv/bin`, the `sh` also at `<session>/sh`, and the
+    /// installed `bravebot-env-tool` is in the tools directory. The session is kept out of the
+    /// search, and the child runs from it when `in_session`.
+    #[cfg(unix)]
+    fn run_started_editor(
+        test: &str,
+        name: &str,
+        in_session: bool,
+        command: Option<&str>,
+        entries: impl FnOnce(&Path, &Path) -> Vec<PathBuf>,
+    ) -> Started {
+        use std::os::unix::fs::PermissionsExt;
+        let session = crate::testutil::scratch_dir(name);
+        let tools = crate::testutil::scratch_dir(&format!("{name}-tools"));
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        std::fs::create_dir_all(session.join(".venv/bin")).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        let script = |path: PathBuf, body: String| {
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let planted = |runs: &str| {
+            format!(
+                "#!/bin/sh\n: > '{}'\nexec {runs} \"$@\"\n",
+                session.join("planted-ran").display()
+            )
+        };
+        script(session.join(".venv/bin/sh"), planted("/bin/sh"));
+        script(session.join("sh"), planted("/bin/sh"));
+        script(
+            session.join(".venv/bin/bravebot-env-tool"),
+            planted(&format!("'{}'", tools.join("bravebot-env-tool").display())),
+        );
+        script(
+            tools.join("bravebot-env-tool"),
+            "#!/bin/sh\n: > \"$1.edited\"\n".to_string(),
+        );
+        script(
+            session.join("editor"),
+            "#!/usr/bin/env sh\n: > \"$1.edited\"\n".to_string(),
+        );
+        let path = std::env::join_paths(entries(&session, &tools)).unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(STARTED_SESSION, &session)
+            .env("PATH", &path);
+        if in_session {
+            child.env(STARTED_IN_SESSION, "1");
+        }
+        if let Some(command) = command {
+            child.env(STARTED_COMMAND, command);
+        }
+        let child = child.output().unwrap();
+
+        let outcome = Started {
+            edited: session.join("prompt.md.edited").exists(),
+            planted: session.join("planted-ran").exists(),
+            report: String::from_utf8_lossy(&child.stderr).into_owned(),
+            succeeded: child.status.success(),
+        };
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        outcome
+    }
+
+    /// SANDBOX-30: an editor that is a script with an `env` shebang, or a launcher that runs another
+    /// program by name, looks that program up on the `PATH` it was started with. A `sh` a confined
+    /// stage wrote into a directory the session keeps out, first on that `PATH`, must not be the one
+    /// that runs: the editor is started unconfined, with the person's access to `~/.ssh` and
+    /// `~/.aws`. The system `sh` behind it is the one found, and the editor still runs to its end.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "editor::tests::an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(TEST, "editor-env-shebang", false, None, |session, _| {
+            vec![
+                session.join(".venv/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+        });
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the editor did not run to its end: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "the editor looked up `sh` in a directory a stage may write"
+        );
+    }
+
+    /// The same for an editor configured as a command line that names another program for the
+    /// first to run, `env` and a tool here. Only the first word is looked up by the editor's own
+    /// search, so the rest reaches `env` as an argument and is found through the `PATH` `env` was
+    /// started with. The tool installed behind the planted one is the one that runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_configured_as_env_and_a_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "editor::tests::an_editor_configured_as_env_and_a_name_never_runs_one_a_stage_may_have_written";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(
+            TEST,
+            "editor-env-command",
+            false,
+            Some("env bravebot-env-tool"),
+            |session, tools| {
+                vec![
+                    session.join(".venv/bin"),
+                    tools.to_path_buf(),
+                    PathBuf::from("/usr/bin"),
+                    PathBuf::from("/bin"),
+                ]
+            },
+        );
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the installed tool did not run: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "`env` looked its argument up in a directory a stage may write"
+        );
+    }
+
+    /// With every entry of the `PATH` a directory the session keeps out, nothing is left to search.
+    /// The editor must then be started with no `PATH` at all: an empty one is read by `execvp` as
+    /// the current directory, which for a session is the directory it writes in. Here the editor
+    /// runs from the session, holding a `sh` of its own, and the system one is the one found.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory() {
+        const TEST: &str = "editor::tests::an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(TEST, "editor-env-empty", true, None, |session, _| {
+            vec![session.join(".venv/bin")]
+        });
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the editor did not run to its end: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "the editor looked up `sh` in the directory it was started in"
+        );
     }
 
     /// The four the clause names, wherever the binary ships. A platform that has a list of its
