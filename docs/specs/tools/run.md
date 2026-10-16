@@ -1782,6 +1782,7 @@ with nothing going.
 `verified-by: bravebot_agent::turn::a_moved_line_is_announced_as_a_job_with_how_long_it_had_run`
 `verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
 `verified-by: bravebot_agent::turn::a_turn_ending_with_a_job_running_says_so_before_it_stops_it`
+`verified-by: bravebot_agent::turn::every_finish_found_between_rounds_is_reported_before_the_first_is_handed_over`
 `verified-by: bravebot_agent::tools::a_job_that_exited_by_itself_is_reported_by_its_codes_at_the_turns_end`
 `verified-by: bravebot_agent::tools::the_turns_end_does_not_wait_for_a_jobs_pipes_to_drain`
 `verified-by: bravebot_agent::shared::a_delegates_job_is_reported_as_its_own`
