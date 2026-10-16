@@ -943,6 +943,26 @@ fn search_and_edit_workflows() -> Vec<Workflow> {
             ))
             .stage(shell("cd tree && patch -s a.txt < ../change.patch"))
             .needing(&["sed", "awk", "diff", "patch"]),
+        Workflow::new("search", "xargs passes a list of files to one program")
+            .file("tree/a.txt", "one\ntwo\nthree\n")
+            .file("tree/sub/b.txt", "two\n")
+            .stage(shell(
+                "find tree -name '*.txt' | xargs grep -l two | grep -q tree/a.txt",
+            ))
+            .needing(&["find", "xargs", "grep"]),
+        // macOS find treats an argument limit it cannot read as fatal only when its environment
+        // is over about 3 KB, so the stage sets a large variable as an account's own would be.
+        Workflow::new(
+            "search",
+            "find -exec {} + passes a list of files to one program",
+        )
+        .file("tree/a.txt", "one\ntwo\nthree\n")
+        .file("tree/sub/b.txt", "two\n")
+        .stage(shell(
+            "PAD=$(printf '%08000d' 0); export PAD; \
+                 find tree -name '*.txt' -exec grep -l two {} + | grep -q tree/a.txt",
+        ))
+        .needing(&["find", "grep"]),
         Workflow::new("editor", "vim edits a file and less shows it")
             .file("note.txt", "one\n")
             .stage(Stage::new(

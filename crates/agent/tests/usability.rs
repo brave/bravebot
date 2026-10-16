@@ -76,6 +76,17 @@ fn the_suite_covers_each_everyday_program_and_the_rows_that_stay_refused() {
             "no workflow for {group}"
         );
     }
+    for name in [
+        "xargs passes a list of files to one program",
+        "find -exec {} + passes a list of files to one program",
+    ] {
+        assert!(
+            workflows
+                .iter()
+                .any(|workflow| workflow.name == name && workflow.expect == Expect::Works),
+            "no workflow named {name}"
+        );
+    }
     let refused = workflows
         .iter()
         .filter(|workflow| workflow.expect == Expect::Refused)

@@ -128,15 +128,17 @@ impl SeatbeltSandbox {
         // the parent or any other process, including another process in the same sandbox.
         out.push_str("(allow process-info-pidinfo (target self))\n");
         // CPU count and page size serve language runtimes (the numeric page-size query
-        // resolves to pagesize_compat). The remaining names are uname's fields, used by
-        // Python's package platform detection. No process arguments or environment query
-        // is in this list.
+        // resolves to pagesize_compat). kern.argmax is the one system-wide argument-size
+        // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
+        // uname's fields, used by Python's package platform detection. No process arguments or
+        // environment query is in this list.
         out.push_str("(allow sysctl-read");
         for name in [
             "hw.machine",
             "hw.ncpu",
             "hw.pagesize",
             "hw.pagesize_compat",
+            "kern.argmax",
             "kern.hostname",
             "kern.osrelease",
             "kern.ostype",
@@ -741,6 +743,7 @@ mod argument_tests {
                     " (sysctl-name \"hw.ncpu\")",
                     " (sysctl-name \"hw.pagesize\")",
                     " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.argmax\")",
                     " (sysctl-name \"kern.hostname\")",
                     " (sysctl-name \"kern.osrelease\")",
                     " (sysctl-name \"kern.ostype\")",
@@ -2742,6 +2745,30 @@ int main(int argc, char **argv) {
                 exit_code_under(&policy, a_stage_for(&home), program, &[argument]),
                 Some(0),
                 "{program} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `xargs` and `getconf ARG_MAX` read the longest argument list a program may be given and
+    /// exit with an error that does not name the sandbox when the profile refuses that query.
+    /// `xargs` reads it before any input, so it is started with none. `find -exec {} +` reads the
+    /// same limit; it fails only with a large environment, so the usability suite holds it.
+    #[test]
+    fn a_program_that_asks_for_the_longest_argument_list_runs_under_the_base() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-starts-argmax");
+        let policy = crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+
+        for (program, arguments) in [
+            ("/usr/bin/xargs", &["/usr/bin/true"][..]),
+            ("/usr/bin/getconf", &["ARG_MAX"][..]),
+        ] {
+            assert_eq!(
+                exit_code_under(&policy, a_stage_for(&home), program, arguments),
+                Some(0),
+                "{program} did not run under the base"
             );
         }
 

@@ -408,10 +408,13 @@ arguments and environment through `sysctl(KERN_PROCARGS2)`. It allows only named
 sysctls and denies `process-info*`, with a `process-info-pidinfo` exception for the process itself
 because system tools need that query during startup. Both restrictions are required: either a broad
 `sysctl-read` grant or the default process-info access permits the environment read. CPU count,
-page size and the fields of `uname` remain readable for ordinary tools ([SANDBOX-21](#SANDBOX-21)).
-This protects against confined stages, including a child given an empty environment; it does not
-stop an unconfined same-user process reading the exec-time copy, erase that copy, or withhold a
-variable the caller deliberately hands to a child. Windows is not covered.
+page size, the fields of `uname` and the longest argument list a program may be given
+(`kern.argmax`, which `xargs`, `find -exec {} +` and `getconf ARG_MAX` read) remain readable for
+ordinary tools ([SANDBOX-21](#SANDBOX-21)). The argument-list limit is one system-wide number and
+holds nothing about any process. This protects against confined stages, including a child given an
+empty environment; it does not stop an unconfined same-user process reading the exec-time copy,
+erase that copy, or withhold a variable the caller deliberately hands to a child. Windows is not
+covered.
 
 The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
 process starts in this one's. Naming it grants nothing: a process started in a directory it may not
@@ -420,6 +423,8 @@ directory too.
 
 `verified-by: bravebot_sandbox::exec_environment::a_confined_child_cannot_read_its_parents_exec_time_environment`
 `verified-by: bravebot_sandbox::macos::process_inspection_is_refused_and_sysctls_are_named_machine_queries`
+`verified-by: bravebot_sandbox::macos::a_program_that_asks_for_the_longest_argument_list_runs_under_the_base`
+`verified-by: bravebot_agent::usability::every_workflow_works_under_the_default`
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
@@ -1769,8 +1774,9 @@ A suite runs the everyday workflows under the confinement a `run` stage is given
 ([SANDBOX-17](#SANDBOX-17)), each in a session directory and a scratch home of its own: `git` (init,
 add, commit, branch, merge, stash, rebase, worktree, a commit hook, and push, clone, fetch and pull
 against a local remote), `gh`, a wrapper script that starts `git` and `make`, `make`, `cargo`
-(check, build, run, test, and a build script), `npm` and `node`, `python3`, `go`, `find`, `grep`,
-`sed`, `awk`, `diff` and `patch`, and `vim` and `less`. A workflow works when every stage exits zero.
+(check, build, run, test, and a build script), `npm` and `node`, `python3`, `go`, `find`, `xargs`
+and `find -exec {} +` passing a list of files to one program, `grep`, `sed`, `awk`, `diff` and
+`patch`, and `vim` and `less`. A workflow works when every stage exits zero.
 The home holds a credential of each kind and has the cache directories of an account that has used
 each toolchain, so a first run on an account that never ran the tool is not what is measured
 ([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the withheld
