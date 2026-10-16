@@ -33,7 +33,7 @@ mod watching;
 
 pub use self::export::{as_last_drawn, as_markdown, as_text};
 pub(crate) use self::hint::{cache_hit_rate, context_reading};
-pub(crate) use self::transcript::{opening_screen, rows_of};
+pub(crate) use self::transcript::{EntryLines, ReplyLines, opening_screen, rows_of};
 
 use self::beneath::lines_beneath_the_box;
 use self::hint::draw_hint;
@@ -2448,6 +2448,160 @@ mod tests {
                 "{} lines were wrapped to measure them, and {too_wide} do not fit on a row",
                 work.wrapped
             );
+        }
+
+        /// What a terminal shows after one frame of `session`, as the cells' symbols.
+        fn frame_of(session: &Session, width: u16, height: u16) -> (String, Laid) {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            let mut laid = Laid::default();
+            terminal
+                .draw(|frame| laid = draw(frame, session))
+                .expect("draw succeeds");
+            let drawn = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            (drawn, laid)
+        }
+
+        /// A typed character is drawn without laying the conversation out again. The first frame
+        /// pays for every line; the frame after a keystroke asks about the few lines that are not
+        /// kept (the reply still arriving) and nothing else, however long the transcript is.
+        #[test]
+        fn a_keystroke_is_drawn_without_measuring_the_transcript_again() {
+            let mut session = a_long_session();
+            session.streaming("and a reply still arriving");
+
+            let ((_, laid), first) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(
+                laid.rows > 1000,
+                "the transcript is not long: {}",
+                laid.rows
+            );
+            assert!(
+                first.asked >= 1000,
+                "the first frame measured {} lines, so the count observes nothing",
+                first.asked
+            );
+
+            session.type_char('x');
+            let ((drawn, _), typed) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(drawn.contains("and a reply still arriving"));
+            assert!(
+                typed.asked <= 4,
+                "a keystroke measured {} lines of the transcript",
+                typed.asked
+            );
+        }
+
+        /// What the kept lines stand for is the entries, so an entry changed in place is drawn as
+        /// it now reads and not as it did when the lines were kept.
+        #[test]
+        fn an_entry_edited_after_a_frame_is_drawn_as_edited() {
+            let mut session = a_long_session();
+            let _ = frame_of(&session, 90, 24);
+
+            let last = session.transcript.last_mut().expect("an entry");
+            last.text = "REWRITTEN after the frame".to_string();
+
+            let (drawn, _) = frame_of(&session, 90, 24);
+            assert!(drawn.contains("REWRITTEN after the frame"), "{drawn}");
+        }
+
+        /// The width, the trail and the palette each change how an entry is drawn, so each is a
+        /// reason the kept lines no longer answer.
+        #[test]
+        fn a_change_of_width_or_trail_is_not_answered_from_the_lines_kept_before_it() {
+            let mut session = a_long_session();
+            let narrow = frame_of(&session, 40, 24).1;
+            let wide = frame_of(&session, 120, 24).1;
+            assert!(
+                narrow.rows > wide.rows,
+                "{} rows at 40 columns, {} at 120: the lines were not laid out again",
+                narrow.rows,
+                wide.rows
+            );
+
+            let before = frame_of(&session, 90, 24).1.rows;
+            session.transcript.last_mut().expect("an entry").trail.push(
+                bravebot_session::audit::TrailLine {
+                    text: "a gate passed".to_string(),
+                    blocked: false,
+                },
+            );
+            session.show_trail = true;
+            assert_eq!(frame_of(&session, 90, 24).1.rows, before + 1);
+            session.show_trail = false;
+            assert_eq!(frame_of(&session, 90, 24).1.rows, before);
+        }
+
+        /// Drawing only the rows on the screen is the same picture as wrapping the whole
+        /// transcript and scrolling it, from the bottom and from every row held above it, at a
+        /// width where lines wrap and one where they do not.
+        #[test]
+        fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
+            let reference = |session: &Session, width: u16, height: u16| -> String {
+                let (lines, _) = lay_out(session, width, height);
+                let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                let total = paragraph.line_count(width) as u16;
+                let max = total.saturating_sub(height);
+                let offset = if session.scroll > 0 {
+                    session.top_row().min(max)
+                } else {
+                    max
+                };
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        frame.render_widget(paragraph.scroll((offset, 0)), frame.area());
+                    })
+                    .expect("draw succeeds");
+                terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect()
+            };
+            let mut session = a_long_session();
+            session.streaming("a reply still arriving that is long enough to wrap onto a second row at forty columns");
+            for width in [40u16, 90] {
+                let height = 12;
+                let area = |session: &Session| {
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                    let mut laid = Laid::default();
+                    terminal
+                        .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
+                        .expect("draw succeeds");
+                    let drawn: String = terminal
+                        .backend()
+                        .buffer()
+                        .content()
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect();
+                    (drawn, laid)
+                };
+                let (bottom, laid) = area(&session);
+                assert_eq!(bottom, reference(&session, width, height), "at the bottom");
+                session.note_layout(laid);
+                for held in [1u16, 2, 3, 7, 40, 301, 999] {
+                    session.scroll = held;
+                    let (drawn, _) = area(&session);
+                    assert_eq!(
+                        drawn,
+                        reference(&session, width, height),
+                        "held {held} rows up at {width} columns"
+                    );
+                }
+                session.scroll = 0;
+            }
         }
 
         /// Nothing has been drawn yet, so the width is zero. Laying out against it must not panic.

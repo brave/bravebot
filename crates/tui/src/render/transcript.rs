@@ -7,12 +7,13 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
+use std::sync::{Arc, OnceLock};
 
 use crate::logo;
 use crate::markdown;
 use crate::state::{Entry, Laid, Session, Speaker};
 use crate::table;
-use crate::theme;
+use crate::theme::{self, Palette};
 use crate::wrap;
 
 use super::{
@@ -162,45 +163,19 @@ fn has_more_to_show(entry: &Entry) -> bool {
             .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
 }
 
-/// The transcript, and the index of the line each prompt the person typed begins at.
+/// The lines each entry is drawn as, appended to `lines`, with where each prompt and each call
+/// with more to show begins.
 ///
-/// Two answers from one pass, because working the second out afterwards would mean deciding which
-/// drawn lines were prompts by looking at them, and the thing that knows is the pass that drew
-/// them.
-fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
-    if let Some(view) = session
-        .scroller()
-        .and_then(|scroller| scroller.request.as_deref())
-    {
-        let (lines, prompts) = request_lines(view);
-        return (lines, prompts, Vec::new());
-    }
-    let mut prompts: Vec<usize> = Vec::new();
-    let mut calls: Vec<(usize, usize, usize)> = Vec::new();
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Nothing has been said yet, so the screen opens on the mark, laid out against the height
-    // rather than stacked into the top corner. A note is not a conversation: the transcript
-    // already holds what starting up reported, and that belongs under the mark rather than in
-    // place of it, which is why this is not a test for an empty transcript. It was one, and the
-    // mark was never drawn at all, since the trust answer is noted before the first frame.
-    // Never over a delegate: the mark invites a prompt, and a delegate takes none. A delegate
-    // that has not yet made a call would otherwise satisfy this vacuously and be drawn as an
-    // empty session.
-    let viewed = session.viewed();
-    let opening = opening_screen(session);
-    if opening {
-        lines.extend(logo::lines(
-            &session.confinement,
-            session.sandbox_mode(),
-            session.sockets_with_a_path_reachable,
-            &session.tier,
-            width,
-            height,
-        ));
-        lines.push(Line::raw(""));
-    }
-
+/// Everything in it is a function of the entries, the width, the theme and whether the trail and
+/// the scroller are showing, which is what a [`EntryLines`] is kept against.
+fn push_entries(
+    session: &Session,
+    viewed: &[Entry],
+    width: u16,
+    lines: &mut Vec<Line<'static>>,
+    prompts: &mut Vec<usize>,
+    calls: &mut Vec<(usize, usize, usize)>,
+) {
     for (index, entry) in viewed.iter().enumerate() {
         let began = lines.len();
         match entry.speaker {
@@ -349,7 +324,14 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
             lines.push(Line::raw(""));
         }
     }
+}
 
+/// What follows the entries: the reply still arriving, what a command typed during the turn
+/// answered, the invitation on the opening screen, and the close of a delegate's view.
+///
+/// Drawn from the session's live state rather than from entries, so it is built afresh on every
+/// frame and is as long as one reply, never as long as the conversation.
+fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<'static>>) {
     // The reply being written right now, under everything that has already happened. Drawn from
     // the session rather than from the transcript because it is not an entry yet: when the round
     // ends the same words arrive as one, in this same place and this same shape, and the tail is
@@ -359,7 +341,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
     // kept, so the only half-written sentence there is belongs to the planner, and it would read
     // in a delegate's view as that delegate writing it.
     if !session.reply_so_far().is_empty() && !session.watching_a_delegate() {
-        lines.extend(assistant_lines(session.reply_so_far(), width));
+        lines.extend(reply_lines(session, width).lines.iter().cloned());
         lines.push(Line::raw(""));
     }
 
@@ -420,6 +402,58 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
             None => {}
         }
     }
+}
+
+/// The transcript, and the index of the line each prompt the person typed begins at.
+///
+/// Two answers from one pass, because working the second out afterwards would mean deciding which
+/// drawn lines were prompts by looking at them, and the thing that knows is the pass that drew
+/// them.
+fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
+    if let Some(view) = session
+        .scroller()
+        .and_then(|scroller| scroller.request.as_deref())
+    {
+        let (lines, prompts) = request_lines(view);
+        return (lines, prompts, Vec::new());
+    }
+    let mut prompts: Vec<usize> = Vec::new();
+    let mut calls: Vec<(usize, usize, usize)> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Nothing has been said yet, so the screen opens on the mark, laid out against the height
+    // rather than stacked into the top corner. A note is not a conversation: the transcript
+    // already holds what starting up reported, and that belongs under the mark rather than in
+    // place of it, which is why this is not a test for an empty transcript. It was one, and the
+    // mark was never drawn at all, since the trust answer is noted before the first frame.
+    // Never over a delegate: the mark invites a prompt, and a delegate takes none. A delegate
+    // that has not yet made a call would otherwise satisfy this vacuously and be drawn as an
+    // empty session.
+    let viewed = session.viewed();
+    let opening = opening_screen(session);
+    if opening {
+        lines.extend(logo::lines(
+            &session.confinement,
+            session.sandbox_mode(),
+            session.sockets_with_a_path_reachable,
+            &session.tier,
+            width,
+            height,
+        ));
+        lines.push(Line::raw(""));
+    }
+
+    let cacheable = !opening && is_the_transcript(session, viewed);
+    if cacheable {
+        let entries = cached_entries(session, width);
+        lines.extend(entries.lines.iter().cloned());
+        prompts.extend_from_slice(&entries.prompts);
+        calls.extend_from_slice(&entries.calls);
+    } else {
+        push_entries(session, viewed, width, &mut lines, &mut prompts, &mut calls);
+    }
+
+    push_tail(session, width, opening, &mut lines);
 
     (lines, prompts, calls)
 }
@@ -523,6 +557,184 @@ pub(crate) fn rows_of(line: &Line<'_>, width: u16) -> u16 {
         .line_count(width) as u16
 }
 
+/// The lines the entries of the transcript are drawn as, kept from one frame to the next.
+///
+/// Drawing the entries is the expensive half of a frame: markdown, tables and diffs for every one
+/// of them. None of it depends on what is being typed, so a keystroke that touches no entry reuses
+/// the lines instead of making them again. It is kept against everything it was made from: the
+/// entries' stamp, the width, the palette, and the two flags that change how an entry is drawn.
+#[derive(Debug)]
+pub(crate) struct EntryLines {
+    stamp: u64,
+    width: u16,
+    palette: Palette,
+    show_trail: bool,
+    scrolling: bool,
+    lines: Vec<Line<'static>>,
+    prompts: Vec<usize>,
+    calls: Vec<(usize, usize, usize)>,
+    /// The row each line begins at once wrapped, and the row after the last. Worked out on first
+    /// use, since the lay-out for the scroller measures rows its own way and nothing at rest
+    /// needs them.
+    starts: OnceLock<Vec<usize>>,
+}
+
+impl EntryLines {
+    fn starts(&self) -> &[usize] {
+        self.starts.get_or_init(|| {
+            let mut at = 0usize;
+            let mut starts = Vec::with_capacity(self.lines.len() + 1);
+            for line in &self.lines {
+                starts.push(at);
+                at += usize::from(rows_of(line, self.width));
+            }
+            starts.push(at);
+            starts
+        })
+    }
+}
+
+/// The reply still arriving, drawn, and kept against the words it was drawn from.
+///
+/// A turn redraws on every pass whether or not the reply moved, and drawing markdown is the cost,
+/// so a pass that carries a keystroke and no new words reuses the lines it already has.
+#[derive(Debug)]
+pub(crate) struct ReplyLines {
+    text: String,
+    width: u16,
+    palette: Palette,
+    lines: Vec<Line<'static>>,
+}
+
+fn reply_lines(session: &Session, width: u16) -> Arc<ReplyLines> {
+    let text = session.reply_so_far();
+    let palette = theme::palette();
+    session.reply_layout.get(
+        |kept| kept.text == text && kept.width == width && kept.palette == palette,
+        || ReplyLines {
+            text: text.to_string(),
+            width,
+            lines: assistant_lines(text, width),
+            palette: palette.clone(),
+        },
+    )
+}
+
+/// Whether `viewed` is the session's own transcript, which is the only sequence kept: a delegate's
+/// lines are a different sequence with no stamp.
+fn is_the_transcript(session: &Session, viewed: &[Entry]) -> bool {
+    std::ptr::eq(viewed.as_ptr(), session.transcript.as_ptr())
+        && viewed.len() == session.transcript.len()
+}
+
+fn cached_entries(session: &Session, width: u16) -> Arc<EntryLines> {
+    let palette = theme::palette();
+    let scrolling = session.scrolling();
+    session.layout.get(
+        |kept| {
+            kept.stamp == session.transcript.stamp()
+                && kept.width == width
+                && kept.palette == palette
+                && kept.show_trail == session.show_trail
+                && kept.scrolling == scrolling
+        },
+        || {
+            let (mut lines, mut prompts, mut calls) = (Vec::new(), Vec::new(), Vec::new());
+            push_entries(
+                session,
+                &session.transcript,
+                width,
+                &mut lines,
+                &mut prompts,
+                &mut calls,
+            );
+            EntryLines {
+                stamp: session.transcript.stamp(),
+                width,
+                palette: palette.clone(),
+                show_trail: session.show_trail,
+                scrolling,
+                lines,
+                prompts,
+                calls,
+                starts: OnceLock::new(),
+            }
+        },
+    )
+}
+
+/// The transcript drawn from what is kept, without making a line of it again and without handing
+/// the terminal any line that is off the screen. `None` where the transcript is not the plain
+/// sequence of entries: the scroller, the opening screen and a delegate's view draw it the
+/// long way.
+fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
+    let viewed = session.viewed();
+    if session.scrolling() || opening_screen(session) || !is_the_transcript(session, viewed) {
+        return None;
+    }
+    let width = area.width;
+    let entries = cached_entries(session, width);
+    let starts = entries.starts();
+    let head_rows = starts.last().copied().unwrap_or(0);
+
+    let mut tail: Vec<Line<'static>> = Vec::new();
+    push_tail(session, width, false, &mut tail);
+    let tail: Vec<(Line<'static>, usize)> = tail
+        .into_iter()
+        .map(|line| {
+            let rows = usize::from(rows_of(&line, width));
+            (line, rows)
+        })
+        .collect();
+    let total = head_rows + tail.iter().map(|(_, rows)| rows).sum::<usize>();
+
+    let height = usize::from(area.height);
+    let max_offset = total.saturating_sub(height);
+    let offset = if session.scroll > 0 {
+        usize::from(session.top_row()).min(max_offset)
+    } else {
+        max_offset
+    };
+
+    // The line holding the first row on the screen, and how far into it the screen starts. Lines
+    // wrap alone, so wrapping from that line gives the rows a wrap of everything would.
+    let first = starts
+        .partition_point(|&start| start <= offset)
+        .saturating_sub(1)
+        .min(entries.lines.len());
+    let mut at = starts[first];
+    let mut shown: Vec<Line<'static>> = Vec::new();
+    let mut skip = 0;
+    let head = entries.lines[first..]
+        .iter()
+        .zip(starts[first..].windows(2).map(|pair| pair[1] - pair[0]));
+    for (line, rows) in head.chain(tail.iter().map(|(line, rows)| (line, *rows))) {
+        if at + rows <= offset {
+            at += rows;
+            continue;
+        }
+        if shown.is_empty() {
+            skip = offset - at;
+        }
+        shown.push(line.clone());
+        at += rows;
+        if at >= offset + height {
+            break;
+        }
+    }
+    let paragraph = Paragraph::new(shown)
+        .wrap(Wrap { trim: false })
+        .scroll((skip as u16, 0));
+    frame.render_widget(paragraph, area);
+
+    Some(Laid {
+        width,
+        height: area.height,
+        rows: total.min(usize::from(u16::MAX)) as u16,
+        ..Laid::default()
+    })
+}
+
 /// The transcript laid out at a width: the lines to draw, and where the rows worth reaching are.
 ///
 /// Where each line begins is only worked out while the scroller is open. It costs a wrap of every
@@ -567,6 +779,9 @@ pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'
 }
 
 pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) -> Laid {
+    if let Some(laid) = draw_kept(frame, area, session) {
+        return laid;
+    }
     let (lines, mut laid) = lay_out(session, area.width, area.height);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 

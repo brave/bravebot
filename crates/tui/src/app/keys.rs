@@ -863,6 +863,7 @@ fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
 ///
 /// Separated from the loop so it can be tested without a terminal.
 pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
+    session.reread_offers();
     // Before the key edits anything: a brief whose box was emptied is no longer being edited.
     session.drop_a_wiped_handoff();
     // At rest, so the modes are the whole of what stands between the key and the box.

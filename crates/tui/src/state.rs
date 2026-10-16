@@ -33,7 +33,9 @@ use entry::DELEGATE_KEPT;
 
 pub use accounts::Occupancy;
 pub use completion::Offered;
-pub use entry::{DELEGATE_SHOWN, Delegate, Entry, JobState, JobView, Output, Speaker, Watched};
+pub use entry::{
+    DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Watched,
+};
 pub use scroller::{Laid, Scroller};
 pub use watching::Watching;
 
@@ -543,7 +545,12 @@ pub struct Addressed {
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
 pub struct Session {
-    pub transcript: Vec<Entry>,
+    pub transcript: Entries,
+    /// The transcript's entries as they were last drawn, so a frame that changed none of them
+    /// does not draw them again. See [`crate::render::EntryLines`].
+    pub(crate) layout: Kept<crate::render::EntryLines>,
+    /// The reply still arriving as it was last drawn. See [`crate::render::ReplyLines`].
+    pub(crate) reply_layout: Kept<crate::render::ReplyLines>,
     /// The line being typed.
     ///
     /// Private, with `caret`, because the two are one value: a caret is an offset into this string
@@ -1256,6 +1263,11 @@ pub struct Session {
     /// Held and let go as [`Session::skills`] are, so that offering the list reads no directory
     /// per frame and constructing a session reads none at all.
     past_sessions: Option<Vec<bravebot_mentions::Entry>>,
+    /// What [`Session::offered`] last answered, so a frame and the callers behind a key press ask
+    /// the disk once between them.
+    offered_memo: Kept<completion::OfferedFor>,
+    /// Raised whenever the skills or sessions held change, which are part of what is offered.
+    offered_epoch: u64,
     /// Files dropped on the box, by the marker standing for each in the line.
     ///
     /// Kept until the line is sent, and read back out of the line at that point rather than sent
@@ -1290,7 +1302,9 @@ pub struct Servers {
 impl Session {
     pub fn new(confinement: impl Into<String>) -> Self {
         Self {
-            transcript: Vec::new(),
+            transcript: Entries::default(),
+            layout: Kept::default(),
+            reply_layout: Kept::default(),
             input: String::new(),
             caret: 0,
             stashed: None,
@@ -1436,6 +1450,8 @@ impl Session {
             reference_sources: Vec::new(),
             skills: None,
             past_sessions: None,
+            offered_memo: Kept::default(),
+            offered_epoch: 0,
             attached: Vec::new(),
             sent: Vec::new(),
             attachments_made: 0,
@@ -13169,7 +13185,7 @@ mod tests {
             recalled.turns = Some(recorded.turns);
             let mut s = session();
             s.replay(&conversation, "a title", &recalled);
-            s.transcript
+            s.transcript.to_vec()
         }
 
         /// A tag reaches this transcript two ways: the agent both interfaces share tags a file it

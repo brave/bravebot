@@ -2667,3 +2667,31 @@ has otherwise finished typing.
 `verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`
 `verified-by: bravebot_tui::keybindings::a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up`
+
+<a id="INPUT-45"></a>
+### INPUT-45: a typed character is drawn as soon as it is handled, at a cost that does not grow with the conversation or the directory
+
+A key, a paste or a focus change is drawn as soon as it has been handled, with no deferral behind
+other queued events. Only a stream of pointer events or of size changes is coalesced, so a burst of
+them is drawn once (INPUT-41).
+
+Drawing a frame after a keystroke does no work in proportion to the length of the transcript. The
+lines the entries are drawn as are kept until an entry, the width, the theme or the trail's
+visibility changes, and only the rows on the screen are handed to the terminal. The reply still
+arriving is drawn again only when its words change. What `@` and `/` offer is worked out once for
+the line a key press leaves, however many callers ask, and a directory that has gone unchanged for
+two seconds is listed once, not on every key.
+
+**Why.** A frame that lays the whole conversation out again makes typing lag in proportion to the
+length of the session, and listing a directory of many files on every key makes each key after an `@`
+slow. A typed character is the one thing a person watches the screen for, so nothing that scales
+with something else may stand between it and the screen.
+
+`verified-by: bravebot_tui::input::only_a_stream_of_positions_or_sizes_is_an_event_a_frame_waits_out`
+`verified-by: bravebot_tui::render::a_keystroke_is_drawn_without_measuring_the_transcript_again`
+`verified-by: bravebot_tui::render::an_entry_edited_after_a_frame_is_drawn_as_edited`
+`verified-by: bravebot_tui::render::a_change_of_width_or_trail_is_not_answered_from_the_lines_kept_before_it`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+`verified-by: bravebot_mentions::lib::a_settled_directory_is_not_read_again_while_it_is_unchanged`
+`verified-by: bravebot_mentions::lib::a_changed_or_recently_touched_directory_is_read_afresh`
+`verified-by: bravebot_tui::references::the_callers_of_one_key_press_share_one_reading_of_the_directory`
