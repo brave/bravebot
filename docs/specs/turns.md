@@ -9,6 +9,7 @@ governs:
   - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/spend_limit.rs
   - crates/agent/src/repeated_call.rs
 documented-by:

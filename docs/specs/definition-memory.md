@@ -12,6 +12,7 @@ governs:
   - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/memory.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs

@@ -23,6 +23,7 @@ governs:
   - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/cli/src/main.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
