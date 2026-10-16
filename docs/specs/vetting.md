@@ -247,6 +247,8 @@ check or about a person reading them makes them fit to leave the machine or to b
 field.
 
 `verified-by: bravebot_core::policy::a_private_slot_promotes_to_private_and_never_to_public`
+`verified-by: bravebot_core::policy::a_public_slot_promotes_to_private_as_well`
+`verified-by: bravebot_core::policy::a_public_picture_is_attached_as_private_as_well`
 
 <a id="CHECK-8"></a>
 ### CHECK-8: an approval covers one slot once, and answers no other question
@@ -305,6 +307,8 @@ somebody who was never asked either question.
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first

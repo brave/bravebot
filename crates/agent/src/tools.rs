@@ -13098,6 +13098,10 @@ mod tests {
     /// anywhere in the tool list would end the distinction quietly. A patch is the same field
     /// under another name: it names the files it edits inside the payload, so nothing about it
     /// can be approved on its own.
+    ///
+    /// Read over every list this program builds, since `advisor` and `load_tool` are added beside
+    /// the table and a delegate's list is built by a function of its own, and a field added in one
+    /// of those is as much the planner's as one in the table.
     #[test]
     fn only_run_takes_a_command_line() {
         // Names a shell string is plausibly called, none of which is the compiled surface, and the
@@ -13133,12 +13137,7 @@ mod tests {
             }
         }
 
-        for tool in available(
-            Scheduling::ArrangingALook,
-            Arming::Allowed { free: 1 },
-            Deadlines::BUILT_IN,
-            Running::Offered,
-        ) {
+        for tool in every_list_a_turn_can_offer() {
             let name = tool.function.name;
             assert!(
                 tool.function.parameters["properties"].is_object(),
@@ -13160,6 +13159,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every tool this program builds for a planner or a delegate: the table under each way a turn
+    /// can be scheduled and armed, with the kinds of delegate written into it, a delegate of each
+    /// kind, and the two tools added beside the table, `advisor` and `load_tool`. The tools an MCP
+    /// server offers are not built here.
+    fn every_list_a_turn_can_offer() -> Vec<Tool> {
+        use bravebot_core::delegate::{Definitions, Kind};
+
+        let mut offered = Vec::new();
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for arming in [
+                Arming::Allowed { free: 1 },
+                Arming::UnderALoop,
+                Arming::UnderAGoal,
+                Arming::Full,
+                Arming::Unavailable,
+            ] {
+                offered.extend(for_planner(
+                    scheduling,
+                    arming,
+                    &Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                ));
+            }
+        }
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            offered.extend(for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&Definitions::default()),
+                Deadlines::BUILT_IN,
+            ));
+        }
+        offer_advisor(&mut offered);
+        offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+        offered
     }
 
     /// A planner that asks the user for a path, a filename, or whether something is installed is

@@ -84,6 +84,8 @@ but that a person's gesture put its path there.
 `verified-by: bravebot_agent::attached::a_picture_dropped_from_outside_the_workspace_is_read_all_the_same`
 `verified-by: bravebot_agent::turn::a_dropped_text_file_from_outside_the_workspace_becomes_context`
 `verified-by: bravebot_agent::turn::dropping_a_text_file_does_not_reach_anything_beside_it`
+`verified-by: bravebot_agent::turn::dropping_a_picture_does_not_reach_anything_beside_it`
+`verified-by: bravebot_agent::turn::dropping_a_file_vouches_for_that_file_and_not_the_ones_beside_it`
 
 <a id="DROP-4"></a>
 ### DROP-4: a recognised type is carried, and an unrecognised one is only a path
