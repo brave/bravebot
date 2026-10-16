@@ -2942,7 +2942,8 @@ refuse the path.
 
 The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
 `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, the
-inhibitor `/caffeinate` starts, a hook's program, a language server, and the editor Ctrl-G opens.
+inhibitor `/caffeinate` starts, a hook's program, a language server, the editor Ctrl-G opens, and
+the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs ([SANDBOX-16](#SANDBOX-16)).
 Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
 lie outside every directory a confined stage may write.
 That list is the whole of it: a program started by a bare name in production code is one this
@@ -2957,6 +2958,12 @@ a new spawn is added to the list here, in the same change, or resolved first.
   set when it is opened or first granted to a stage, and not when a prompt describes the stage, and
   is never removed from it, because closing a directory does not remove a file already written
   there.
+- **A command that opens no session leaves out the directory it ran in.** `doctor --push-identity`
+  is a new process, which knows of no directory a stage wrote in an earlier session. It leaves out
+  the directory it ran in and the checkout holding it, the nearest ancestor with a `.git`, so a
+  `bin` in the checkout that is first on `PATH` is not searched. A virtualenv or tool directory a
+  stage was granted elsewhere is not known to it. A program it starts is also started without this
+  agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
@@ -3017,6 +3024,10 @@ its own arguments through the `PATH` it inherited from bravebot, not through the
 `verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_cli::push_identity::the_checkout_holding_the_directory_is_left_out_with_it`
+`verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
+`verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_cli::running::doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent`
 
 <a id="SANDBOX-31"></a>
 ### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others

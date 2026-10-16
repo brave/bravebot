@@ -1458,9 +1458,11 @@ esac
 exit 1"#,
     );
     let path = format!("{}:/usr/bin:/bin", tools.display());
+    let work = checkout_in(&scratch);
 
-    let output = bravebot(
+    let output = bravebot_started_in(
         &home,
+        &work,
         &[("PATH", &path)],
         &["doctor", "--push-identity", "github.com/netzenbot"],
     );
@@ -1468,6 +1470,178 @@ exit 1"#,
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     stdout
+}
+
+/// A directory with a `.git` in it, beside the stand-ins rather than above them. The command leaves
+/// out the checkout it runs in (SANDBOX-30), and the scratch directory sits inside this
+/// repository's own, so running from anywhere else would leave out the stand-ins too.
+#[cfg(unix)]
+fn checkout_in(scratch: &Scratch) -> PathBuf {
+    let work = scratch.path.join("work");
+    std::fs::create_dir_all(work.join(".git")).unwrap();
+    work
+}
+
+/// An executable `name` in `directory` that runs `body`.
+#[cfg(unix)]
+fn stand_in(directory: &Path, name: &str, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(directory).unwrap();
+    let path = directory.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// SANDBOX-30 over the process: `ssh-keygen`, `ssh` and `git` are not started from a `bin` in the
+/// checkout the command runs in, nor in the directory it runs in, when that is first on `PATH`.
+/// Each plants a marker file if it runs. The programs behind them are the ones started, which tells
+/// this apart from a command that starts nothing. `ssh-keygen` sits in the checkout's root and the
+/// others in a subdirectory, so leaving out only the directory the command ran in fails too.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in() {
+    let scratch = Scratch::new("cli-running-doctor-push-identity-planted");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 AAAA c\n").unwrap();
+    let work = checkout_in(&scratch);
+    let here = work.join("crates").join("cli");
+    std::fs::create_dir_all(&here).unwrap();
+    let marker = |name: &str| scratch.path.join(format!("ran-{name}"));
+    let plant = |directory: PathBuf, name: &str| {
+        let body = format!(
+            "touch '{}'; echo 'Hi planted! You have'",
+            marker(name).display()
+        );
+        stand_in(&directory, name, &body);
+        directory
+    };
+    let in_the_root = plant(work.join("bin"), "ssh-keygen");
+    let in_the_directory = here.join("bin");
+    plant(in_the_directory.clone(), "ssh");
+    plant(in_the_directory.clone(), "git");
+    let tools = scratch.path.join("tools");
+    stand_in(
+        &tools,
+        "ssh-keygen",
+        r#"echo "256 SHA256:installedkeygen c (ED25519)""#,
+    );
+    stand_in(
+        &tools,
+        "ssh",
+        r#"echo "Hi installedssh! You've successfully authenticated, but GitHub does not provide shell access." >&2"#,
+    );
+    stand_in(
+        &tools,
+        "git",
+        r#"echo "git@github.com:installedgit/repo.git""#,
+    );
+    let path = std::env::join_paths([&in_the_directory, &in_the_root, &tools]).unwrap();
+
+    let output = bravebot_started_in(
+        &home,
+        &here,
+        &[("PATH", path.to_str().unwrap())],
+        &["doctor", "--push-identity"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    for name in ["ssh-keygen", "ssh", "git"] {
+        assert!(
+            !marker(name).exists(),
+            "{name} was started from the checkout: {stdout}"
+        );
+    }
+    assert!(stdout.contains("SHA256:installedkeygen"), "{stdout}");
+    assert!(stdout.contains("installedssh"), "{stdout}");
+    assert!(stdout.contains("github.com/installedgit"), "{stdout}");
+}
+
+/// SANDBOX-30 over the process: a program found only in the checkout is absent, and the report says
+/// so rather than showing what the planted file printed.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent() {
+    let scratch = Scratch::new("cli-running-doctor-push-identity-absent");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 AAAA c\n").unwrap();
+    let work = checkout_in(&scratch);
+    let planted = work.join("bin");
+    stand_in(
+        &planted,
+        "ssh-keygen",
+        r#"echo "256 SHA256:planted c (ED25519)""#,
+    );
+    stand_in(
+        &planted,
+        "ssh",
+        r#"echo "Hi planted! You've successfully authenticated" >&2"#,
+    );
+
+    let output = bravebot_started_in(
+        &home,
+        &work,
+        &[("PATH", planted.to_str().unwrap())],
+        &["doctor", "--push-identity", "github.com/netzenbot"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(!stdout.contains("planted"), "{stdout}");
+    assert!(stdout.contains("id_ed25519.pub"), "{stdout}");
+}
+
+/// CRED-14 over the process: this agent's signing key and key id are not in the environment of
+/// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
+/// stand-in reports what it was handed in the part of its answer the report shows.
+#[cfg(unix)]
+#[test]
+fn doctor_push_identity_hands_none_of_this_agents_credentials_to_the_programs_it_starts() {
+    let scratch = Scratch::new("cli-running-doctor-push-identity-credentials");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 AAAA c\n").unwrap();
+    let work = checkout_in(&scratch);
+    let tools = scratch.path.join("tools");
+    stand_in(
+        &tools,
+        "ssh-keygen",
+        r#"echo "256 SHA256:key${SERVICES_KEY_AICHAT:-withheld} c (ED25519)""#,
+    );
+    stand_in(
+        &tools,
+        "ssh",
+        r#"echo "Hi id${BRAVE_SERVICES_KEY_ID:-withheld}! You've successfully authenticated, but GitHub does not provide shell access." >&2"#,
+    );
+    stand_in(
+        &tools,
+        "git",
+        r#"echo "git@github.com:owner${SERVICES_KEY_AICHAT:-withheld}/repo.git""#,
+    );
+    let path = format!("{}:/usr/bin:/bin", tools.display());
+
+    let output = bravebot_started_in(
+        &home,
+        &work,
+        &[
+            ("PATH", &path),
+            ("SERVICES_KEY_AICHAT", "livesigningkey"),
+            ("BRAVE_SERVICES_KEY_ID", "liveid"),
+        ],
+        &["doctor", "--push-identity"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("livesigningkey") && !stdout.contains("liveid"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("SHA256:keywithheld"), "{stdout}");
+    assert!(stdout.contains("idwithheld"), "{stdout}");
+    assert!(stdout.contains("github.com/ownerwithheld"), "{stdout}");
 }
 
 /// SANDBOX-16 over the argument list: an argument that is not `<host>/<owner>` is refused before
