@@ -263,7 +263,7 @@ impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CommandSubstitution => f.write_str(
-                "a command whose text is computed is a destination nobody saw. Write the value out",
+                "a command whose text is computed is a destination nobody saw. Write the value out, or pass the text as one literal argument in single quotes, as when handing a script to `sh -c`",
             ),
             Self::ProcessSubstitution => f.write_str(
                 "process substitution names a file descriptor nobody named. Use a pipe, or a file",
@@ -271,9 +271,9 @@ impl fmt::Display for Reason {
             Self::Variable => f.write_str(
                 "the value is not in the line, so the plan would not be in the line. Write the value out, or put a literal `$` in single quotes or write it as `\\$`",
             ),
-            Self::Arithmetic => {
-                f.write_str("arithmetic is a language, and a language needs an interpreter")
-            }
+            Self::Arithmetic => f.write_str(
+                "arithmetic is a language, and a language needs an interpreter. To hand the text to one, pass it as one literal argument in single quotes, as when handing a script to `sh -c`",
+            ),
             Self::Background => f.write_str(
                 "backgrounding is a parameter of the call rather than a token in the line",
             ),
@@ -2542,6 +2542,21 @@ mod tests {
             said.contains("single quotes") && said.contains("\\$"),
             "{said}"
         );
+    }
+
+    /// A script for `sh -c` is the usual reason for a `$(` in an argument, and single quotes pass it.
+    #[test]
+    fn the_substitution_and_arithmetic_refusals_name_single_quotes() {
+        for reason in [Reason::CommandSubstitution, Reason::Arithmetic] {
+            let said = reason.to_string();
+            assert!(said.contains("single quotes"), "{said}");
+        }
+        for line in [
+            "sh -c 'for i in $(seq 1 3); do echo x; done'",
+            "sh -c 'echo $((1+1))'",
+        ] {
+            parsed(line);
+        }
     }
 
     #[test]
