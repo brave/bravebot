@@ -16335,9 +16335,12 @@ fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() 
         Task::new("commit this"),
     )
     .expect("turn runs");
-    for prompt in ["one", "two", "three", "four"] {
+    for prompt in ["one", "two", "three", "four", "five"] {
         conversation.push(bravebot_aichat::protocol::Message::user(prompt));
-        conversation.push(bravebot_aichat::protocol::Message::assistant("ok"));
+        // Heavy enough that what the cut gives up outweighs the skill it sends again.
+        conversation.push(bravebot_aichat::protocol::Message::assistant(
+            "ok ".repeat(200),
+        ));
     }
     let _ = received.recv().expect("first request");
     let _ = received.recv().expect("second request");
