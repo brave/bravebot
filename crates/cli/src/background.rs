@@ -1,5 +1,5 @@
 //! `bravebot sessions`, `--bg`, `attach` and `reply`: the sessions that keep running after the
-//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10, BG-11).
+//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10, BG-11, BG-16).
 //!
 //! Everything drawn here is a thing the person typed, a fact about a process, or a word from a
 //! fixed set. The roster has no field for anything else (BG-4), so there is nothing in it to
@@ -8,6 +8,7 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,6 +24,14 @@ const ID_SHOWN: usize = 8;
 /// The bare word is the roster of background sessions, which is what it has always been. The
 /// sessions recorded for a directory are a separate listing under `list` (CLI-32).
 pub(crate) fn sessions(args: &[String]) -> ExitCode {
+    if wants_the_view(
+        args,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    ) {
+        return view();
+    }
     match args {
         [] => list(false),
         [flag] if flag == "--json" => list(true),
@@ -59,6 +68,41 @@ pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitC
                 t!(sessions_import_no_project, path = directory.display()),
             )
         })
+}
+
+/// Whether `bravebot sessions` opens the list rather than printing lines (BG-16).
+///
+/// Standard error is checked as well: an attach from the list needs it to say why it cannot start.
+fn wants_the_view(
+    args: &[String],
+    input_is_terminal: bool,
+    output_is_terminal: bool,
+    error_is_terminal: bool,
+) -> bool {
+    args.is_empty() && input_is_terminal && output_is_terminal && error_is_terminal
+}
+
+/// The list grouped by state; Enter on a row attaches as `bravebot attach` does (BG-16).
+fn view() -> ExitCode {
+    let roster = Roster::readable();
+    let read = || {
+        roster
+            .as_ref()
+            .map(|roster| rows_of(&roster.list()))
+            .unwrap_or_default()
+    };
+    let rows = read();
+    if rows.is_empty() {
+        return list(false);
+    }
+    match bravebot_tui::sessions_view::run(rows, read) {
+        Ok(Choice::Attach(id)) => attach(&[id]),
+        Ok(Choice::Leave) => ExitCode::SUCCESS,
+        Err(problem) => {
+            eprintln!("{}", t!(sessions_view_failed, problem = problem));
+            list(false)
+        }
+    }
 }
 
 fn list(as_json: bool) -> ExitCode {
@@ -600,24 +644,38 @@ fn shown(typed: &str) -> String {
     crate::progress::printable(typed).replace('\t', " ")
 }
 
-/// One line for each session: the start of its id, its name, its state, where it works, how long
+/// One row for each session: the start of its id, its name, its state, where it works, how long
 /// since its last turn, and the last prompt the person typed.
 ///
 /// A prompt that is held shows as needing input and the one word for its kind, and nothing of
-/// what it asks (BG-5).
-fn lines_of(seen: &[Seen]) -> Vec<String> {
+/// what it asks (BG-5). Both the lines and the list (BG-16) are drawn from these.
+fn rows_of(seen: &[Seen]) -> Vec<Row> {
     seen.iter()
         .map(|seen| {
             let job = &seen.job;
-            let id: String = job.id.chars().take(ID_SHOWN).collect();
-            let since =
-                bravebot_session::sessions::how_long_ago(job.last_turn.unwrap_or(job.started));
+            Row {
+                id: job.id.clone(),
+                short: job.id.chars().take(ID_SHOWN).collect(),
+                name: shown(&job.name),
+                state: seen.state(),
+                state_words: state_in_words(seen),
+                since: bravebot_session::sessions::how_long_ago(
+                    job.last_turn.unwrap_or(job.started),
+                ),
+                directory: shown(&job.directory),
+                prompt: shown(&bravebot_session::sessions::title_from(&job.prompt)),
+            }
+        })
+        .collect()
+}
+
+fn lines_of(seen: &[Seen]) -> Vec<String> {
+    rows_of(seen)
+        .iter()
+        .map(|row| {
             format!(
-                "{id}  {}  {}  {}  {since}  {}",
-                shown(&job.name),
-                state_in_words(seen),
-                shown(&job.directory),
-                shown(&bravebot_session::sessions::title_from(&job.prompt)),
+                "{}  {}  {}  {}  {}  {}",
+                row.short, row.name, row.state_words, row.directory, row.since, row.prompt
             )
         })
         .collect()
@@ -770,5 +828,94 @@ mod tests {
         assert_eq!(drawable(&mut pending), "caf");
         pending.extend_from_slice(&"caf\u{e9}".as_bytes()[4..]);
         assert_eq!(drawable(&mut pending), "\u{e9}");
+    }
+
+    /// BG-16: `bravebot sessions` opens the list only for no other word, with standard input,
+    /// output and error all terminals, so a pipe or a redirect, `--json` or `stop` is not taken over.
+    #[test]
+    fn the_list_opens_only_for_no_other_word_on_three_terminals() {
+        let words = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert!(wants_the_view(&words(&[]), true, true, true));
+        assert!(!wants_the_view(&words(&[]), false, true, true));
+        assert!(!wants_the_view(&words(&[]), true, false, true));
+        assert!(!wants_the_view(&words(&[]), true, true, false));
+        assert!(!wants_the_view(&words(&["--json"]), true, true, true));
+        assert!(!wants_the_view(
+            &words(&["stop", "3f2a9c1e"]),
+            true,
+            true,
+            true
+        ));
+        assert!(!wants_the_view(
+            &words(&["search", "ledger"]),
+            true,
+            true,
+            true
+        ));
+    }
+
+    /// BG-16, BG-6: a session is grouped by the state of its process now. An entry that said it
+    /// was working or holding a prompt and has no process is in the interrupted group, and an idle
+    /// one with no process is in the stopped group, so the list never offers a dead session under
+    /// "working" or "needs input".
+    #[test]
+    fn a_session_is_grouped_by_the_state_of_its_process_and_not_the_one_it_last_wrote() {
+        let state_of =
+            |written, held, live| rows_of(&[seen("fix the build", written, held, live)])[0].state;
+        assert_eq!(state_of(State::Working, None, false), State::Interrupted);
+        assert_eq!(
+            state_of(State::NeedsInput, Some(Held::Run), false),
+            State::Interrupted
+        );
+        assert_eq!(state_of(State::Idle, None, false), State::Stopped);
+        assert_eq!(state_of(State::Working, None, true), State::Working);
+        assert_eq!(
+            state_of(State::NeedsInput, Some(Held::Run), true),
+            State::NeedsInput
+        );
+        assert_eq!(state_of(State::Idle, None, true), State::Idle);
+    }
+
+    /// BG-16: a row holds the whole id for `attach`, the start of it for the screen, and the kind of
+    /// a held prompt as a word and nothing of what it asks.
+    #[test]
+    fn a_row_holds_the_whole_id_and_the_start_of_it_and_names_the_kind_of_a_held_prompt() {
+        let row = &rows_of(&[seen(
+            "fix the build",
+            State::NeedsInput,
+            Some(Held::Fetch),
+            true,
+        )])[0];
+        assert_eq!(row.id, "11111111-1111-4111-8111-111111111111");
+        assert_eq!(row.short, "11111111");
+        assert!(
+            row.state_words
+                .contains(&t!(sessions_held_fetch).to_string()),
+            "{row:?}"
+        );
+    }
+
+    /// BG-5, BG-16: no field of a row the list draws holds a control character, whichever field
+    /// the person's typing reached.
+    #[test]
+    fn a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row() {
+        let mut one = seen("fix\x1b[31m the\nbuild\r\x07", State::Idle, None, true);
+        one.job.name = "na\x1b]0;me\x07\tx".to_string();
+        one.job.directory = "/work/\x1b[2J/pro\nject".to_string();
+        let row = &rows_of(&[one])[0];
+        for field in [
+            &row.name,
+            &row.directory,
+            &row.prompt,
+            &row.state_words,
+            &row.since,
+            &row.short,
+        ] {
+            assert!(!field.chars().any(|c| c.is_control()), "{field:?}");
+        }
+        assert!(
+            row.name.contains('\u{241b}') && row.directory.contains('\u{241b}'),
+            "{row:?}"
+        );
     }
 }
