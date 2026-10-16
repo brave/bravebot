@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
   - crates/agent/src/subscription.rs
