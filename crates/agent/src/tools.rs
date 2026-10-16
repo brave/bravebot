@@ -20926,6 +20926,7 @@ mod tests {
 
     /// The regression it rejects: a skill directory that has had its scripts run listing the
     /// bytecode cache first, so a `.pyc` is the file the result offers as the example (LOAD-4).
+    #[cfg(unix)]
     #[test]
     fn the_listing_leaves_out_generated_directories_and_compiled_files() {
         let fixture = SkillFixture::new("skill-files-generated");
