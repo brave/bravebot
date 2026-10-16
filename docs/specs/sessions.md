@@ -18,6 +18,7 @@ governs:
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/background.rs
   - crates/agent/src/aside.rs

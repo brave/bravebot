@@ -14,6 +14,7 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/cli/src/model.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
