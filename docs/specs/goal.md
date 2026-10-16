@@ -419,7 +419,7 @@ requests, so a person capping what background work costs caps it once.
 
 A model needing a sign-in this machine has not made sends no check, and neither does one the
 machine-level layer excludes or one no configured service answers for. The goal ends, as it does for every other request that failed
-([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the two it
+([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the three it
 was.
 
 **What does not change with the model.** The verdict is still read as [GOAL-4](#GOAL-4) has it, and
@@ -432,6 +432,8 @@ model that answered. The judge is still offered no tools and still gets one roun
 `verified-by: bravebot_agent::turn::a_check_with_no_summary_model_runs_on_the_sessions_own`
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_sends_no_check`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_sends_no_check`
+`verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
 
 ## Known costs
 

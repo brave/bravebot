@@ -28645,6 +28645,96 @@ fn a_long_conversation() -> bravebot_agent::Conversation {
     conversation
 }
 
+/// What a request for a summary is recognised by: the closing instruction no other request carries.
+const A_SUMMARY_ASKING: &str = "Summarise everything above";
+
+/// A planner that reads `f1.txt`, `f2.txt` and so on, one a round, for `rounds` rounds and then
+/// answers, every reply reporting a request far past any budget the tests set.
+///
+/// A request for a summary is answered by `summary(n)`, `n` counting from one, and takes no place
+/// in the planner's script. The rounds are then the same however many summaries the turn asks for,
+/// which a script answering in order cannot offer: a summary there consumes the reply the next
+/// round was meant to get.
+fn serve_a_long_turn(
+    rounds: usize,
+    mut summary: impl FnMut(usize) -> String + Send + 'static,
+) -> (String, MockRequests) {
+    let mut script = (1..=rounds)
+        .map(|n| {
+            tool_request_with_usage(
+                "read_file",
+                &format!(r#"{{"path":"f{n}.txt"}}"#),
+                50_000,
+                10,
+            )
+        })
+        .chain(std::iter::once(reply_with_usage(
+            "read them all",
+            50_000,
+            10,
+        )));
+    let mut asked = 0;
+    serve_rounds(Vec::new(), false, move |body| {
+        if body.contains(A_SUMMARY_ASKING) {
+            asked += 1;
+            return Some(Some(summary(asked)));
+        }
+        script.next().map(Some)
+    })
+}
+
+/// The lines a sink recorded for compactions: one for each summary adopted, and the gate's own.
+fn compact_gate_lines(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed { gate, detail } if *gate == "compact" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run thirty rounds of reads from an empty conversation against a budget of 1,000 tokens, with a
+/// summary answering `[summary-N]` for the Nth one asked for. Returns the requests the server
+/// received and the lines the trail recorded for each compaction.
+fn a_turn_of_thirty_rounds_past_the_budget(name: &str) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    for n in 1..=30 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_a_long_turn(30, |n| {
+        reply_with(&format!("they have been reading files [summary-{n}]"))
+    });
+    let config = config_with_budget(&endpoint, 1_000);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read f1.txt through f30.txt, one at a time"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let trail = compact_gate_lines(&sink)
+        .into_iter()
+        .filter(|line| line.starts_with("round "))
+        .collect();
+    (received.try_iter().collect(), trail)
+}
+
 /// The whole point. A conversation the server says is nearly too large is summarised before the
 /// next request rather than after the one that gets refused, and the request that follows carries
 /// the summary in place of what it stood for.
@@ -29099,6 +29189,60 @@ fn a_summary_of_an_untrusted_conversation_leaves_the_conversation_whole() {
     );
 }
 
+/// COMPACT-1, COMPACT-10: `/compact` builds a policy of its own rather than borrowing a turn's, so
+/// the context it inherits is what makes the gate on the way back in hold there. A summary of a
+/// conversation that went untrusted is refused, the conversation is left as it was, and the trail
+/// carries no line claiming a summary was made.
+#[test]
+fn compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut snapshot = a_long_conversation().snapshot();
+    snapshot.context = "untrusted".to_string();
+    let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+    let before = conversation.len();
+
+    let outcome = turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let error = outcome
+        .err()
+        .expect("a summary of an untrusted conversation is refused");
+    assert!(
+        matches!(error, bravebot_agent::compact::CompactError::Denied(_)),
+        "got {error:?}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a refused summary shortened the conversation"
+    );
+    assert!(
+        !conversation.messages()[0]
+            .message
+            .content
+            .as_text()
+            .is_some_and(|text| text.starts_with(bravebot_agent::conversation::COMPACTED_PREFIX)),
+        "a refused summary replaced what it stood for"
+    );
+    let recorded = compact_gate_lines(&sink);
+    assert!(
+        recorded.is_empty(),
+        "a refused summary left a line claiming one was made: {recorded:?}"
+    );
+}
+
 /// A conversation nobody has measured yet is not compacted on the strength of a figure that does
 /// not exist. Every first turn of every session would otherwise open by summarising nothing.
 #[test]
@@ -29122,6 +29266,118 @@ fn a_conversation_nobody_has_measured_is_not_compacted() {
     assert!(
         first.contains("what is 2 + 2?"),
         "something was sent before the turn's own request: {first}"
+    );
+}
+
+/// COMPACT-8: the same, with older exchanges a cut would take. An empty conversation has nothing to
+/// summarise whatever the trigger says, so it cannot tell a turn that waits for a figure from one
+/// that reads a missing figure as past the budget or guesses one from the words in the history.
+#[test]
+fn a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted() {
+    let scratch = Scratch::new("compact-unmeasured-long");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // A second reply, so a turn that asks for a summary first still runs to its end and fails on
+    // the assertions below rather than on a script that ran out.
+    let (endpoint, received) = serve_sequence(vec![reply_with("done"), reply_with("done")]);
+    let config = config_with_budget(&endpoint, 1);
+    let mut conversation = a_long_conversation();
+    conversation.measured(0);
+    assert!(
+        conversation.compaction_boundary().is_some(),
+        "the fixture has nothing a cut could take"
+    );
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains(A_SUMMARY_ASKING)),
+        "a summary was asked for with nothing measured: {bodies:#?}"
+    );
+    assert_eq!(bodies.len(), 1, "{bodies:#?}");
+    assert!(
+        bodies[0].contains("port the parser to the new lexer"),
+        "the exchange was left out of the request: {}",
+        bodies[0]
+    );
+}
+
+/// COMPACT-8: a summariser that failed is not asked again for the rest of the turn. The conversation
+/// stays past the budget through every round, so only the failure stops the requests.
+#[test]
+fn a_summariser_that_failed_is_not_asked_again_for_the_rest_of_the_turn() {
+    let scratch = Scratch::new("compact-failed-summariser");
+    for n in 1..=4 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // An empty reply is one a summary cannot be made of, and fails the compaction, not the turn.
+    let (endpoint, received) = serve_a_long_turn(4, |_| reply_with(""));
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read f1.txt through f4.txt, one at a time"),
+    )
+    .expect("a summary that could not be made does not fail the turn");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert_eq!(
+        summaries, 1,
+        "the summariser was asked again after it failed: {summaries} requests"
+    );
+    assert_eq!(
+        bodies.len() - summaries,
+        5,
+        "the turn did not run its four reads and its answer"
+    );
+    assert!(
+        bodies
+            .last()
+            .expect("a last request")
+            .contains("port the parser to the new lexer"),
+        "a failed summary shortened the conversation"
+    );
+}
+
+/// COMPACT-8: compaction is tried before every round that qualifies, so a turn long enough is
+/// summarised again once enough has built up behind the last summary, and the last round is sent
+/// the latest summary alone.
+#[test]
+fn a_turn_is_summarised_more_than_once_as_the_rounds_build_up() {
+    let (bodies, _trail) =
+        a_turn_of_thirty_rounds_past_the_budget("compact-every-qualifying-round");
+
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert!(
+        summaries >= 2,
+        "{summaries} summaries asked for in {} requests past the budget",
+        bodies.len()
+    );
+    let last = bodies.last().expect("a last request");
+    assert!(
+        last.contains(&format!("[summary-{summaries}]")) && !last.contains("[summary-1]"),
+        "the last round was not sent the latest summary alone: {last}"
     );
 }
 
@@ -29658,6 +29914,78 @@ fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conve
     );
 }
 
+/// COMPACT-15: a summary model the machine-level layer excludes refuses the compaction as one
+/// needing a sign-in does: nothing is sent, the conversation is left whole, and the sentence says
+/// the machine excluded it. A model the layer does not exclude summarises as before.
+#[test]
+fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole() {
+    let scratch = Scratch::new("compact-summary-model-excluded");
+    let managed = scratch.path.join("managed-settings.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["an-excluded-model"]}}"#)
+        .expect("write the managed file");
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let mut config = config_for(&endpoint);
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+
+    config.summary_model = Some("an-excluded-model".to_string());
+    let refused = turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let failure = match refused {
+        Err(failure) => failure,
+        Ok(_) => panic!("a summary model the machine excludes must refuse the compaction"),
+    };
+    let said = failure.to_string();
+    assert!(
+        said.contains("an-excluded-model") && said.contains("managed settings"),
+        "the refusal did not name the model and the machine's exclusion: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "an excluded model was reported as one needing a sign-in: {said}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a refused compaction shortened the conversation anyway"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model the machine excludes was sent the conversation: {sent:?}"
+    );
+
+    config.summary_model = Some("a-permitted-model".to_string());
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a model the layer does not exclude summarises")
+    .expect("a long conversation has something to summarise");
+    let body = received.recv().expect("the summariser's request");
+    assert_eq!(model_in(&body), "a-permitted-model", "{body}");
+}
+
 /// GOAL-19: the judge runs on the model the setting names, so one key caps what both side requests
 /// cost. The session's model is named too and differs, so a check that ignored the setting fails.
 #[test]
@@ -29769,6 +30097,71 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
         sent.is_empty(),
         "a model with no sign-in was sent a check: {sent:?}"
     );
+}
+
+/// GOAL-19: a summary model the machine-level layer excludes sends no check either, and the goal
+/// ends on a reason that says the machine excluded it rather than that a sign-in is missing. The
+/// question itself is pinned beside `side_request_model`; this pins that the goal acts on the answer.
+/// A model the layer does not exclude is judged on as before, so the refusal is about the name.
+#[test]
+fn a_summary_model_the_machine_excludes_sends_no_check() {
+    let scratch = Scratch::new("goal-summary-model-excluded");
+    let managed = scratch.path.join("managed-settings.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["an-excluded-model"]}}"#)
+        .expect("write the managed file");
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let mut config = config_for(&endpoint);
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+
+    config.summary_model = Some("an-excluded-model".to_string());
+    let refused = turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let failure = match refused {
+        Err(failure) => failure,
+        Ok(_) => panic!("a summary model the machine excludes must send no check"),
+    };
+    let said = failure.to_string();
+    assert!(
+        said.contains("an-excluded-model") && said.contains("managed settings"),
+        "the refusal did not name the model and the machine's exclusion: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "an excluded model was reported as one needing a sign-in: {said}"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model the machine excludes was sent a check: {sent:?}"
+    );
+
+    config.summary_model = Some("a-permitted-model".to_string());
+    turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a model the layer does not exclude is judged on");
+    let body = received.recv().expect("the check's request");
+    assert_eq!(model_in(&body), "a-permitted-model", "{body}");
 }
 
 /// The stop reaches the goal check as it reaches a summary and a question. Nothing is judged, and
@@ -30321,64 +30714,42 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
 /// be recovered from a timestamp.
 #[test]
 fn the_trail_says_which_round_a_compaction_landed_on() {
-    let scratch = Scratch::new("compact-round-recorded");
-    for n in 1..=15 {
-        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    let (mut bodies, trail) = a_turn_of_thirty_rounds_past_the_budget("compact-round-recorded");
+
+    // The expected rounds come from the wire, as the planner's requests that went out before each
+    // summary, and not from the count the driver keeps. Two compactions at different rounds, so a
+    // line that repeats one figure does not match both. Every request carries the rounds before it,
+    // so two in a row with the same bytes are one request sent again after its reply could not be
+    // read, which the server logs twice.
+    bodies.dedup();
+    let mut planner_requests = 0;
+    let mut asked_on = Vec::new();
+    for body in &bodies {
+        if body.contains(A_SUMMARY_ASKING) {
+            asked_on.push(planner_requests);
+        } else {
+            planner_requests += 1;
+        }
     }
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
-
-    let mut replies: Vec<String> = (1..=15)
-        .map(|n| {
-            tool_request_with_usage(
-                "read_file",
-                &format!(r#"{{"path":"f{n}.txt"}}"#),
-                50_000,
-                10,
-            )
-        })
-        .collect();
-    replies.push(reply_with_usage("read them all", 50_000, 10));
-    replies.push(reply_with("they have been reading f1.txt onwards"));
-    replies.push(reply_with("they have been reading f1.txt onwards"));
-
-    let (endpoint, _received) = serve_sequence(replies);
-    let config = config_with_budget(&endpoint, 1_000);
-    let egress = bravebot_net::Egress::new();
-    let mut sink = RecordingSink::new();
-
-    turn::resume(
-        &config,
-        &egress,
-        &workspace,
-        &Task::new("read f1.txt through f15.txt, one at a time"),
-        &mut bravebot_agent::Conversation::new(),
-        &mut bravebot_agent::confirm::ApproveWrites,
-        &mut bravebot_agent::report::RecordingReporter::default(),
-        &mut sink,
-        trusting_the_workspace(),
-        bravebot_core::programs::TrustedPrograms::new(),
-        None,
-        &bravebot_core::cancel::Cancel::new(),
-    )
-    .outcome
-    .expect("turn runs");
-
-    let recorded: Vec<String> = sink
-        .events()
+    let recorded: Vec<usize> = trail
         .iter()
-        .filter_map(|event| match event {
-            Event::GatePassed { gate, detail } if *gate == "compact" => Some(detail.clone()),
-            _ => None,
+        .map(|line| {
+            line.strip_prefix("round ")
+                .and_then(|rest| rest.split_once(':'))
+                .and_then(|(round, _)| round.parse().ok())
+                .unwrap_or_else(|| panic!("a line with no round: {line}"))
         })
         .collect();
 
-    // A round partway through, not the zero `/compact` reports: the whole point is that this one
-    // interrupted work that was already under way.
+    // Partway through, not the zero `/compact` reports: the whole point is that these interrupted
+    // work that was already under way.
     assert!(
-        recorded
-            .iter()
-            .any(|line| line.contains("round ") && !line.contains("round 0:")),
-        "no compaction reported the round it interrupted: {recorded:?}"
+        asked_on.len() >= 2 && asked_on.iter().all(|round| *round > 0),
+        "the turn did not compact twice partway through: {asked_on:?}"
+    );
+    assert_eq!(
+        recorded, asked_on,
+        "the trail did not say which round each compaction landed on: {trail:?}"
     );
 }
 
@@ -46396,6 +46767,72 @@ fn an_empty_reply_is_asked_about_and_the_turn_carries_on() {
         .collect::<Vec<_>>();
     assert_eq!(asked, [0, 1, 1, 2], "{bodies:#?}");
     assert_eq!(reporter.spent.last().unwrap().tokens, 66);
+}
+
+/// TURN-6: the person is told nothing when an empty reply is asked about. The line goes to the
+/// planner, and anything shown beside it would be a request the person never made and cannot
+/// answer.
+#[test]
+fn the_person_is_told_nothing_when_an_empty_reply_is_asked_about() {
+    let ran = |name: &str, script: Vec<Served>| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let (url, received) = serve_script(script);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let outcome = take_a_turn_reporting(
+            &config_for(&url),
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            Task::new("work"),
+            &mut reporter,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn carries on past an empty reply");
+        assert_eq!(outcome.reply_for_display(), "done");
+        let bodies: Vec<String> = received.try_iter().collect();
+        (reporter, bodies)
+    };
+
+    // The same turn without the empty reply is what silence is measured against.
+    let (quiet, _) = ran(
+        "empty-reply-baseline",
+        vec![Served::Reply(reply_with_usage("done", 20, 2))],
+    );
+    let (asked, bodies) = ran(
+        "empty-reply-unannounced",
+        vec![
+            Served::Reply(reply_with_usage("", 10, 1)),
+            Served::Reply(reply_with_usage("done", 20, 2)),
+        ],
+    );
+
+    assert_eq!(
+        bodies
+            .iter()
+            .map(|body| body.matches(ASKED_AFTER_AN_EMPTY_REPLY).count())
+            .collect::<Vec<_>>(),
+        [0, 1],
+        "the empty reply was not asked about: {bodies:#?}"
+    );
+    assert_eq!(asked.notices, quiet.notices);
+    assert_eq!(asked.narration, quiet.narration);
+    // The empty reply itself arrives as an empty fragment, which says nothing to anyone.
+    let said = |reporter: &bravebot_agent::report::RecordingReporter| -> Vec<String> {
+        reporter
+            .streamed
+            .iter()
+            .filter(|fragment| !fragment.is_empty())
+            .cloned()
+            .collect()
+    };
+    assert_eq!(said(&asked), said(&quiet));
+    assert_eq!(asked.interjected, quiet.interjected);
+    assert_eq!(asked.shown.len(), quiet.shown.len());
+    assert_eq!(asked.printed.len(), quiet.printed.len());
+    assert_eq!(asked.returned.len(), quiet.returned.len());
+    assert_eq!(asked.landed.len(), quiet.landed.len());
+    assert_eq!(asked.started.len(), quiet.started.len());
+    assert_eq!(asked.checks.len(), quiet.checks.len());
 }
 
 /// Asked once and no more. A second empty reply in a row is a model with nothing to say here, and

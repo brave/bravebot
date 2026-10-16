@@ -275,6 +275,7 @@ on ordinary endings; file authority remains shared and child advice remains loca
 `verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
 `verified-by: bravebot_agent::backend::only_a_finished_reply_with_nothing_in_it_is_an_empty_reply`
+`verified-by: bravebot_agent::turn::the_person_is_told_nothing_when_an_empty_reply_is_asked_about`
 
 <a id="TURN-7"></a>
 ### TURN-7: a reply the output ceiling stopped is told why and asked once for less

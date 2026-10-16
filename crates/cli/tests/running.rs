@@ -3985,6 +3985,40 @@ fn doctor_says_a_checkouts_fallback_model_is_not_obeyed() {
     );
 }
 
+/// A checkout's `summaryModel` is dropped and `doctor` names the checkout's file, so whoever wrote
+/// it is told which file to change rather than left to conclude the conversation is being sent to
+/// the model it names (COMPACT-15).
+#[test]
+fn doctor_names_the_file_of_a_checkouts_summary_model_that_is_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-summary-checkout");
+    let cwd = a_checkout_saying(&scratch, r#"{"summaryModel": "attacker-chosen-model"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let file = Path::new("checkout")
+        .join(".bravebot")
+        .join("settings.json");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("summaryModel in"))
+        .unwrap_or_else(|| panic!("doctor did not mention summaryModel: {stdout}{stderr}"));
+    assert!(
+        line.contains(&format!("{} is not obeyed", file.display())),
+        "the line did not name the checkout's file: {line}"
+    );
+    assert!(!stdout.contains("attacker-chosen-model"), "{stdout}");
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///
@@ -11409,6 +11443,13 @@ fn update_takes_no_argument() {
 /// file readable by others if the hook did not ask for better.
 #[cfg(unix)]
 fn a_bash_session(scratch: &Scratch, commands: &[&str]) -> String {
+    a_bash_session_after(scratch, "", commands)
+}
+
+/// As [`a_bash_session`], with `before` run ahead of the hook: what a person's own startup file
+/// would already have set when the hook is sourced.
+#[cfg(unix)]
+fn a_bash_session_after(scratch: &Scratch, before: &str, commands: &[&str]) -> String {
     use std::os::unix::fs::PermissionsExt;
 
     let bin = scratch.path.join("bin");
@@ -11434,7 +11475,12 @@ fn a_bash_session(scratch: &Scratch, commands: &[&str]) -> String {
         .stderr(Stdio::null())
         .spawn()
         .expect("bash starts");
-    let mut script = format!("umask 022\nsource {}\n", init.display());
+    let mut script = String::from("umask 022\n");
+    if !before.is_empty() {
+        script.push_str(before);
+        script.push('\n');
+    }
+    script.push_str(&format!("source {}\n", init.display()));
     for command in commands {
         script.push_str(command);
         script.push('\n');
@@ -11602,6 +11648,105 @@ fn an_incognito_shell_records_nothing_and_asks_incognito() {
             .any(|line| line.contains("export BRAVEBOT_INCOGNITO")),
         "the line that turned it on was recorded: {given:?}"
     );
+}
+
+/// SHELLINT-3. The variable stops the recording when it is set and not empty: set to nothing it is
+/// the same as unset, so the lines after it are recorded and the run is not started incognito.
+#[cfg(unix)]
+#[test]
+fn an_empty_incognito_variable_stops_nothing() {
+    let scratch = Scratch::new("cli-running-shell-init-incognito-empty");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "export BRAVEBOT_INCOGNITO=1",
+            "echo hidden-command",
+            "export BRAVEBOT_INCOGNITO=",
+            "echo visible-command",
+            "@bravebot \"question\"",
+        ],
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p question", "{output}");
+    assert!(
+        given.iter().any(|line| line == "echo visible-command"),
+        "an empty variable still stopped the recording: {given:?}"
+    );
+    assert!(
+        !given.iter().any(|line| line == "echo hidden-command"),
+        "a line run while it was set was recorded: {given:?}"
+    );
+}
+
+/// SHELLINT-4. A question carries the last 200 recorded lines and no earlier ones.
+#[cfg(unix)]
+#[test]
+fn a_question_carries_at_most_the_last_two_hundred_lines() {
+    let scratch = Scratch::new("cli-running-shell-init-line-limit");
+    let mut commands: Vec<String> = (1..=250)
+        .map(|n| format!("echo run-{n} >/dev/null"))
+        .collect();
+    commands.push("@bravebot \"question\"".to_string());
+    let commands: Vec<&str> = commands.iter().map(String::as_str).collect();
+
+    let output = a_bash_session(&scratch, &commands);
+
+    let (_, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(given.len(), 200, "{} lines were given", given.len());
+    assert_eq!(
+        given.first().map(String::as_str),
+        Some("echo run-51 >/dev/null")
+    );
+    assert_eq!(
+        given.last().map(String::as_str),
+        Some("echo run-250 >/dev/null")
+    );
+}
+
+/// SHELLINT-4. A question carries at most 64 KiB of the recorded lines, the most recent ones, so a
+/// terminal that ran a few very long lines does not send them all.
+#[cfg(unix)]
+#[test]
+fn a_question_carries_at_most_sixty_four_kib_of_the_latest_lines() {
+    let scratch = Scratch::new("cli-running-shell-init-size-limit");
+    let filler = "x".repeat(2000);
+    let mut commands: Vec<String> = (10..=49)
+        .map(|n| format!("echo {n}-{filler} >/dev/null"))
+        .collect();
+    commands.push("@bravebot \"question\"".to_string());
+    let commands: Vec<&str> = commands.iter().map(String::as_str).collect();
+
+    let output = a_bash_session(&scratch, &commands);
+
+    let (_, given) = what_a_question_was_given(&output, 0);
+    let bytes: usize = given.iter().map(|line| line.len() + 1).sum();
+    assert_eq!(bytes, 65_536, "{} lines of {bytes} bytes", given.len());
+    assert_eq!(
+        given.last().map(String::as_str),
+        Some(format!("echo 49-{filler} >/dev/null").as_str()),
+        "the window did not end with the latest line"
+    );
+}
+
+/// SHELLINT-4. Closing the terminal runs the exit handler the shell already had as well as removing
+/// the file: the hook chains the handler and does not replace it.
+#[cfg(unix)]
+#[test]
+fn closing_the_terminal_runs_the_exit_handler_the_shell_already_had() {
+    let scratch = Scratch::new("cli-running-shell-init-exit-chain");
+    let output = a_bash_session_after(
+        &scratch,
+        "trap 'echo EARLIER-EXIT-HANDLER-RAN' EXIT",
+        &["echo recorded"],
+    );
+    assert!(
+        output.contains("EARLIER-EXIT-HANDLER-RAN"),
+        "the handler the shell had was replaced: {output}"
+    );
+    let left: Vec<_> = std::fs::read_dir(scratch.path.join(".bravebot/shell"))
+        .expect("the directory outlives the shell")
+        .collect();
+    assert!(left.is_empty(), "the terminal closed and left {left:?}");
 }
 
 /// A gateway on loopback that lists one model and answers every chat request with `status` and a
