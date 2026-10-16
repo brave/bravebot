@@ -465,6 +465,21 @@ impl Notice {
         })
     }
 
+    /// That a standing instruction source is long enough to be worth saying so (INSTR-15).
+    ///
+    /// The file still loaded. `source` is a path from INSTR-1's fixed set and `bytes` is its
+    /// length, so this names a file and a number and nothing the file holds.
+    pub(crate) fn source_is_large(source: &str, bytes: usize) -> Self {
+        Self::new(t!(source_is_large, source = source, bytes = bytes))
+    }
+
+    /// That the standing instructions together are long enough to be worth saying so (INSTR-15).
+    ///
+    /// Said once for the turn, at the source that crosses the line, since the total is one fact.
+    pub(crate) fn sources_large_together(bytes: usize, limit: usize) -> Self {
+        Self::new(t!(sources_large_together, bytes = bytes, limit = limit))
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

@@ -44,3 +44,5 @@ fr:sessions-list-not-continuable
 fr:sessions-list-row
 fr:sessions-list-unknown
 fr:sessions-list-usage
+fr:source-is-large
+fr:sources-large-together

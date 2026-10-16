@@ -56,6 +56,19 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// following that would replace instructions with the ones they referred to in passing.
 const POINTER_BYTES: usize = 500;
 
+/// How long one instruction file may be before its size is said out loud.
+///
+/// About 200 lines of prose, which is the length Claude Code recommends staying under. The file is
+/// always loaded, however long it is: a person who meant to write that much should not have it
+/// dropped or cut short, and the cost of it is worth a sentence rather than a refusal.
+const INSTRUCTIONS_WARN_BYTES: usize = 16_384;
+
+/// How long every instruction file together may be before the total is said out loud.
+///
+/// Codex stops adding instruction files at 32 KiB in all, which is the same judgement about the
+/// same cost. Said once for the turn rather than once per file, since the total is one fact.
+const INSTRUCTIONS_COMBINED_WARN_BYTES: usize = 32_768;
+
 /// How many files deep an `@path` import may nest, counting the instructions file as zero.
 const IMPORT_DEPTH: usize = 4;
 
@@ -151,6 +164,8 @@ pub fn compose_in<S: Sink>(
         .push_str(missing_dependency_guidance(workspace.scratch().is_some()));
 
     let mut standing = Prompt::default();
+    // What the sources admitted so far cost, for the combined word of INSTR-15.
+    let mut standing_bytes = 0;
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
@@ -159,6 +174,7 @@ pub fn compose_in<S: Sink>(
         && let Some(text) = read_home_agents(policy, home)
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
+        admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
         standing.push(Provenance::TrustedFile(origin), text.trim());
         standing.push(Provenance::Driver, "\n\n");
@@ -169,6 +185,12 @@ pub fn compose_in<S: Sink>(
     };
     match workspace_agents {
         Ok(Some(found)) => {
+            admit_by_size(
+                &found.origin,
+                &found.text,
+                &mut standing_bytes,
+                &mut preamble.notices,
+            );
             standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
             standing.push(
                 Provenance::TrustedFile(found.origin.to_string()),
@@ -183,6 +205,7 @@ pub fn compose_in<S: Sink>(
         for relative in nested_agents_files(sources) {
             match read_nested_agents(policy, sources, &relative) {
                 Ok(Some(text)) => {
+                    admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices);
                     standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
                     standing.push(Provenance::TrustedFile(relative), text.trim());
                     standing.push(Provenance::Driver, "\n\n");
@@ -628,6 +651,31 @@ pub(crate) fn today() -> String {
         .unwrap_or(0);
     let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// What one gate-passed source costs, said out loud where it is worth saying (INSTR-15).
+///
+/// Every source reaches the prompt whatever its size; this only decides what is said about it.
+/// `total` is what the sources admitted so far add up to, so the combined word is said at the one
+/// source that crosses the line and not again.
+///
+/// **The only thing read here is the byte length of text that has already passed the trust gate**,
+/// which is the test [`pointer_target`] already rests on (INSTR-8). `origin` is a path from
+/// INSTR-1's fixed set, so a notice names a file and a number and never anything a file holds.
+/// An untrusted source never reaches this, because [`read_instructions`] has already refused it.
+fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<Notice>) {
+    let bytes = text.len();
+    if bytes > INSTRUCTIONS_WARN_BYTES {
+        notices.push(Notice::source_is_large(origin, bytes));
+    }
+    let before = *total;
+    *total += bytes;
+    if before <= INSTRUCTIONS_COMBINED_WARN_BYTES && *total > INSTRUCTIONS_COMBINED_WARN_BYTES {
+        notices.push(Notice::sources_large_together(
+            *total,
+            INSTRUCTIONS_COMBINED_WARN_BYTES,
+        ));
+    }
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.

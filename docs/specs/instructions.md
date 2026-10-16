@@ -551,6 +551,51 @@ which file is read.
 `verified-by: bravebot_agent::safe::a_safe_session_offers_no_nested_skill`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_nested_agents_file`
 
+<a id="INSTR-15"></a>
+### INSTR-15: a standing source long enough to matter is said out loud
+
+After a source has passed the trust gate, its byte length is compared against two fixed figures.
+Over 16384 bytes a notice names the file and its size. The byte lengths of all the sources are
+added up, and over 32768 bytes in all one further notice says the total. The combined notice is
+said once for the turn, at the source that crosses the figure. Neither figure keeps a file out of
+the prompt: every source that passes the trust gate reaches it, whatever its size.
+
+The sources measured are the ones [INSTR-4](#INSTR-4) orders: `~/.bravebot/AGENTS.md`, the
+project's file, and each nested `AGENTS.md` of [INSTR-14](#INSTR-14). Words from
+`--append-system-prompt` are not measured, for the reason [INSTR-10](#INSTR-10) does not read them
+through the gate: a person who typed them for this run has said what this run carries. A source an
+untrusted directory holds is already out before this rule is reached, so nothing untrusted is
+measured and nothing untrusted is named.
+
+The notices are said before the first request, as [SKILL-11](skills.md#SKILL-11) requires of every
+notice, and composed per turn like every other part of this ([INSTR-7](#INSTR-7)), so shortening a
+file ends them.
+
+This is a length and nothing else. The driver compares the byte count of text that has already
+passed the gate, which is the test [INSTR-8](#INSTR-8) already rests on, and a notice carries a
+path from [INSTR-1](#INSTR-1)'s fixed set and a number. Nothing a file says decides whether it is
+loaded or what is said about it. A path is named here where [SKILL-6](skills.md#SKILL-6) counts
+rather than names, because that rule is about a path an untrusted project chose; these paths are
+fixed by [INSTR-1](#INSTR-1) and a nested one passed the trust map before it was measured.
+
+[INSTR-6](#INSTR-6) keeps the absence of a source silent and is untouched: this concerns a file
+that is there.
+
+**Why.** [INSTR-5](#INSTR-5) puts every source in every request of the session, so a file nobody
+meant to be long is paid for on every turn and nothing today says its size. Codex stops adding
+instruction files at 32 KiB in all and Claude Code warns over a recommended length, which is the
+same judgement about the same cost: a warning, not a refusal. A file nobody meant to write that
+long is still a file somebody wrote on purpose, and a half-read set of instructions is worse than
+a whole one that cost a sentence to say so: the planner cannot tell which rules a drop left out,
+and a rule cut off mid-sentence still reads as a rule.
+
+**Known costs.** Nothing here accounts for the prompt against the model's context window, and
+compaction ([compaction.md](compaction.md)) is where that question belongs.
+
+`verified-by: bravebot_agent::preamble::a_long_instructions_file_loads_and_its_size_is_said`
+`verified-by: bravebot_agent::preamble::a_very_large_instructions_file_still_loads`
+`verified-by: bravebot_agent::preamble::sources_long_together_are_reported_once`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
@@ -584,3 +629,6 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   says nothing that contradicts it. Deleting the global file, or narrowing it, is the only way to
   remove it, since a project is not the right place to be granted power over the user's own
   configuration.
+- **There is no ceiling past which a source of [INSTR-15](#INSTR-15) is left out.** A file of any
+  size is paid for in full on every request of the session, because dropping or truncating it is a
+  worse cost than carrying it whole.
