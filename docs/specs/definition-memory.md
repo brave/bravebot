@@ -15,6 +15,7 @@ governs:
   - crates/agent/src/memory.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/manifest.rs
   - crates/core/src/delegate.rs

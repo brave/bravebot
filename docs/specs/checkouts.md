@@ -9,6 +9,7 @@ governs:
   - crates/agent/src/git/checkout.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/turn/delegate_end.rs

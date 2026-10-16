@@ -4,6 +4,7 @@ title: vet_content
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 documented-by: docs/website/docs/security/vetting.md
 ---
 

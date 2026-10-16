@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/git/status.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/core/src/policy.rs
 documented-by: docs/website/docs/reference/tools.md
 ---

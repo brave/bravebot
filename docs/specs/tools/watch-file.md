@@ -4,6 +4,7 @@ title: watch_file
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/watch.rs
 documented-by: docs/website/docs/using/watches.md
 ---

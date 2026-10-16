@@ -4,6 +4,7 @@ title: fetch_url
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/core/src/policy.rs
   - crates/core/src/url.rs
   - crates/net/src/address.rs

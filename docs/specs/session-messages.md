@@ -4,6 +4,7 @@ title: Messages between background sessions
 status: proposed
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/messages.rs
   - crates/cli/src/host.rs
   - crates/session/src/jobs.rs
@@ -24,8 +25,9 @@ are not.
 The receiving half is built: a background session's socket takes a message, holds up to eight for
 its planner, and puts each in front of the planner at the start of its next request in a frame the
 driver wrote, under the label it arrived with ([MSG-6](#MSG-6) to [MSG-9](#MSG-9)). The sending half
-is not: there is no `message_session` tool in `crates/agent/src/tools.rs`, no prompt, and no client
-that writes to another session's socket, so nothing in this program sends. A clause with a part still
+is not: there is no `message_session` tool in `crates/agent/src/tools.rs` or
+`crates/agent/src/tools/offered.rs`, no prompt, and no client that writes to another session's
+socket, so nothing in this program sends. A clause with a part still
 to build reads `verified-by: none` until all of it lands, and the parts not built are the tool and
 its refusals ([MSG-1](#MSG-1), [MSG-5](#MSG-5)), the sender's gate and label ([MSG-2](#MSG-2)), the
 prompt ([MSG-3](#MSG-3), [MSG-4](#MSG-4)), the bound on a sender ([MSG-10](#MSG-10)), the sender's
