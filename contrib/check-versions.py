@@ -14,8 +14,11 @@ which is why CI runs it and why `make bump-version` runs it before committing wh
 bump that misses one of these files fails instead of being found later.
 
 What is in scope is the version of the thing people install: the workspace, the published npm
-wrapper, and the desktop application. docs/website is a documentation site whose package version
-names nothing anybody installs, so it is deliberately not here.
+wrapper and the platform packages it depends on, and the desktop application. docs/website is a
+documentation site whose package version names nothing anybody installs, so it is deliberately
+not here. The platform packages are built at publish time from the wrapper's own manifest, so the
+only place one states a version is the wrapper's `optionalDependencies`, each at exactly the
+wrapper's version.
 
 Standard library only, like the other checks CI runs without a toolchain.
 """
@@ -31,6 +34,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # A manifest states the version once. The lockfiles are pnpm's, which do not record the version of
 # the project they lock, so a manifest is the only place each package states it.
 MANIFESTS = ("package.json", "ui/package.json")
+
+# The manifest whose `optionalDependencies` are the platform packages, each pinned to the version
+# the wrapper is published at: npm installs the one for the machine, and a range would let it take
+# a binary from a release other than the wrapper's.
+PUBLISHED = "package.json"
+PLATFORM_PACKAGES = "optionalDependencies"
 
 VERSION_LINE = re.compile(r'version\s*=\s*"([^"]+)"')
 
@@ -53,6 +62,12 @@ def workspace_version(text):
     return None
 
 
+def platform_packages(data):
+    """The wrapper's platform packages and the version each is pinned to, empty where it has none."""
+    packages = pick(data, PLATFORM_PACKAGES)
+    return packages if isinstance(packages, dict) else {}
+
+
 def stated(root):
     """Every place a version is written down, as (where, version), with None for unreadable.
 
@@ -63,6 +78,9 @@ def stated(root):
     for name in MANIFESTS:
         data = read_json(root / name)
         found.append((name, pick(data, "version")))
+        if name == PUBLISHED:
+            for package, pinned in sorted(platform_packages(data).items()):
+                found.append((f"{name} {PLATFORM_PACKAGES} {package}", pinned))
     return found
 
 
@@ -87,7 +105,8 @@ def write(root, version):
 
     The cargo half of a bump is cargo's: the workspace manifest is rewritten before this is
     called and `cargo update` follows it through to the lockfile. What is here is the two JSON
-    files, in one place with the check that reads them, because they were rewritten by a node
+    files and the platform packages the wrapper pins, in one place with the check that reads
+    them, because they were rewritten by a node
     program embedded in a make recipe that could not run: a recipe's line continuations are
     literal backslashes inside the single quotes holding the program, so node was handed a source
     beginning with one and refused it.
@@ -112,6 +131,9 @@ def write(root, version):
             )
             return 1
         data["version"] = version
+        if name == PUBLISHED:
+            for package in platform_packages(data):
+                data[PLATFORM_PACKAGES][package] = version
         ready.append((path, serialise(data)))
 
     # Every file is read and checked before any is written, so a refusal leaves the tree as it
@@ -160,14 +182,27 @@ def check(root):
     return 0
 
 
+# The statement of a platform package's version in the fixture, named as `stated` names it.
+FIXTURE_PIN = f"{PUBLISHED} {PLATFORM_PACKAGES} @brave/bravebot-linux-x64"
+
 # One fixture per file this has to read, each broken in one way, because a check that reads one
 # of the manifests passes on this tree today and would have passed on the tree that shipped the
 # front end at 0.1.0.
 CASES = [
     ("an agreeing tree passes", {}, None),
-    ("the published wrapper lagging", {"package.json": "0.8.0"}, "package.json"),
+    ("the published wrapper lagging", {"package.json": "0.8.0"}, "package.json: states 0.8.0"),
     ("the application lagging", {"ui/package.json": "0.1.0"}, "ui/package.json"),
     ("a file that is not there", {"ui/package.json": None}, "ui/package.json"),
+    (
+        "a platform package pinned to another version",
+        {FIXTURE_PIN: "0.8.0"},
+        f"{FIXTURE_PIN}: states 0.8.0",
+    ),
+    (
+        "a platform package pinned by a range",
+        {FIXTURE_PIN: "^0.9.0"},
+        f"{FIXTURE_PIN}: states ^0.9.0",
+    ),
 ]
 
 
@@ -182,9 +217,13 @@ def fixture(root, version, broken):
     for name in MANIFESTS:
         if broken.get(name, version) is None:
             continue
-        (root / name).write_text(
-            serialise({"name": name, "version": broken.get(name, version)}), encoding="utf-8"
-        )
+        data = {"name": name, "version": broken.get(name, version)}
+        if name == PUBLISHED:
+            data[PLATFORM_PACKAGES] = {
+                "@brave/bravebot-linux-x64": broken.get(FIXTURE_PIN, version),
+                "@brave/bravebot-win32-x64": version,
+            }
+        (root / name).write_text(serialise(data), encoding="utf-8")
 
 
 def quietly(run):
@@ -224,7 +263,7 @@ def selftest():
 
     # Every file behind at once, which is the state a bump starts from, and then the check as the
     # question of whether the write reached all of them.
-    behind = {name: "0.8.0" for name in MANIFESTS}
+    behind = {name: "0.8.0" for name in MANIFESTS} | {FIXTURE_PIN: "0.8.0"}
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
         fixture(root, "0.9.0", behind)

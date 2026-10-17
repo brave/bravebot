@@ -6,8 +6,11 @@ governs:
   - Makefile
   - .github/workflows/ci.yml
   - .github/workflows/publish-npm.yml
-  - npm/scripts/postinstall.js
-  - npm/tests/postinstall.test.mjs
+  - npm/bin/bravebot.js
+  - npm/scripts/stage-platform-package.js
+  - npm/tests/stage-platform-package.test.mjs
+  - npm/tests/launcher.test.mjs
+  - npm/tests/package.test.mjs
   - install.sh
   - package.json
   - ui/package.json
@@ -26,9 +29,10 @@ Building for a platform is not this topic. Reproducible cross-builds are ordinar
 in [../development/releasing.md](../development/releasing.md). This file governs only the path from a version to a
 published asset, and the checks along it.
 
-Two installers fetch what is published: the npm package's install step, and the shell script
-served from the trunk of this repository. Both are governed here. Learning from a running copy
-that a newer release exists is [updates.md](updates.md).
+Two routes carry what is published: the npm packages, which hold the binaries themselves and are
+built from the GitHub release when they are published, and the shell script served from the trunk
+of this repository, which fetches the release when it runs. Both are governed here. Learning from
+a running copy that a newer release exists is [updates.md](updates.md).
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
 binaries are built and published by the Jenkins job `bravebot-build` in the devops repository.
@@ -37,10 +41,11 @@ once that release exists.
 
 Most of this is not pinned by a Rust test. Those rules are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
-suite can execute, so each of those clauses says in brackets what makes it hold. Two of them are
-the exception. What the npm installer downloads from is pinned by a Node test that the npm
-lockfile job runs and `cargo test` does not reach, and what the installers do with a Linux
-signature is pinned by a Rust test that runs both of them against a release it made.
+suite can execute, so each of those clauses says in brackets what makes it hold. Some are the
+exception. What the package script downloads from, what the wrapper installs and which package the
+launcher runs are pinned by Node tests that the npm lockfile job runs and `cargo test` does not
+reach, and what the script and `install.sh` do with a signature is pinned by a Rust test that runs
+both of them against a release it made.
 
 ## Clauses
 
@@ -49,12 +54,15 @@ signature is pinned by a Rust test that runs both of them against a release it m
 
 The workspace manifest holds the version. Every other file that repeats it, the npm package
 manifest and the desktop application's manifest in particular, states the same value, and a
-disagreement stops a release rather than being resolved in favour of either. A disagreement is
-reported by a check that runs on every pull request, rather than only by the refusal at the tag.
+disagreement stops a release rather than being resolved in favour of either. The npm package
+manifest repeats it for each of its six platform packages, which it pins by exact version. Those
+packages are written from that manifest when they are published, so each states the version in no
+file of its own. A disagreement is reported by a check that runs on every pull request, rather
+than only by the refusal at the tag.
 
-**Why.** The installer derives the tag it downloads from the version it was published with, so two
-files disagreeing does not produce a mislabelled release, it produces a release whose assets the
-installer looks for under a name that was never uploaded. The application is packaged from its own
+**Why.** The publish step derives the tag it downloads from the version in the tree, so two
+files disagreeing does not produce a mislabelled release, it produces a release whose assets that
+step looks for under a name that was never uploaded. The application is packaged from its own
 manifest and ships an agent build, so a version left behind there is an app naming a release that
 was never made. Reporting it at the tag is release day; reporting it in CI is the pull request
 that caused it, and the front end sat two minor versions behind from the day it was folded in with
@@ -117,8 +125,8 @@ disagreement among the files that state it. Jenkins names the GitHub release the
 of the commit it checked out, after the same refusal. Neither path publishes under a name that
 disagrees with the tree it built.
 
-**Why.** The installer derives the tag it downloads from the version it was published with, so
-a release whose name is not the version in the tree is a release whose assets the installer
+**Why.** The publish step derives the tag it downloads from the version in the tree, so
+a release whose name is not the version in the tree is a release whose assets that step
 looks for under a name that was never uploaded.
 
 `verified-by: by-construction (the tagging path sets the tag from Cargo.toml after make check-versions, a Jenkins RELEASE refuses unless that tag already names the commit it checked out and package.json states the same version, then names the GitHub release from Cargo.toml, and the npm publish refuses unless the tag is v plus the same version in both files)`
@@ -164,47 +172,59 @@ distinguish a bad download from a good one now fires on every good one.
 `verified-by: by-construction (Jenkins attaches the .sha256 written after signing, covering the bytes that were uploaded)`
 
 <a id="RELEASE-9"></a>
-### RELEASE-9: a downloaded binary is checked against its published checksum before it is installed
+### RELEASE-9: a downloaded binary is checked against its published checksum before it is written
 
-Each installer fetches the published checksum, compares it against what it downloaded, and writes
-no executable when the two differ or the checksum is not well formed. Well formed is the digest
-and nothing else: sixty-four hex digits, with no filename beside them.
+`install.sh` and the script that builds the npm platform packages each fetch the published
+checksum, compare it against what they downloaded, and write no executable when the two differ or
+the checksum is not well formed. Well formed is the digest and nothing else: sixty-four hex
+digits, with no filename beside them. An npm install fetches no checksum: the registry's integrity
+hash covers the bytes of the package it serves, and those bytes passed this check when the package
+was built.
 
-**Why.** Without this the binary runs on the strength of the transport alone, and a substituted
-release asset is indistinguishable from a good one. The checksum is what an installer can check
-on every platform. It is published beside the binary, so it shows that the download arrived
-intact and not who produced it; [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) are what
-check that.
+**Why.** Without this the binary runs, or is published, on the strength of the transport alone,
+and a substituted release asset is indistinguishable from a good one. The checksum is what both
+can check on every platform. It is published beside the binary, so it shows that the download
+arrived intact and not who produced it; [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15)
+are what check that.
 
-`verified-by: by-construction (each installer hashes what it downloaded, compares it against the published value, and exits without writing when they differ or the published value is not sixty-four hex digits)`
+`verified-by: by-construction (install.sh and the package script each hash what they downloaded, compare it against the published value, and exit without writing when they differ or the published value is not sixty-four hex digits)`
 
 <a id="RELEASE-10"></a>
-### RELEASE-10: the npm package is published by hand, after that version's GitHub release exists
+### RELEASE-10: the npm packages are published by hand, after that version's GitHub release exists
 
 A branch push, a pull request, and a tag push do not publish to the registry. Someone dispatches
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
-What is published is the tree that tag names, and a branch of the same name does not supply it. A
-dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing any
-platform asset, any checksum, or the signature beside a Linux checksum, or whose Linux signature
-does not verify against the key the tree carries, is refused rather than publishing a wrapper whose
-installer has nothing to fetch or refuses what it fetches.
+What is published is the tree that tag names, and a branch of the same name does not supply it.
+Seven packages are published: the six platform packages, and the wrapper only after all six are on
+the registry. A dispatch is refused before anything is published when its tag is not `v` plus the
+version in the tree, when the wrapper runs an install script or depends on anything but the six
+platform packages at its own version, when its GitHub release is missing any platform asset, any
+checksum, or the signature beside a Linux checksum, or when a Linux signature does not verify
+against the key the tree carries. A macOS or Windows binary that is not signed by Brave is refused
+by the job for that platform, which can be after other platforms have been published. A package
+already on the registry at that version is left alone, so a dispatch after a partial failure
+publishes what is missing.
 
-**Why.** The installer derives the download from the version it was published with. Publishing
-the wrapper first makes every install fail until the assets exist, which reads as the tool being
-broken. Jenkins is started by hand, days later if need be, so npm publish is the same kind of
-step: it happens when somebody chooses, not when the tag lands. Publishing from a branch puts
-an unreviewed version on the registry.
+**Why.** A platform package is built from the release, so it cannot exist before it. npm skips an
+optional dependency it cannot find without a message, so a wrapper published ahead of its packages
+installs and then has no binary until they exist, which reads as the tool being broken. Jenkins is
+started by hand, days later if need be, so npm publish is the same kind of step: it happens when
+somebody chooses, not when the tag lands. Publishing from a branch puts an unreviewed version on
+the registry. A version cannot be published twice, and the signature checks need a macOS and a
+Windows machine, so a failure on one platform can follow successes on others; leaving a published
+package alone lets the next dispatch finish the release rather than fail on the first package it
+finds.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release and each of those signatures verifies against the key in npm/scripts/postinstall.js; make check-security faults a checkout of a bare name)`
+`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch; its lint job refuses a wrapper that runs an install script or depends on anything but the six platform packages at its own version; its release job checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release and each of those signatures verifies against the key in npm/scripts/stage-platform-package.js; each platform job needs the release job and skips a package the registry already has, and the wrapper's job needs every platform job; make check-security faults a checkout of a bare name, and npm/tests/package.test.mjs holds the matrix of platform jobs to the six platforms, each on a runner of the system its signature check runs on)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
 
-The publish job proves itself with a short-lived OIDC identity for this workflow in this
-repository, and sets no long-lived npm credential. The package it publishes carries provenance
-for that run. No dependency of this repository is installed or run in the job that holds the grant:
-the grant is declared on that job rather than for the whole workflow, and the lockfile lint is a
-job of its own that holds only `contents: read`.
+Each job that publishes proves itself with a short-lived OIDC identity for this workflow in this
+repository, and sets no long-lived npm credential. Every package it publishes carries provenance
+for that run. No dependency of this repository is installed or run in a job that holds the grant:
+the grant is declared on the jobs that publish rather than for the whole workflow, and the
+lockfile lint and the checks of the release are jobs of their own that hold only `contents: read`.
 
 **Why.** A token in GitHub secrets is a credential that publishes if it leaks, and it outlives
 the run that needed it. OIDC binds the publish to this file on this repository, so a different
@@ -212,42 +232,46 @@ workflow, or the same workflow in a fork, cannot use it. The grant is a permissi
 token, and every step of the job holding it can exercise that permission, so a job is the smallest
 boundary it has: a dependency installed or run in the publishing job could mint the credential and
 publish a tarball with this repository's provenance on it, while under `contents: read` the
-identical compromise reaches a green check and nothing else. The wrapper declares no dependency
-today, so the job that lints holds the lower grant to keep that true of whatever is added. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
+identical compromise reaches a green check and nothing else. The wrapper depends on nothing but
+the platform packages this workflow publishes, so the job that lints holds the lower grant to keep that true of whatever is added. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
 than a job name, so which job publishes is this repository's to choose.
 
-`verified-by: by-construction (the publish job grants id-token: write, sets no NPM_TOKEN or NODE_AUTH_TOKEN, and calls npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant)`
+`verified-by: by-construction (the platform and wrapper publish jobs grant id-token: write, set no NPM_TOKEN or NODE_AUTH_TOKEN, and call npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant)`
 
 <a id="RELEASE-12"></a>
-### RELEASE-12: the published package has no dependency, and the pnpm lockfiles are committed and linted
+### RELEASE-12: the published wrapper depends on its platform packages alone, and the pnpm lockfiles are committed and linted
 
-The wrapper that is published declares no dependency, so installing it fetches nothing but the
-wrapper. The three JavaScript projects that are not published (`ui`, `docs/website` and
+The wrapper that is published declares no dependency except exactly its six platform packages,
+as `optionalDependencies`, so installing it fetches nothing but the wrapper and the package for
+the machine. The three JavaScript projects that are not published (`ui`, `docs/website` and
 `packages/agent-client`) each commit a `pnpm-lock.yaml`, CI installs from it with
 `--frozen-lockfile`, and a lockfile that pulls from anywhere but the npm registry, or from a
 GitHub repository other than the one its `package.json` names, fails that job.
 
 **Why.** A dependency that appeared only at install time would be bytes nobody reviewed, and the
-first place that would show up is the pipeline that publishes. The lockfile is the whole of what
+first place that would show up is the pipeline that publishes. The platform packages are the
+exception because they are the binary: this workflow builds each from the verified release and
+publishes it, and the wrapper pins each at its own version, since a range would let an install take
+a binary from another release. The lockfile is the whole of what
 an install fetches, so an entry edited to point at another host changes what runs in CI without
 touching `package.json`.
 
-`verified-by: by-construction (package.json declares no dependency and publish-npm.yml refuses a tag whose package.json declares one; each project's pnpm-lock.yaml is in the tree, CI installs with pnpm install --frozen-lockfile, and contrib/check-pnpm-lockfiles.py refuses a registry entry that is not an sha512 integrity alone, a git source the project's package.json does not name, and a link, file or URL version)`
+`verified-by: by-construction (package.json declares no dependency but the six platform packages at its own version, which npm/tests/package.test.mjs holds and publish-npm.yml refuses a tag whose package.json breaks; each project's pnpm-lock.yaml is in the tree, CI installs with pnpm install --frozen-lockfile, and contrib/check-pnpm-lockfiles.py refuses a registry entry that is not an sha512 integrity alone, a git source the project's package.json does not name, and a link, file or URL version)`
 
 <a id="RELEASE-13"></a>
-### RELEASE-13: each installer's release origin is composed from nothing
+### RELEASE-13: each tool's release origin is composed from nothing
 
-The repository an installer downloads from is stated in the installer. Nothing outside it chooses
-that repository: not an argument, not a file, and not the environment.
+The repository `install.sh` and the package script download from is stated in each. Nothing
+outside it chooses that repository: not an argument, not a file, and not the environment.
 
-**Why.** An installer fetches an asset and the checksum of that asset from the same release, so an
+**Why.** Each fetches an asset and the checksum of that asset from the same release, so an
 origin supplied from outside moves both halves of the comparison together. A substituted binary
 published beside its own true digest then satisfies the checksum check rather than failing it, and
-is written executable onto the path. Nothing else on the install path notices: the package
-manifest names the real package, the lockfile carries the registry's integrity hash for it, and
-the install prints the version it fetched rather than where it fetched it from. The line a person
-is handed to update with is one fixed line for the same reason, which [updates.md](updates.md)
-sets out.
+is written executable onto the path, or is published to the registry under Brave's name with
+provenance for a run that did nothing wrong. Nothing else on either path notices: the package
+manifest names the real package, and the log prints the version it fetched rather than where it
+fetched it from. The line a person is handed to update with is one fixed line for the same reason,
+which [updates.md](updates.md) sets out.
 
 The one input install.sh accepts is a version: three decimal numbers with an optional leading `v`,
 composed into a tag under that fixed repository, and refused before any request when it is
@@ -255,30 +279,32 @@ anything else. It chooses a release, never a host or a path, and every check in
 [RELEASE-9](#RELEASE-9), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) runs unchanged
 against it. `crates/cli/tests/installer_signature.rs` pins which URLs each argument reaches.
 
-`verified-by: by-construction (install.sh states the repository as a literal, and the npm installer composes both URLs from one constant; npm/tests/postinstall.test.mjs calls that origin with an environment set against it, holds the installer to that one URL, and fails on any reach into the environment beyond the two values that choose whether to download and for which architecture. make check-npm runs it)`
+`verified-by: by-construction (install.sh states the repository as a literal, and the package script composes both URLs from one constant and the version in the tree; npm/tests/stage-platform-package.test.mjs calls that origin with an environment set against it, holds the script to that one URL, and fails on any reach into the environment. make check-npm runs it)`
 
 <a id="RELEASE-14"></a>
 ### RELEASE-14: on Linux, a checksum whose signature does not verify installs nothing
 
-On Linux, where `gpg` can be run, each installer also fetches the signature published beside the
-checksum and checks it over the checksum exactly as it was fetched, against the release signing key
-it carries embedded. The signature counts only when it was made by the key the installer names by
-its fingerprint. When the signature cannot be fetched, or does not verify, or was made by any other
-key, no executable is written. Where `gpg` cannot be run, the installer says it skipped the check
-and installs on the checksum alone. Darwin and Windows publish no such signature and are checked
-as [RELEASE-15](#RELEASE-15) says.
+On Linux, where `gpg` can be run, `install.sh` and the package script also fetch the signature
+published beside the checksum and check it over the checksum exactly as it was fetched, against
+the release signing key they carry embedded. The signature counts only when it was made by the key
+they name by its fingerprint. When the signature cannot be fetched, or does not verify, or was
+made by any other key, no executable is written. Where `gpg` cannot be run, `install.sh` says it
+skipped the check and installs on the checksum alone, and the package script writes nothing.
+Darwin and Windows publish no such signature and are checked as [RELEASE-15](#RELEASE-15) says.
 
 **Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
 so whoever can replace the one can replace the other: the checksum proves the download arrived
 intact, not who produced it. A signature from a key held outside the release means a substituted
 binary also needs that key. The key is embedded rather than fetched because the bytes that decide
-what to trust are then the installer's own, reviewed and published with it, and no second host can
+what to trust are then the tool's own, reviewed and published with it, and no second host can
 withhold it or fail an install for a reason that has nothing to do with what was downloaded. A
 missing signature is refused rather than skipped because skipping it would let whoever can change
 the release turn the check off by deleting one file, and that is the person the check exists for. A
-missing `gpg` is skipped rather than refused because it is a property of the machine, which nobody
-changing a release controls, and requiring it would fail an install for a reason that has nothing
-to do with what was downloaded.
+missing `gpg` is skipped by `install.sh` rather than refused because it is a property of the
+machine, which nobody changing a release controls, and requiring it would fail an install for a
+reason that has nothing to do with what was downloaded. The package script runs on a runner the
+workflow chose, which has `gpg`, so there the tool is part of the check, and a build that skipped
+it for want of the tool would be the one an attacker arranges.
 
 **Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
 or added to the person's own. The signature covers the checksum and nothing else, so it shows who
@@ -292,30 +318,34 @@ serve an older release's binary, checksum and signature together, and they verif
 `verified-by: bravebot_cli::installer_signature::a_signature_that_verifies_but_was_made_by_a_key_the_installer_does_not_name_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
+`verified-by: bravebot_cli::installer_signature::a_linux_package_is_not_built_without_gpg`
 `verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
 `verified-by: bravebot_cli::installer_signature::a_windows_binary_signed_by_brave_installs`
 
 <a id="RELEASE-15"></a>
 ### RELEASE-15: on macOS and Windows, a binary not signed by Brave installs nothing
 
-Before an executable is written, each installer checks the code signature the binary carries.
-On macOS the binary has to satisfy a `codesign` requirement that names Brave's Developer ID team,
-and has to pass `spctl` as an installer package, which is where notarization is checked. On
-Windows, in the npm installer, Authenticode has to report the signature as valid and the signing
-certificate's name has to be `Brave Software, Inc.`. When the signature is missing, is from any
-other signer, or does not verify, or when the tool that checks it cannot be run, no executable is
-written. Linux binaries carry no code signature and are checked as [RELEASE-14](#RELEASE-14)
-says. The install script does not install Windows.
+Before an executable is written, `install.sh` and the package script check the code signature the
+binary carries. On macOS the binary has to satisfy a `codesign` requirement that names Brave's
+Developer ID team, and has to pass `spctl` as an installer package, which is where notarization is
+checked. On Windows, in the package script, Authenticode has to report the signature as valid and
+the signing certificate's name has to be `Brave Software, Inc.`. When the signature is missing, is
+from any other signer, or does not verify, or when the tool that checks it cannot be run, no
+executable is written. Linux binaries carry no code signature and are checked as
+[RELEASE-14](#RELEASE-14) says. The install script does not install Windows. The package script
+builds a macOS package on a macOS runner and a Windows package on a Windows runner, because
+`codesign`, `spctl` and PowerShell's Authenticode check run nowhere else. An npm install checks no
+signature of its own.
 
 **Why.** The checksum is published beside the binary, so whoever can replace one can replace the
 other, and the checksum cannot say who produced the binary. The macOS and Windows binaries are
 already signed and the operating systems can check that, but a binary run from a terminal is not
-assessed by Gatekeeper, so an installer that does not ask never finds out. `codesign` and
+assessed by Gatekeeper, so a tool that does not ask never finds out. `codesign` and
 Authenticode on their own accept a valid signature from any signer whose certificate a trusted
 authority issued, which includes anybody with a developer account, so the requirement names
 Brave's team and the Windows check names the signer. A missing tool is refused rather than skipped
 because, unlike `gpg` on Linux, these tools ship with the operating system, so a machine without
-one is not a machine the installer should trust an unchecked binary on. `spctl -t install` is used
+one is not a machine to trust an unchecked binary on. `spctl -t install` is used
 because `-t execute` rejects any bare executable that is not an app bundle, however it is signed.
 
 **Note.** The macOS check was run by hand against the published arm64 release and accepted it. The
@@ -324,9 +354,10 @@ Windows check has not been run on Windows: the signer name was read from the cer
 compares the certificate's common name and pins no thumbprint, so a certificate carrying that
 name from another authority the machine trusts would pass; a thumbprint would refuse every install
 at the next certificate renewal. The tests replace `codesign`, `spctl` and `powershell.exe` with
-programs that answer from a marker in the binary, so they hold the installers to what they ask and
-how they treat the answer, and not to what the real tools say. `spctl` can need the network to check notarization, so an offline macOS
-install may be refused.
+programs that answer from a marker in the binary, so they hold `install.sh` and the package script to
+what they ask and how they treat the answer, and not to what the real tools say. `spctl` can need
+the network to check notarization, so an offline macOS install may be refused. The first run of the
+package script on a hosted macOS or Windows runner is a release's publish.
 
 `verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
 `verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_another_team_installs_nothing`
@@ -339,10 +370,52 @@ install may be refused.
 `verified-by: bravebot_cli::installer_signature::a_windows_install_without_powershell_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_install_runs_neither_codesign_nor_powershell`
 
+<a id="RELEASE-16"></a>
+### RELEASE-16: installing the npm package runs no script and fetches nothing from the release
+
+Installing `@brave/bravebot` runs no script and makes no request outside npm's own. The wrapper
+holds the launcher and no binary. Each binary is in the package for its platform, which the
+wrapper lists in `optionalDependencies` at its own exact version, and npm installs the one whose
+`os` and `cpu` match the machine. A package npm cannot find, such as one for a version that has not
+been published, is skipped and the install still succeeds.
+
+**Why.** A script runs on a machine before the person has run anything of ours, and the npm
+settings that ask for scripts to be allowed, or skip them, make an install that depends on one
+fail or leave no binary: an install that depends on a script is refused under
+`--strict-allow-scripts` and leaves nothing under `--ignore-scripts`. A binary in a package is
+installed by npm itself, which works under both. A download keyed to the package's own version
+fails for a version with no release, such as a checkout at a bumped but unreleased version, because
+the assets it asks for do not exist yet. A platform package that does not exist is skipped instead,
+and the launcher says what is missing ([RELEASE-17](#RELEASE-17)).
+
+`verified-by: by-construction (package.json declares no preinstall, install, postinstall or prepare script and no dependency but the six platform packages at its own version, which npm/tests/package.test.mjs holds and the lint job of publish-npm.yml refuses at publish; make check-versions holds each pin to the workspace version; npm/tests/stage-platform-package.test.mjs holds each package's os and cpu to the asset it holds)`
+
+<a id="RELEASE-17"></a>
+### RELEASE-17: the launcher runs the package for its own platform, and says what is missing
+
+The launcher runs the binary in `@brave/bravebot-<platform>-<arch>`, named from `process.platform`
+and `process.arch` of the node running it and from nothing else: not an argument, not a file, and
+not the environment. A package for another platform is never run. When that package is not
+installed, or holds no binary, the launcher exits 1 with a message that names the package and
+platform, the installs that leave it out, and what to do. It tells the binary it was started by
+npm ([UPDATE-2](updates.md#UPDATE-2)) and exits with the binary's status.
+
+**Why.** Which package is run decides which executable starts, so no value somebody supplies may
+choose it, for the reason [RELEASE-13](#RELEASE-13) gives for the origin. The binary can still be
+absent: `--omit=optional` skips the package, a platform with no package has none, and a version
+that has not been published has none. The message says what happened, because advice to reinstall
+changes nothing in those cases.
+
+**Note.** Node's own lookup also searches the directories `NODE_PATH` names, after the install
+tree, so a package placed there is run when the installed one is missing. The launcher reads no
+variable itself.
+
+`verified-by: by-construction (npm/tests/launcher.test.mjs lays out a node_modules tree and runs the real launcher in it: it runs the package of its own platform with its arguments and its exit status, never another platform's, finds a package installed beside the wrapper or beneath it, names the missing package when there is none or no binary, reads no environment value except to hand it on, and runs a package built by the real publish step. make check-npm runs it)`
+
 ## Known costs
 
-- **The signature checks are pinned by a Rust test, and the npm origin by a Node one.** Every
-  clause but [RELEASE-13](#RELEASE-13), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) is
+- **The signature checks are pinned by a Rust test, and the package script and launcher by Node
+  ones.** Every clause but [RELEASE-13](#RELEASE-13) to [RELEASE-17](#RELEASE-17) is
   by-construction, which means a refusal can be removed and only a reader will notice. The tests
   for [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) run on Linux alone and skip where
   `gpg` or `node` is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
@@ -354,15 +427,17 @@ install may be refused.
   kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the six files that
   state a version, and carries its own selftest because a version check that is quietly partial
   reports success forever. Both of those are read off files, so a refusal deleted from a `run:`
-  block passes them. `make check-npm` is the one that runs something: it calls the npm installer's
-  origin as code, so [RELEASE-13](#RELEASE-13) fails rather than reports when that origin becomes
-  something a caller supplies. It reaches the npm installer alone, and the shell script beside it
-  is read by nothing.
+  block passes them. `make check-npm` is the one that runs something: it calls the package script's
+  origin as code and runs the real launcher in a tree laid out the way npm lays one out, so
+  [RELEASE-13](#RELEASE-13) fails rather than reports when that origin becomes something a caller
+  supplies, and [RELEASE-17](#RELEASE-17) when the launcher and the publish step stop agreeing. It
+  reaches the package script alone, and the shell script beside it is read by nothing. It does not
+  run `publish-npm.yml`, whose platform jobs run for the first time at a release.
 
 - **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
-  noticing. RELEASE-9 is the installer in this repository: a checksum Jenkins ships in the
-  wrong form is refused here, not accepted.
+  noticing. RELEASE-9 is `install.sh` and the package script, in this repository: a checksum
+  Jenkins ships in the wrong form is refused here, not accepted.
 
 - **Only the npm publish refuses a release whose Linux checksums carry no signature that verifies.**
   The publish job in devops checks for each binary but not for a signature. The install script
@@ -370,14 +445,15 @@ install may be refused.
   publishes without them is refused by every Linux install that has `gpg` from the moment it
   exists, and the npm check comes too late to prevent that.
 
-- **Changing the signing key breaks every installer that carries the old one.** Each npm version
-  carries the key it was published with and installs its own version's release, so it keeps
-  working while that release is served. The install script is served from the trunk and installs
-  the newest release, so the key it carries has to change at the moment the first release signed
-  by the new key is published, and either order leaves a window in which Linux installs with `gpg`
-  are refused. The macOS team and the Windows signer name are embedded the same way, so a change
-  of either reaches only the installers shipped after it. An embedded key cannot be revoked or updated after it is published: a revocation or
-  a new signing subkey reaches only the installers shipped after it.
+- **Changing the signing key breaks the install script that carries the old one.** The npm
+  packages carry no key and check nothing when installed, so a change reaches them only through the
+  next publish, which reads the key from the tag it publishes. The install script is served from the
+  trunk and installs the newest release, so the key it carries has to change at the moment the
+  first release signed by the new key is published, and either order leaves a window in which Linux
+  installs with `gpg` are refused. The macOS team and the Windows signer name are embedded the same
+  way, in `install.sh` and the package script. An embedded key cannot be revoked or updated after it
+  is published: a revocation or a new signing subkey reaches only the install scripts served, and
+  the publishes made, after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a
@@ -400,16 +476,39 @@ install may be refused.
 
 - **The trusted publisher is configured on npmjs.com, not here.** OIDC will refuse until that
   record names this repository and `publish-npm.yml` exactly. A mismatch looks like a 404 from
-  the registry. Enabling 2FA on maintainer npm accounts is also outside this tree.
+  the registry. Each of the seven package names has a record of its own, so a platform package
+  without one fails its job while the others publish. Enabling 2FA on maintainer npm accounts is
+  also outside this tree.
 
-- **Two third party actions still run in the job holding the grant.** Checking out the tag and
-  pointing npm at the registry is what that job is, so `actions/checkout` and `actions/setup-node`
-  cannot be moved out of it. Both are pinned to a commit, which is the whole of what is held
-  against them, so what remains is whoever owns those two commits.
+- **Two third party actions still run in each job holding the grant.** Checking out the tag and
+  pointing npm at the registry is what those jobs are, so `actions/checkout` and
+  `actions/setup-node` cannot be moved out of them. Both are pinned to a commit, which is the whole
+  of what is held against them, so what remains is whoever owns those two commits.
 
-- **A second npm publish of the same version fails at the registry.** Dispatching before Jenkins
-  has created the GitHub release fails the asset check instead. A delayed Jenkins run does not
-  start npm publish on its own.
+- **A refused platform can come after others are published.** The macOS and Windows signatures are
+  checked by the job for that platform, which holds the grant and publishes its own package, so a
+  binary the check refuses is found after the packages of the other platforms may be on the
+  registry. The wrapper is not published until every platform is, and the next dispatch publishes
+  what is missing. A version on the registry cannot be taken back.
+
+- **A second dispatch for a published version fails at the wrapper.** The registry will not take a
+  version twice, and the platform jobs before it leave a published package alone. Dispatching
+  before Jenkins has created the GitHub release fails the asset check instead. A delayed Jenkins
+  run does not start npm publish on its own.
+
+- **Nothing at install time checks a code signature.** npm checks the integrity hash the registry
+  serves, which covers the bytes that were published and not who made them. Those bytes were
+  checked here, at publish, so the check has moved from the machine that installs to the one that
+  publishes. Someone who can publish as this workflow, or make the registry serve other bytes, is
+  not stopped by the launcher.
+
+- **Under Rosetta the x64 package is the one installed.** npm matches `cpu` against the node that
+  runs it, which reports x64 on an arm64 Mac when it is an Intel build, so that machine gets the
+  x64 binary and runs it translated.
+
+- **A version with no platform packages installs without a binary.** npm skips an optional
+  dependency it cannot find, so an install from a checkout or a git ref at a version that has not
+  been published succeeds, and the launcher says the binary is missing.
 
 - **OIDC trusted publishing does not support Jenkins.** That is why this one publication step
   is in GitHub Actions while the signed binaries stay in Jenkins.

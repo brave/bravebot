@@ -107,8 +107,8 @@ the Front end job.
 
 `make check-scripts` checks that every required gate runs, that UI, installer and lockfile
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
-half also holds `check-npm` to reaching the installer test and the lockfile lint's own cases before
-any lockfile is read, and to failing rather than passing when that test is no longer there. It runs
+half also holds `check-npm` to reaching the npm tests and the lockfile lint's own cases before
+any lockfile is read, and to failing rather than passing when those tests are no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
 `check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest` and `check-session-review-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
@@ -254,11 +254,13 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
-`make check-npm` lints the pnpm lockfiles, as CI does, and runs the installer test
-under `npm/tests`, which holds the release origin the published package downloads from to this
-repository whatever the environment says. That test is the one thing in the tree that runs a
-clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to
-the published wrapper as well as to a lockfile. `make check-deps` decides
+`make check-npm` lints the pnpm lockfiles, as CI does, and runs the tests under `npm/tests`. They
+hold the release origin the script that builds the platform packages downloads from to this
+repository whatever the environment says, hold each platform package to its asset and to the
+machine npm installs it on, run the real launcher in a tree laid out the way npm lays one out, and
+hold the wrapper's manifest and the publish workflow to the same six platforms. They are the
+things in the tree that run clauses of [../specs/releases.md](../specs/releases.md) as code, so
+run this target for a change to the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, a dependency from anywhere but
 crates.io, and a regex engine. It also fails an exception in `deny.toml` that has no `reason`,

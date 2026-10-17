@@ -3,7 +3,11 @@ name: Publish npm
 # Started by hand, after the tag exists and after Jenkins has created the GitHub
 # release. Authentication is OIDC: there is no NPM_TOKEN.
 #
-# On npmjs.com, the trusted publisher for @brave/bravebot must name this file
+# Seven packages are published, the six platform packages first. Each @brave/bravebot-<platform>
+# holds the verified binary for one platform, and @brave/bravebot depends on all six and holds
+# none.
+#
+# On npmjs.com, the trusted publisher of every one of the seven packages must name this file
 # exactly: publish-npm.yml
 on:
   workflow_dispatch:
@@ -20,10 +24,10 @@ permissions:
   contents: read
 
 jobs:
-  # The wrapper declares no dependency, so there is nothing to install here and no
-  # third-party code to run: the lint is a script in this tree and the check reads
-  # package.json. It stays a job of its own, under `contents: read`, so the publish job
-  # does not run repository scripts beside the token it mints.
+  # The wrapper declares no dependency but its six platform packages, so there is nothing to
+  # install here and no third-party code to run: the lint is a script in this tree and the check
+  # reads package.json. It stays a job of its own, under `contents: read`, so the publish jobs
+  # do not run repository scripts beside the token they mint.
   #
   # Not left to ci.yml's npm-lockfile job, which runs the same lint: nothing here
   # requires that job to have passed, so a tag moved after it ran would be linted nowhere.
@@ -40,15 +44,34 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
 
-      - name: Refuse a dependency in the published package
+      # The wrapper runs no script at install and depends on nothing but exactly the platform
+      # packages, each at its own version. Any other, or one at a range, is bytes nobody reviewed.
+      - name: Refuse an install script, and a dependency other than the platform packages
         run: |
           set -eu
           node -e '
             const pkg = require("./package.json");
-            const declared = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+            const { PLATFORMS, packageName } = require("./npm/scripts/stage-platform-package.js");
+            const refused = ["dependencies", "devDependencies", "peerDependencies"]
               .filter((key) => Object.keys(pkg[key] || {}).length > 0);
-            if (declared.length > 0) {
-              console.error("error: package.json declares " + declared.join(", ") + "; the wrapper has none");
+            if (refused.length > 0) {
+              console.error("error: package.json declares " + refused.join(", ") + "; the wrapper has none");
+              process.exit(1);
+            }
+            const scripts = ["preinstall", "install", "postinstall"].filter((name) => (pkg.scripts || {})[name]);
+            if (scripts.length > 0) {
+              console.error("error: package.json runs " + scripts.join(", ") + " at install; the wrapper runs none");
+              process.exit(1);
+            }
+            const declared = pkg.optionalDependencies || {};
+            const wanted = Object.keys(PLATFORMS).map(packageName).sort();
+            if (JSON.stringify(Object.keys(declared).sort()) !== JSON.stringify(wanted)) {
+              console.error("error: optionalDependencies is not exactly " + wanted.join(", "));
+              process.exit(1);
+            }
+            const wrong = wanted.filter((name) => declared[name] !== pkg.version);
+            if (wrong.length > 0) {
+              console.error("error: " + wrong.join(", ") + " not pinned to " + pkg.version);
               process.exit(1);
             }
           '
@@ -56,20 +79,19 @@ jobs:
       - name: Lint the pnpm lockfiles
         run: python3 contrib/check-pnpm-lockfiles.py
 
-  # The trusted publisher on npmjs.com keys on this repository and this filename, not
-  # on a job name, so publishing is unaffected by which job here holds the grant.
-  publish:
-    name: Publish @brave/bravebot
+  # What can be refused about the release without a platform's own tools, before any package is
+  # published: the tag, the assets, and the signature on each Linux checksum. The macOS and
+  # Windows signatures are checked by the platform jobs below, which have the tools. It holds only
+  # `contents: read`, so the grant is not in the job that reads the release.
+  release:
+    name: Check the GitHub release
     needs: lint
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
-      # Qualified for the reason above, and here it is what pins the published bytes
-      # to the tag: every gate below reads either this checkout or the GitHub release,
-      # so a branch supplying the tree passes both and npm gets an unreviewed one.
+      # Qualified for the reason above, and here it is what pins the checked tree to the tag:
+      # every gate below reads either this checkout or the GitHub release, so a branch supplying
+      # the tree passes both and the publishing jobs read a different one.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
@@ -112,7 +134,7 @@ jobs:
             if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256"; then
               missing="$missing ${asset}.sha256"
             fi
-            # A Linux install with gpg refuses a checksum that has no signature beside it.
+            # A Linux package is built only from a checksum that has a signature beside it.
             case "$asset" in
               bravebot-linux-*)
                 if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256.asc"; then
@@ -127,23 +149,23 @@ jobs:
             exit 1
           fi
 
-      # The key an installer checks against is the one in this tree, so a release signed by any
-      # other key would publish a wrapper whose Linux installs all fail.
+      # The key a package is built against is the one in this tree, so a release signed by any
+      # other key would stop both Linux packages after the others had been published.
       - name: Refuse a Linux checksum whose signature does not verify
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
           set -eu
-          fingerprint="$(sed -n 's/^const SIGNING_KEY_FINGERPRINT = "\([0-9A-F]\{40\}\)";$/\1/p' npm/scripts/postinstall.js)"
+          fingerprint="$(sed -n 's/^const SIGNING_KEY_FINGERPRINT = "\([0-9A-F]\{40\}\)";$/\1/p' npm/scripts/stage-platform-package.js)"
           if [ -z "$fingerprint" ]; then
-            echo "error: npm/scripts/postinstall.js names no signing key fingerprint"
+            echo "error: npm/scripts/stage-platform-package.js names no signing key fingerprint"
             exit 1
           fi
           GNUPGHOME="$(mktemp -d)"
           export GNUPGHOME
           downloads="$(mktemp -d)"
-          sed -n '/-----BEGIN PGP PUBLIC KEY BLOCK-----/,/-----END PGP PUBLIC KEY BLOCK-----/p' npm/scripts/postinstall.js |
+          sed -n '/-----BEGIN PGP PUBLIC KEY BLOCK-----/,/-----END PGP PUBLIC KEY BLOCK-----/p' npm/scripts/stage-platform-package.js |
             sed -e 's/^.*\(-----BEGIN PGP PUBLIC KEY BLOCK-----\)/\1/' -e 's/\(-----END PGP PUBLIC KEY BLOCK-----\).*$/\1/' |
             gpg --batch --quiet --import
           for asset in bravebot-linux-amd64 bravebot-linux-arm64; do
@@ -156,6 +178,94 @@ jobs:
             fi
           done
 
+  # One job per platform, on a runner of that platform's own kind because the signature check
+  # on a macOS binary is codesign and spctl and on a Windows binary is Authenticode, neither of
+  # which runs elsewhere. Each builds its package from the GitHub release with
+  # npm/scripts/stage-platform-package.js, which refuses a checksum that does not match and a
+  # signature that is not Brave's, and publishes what that script wrote. What is published is
+  # what was verified in the same job.
+  #
+  # A package already on the registry at this version is left alone, so a dispatch after a
+  # partial failure publishes what is missing. A version cannot be published twice, and one
+  # platform being refused does not undo the others.
+  #
+  # The trusted publisher on npmjs.com keys on this repository and this filename, not on a job
+  # name, so publishing is unaffected by which job here holds the grant.
+  platform:
+    name: Publish @brave/bravebot-${{ matrix.platform }}
+    needs: release
+    if: github.repository == 'brave/bravebot'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: darwin-x64
+            runner: macos-latest
+          - platform: linux-arm64
+            runner: ubuntu-latest
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: win32-arm64
+            runner: windows-latest
+          - platform: win32-x64
+            runner: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Qualified for the reason above.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Build the package from the release
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: node npm/scripts/stage-platform-package.js "$PLATFORM" "$RUNNER_TEMP/package"
+
+      # Provenance is attached automatically for trusted publishing from a public
+      # repository. --provenance keeps that explicit. No NODE_AUTH_TOKEN: a token
+      # would hide OIDC and skip the trusted-publisher path.
+      - name: Publish
+        run: |
+          set -eu
+          name="$(node -p 'require(process.argv[1]).name' "$RUNNER_TEMP/package/package.json")"
+          version="$(node -p 'require(process.argv[1]).version' "$RUNNER_TEMP/package/package.json")"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} is already on the registry; not publishing it again"
+          else
+            npm publish "$RUNNER_TEMP/package" --access public --provenance --ignore-scripts
+          fi
+
+  # The wrapper goes last: its dependencies have to resolve when somebody installs it, and it is
+  # what `npm install -g @brave/bravebot` fetches, so nothing is announced before the binaries are.
+  publish:
+    name: Publish @brave/bravebot
+    needs: platform
+    if: github.repository == 'brave/bravebot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Qualified for the reason above, and here it is what pins the published bytes
+      # to the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
@@ -165,6 +275,6 @@ jobs:
       # Provenance is attached automatically for trusted publishing from a public
       # repository. --provenance keeps that explicit. No NODE_AUTH_TOKEN: a token
       # would hide OIDC and skip the trusted-publisher path. --ignore-scripts keeps
-      # postinstall from fetching a binary during the publish run itself.
+      # a lifecycle script from running during the publish itself.
       - name: Publish
         run: npm publish --access public --provenance --ignore-scripts

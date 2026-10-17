@@ -70,23 +70,30 @@ binaries plus the `.sha256` files written after signing. `gh release create` fai
 release already exists.
 
 After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
-`publish-npm.yml` from that tag to publish `@brave/bravebot`. Without `TAG` it takes the latest
-GitHub release rather than the version in the tree, which may already be bumped past it. The
-workflow, not the target, refuses a tag that does not match its tree or a release missing an
-asset. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted publisher on npmjs.com must
-name that workflow file. The npm `postinstall` verifies the binary against its published
-`.sha256` before writing it, and then its signature: the `.sha256` on Linux, the code signature
-on macOS and Windows. `install.sh` does the same except on Windows, which it does not install.
+`publish-npm.yml` from that tag. It publishes seven packages: `@brave/bravebot-<platform>-<arch>`
+for each of the six platforms, each holding that platform's binary, and then `@brave/bravebot`,
+which lists the six as `optionalDependencies` at its own version and holds no binary. Without
+`TAG` the target takes the latest GitHub release rather than the version in the tree, which may
+already be bumped past it. The workflow, not the target, refuses a tag that does not match its
+tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
+trusted publisher on npmjs.com must name that workflow file for each of the seven packages.
+
+Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
+platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
+then its signature: the `.sha256` on Linux, the code signature on macOS and Windows. `install.sh`
+does the same when it runs, except on Windows, which it does not install. Installing the npm
+package runs no script and checks nothing itself. A dispatch after a partial failure publishes
+the packages that are missing and skips the ones the registry already has.
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without
 secrets. Jenkins does not set it on an upload, so a missing credential fails the release
 instead of shipping a binary that cannot reach the backend.
 
-Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and the
-installers hold each to that: the Developer ID team `KL8N8XSYF4` on macOS, the signer
-`Brave Software, Inc.` on Windows. A change of certificate or team has to be made in `install.sh`
-and `npm/scripts/postinstall.js` before the first release signed by the new one is published, or
-installs of it are refused. The commands for checking a download by hand are in the quickstart.
+Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and
+`install.sh` and the platform package script hold each to that: the Developer ID team `KL8N8XSYF4`
+on macOS, the signer `Brave Software, Inc.` on Windows. A change of certificate or team has to be
+made in `install.sh` and `npm/scripts/stage-platform-package.js` before the first release signed
+by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are in the quickstart.
 
 ## The desktop application
 
