@@ -14,7 +14,6 @@ import type {
   OpenedSession,
   PermissionMode,
   SandboxMode,
-  RewoundSession,
   RunRecord,
   SettingsRules,
   SessionSummary,
@@ -33,7 +32,6 @@ import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
-import type { ExportFormat } from '../shared/export'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
@@ -41,14 +39,15 @@ import { activeBots, botProjects, type Bot } from '../shared/bots'
 import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
-import type { TurnDisclosure } from './turn-details'
-import { AuditInspector } from './components/AuditInspector'
+import { useAudit } from './use-audit'
+import { useExport } from './use-export'
+import { useRewind } from './use-rewind'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
-import { planRewind, pointForPrompt, rewindFailure } from './rewind'
+import { planRewind } from './rewind'
 import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { apply } from './apply'
@@ -116,17 +115,6 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
   }, [live?.summary.id, live?.summary.directory, live?.model])
-  /**
-   * Whether an export carries the tool calls as well as the conversation.
-   *
-   * Off to begin with, because the common reason to export a session is to show somebody
-   * what was asked and what came back. Held for the window rather than per session and not
-   * written to disk: it is answered next to the format, at the moment of exporting, and a
-   * setting remembered across launches would decide the contents of a file somebody is about
-   * to hand to another person without being on screen when they do.
-   */
-  const [includeTools, setIncludeTools] = useState(false)
-
   const [forks, setForks] = useState<Fork[]>([])
   const [bots, setBots] = useState<Bot[]>([])
 
@@ -587,26 +575,7 @@ export function App(): React.JSX.Element {
   )
 
   const { widths, collapsed, dragging, folding, start, reset, nudge, toggle } = useColumns()
-  const [audit, setAudit] = useState<{ handle: string; turn: number | null; trigger: HTMLButtonElement; wasFolded: boolean } | null>(null)
-  useEffect(() => { setAudit(null) }, [live?.handle])
-  const selectedAudit = audit?.handle === live?.handle ? audit : null
-  const openAudit = (turn: number | null, trigger: HTMLButtonElement) => {
-    if (!live) return
-    setAudit({ handle: live.handle, turn, trigger, wasFolded: selectedAudit?.wasFolded ?? collapsed.right })
-    if (collapsed.right) toggle('right')
-  }
-  const closeAudit = () => {
-    if (selectedAudit?.wasFolded && !collapsed.right) toggle('right')
-    setAudit(null)
-    // The live trigger disappears at completion; return to that turn's new footer instead.
-    const trigger = selectedAudit?.trigger.isConnected ? selectedAudit.trigger :
-      selectedAudit && selectedAudit.turn !== null ? document.querySelector<HTMLButtonElement>(`.turn-footer [data-audit-turn="${selectedAudit.turn}"]`) : null
-    trigger?.focus({ preventScroll: true })
-  }
-  const discloseTurn = (turn: number, field: TurnDisclosure, open: boolean) => {
-    if (!live) return
-    updateSession(live.handle, (old) => old?.turns[turn] ? { ...old, turns: { ...old.turns, [turn]: { ...old.turns[turn]!, [field]: open } } } : old)
-  }
+  const { selectedAudit, openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
 
   /** Which sessions in the list came out of another one, for the mark beside their names. */
   const forked = useMemo(() => forkedSessions(forks), [forks])
@@ -838,57 +807,7 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  /**
-   * The conversation, as an export would carry it.
-   *
-   * Derived rather than built at the moment somebody picks a format, because whether there
-   * is anything to export decides two things that have to agree: whether the button is grey
-   * and whether the menu item is. One list, read twice.
-   */
-  const exportable = useMemo(
-    () => (live ? t.conversation(live.entries, includeTools) : []),
-    [live, includeTools],
-  )
-
-  /**
-   * Whether there is anything worth writing to a file.
-   *
-   * Counts what was *said*, not what is in `exportable`: a session that has only made tool
-   * calls would otherwise offer an export that `parseExportRequest` then refuses, because a
-   * file of nothing but calls is not a conversation. Two places decide this and they have to
-   * agree; this is the one that greys the button, and the boundary is the one that cannot be
-   * got around.
-   */
-  const canExport = useMemo(() => exportable.some((turn) => turn.role !== 'tool'), [exportable])
-
-  /**
-   * Write the conversation to a file.
-   *
-   * The turns go over structured and the main process composes the document — see
-   * `shared/export.ts`. A saved file is confirmed in a toast that names where it went; a failure
-   * goes to the problem toast where every other recoverable failure in this component goes.
-   */
-  const exportSession = useCallback(
-    async (format: ExportFormat) => {
-      if (!live || !canExport) return
-      const outcome = await window.bravebot.exportSession({
-        format,
-        document: {
-          title: live.summary.title,
-          directory: live.summary.directory,
-          branch: live.summary.branch,
-          turns: exportable,
-        },
-      })
-      if (outcome.status === 'saved') {
-        showToast('Exported', `Saved to ${outcome.where}`)
-      } else if (outcome.status === 'failed') {
-        setProblem(`Could not export that: ${outcome.message}`)
-      }
-      // A cancelled sheet says nothing. Somebody changed their mind, which is not news.
-    },
-    [live, canExport, exportable],
-  )
+  const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
     reset('left')
@@ -1030,63 +949,7 @@ export function App(): React.JSX.Element {
     [live, refresh, readForks],
   )
 
-  /**
-   * Which rewind is waiting on its confirmation, for which session.
-   *
-   * The handle is kept so a dialog asked about one session is never answered against another.
-   */
-  const [rewinding, setRewinding] = useState<{ handle: string; steps: number; busy: boolean } | null>(null)
-  const askRewind = useCallback((steps: number) => {
-    const current = liveRef.current
-    if (!current || current.running || !current.rewind?.some((point) => point.steps === steps)) return
-    setRewinding({ handle: current.handle, steps, busy: false })
-  }, [])
-  const rewindEntry = useCallback((id: string) => {
-    const entry = liveRef.current?.entries.find((candidate) => candidate.id === id)
-    const point = entry?.kind === 'user' ? pointForPrompt(liveRef.current?.rewind ?? [], entry.prompt) : null
-    if (point) askRewind(point.steps)
-  }, [askRewind])
-
-  /**
-   * Put the session back and draw it again from what the agent says it now holds.
-   *
-   * Redrawn rather than patched, as opening a saved session is: what is on screen afterwards is
-   * what the next turn will be working from.
-   */
-  const confirmRewind = useCallback(async () => {
-    if (!rewinding || rewinding.busy) return
-    const { handle, steps } = rewinding
-    setRewinding({ ...rewinding, busy: true })
-    try {
-      const rewound = await call<RewoundSession>('session.rewind', { session: handle, steps })
-      updateSession(handle, (old) => old ? {
-        ...old,
-        entries: t.fromSaid(rewound.said),
-        turns: Object.fromEntries(Object.entries(old.turns).filter(([turn]) => Number(turn) < rewound.turn)),
-        todos: Object.values(rewound.todos).flat(),
-        contextTokens: rewound.contextTokens,
-        archived: rewound.archived,
-        rewind: rewound.rewind,
-        awaitingOrdinal: null,
-        focus: null,
-        // Held, so the prompt going back in the composer is not overtaken by one queued before it.
-        queuePaused: old.queued?.length ? true : old.queuePaused,
-        // The turn that carried the briefing may be one of those undone.
-        bot: old.bot ? { ...old.bot, grounded: false } : null,
-      } : old)
-      const draftNow = liveRef.current?.handle === handle ? draft : ''
-      setDraft(rewound.text + (draftNow.trim() ? `\n\n${draftNow}` : ''))
-      showToast(`Back to before turn ${rewound.turn}`)
-      setProblem(rewound.refused.length
-        ? `These files still hold what the undone turns wrote, so check them before going on: ${rewound.refused.join(', ')}`
-        : null)
-      void refresh()
-    } catch (error) {
-      setProblem(rewindFailure(error))
-    } finally {
-      setRewinding(null)
-    }
-  }, [rewinding, draft, setDraft, updateSession, refresh])
+  const { rewinding, askRewind, rewindEntry, confirmRewind, cancel: cancelRewind } = useRewind({ liveRef, updateSession, refresh, draft, setDraft, setProblem })
 
   /** Show the session this one was cut out of, at the point of the cut. */
   const openParent = useCallback(() => {
@@ -1216,7 +1079,7 @@ export function App(): React.JSX.Element {
     rewindEntry,
     undoTurn: () => { const newest = live?.rewind?.[0]; if (newest) askRewind(newest.steps) },
     exportSession: (format) => void exportSession(format),
-    toggleExportTools: () => setIncludeTools((on) => !on),
+    toggleExportTools: toggleTools,
     theme: () => openSettingsPage('general'),
   })
 
@@ -1243,12 +1106,7 @@ export function App(): React.JSX.Element {
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
-  const stableCloseAudit = useEvent(closeAudit)
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
-  const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
-  const auditPanel = useMemo(() => selectedAudit
-    ? <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={auditTurn} onClose={stableCloseAudit} />
-    : null, [selectedAudit, auditTurn, stableCloseAudit])
 
   // A bot's own page, while no conversation is open over it.
   const viewedBot = !live && !reading && botView ? bots.find((each) => each.slug === botView && each.retired === 0) ?? null : null
@@ -1385,7 +1243,7 @@ export function App(): React.JSX.Element {
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}
-        onToggleTools={() => setIncludeTools((on) => !on)}
+        onToggleTools={toggleTools}
         onExport={(format) => void exportSession(format)}
         // Followed but never raised here: the banner says a kept answer settled this session, and
         // one another session kept since did not.
@@ -1438,7 +1296,7 @@ export function App(): React.JSX.Element {
       {rewinding && live?.handle === rewinding.handle && (() => {
         const plan = planRewind(live.rewind ?? [], rewinding.steps)
         return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}
-          onCancel={() => setRewinding(null)} onConfirm={() => void confirmRewind()} />
+          onCancel={cancelRewind} onConfirm={() => void confirmRewind()} />
       })()}
       {live?.askingTrust && (
         <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
