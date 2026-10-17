@@ -408,7 +408,7 @@ arguments and environment through `sysctl(KERN_PROCARGS2)`. It allows only named
 sysctls and denies `process-info*`, with a `process-info-pidinfo` exception for the process itself
 because system tools need that query during startup. Both restrictions are required: either a broad
 `sysctl-read` grant or the default process-info access permits the environment read. CPU count,
-page size, the fields of `uname` and the longest argument list a program may be given
+page size, the physical memory size (`hw.memsize`, which `sort` reads), the fields of `uname` and the longest argument list a program may be given
 (`kern.argmax`, which `xargs`, `find -exec {} +` and `getconf ARG_MAX` read) remain readable for
 ordinary tools ([SANDBOX-21](#SANDBOX-21)). The argument-list limit is one system-wide number and
 holds nothing about any process. This protects against confined stages, including a child given an
@@ -1792,7 +1792,7 @@ A suite runs the everyday workflows under the confinement a `run` stage is given
 add, commit, branch, merge, stash, rebase, worktree, a commit hook, and push, clone, fetch and pull
 against a local remote), `gh`, a wrapper script that starts `git` and `make`, `make`, `cargo`
 (check, build, run, test, and a build script), `npm` and `node`, `python3`, `go`, `find`, `xargs`
-and `find -exec {} +` passing a list of files to one program, `grep`, `sed`, `awk`, `diff` and
+and `find -exec {} +` passing a list of files to one program, `sort` and `uniq` counting lines, `grep`, `sed`, `awk`, `diff` and
 `patch`, and `vim` and `less`. A workflow works when every stage exits zero.
 The home holds a credential of each kind and has the cache directories of an account that has used
 each toolchain, so a first run on an account that never ran the tool is not what is measured
