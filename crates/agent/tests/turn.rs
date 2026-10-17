@@ -29626,6 +29626,45 @@ fn a_second_refusal_is_reported_and_compacts_nothing_more() {
     assert_eq!(summaries, 1, "a second refusal compacted again");
 }
 
+/// COMPACT-14: a summariser that failed earlier in the turn is not tried again for a refusal either.
+/// The first summary is the budget's and comes back empty, so it fails; the request the planner is
+/// then refused on would be answered with a second summary but for that failure.
+#[test]
+fn a_refusal_after_a_failed_summary_is_reported_without_asking_for_another() {
+    let scratch = Scratch::new("compact-after-refusal-after-failure");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(reply_with("")),
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with("a second summary nobody should ask for")),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect_err("the refusal is reported");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert_eq!(
+        summaries, 1,
+        "a summariser that had failed was asked again: {bodies:#?}"
+    );
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+}
+
 /// A conversation with nothing COMPACT-5 would cut has nothing to give, so the refusal is reported
 /// as it was and no summariser is asked.
 #[test]
