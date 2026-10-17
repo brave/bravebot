@@ -10464,6 +10464,94 @@ fn read_git_opens_no_repository_whose_name_is_not_text() {
     );
 }
 
+/// Keeps two checkouts, `c1` and `c2`, each naming `README` as a candidate, and then removes the
+/// directory of the first by hand. Returns the workspaces they were made for.
+fn keep_two_checkouts_and_remove_the_first_by_hand(
+    workspace: &Workspace,
+    policy: &Policy<'_, RecordingSink>,
+    state: &std::path::Path,
+) -> Vec<Workspace> {
+    use bravebot_agent::workspace::Retired;
+    let authority = policy.file_authority();
+    let made: Vec<Workspace> = (0..2)
+        .map(|_| {
+            let made = workspace
+                .checkout_for(policy, state, d1())
+                .expect("a checkout");
+            let info = made.checkout().unwrap();
+            info.record_typed("README");
+            assert_eq!(info.retire(&authority), Retired::Kept);
+            made
+        })
+        .collect();
+    std::fs::remove_dir_all(made[0].root()).unwrap();
+    made
+}
+
+/// CHECKOUT-15. A kept checkout whose directory was removed by hand is not removed again by its
+/// number: the session no longer keeps it, as for a number it never had. The checkout beside it is
+/// still removed by its own.
+#[test]
+fn a_checkout_removed_by_hand_is_not_removed_again_by_its_number() {
+    use bravebot_agent::workspace::Unremoved;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+    let mut trust = policy.file_authority().snapshot();
+
+    assert_eq!(
+        workspace.remove_session_checkout("c1", &mut trust),
+        Err(Unremoved::NoSuch)
+    );
+    workspace
+        .remove_session_checkout("c2", &mut trust)
+        .expect("the checkout beside it was not removed by its own number");
+    assert!(!made[1].root().exists(), "the directory was left");
+}
+
+/// CHECKOUT-14. A file of a kept checkout whose directory was removed by hand is refused as a
+/// checkout the session does not keep, not as a file missing from one. The checkout beside it still
+/// reads.
+#[test]
+fn a_file_of_a_checkout_removed_by_hand_is_refused_as_no_such_checkout() {
+    use bravebot_agent::workspace::CheckoutRead;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed-read", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+
+    let read = |id: &str| workspace.read_checkout_file(&policy, id, "README", &Default::default());
+    assert_eq!(read("c1").unwrap_err(), CheckoutRead::NoSuchCheckout);
+    assert!(
+        read("c2").is_ok(),
+        "the checkout beside it was not read by its own number"
+    );
+}
+
+/// CHECKOUT-13. The status over a kept checkout whose directory was removed by hand is declined as
+/// no repository, as for a number the session never had. The checkout beside it has a status.
+#[test]
+fn the_status_of_a_checkout_removed_by_hand_is_declined_as_no_repository() {
+    use bravebot_agent::git::Declined;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed-status", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+    made[1].checkout().unwrap().mark_worked_in();
+
+    assert_eq!(
+        workspace.checkout_status(&mut policy, "c1").unwrap_err(),
+        Declined::NoRepository
+    );
+    workspace
+        .checkout_status(&mut policy, "c2")
+        .expect("the checkout beside it had no status");
+}
+
 /// CHECKOUT-13. The status over a session's checkout lists the files a program wrote there, which
 /// no tool recorded, and the ones it deleted apart from the rest, without reading `<checkout>/.git`.
 #[test]

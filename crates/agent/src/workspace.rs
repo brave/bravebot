@@ -4962,6 +4962,18 @@ impl Workspace {
         listed(&self.session_checkouts)
     }
 
+    /// The checkout the session keeps under `id` whose directory is still there. Where
+    /// [`Workspace::session_checkouts`] lists them all, this finds one by its number.
+    ///
+    /// [`Workspace::written_since_checkout`] does not use it: a write recorded after a checkout
+    /// was made is still a write once its directory has been removed by hand.
+    fn session_checkout(&self, id: &str) -> Option<Made> {
+        locked(&self.session_checkouts)
+            .iter()
+            .find(|made| made.id == id && made.path.exists())
+            .cloned()
+    }
+
     /// Remove the session's checkout `id`, one [`Workspace::session_checkouts`] lists, and take
     /// its rules out of `trust` the way a delegate's ending does (CHECKOUT-15).
     ///
@@ -4975,11 +4987,7 @@ impl Workspace {
         id: &str,
         trust: &mut bravebot_core::trust::TrustStore,
     ) -> Result<(), Unremoved> {
-        let made = locked(&self.session_checkouts)
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
-            .ok_or(Unremoved::NoSuch)?;
+        let made = self.session_checkout(id).ok_or(Unremoved::NoSuch)?;
         if std::iter::once(self.root.clone())
             .chain(self.added_directories())
             .any(|open| open.starts_with(&made.path))
@@ -5026,11 +5034,7 @@ impl Workspace {
         id: &str,
     ) -> Result<crate::git::Listing, crate::git::Declined> {
         use crate::git::Declined;
-        let made = locked(&self.session_checkouts)
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
-            .ok_or(Declined::NoRepository)?;
+        let made = self.session_checkout(id).ok_or(Declined::NoRepository)?;
         let root = made.path.to_string_lossy().into_owned();
         let tree_key = self.trust_key(&root);
         policy.capture_files(|policy, _capture| {
@@ -5099,10 +5103,8 @@ impl Workspace {
         relative: &str,
         listed: &std::collections::BTreeSet<String>,
     ) -> Result<Labelled<String>, CheckoutRead> {
-        let made = locked(&self.session_checkouts)
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
+        let made = self
+            .session_checkout(id)
             .ok_or(CheckoutRead::NoSuchCheckout)?;
         let candidate =
             locked(&made.record.written).named.contains(relative) || listed.contains(relative);
@@ -6426,6 +6428,80 @@ mod tests {
         assert_eq!(volume_folds_case(&root), folds);
         assert_eq!(trust_store(&root).folds_case(), folds);
         assert!(!trust_store(&root.join("does-not-exist")).folds_case());
+    }
+
+    /// Lists a checkout under `id` as kept at `path`, which need not exist.
+    fn keep_checkout(workspace: &Workspace, id: &str, path: PathBuf) {
+        locked(&workspace.session_checkouts).push(Made {
+            id: id.to_string(),
+            path,
+            key: String::new(),
+            commit: String::new(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            git_dir: workspace.root.join(".git"),
+            record: Arc::default(),
+            after: 0,
+            _claim: None,
+        });
+    }
+
+    /// CHECKOUT-15, CHECKOUT-21. Removing, reading and the status over a checkout name it by number,
+    /// so the number has to match whole and the directory has to be there: `c1` is not `c10`, and
+    /// one removed by hand is not one the session still keeps.
+    #[test]
+    fn a_kept_checkout_is_found_by_its_whole_number_and_only_while_its_directory_is_there() {
+        let root = crate::testutil::scratch_dir("session-checkout-lookup");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c10"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+        }
+        for id in ["c1", "c10", "c2"] {
+            keep_checkout(&workspace, id, root.join(id));
+        }
+
+        let found = |id: &str| workspace.session_checkout(id).map(|made| made.id);
+        assert_eq!(found("c1").as_deref(), Some("c1"));
+        assert_eq!(found("c10").as_deref(), Some("c10"));
+        assert_eq!(
+            found("c"),
+            None,
+            "a number that starts the others was found"
+        );
+        assert_eq!(found("c100"), None, "a number the others start was found");
+        assert_eq!(found("c2"), None, "a checkout with no directory was found");
+
+        std::fs::remove_dir(root.join("c1")).unwrap();
+        assert_eq!(found("c1"), None, "a checkout removed by hand was found");
+        assert_eq!(found("c10").as_deref(), Some("c10"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// CHECKOUT-14. Whether a file was written since a checkout was made is the driver's own
+    /// record of writes and does not read the checkout's directory, so it answers the same once
+    /// the directory has been removed by hand. Only a checkout the session keeps answers at all.
+    #[test]
+    fn a_write_since_a_checkout_still_counts_once_its_directory_is_removed_by_hand() {
+        let root = crate::testutil::scratch_dir("written-since-removed-checkout");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        keep_checkout(&workspace, "c1", root.join("never-made"));
+        assert!(workspace.session_checkout("c1").is_none());
+
+        assert!(!workspace.written_since_checkout("c1", "README"));
+        workspace.record_write(Some("README"));
+        assert!(
+            workspace.written_since_checkout("c1", "README"),
+            "a write after the checkout was made stopped counting with its directory"
+        );
+        assert!(!workspace.written_since_checkout("c1", "other.txt"));
+        assert!(
+            !workspace.written_since_checkout("c2", "README"),
+            "a checkout the session does not keep reported a write"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
