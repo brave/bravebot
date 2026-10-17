@@ -40,6 +40,33 @@ fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The checks a directory name a person typed has to pass before anything is asked about where it
+/// sits: absolute, resolvable, and a directory, reported in that order. It reads only the name and
+/// file system metadata and assigns no label. The caller's own earlier and later checks stay with
+/// the caller, since their order decides which error a name that fails several reports.
+fn existing_directory(directory: &str) -> Result<PathBuf, WorkspaceError> {
+    let candidate = Path::new(directory);
+    if !candidate.is_absolute() {
+        return Err(WorkspaceError::Invalid {
+            path: directory.to_string(),
+            reason: "must be an absolute path",
+        });
+    }
+
+    let canonical = candidate.canonicalize().map_err(|e| WorkspaceError::Io {
+        path: directory.to_string(),
+        detail: e.to_string(),
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(WorkspaceError::Invalid {
+            path: directory.to_string(),
+            reason: "must be a directory",
+        });
+    }
+    Ok(canonical)
+}
+
 #[path = "../../ui-files/src/names.rs"]
 mod names;
 
@@ -1537,25 +1564,7 @@ impl Workspace {
                          tools inside the workspace",
             });
         }
-        let candidate = Path::new(directory);
-        if !candidate.is_absolute() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be an absolute path",
-            });
-        }
-
-        let canonical = candidate.canonicalize().map_err(|e| WorkspaceError::Io {
-            path: directory.to_string(),
-            detail: e.to_string(),
-        })?;
-
-        if !canonical.is_dir() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be a directory",
-            });
-        }
+        let canonical = existing_directory(directory)?;
 
         if canonical.starts_with(&self.root) {
             return Err(WorkspaceError::Invalid {
@@ -1814,25 +1823,7 @@ impl Workspace {
         if !kept.is_empty() {
             return Err(WorkspaceError::KeepsCheckouts { ids: kept });
         }
-        let candidate = Path::new(directory);
-        if !candidate.is_absolute() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be an absolute path",
-            });
-        }
-
-        let canonical = candidate.canonicalize().map_err(|e| WorkspaceError::Io {
-            path: directory.to_string(),
-            detail: e.to_string(),
-        })?;
-
-        if !canonical.is_dir() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be a directory",
-            });
-        }
+        let canonical = existing_directory(directory)?;
 
         if canonical == self.root {
             return Err(WorkspaceError::Invalid {

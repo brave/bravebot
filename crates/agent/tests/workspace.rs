@@ -5356,6 +5356,44 @@ fn moving_to_something_that_is_not_a_directory_is_refused() {
     assert_eq!(workspace.root(), root, "a refused move moved the workspace");
 }
 
+/// Naming a directory to open and naming one to move to are refused for the same three reasons,
+/// in the same words, with the name as the person typed it. A fault in the checks they share
+/// shows in one of them or the other, so each reason is asked of both.
+#[test]
+fn opening_and_moving_to_a_directory_refuse_a_bad_name_the_same_way() {
+    let scratch = Scratch::new("directory-name-refusals");
+    std::fs::write(scratch.path.join("notes.md"), "a note").unwrap();
+    let outside = Scratch::new("directory-name-refusals-outside");
+    std::fs::write(outside.path.join("notes.md"), "a note").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let file = outside.path.join("notes.md").to_str().unwrap().to_string();
+    let missing = outside.path.join("nowhere").to_str().unwrap().to_string();
+
+    let refused = |error: WorkspaceError, name: &str, reason: &str, caller: &str| {
+        assert!(
+            matches!(&error, WorkspaceError::Invalid { path, reason: r } if path == name && *r == reason),
+            "{caller}({name}): {error:?}"
+        );
+    };
+    for (name, reason) in [
+        ("relative/dir", "must be an absolute path"),
+        (file.as_str(), "must be a directory"),
+    ] {
+        let opened = workspace.resolve_directory(name).expect_err(name);
+        refused(opened, name, reason, "resolve_directory");
+        let moved = workspace.change_root(name).expect_err(name);
+        refused(moved, name, reason, "change_root");
+    }
+    let opened = workspace.resolve_directory(&missing).expect_err("missing");
+    let moved = workspace.change_root(&missing).expect_err("missing");
+    for error in [opened, moved] {
+        assert!(
+            matches!(&error, WorkspaceError::Io { path, .. } if *path == missing),
+            "{error:?}"
+        );
+    }
+}
+
 /// A tree is the expensive thing to put in a context, and most questions about a project are
 /// answered by its shape. Without a bound the only listing on offer is every file at every
 /// depth, which in a real repository is thousands of paths in the planner and in every delegate
