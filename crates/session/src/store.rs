@@ -103,6 +103,9 @@ fn now() -> u64 {
 /// The history file inside the global state directory.
 const HISTORY_FILE: &str = "history";
 
+/// Held while the history file is appended to or replaced.
+const HISTORY_LOCK_FILE: &str = "history.lock";
+
 /// The chosen model, one line, inside the global state directory.
 const MODEL_FILE: &str = "model";
 
@@ -289,19 +292,62 @@ pub fn append_history(entry: &Entry) {
     }
 
     let line = format!("{}\n", encode(entry));
+    // Held so a removal that is rewriting the file cannot rename over this line. An append that
+    // cannot take the lock is still written, since losing one prompt here is worse than racing.
+    let _lock = lock_history(&dir);
     let _ = bravebot_agent::home::append_to_file(&dir.join(HISTORY_FILE))
         .and_then(|mut file| file.write_all(line.as_bytes()));
 }
 
+/// Hold the history file's lock until the returned handle is dropped.
+fn lock_history(dir: &std::path::Path) -> Option<std::fs::File> {
+    let file = bravebot_agent::home::append_to_file(&dir.join(HISTORY_LOCK_FILE)).ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
+
+/// Remove the one stored line that is `entry`, leaving every other stored prompt in place.
+///
+/// For a cancelled prompt. The stored file is read again under the lock rather than replaced with
+/// this session's list, because other sessions have appended to it since this one loaded it. The
+/// newest matching line is the one removed, which is the one this session wrote. Nothing is
+/// written when no line matches.
+pub fn remove_history_entry(entry: &Entry) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    let Some(_lock) = lock_history(&dir) else {
+        return;
+    };
+    let path = dir.join(HISTORY_FILE);
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let mut entries = parse_history(&contents);
+    let Some(at) = entries.iter().rposition(|stored| stored == entry) else {
+        return;
+    };
+    entries.remove(at);
+    write_history(&dir, &entries);
+}
+
 /// Rewrite the file with exactly these entries.
 ///
-/// Used to drop a cancelled prompt and to enforce the cap. Written to a temporary file and
-/// renamed so an interrupted write cannot leave a half-truncated history.
+/// Replaces whatever is stored, so a caller that holds only what it loaded at the start would take
+/// away what other sessions added since. A cancelled prompt is removed with
+/// [`remove_history_entry`]. Written to a temporary file and renamed so an interrupted write
+/// cannot leave a half-truncated history.
 pub fn save_history(entries: &[Entry]) {
     let Some(dir) = writable() else {
         return;
     };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
+    let _lock = lock_history(&dir);
+    write_history(&dir, entries);
+}
+
+/// Write the entries within the cap. The caller holds the lock.
+fn write_history(dir: &std::path::Path, entries: &[Entry]) {
+    if bravebot_agent::home::create_directory(dir).is_err() {
         return;
     }
 

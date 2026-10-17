@@ -4497,6 +4497,38 @@ mod preserved_history {
             ["earlier prompt", "prompt from a second session"]
         );
     }
+
+    /// A cancellation that does remove an entry must take only that line, because a second
+    /// session has been appending to the file since this one loaded it.
+    #[test]
+    fn cancelling_a_submitted_prompt_keeps_what_another_session_recorded() {
+        let _scratch = Scratch::new("submitted-recall-elsewhere");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "earlier prompt");
+        session.complete("done", vec![], 0);
+        bravebot_session::store::append_history(&bravebot_session::store::Entry::sent(
+            "prompt from a second session",
+            None,
+        ));
+        submit(&mut session, "cancelled prompt");
+        bravebot_session::store::append_history(&bravebot_session::store::Entry::sent(
+            "later prompt from a second session",
+            None,
+        ));
+        session.stopped(Some(0));
+        session.restore("cancelled prompt");
+        assert_eq!(
+            bravebot_session::store::load_history()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "earlier prompt",
+                "prompt from a second session",
+                "later prompt from a second session"
+            ]
+        );
+    }
 }
 
 /// Live manifests charge the continuing session once; stopping creates no separate record.
