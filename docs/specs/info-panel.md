@@ -13,8 +13,8 @@ documented-by: docs/website/docs/using/sessions.md
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
 issue and pull request it is for, the model and effort it runs on, its context and cache, its token
-total, the language servers and MCP servers it has started, and its plan. Giving a session its links with `--issue` and `--pr`, from a URL in a
-prompt, and from what `gh pr create` prints are proposed in
+total, the language servers and MCP servers it has started, and its plan. Giving a session its links from a URL in a
+prompt, and from what `gh pr create` prints, are proposed in
 [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
@@ -236,7 +236,7 @@ last row counts the rows left out above the ones shown apart from those below th
 
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
-with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
+with `/issue` and `/pr`, or `--issue` and `--pr`), the planner's own `todo_write` rows, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
@@ -261,6 +261,15 @@ not the other. Each change is written to the session record at once, as a rename
 ([SESSION-3](sessions.md#SESSION-3)), and gives up no rewind point, since no point holds a link.
 Typed while a turn runs, they are carried out as `/rename` is ([CMD-8](commands.md#CMD-8)).
 
+`--issue <url>` and `--pr <url>` give the session a command line opens the same links, under the
+same check, and so does only that session: not one `/resume` switches to. They are taken out of the
+line wherever they stand, each of a kind may be given twice and the last is used, and a value that
+fails the check, or none, stops the line before the session opens with [the status for an argument](cli.md),
+in a sentence that does not repeat it. A link the flag gives replaces the one a resumed
+record held and is written to the record as `/issue` is; a link it does not give is left as it was.
+A line that opens no interactive session (a one-shot run, `--plain`, `--bg`, or a command that
+starts none) is refused with them rather than dropping them.
+
 The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
 set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
 since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
@@ -272,6 +281,10 @@ not a link. A new link reaches an open panel on the next frame.
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
+`verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
+`verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
+`verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
 `verified-by: bravebot_session::sessions::only_one_web_address_on_one_line_is_a_link`
 `verified-by: bravebot_tui::panel::the_links_section_has_a_row_for_each_link_that_is_set`
 `verified-by: bravebot_tui::panel::a_long_link_keeps_its_end`

@@ -155,6 +155,8 @@ cli-option-log-level =
     How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
     Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-issue = Give the session it opens this issue link, as /issue does
+cli-option-pr = Give the session it opens this pull request link, as /pr does
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
 cli-option-append-system-prompt =
@@ -315,6 +317,12 @@ cli-directory-unknown = cannot tell which directory this is
 cli-no-such-session = no session { $id } in this directory
 cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
+cli-issue-needs-a-link = --issue requires one http or https address
+cli-pr-needs-a-link = --pr requires one http or https address
+# Said where --issue or --pr is given to a line that opens no interactive session: a task, a session
+# in lines, a background session, or a command that starts none.
+cli-links-need-a-session =
+    --issue and --pr give the session they open its links, and this command line opens no interactive session
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
 cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
 # Said where something other than --model or --effort follows the prompt of -i. The session it opens
