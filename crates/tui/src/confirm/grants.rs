@@ -14,7 +14,7 @@ use crate::theme;
 
 use super::chrome::{answer_keys, centred, indented, panel, yes_and_no};
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Response, Step, answer_for, ask_scrolled};
+use super::{Answer, Response, answer_for, ask_plain};
 
 /// Interpret one key press at the plan prompt, or `None` for a key that answers nothing there.
 ///
@@ -22,7 +22,7 @@ use super::{Answer, Response, Step, answer_for, ask_scrolled};
 /// moment at which Escape means "leave this one effect": a step later the same key cancels the run,
 /// and a person pressing it at the plan asked for the same thing (MANIFEST-11). Every other key is
 /// read as at any other prompt.
-pub(super) fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+pub(super) fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response<Answer>> {
     match key.code {
         KeyCode::Esc if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             drawn.take(Some(Response::Answer(Answer::Interrupt)))
@@ -33,11 +33,10 @@ pub(super) fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Respon
 
 /// Ask whether to fetch a URL, blocking until answered.
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_fetch(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -114,11 +113,10 @@ pub(super) fn draw_fetch(
 
 /// Ask whether programs may reach one more path for the session, blocking until answered.
 pub fn ask_path<B: Backend>(terminal: &mut Terminal<B>, request: &PathRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_path(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -163,11 +161,10 @@ pub(super) fn draw_path(
 /// Ask whether programs may reach hosts the allowed-hosts list does not cover, for the session,
 /// blocking until answered.
 pub fn ask_host<B: Backend>(terminal: &mut Terminal<B>, request: &HostRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_host(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -215,11 +212,10 @@ pub fn ask_remove_checkout<B: Backend>(
     terminal: &mut Terminal<B>,
     checkout: &bravebot_agent::workspace::SessionCheckout,
 ) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_remove_checkout(frame, checkout, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -297,13 +293,13 @@ pub(super) fn draw_remove_checkout(
 /// leaves the machine; what a yes agrees to is that the file's text goes into a model's context,
 /// and so to whoever performs inference. CRED-15 is where that is settled.
 pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRequest) -> Answer {
-    // A terminal that cannot be drawn to cannot show what was found, and sending a credential
-    // to a model nobody warned anybody about is the one thing this question cannot mean.
-    ask_scrolled(
+    // `ask_plain` refuses a terminal that cannot be drawn to. That one cannot show what was found,
+    // and sending a credential to a model nobody warned anybody about is the one thing this
+    // question cannot mean.
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_exposure(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -377,15 +373,14 @@ pub(super) fn draw_exposure(
 /// again and nothing a step reads can add to it: what is on the screen is the whole of what will
 /// happen. MANIFEST-10 is where that is settled.
 pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRequest) -> Answer {
-    // A terminal that cannot be drawn to cannot show the plan, and running a program nobody was
-    // shown is the one thing this question cannot mean.
-    ask_scrolled(
+    // `ask_plain` refuses a terminal that cannot be drawn to. That one cannot show the plan, and
+    // running a program nobody was shown is the one thing this question cannot mean.
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_manifest(frame, request, scroll, seen),
         // Scrolls as well as answers: a plan longer than the box is the one most worth reading
         // before answering, since approving it approves the steps below the fold as well.
-        |key, drawn| manifest_answer_for(key, drawn).map(Step::from),
+        manifest_answer_for,
     )
 }
 

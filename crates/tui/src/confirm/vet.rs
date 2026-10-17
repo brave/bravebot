@@ -18,7 +18,9 @@ use super::chrome::{
     answer_keys, approving, centred, indented, panel, refusing, stopping, verdict_rows,
 };
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Next, Step, answer_for, ask_scrolled, next_press};
+use super::{
+    Answer, Approves, Next, Response, Step, answer_for, ask_plain, ask_scrolled, next_press,
+};
 
 /// Draw the prompt for reading a command's output and wait for an answer.
 ///
@@ -213,30 +215,11 @@ impl VetAnswer {
     }
 }
 
-/// What a key press did at a vetting prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum VetResponse {
-    Answer(VetAnswer),
-    Scroll(i16),
-}
-
-impl pinned::Approving for VetResponse {
+impl Approves for VetAnswer {
     fn approves(&self) -> bool {
         match self {
-            VetResponse::Answer(answer) => match answer {
-                VetAnswer::Approve | VetAnswer::ApproveAlways => true,
-                VetAnswer::Reject | VetAnswer::Interrupt => false,
-            },
-            VetResponse::Scroll(_) => false,
-        }
-    }
-}
-
-impl From<VetResponse> for Step<VetAnswer> {
-    fn from(response: VetResponse) -> Self {
-        match response {
-            VetResponse::Answer(answer) => Step::Answer(answer),
-            VetResponse::Scroll(by) => Step::Scroll(by),
+            VetAnswer::Approve | VetAnswer::ApproveAlways => true,
+            VetAnswer::Reject | VetAnswer::Interrupt => false,
         }
     }
 }
@@ -246,7 +229,7 @@ pub(super) fn vet_answer_for(
     key: KeyEvent,
     request: &VetRequest,
     drawn: &Drawn,
-) -> Option<VetResponse> {
+) -> Option<Response<VetAnswer>> {
     vetting_answer_for(key, request.verdict, drawn)
 }
 
@@ -255,7 +238,7 @@ pub(super) fn output_answer_for(
     key: KeyEvent,
     request: &OutputRequest,
     drawn: &Drawn,
-) -> Option<VetResponse> {
+) -> Option<Response<VetAnswer>> {
     vetting_answer_for(key, request.verdict, drawn)
 }
 
@@ -273,29 +256,33 @@ pub(super) fn output_answer_for(
 /// One function for both prompts because they ask the same question of the same person about the
 /// same kind of grant, and the standing answer is the same answer. Two copies of this would be two
 /// places for the set of bound keys to drift apart.
-fn vetting_answer_for(key: KeyEvent, verdict: Verdict, drawn: &Drawn) -> Option<VetResponse> {
+fn vetting_answer_for(
+    key: KeyEvent,
+    verdict: Verdict,
+    drawn: &Drawn,
+) -> Option<Response<VetAnswer>> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
-            KeyCode::Char('c') => Some(VetResponse::Answer(VetAnswer::Interrupt)),
+            KeyCode::Char('c') => Some(Response::Answer(VetAnswer::Interrupt)),
             _ => None,
         };
     }
 
     let page = drawn.page();
     drawn.take(match key.code {
-        KeyCode::Char('y' | 'Y') => Some(VetResponse::Answer(VetAnswer::Approve)),
+        KeyCode::Char('y' | 'Y') => Some(Response::Answer(VetAnswer::Approve)),
         KeyCode::Char('a' | 'A') if verdict.is_safe() => {
-            Some(VetResponse::Answer(VetAnswer::ApproveAlways))
+            Some(Response::Answer(VetAnswer::ApproveAlways))
         }
-        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(VetResponse::Answer(VetAnswer::Reject)),
-        KeyCode::Up | KeyCode::Char('k') => Some(VetResponse::Scroll(-1)),
-        KeyCode::Down | KeyCode::Char('j') => Some(VetResponse::Scroll(1)),
-        KeyCode::PageUp => Some(VetResponse::Scroll(-page)),
-        KeyCode::PageDown => Some(VetResponse::Scroll(page)),
-        KeyCode::Home => Some(VetResponse::Scroll(i16::MIN)),
-        KeyCode::End => Some(VetResponse::Scroll(i16::MAX)),
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(Response::Answer(VetAnswer::Reject)),
+        KeyCode::Up | KeyCode::Char('k') => Some(Response::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(Response::Scroll(1)),
+        KeyCode::PageUp => Some(Response::Scroll(-page)),
+        KeyCode::PageDown => Some(Response::Scroll(page)),
+        KeyCode::Home => Some(Response::Scroll(i16::MIN)),
+        KeyCode::End => Some(Response::Scroll(i16::MAX)),
         // Enter is deliberately not an approval: it is the key most likely to be pressed out of
         // habit, and this prompt puts bytes nobody vouched for into the planner's context.
         _ => None,
@@ -340,8 +327,8 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             Next::Skip => continue,
             Next::Lost => return VetAnswer::Reject,
             Next::Press(key) => match vet_answer_for(key, request, &drawn) {
-                Some(VetResponse::Answer(answer)) => return answer,
-                Some(VetResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 None => continue,
             },
         }
@@ -604,11 +591,10 @@ pub(super) fn draw_vet(
 
 /// Draw the offer to vouch for a quarantined file, and wait for an answer.
 pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_vouch(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
