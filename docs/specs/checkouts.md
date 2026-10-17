@@ -11,6 +11,7 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/checkouts.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
