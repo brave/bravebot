@@ -364,7 +364,7 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
 
 // The events the agent sends, folded by the window's own reducer, read by the word both places draw.
 function liveSession() {
-  const { apply } = load('src/renderer/App.tsx')
+  const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
     live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
@@ -643,4 +643,49 @@ test('a draft moves to the record id once the session has one, and only then', (
     promoteDraft(old, old)
     assert.deepEqual(written, [], 'a session that already had an id, or still has none, moves nothing')
   } finally { delete globalThis.window }
+})
+
+test('the sidebar lists sessions from the record, the open windows and unsent drafts, and says which ask something', () => {
+  const { listSessions, NO_PROJECT } = load('src/renderer/session-list.ts')
+  const key = (directory, id) => JSON.stringify([directory, id])
+  const summary = (id, directory = '/p') => ({ id, directory, title: id, project: 'p', branch: 'main', updated: 1, bytes: 5 })
+  const bot = { slug: 'review', name: 'Review', avatar: 'a', home: '/home/review', conversations: [{ id: 'bot-chat', directory: '/p' }] }
+  const open = (id, over = {}) => ({ handle: `h-${id}`, summary: { ...summary(id), title: 'Renamed' }, entries: [], running: false, bot: null, ...over })
+  const asking = { kind: 'ask', id: 'q', request: { request: 1 }, answers: null }
+  const list = (over = {}) => listSessions({ sessions: [], opened: [], conversations: {}, bots: [], now: 600, currentKey: '', ...over })
+
+  // A bot's home folder is not a project.
+  const homed = list({ sessions: [summary('in-home', '/home/review'), summary('in-project')], bots: [bot] }).ownSessions
+  assert.equal(homed[0].project, NO_PROJECT)
+  assert.equal(homed[0].branch, null)
+  assert.equal(homed[1].project, 'p')
+
+  // An open window's title wins over the record's, and a window with no record yet is listed first, stamped with the clock.
+  const merged = list({ sessions: [summary('a')], opened: [open('a'), { ...open('b'), summary: { ...summary(null), title: 'New' }, draftId: 'draft:9' }] }).ownSessions
+  assert.deepEqual(merged.map((each) => [each.id, each.title, each.updated]), [['draft:9', 'New', 600], ['a', 'Renamed', 1]])
+
+  // A draft somebody typed is listed once, a blank one and a key that is not a draft key are not, and a key that is not JSON is skipped.
+  const drafts = list({ conversations: {
+    [key('/p', 'draft:1')]: { draft: 'hello' }, [key('/p', 'draft:2')]: { draft: '  ' }, [key('/p', 'real')]: { draft: 'x' }, 'not json': { draft: 'y' },
+  } }).ownSessions
+  assert.deepEqual(drafts.map((each) => [each.id, each.title, each.updated]), [['draft:1', 'Draft · hello', 600]])
+
+  // What a row says: only what asks something of the reader, and the bot found by record, by owner, or by the open window.
+  const listing = list({
+    sessions: [summary('bot-chat'), summary('owned'), summary('asks'), summary('runs'), summary('failed'), summary('quiet'), summary('windowed')],
+    conversations: { [key('/p', 'owned')]: { draft: '', botSlug: 'review' } },
+    bots: [bot],
+    opened: [open('asks', { entries: [asking] }), open('runs', { running: true }), open('failed', { entries: [{ kind: 'error' }] }), open('quiet'), open('windowed', { bot: { slug: 'review' } })],
+    currentKey: key('/p', 'runs'),
+  })
+  const face = { name: 'Review', avatar: 'a' }
+  assert.deepEqual(listing.info[key('/p', 'bot-chat')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'owned')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'windowed')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'asks')], { bot: undefined, status: 'answer' })
+  assert.equal(listing.info[key('/p', 'runs')].status, 'working')
+  assert.equal(listing.info[key('/p', 'failed')].status, 'failed')
+  assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
+  assert.equal(listing.attention, 1)
+  assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
 })
