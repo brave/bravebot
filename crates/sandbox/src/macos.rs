@@ -128,13 +128,15 @@ impl SeatbeltSandbox {
         // the parent or any other process, including another process in the same sandbox.
         out.push_str("(allow process-info-pidinfo (target self))\n");
         // CPU count and page size serve language runtimes (the numeric page-size query
-        // resolves to pagesize_compat). kern.argmax is the one system-wide argument-size
+        // resolves to pagesize_compat). hw.memsize is the physical memory size, which sort
+        // reads to size its buffer. kern.argmax is the one system-wide argument-size
         // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
         // uname's fields, used by Python's package platform detection. No process arguments or
         // environment query is in this list.
         out.push_str("(allow sysctl-read");
         for name in [
             "hw.machine",
+            "hw.memsize",
             "hw.ncpu",
             "hw.pagesize",
             "hw.pagesize_compat",
@@ -740,6 +742,7 @@ mod argument_tests {
                 concat!(
                     "(allow sysctl-read",
                     " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.memsize\")",
                     " (sysctl-name \"hw.ncpu\")",
                     " (sysctl-name \"hw.pagesize\")",
                     " (sysctl-name \"hw.pagesize_compat\")",

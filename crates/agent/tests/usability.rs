@@ -77,6 +77,7 @@ fn the_suite_covers_each_everyday_program_and_the_rows_that_stay_refused() {
         );
     }
     for name in [
+        "sort and uniq count lines",
         "xargs passes a list of files to one program",
         "find -exec {} + passes a list of files to one program",
     ] {
