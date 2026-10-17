@@ -184,6 +184,7 @@ repeated down a hundred rows.
 `verified-by: bravebot_tui::app::a_configured_tier_is_not_confusable_with_a_brave_model_served_through_bedrock`
 `verified-by: bravebot_tui::app::a_tier_with_no_profile_configured_still_names_the_account`
 `verified-by: bravebot_tui::app::a_gateway_row_says_which_service_answers_it`
+`verified-by: bravebot_tui::app::the_note_left_on_choosing_a_model_names_its_service`
 `verified-by: bravebot_aichat::models::a_fetched_row_carries_the_gateway_that_serves_it`
 
 <a id="BACKEND-7"></a>

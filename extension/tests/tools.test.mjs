@@ -901,6 +901,8 @@ test("open_tab closes a tab that committed on a browser error page", async () =>
     chrome,
   );
   assert.ok("error" in reply);
+  assert.ok(reply.error.message.includes(url));
+  assert.ok(!reply.error.message.includes("chrome-error"));
   assert.ok(reached(chrome, "tabs.remove"));
 });
 
@@ -935,9 +937,18 @@ test("open_tab gives up on a page that never commits and closes the tab", async 
       await Promise.resolve();
     }
     assert.ok(!reached(chrome, "tabs.remove"));
-    mock.timers.tick(OPEN_TIMEOUT_MS);
+    // The limit is twenty seconds: a tab still loading a millisecond short of
+    // it is kept waiting, and the millisecond after it is closed.
+    assert.equal(OPEN_TIMEOUT_MS, 20_000);
+    mock.timers.tick(19_999);
+    for (let turn = 0; turn < 10; turn += 1) {
+      await Promise.resolve();
+    }
+    assert.ok(!reached(chrome, "tabs.remove"));
+    mock.timers.tick(1);
     const reply = await pending;
     assert.match(reply.error.message, /did not load in time/);
+    assert.ok(reply.error.message.includes(url));
     assert.ok(reached(chrome, "tabs.remove"));
     assert.equal(chrome.listeners.onCommitted.size, 0);
   } finally {
