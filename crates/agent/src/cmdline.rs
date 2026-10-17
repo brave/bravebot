@@ -1926,6 +1926,51 @@ pub fn compile(
     })
 }
 
+/// The plan as the planner is told it, which is what a person is shown with each operand put back
+/// as the line wrote it.
+///
+/// A pattern in the line is replaced by the names it matched when the line is compiled, and those
+/// names come out of a directory nobody may have vouched for, so a sentence addressed to the planner
+/// cannot spell them ([CMDLINE-4]). The program is still named as the person was shown it (RUN-2).
+/// A plan whose steps this walk cannot pair with the line's commands is told as the line itself,
+/// which is the planner's own text.
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+pub fn display_as_written(plan: &Plan) -> String {
+    let Ok(node) = parse(&plan.line) else {
+        return plan.line.clone();
+    };
+    let mut written = Vec::new();
+    operands_as_written(&node, &mut written);
+    plan.steps
+        .display_with_operands(&written)
+        .unwrap_or_else(|| plan.line.clone())
+}
+
+/// Each command's operands as the line spelled them, in the order the compiler builds its steps.
+fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>) {
+    let command = |command: &Command, out: &mut Vec<Vec<String>>| {
+        out.push(
+            command.words[1..]
+                .iter()
+                .map(|word| match word.pieces.iter().any(is_pattern) {
+                    true => render(&word.pieces),
+                    false => bravebot_core::command::quoted(&render(&word.pieces)),
+                })
+                .collect(),
+        );
+    };
+    match node {
+        Node::Command(one) => command(one, out),
+        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out)),
+        Node::Join { left, right, .. } => {
+            operands_as_written(left, out);
+            operands_as_written(right, out);
+        }
+        Node::Group(inner) => operands_as_written(inner, out),
+    }
+}
+
 /// One compile in progress: where it runs, and what the plan has named so far.
 struct Compiler<'a, 'r> {
     directory: &'a Path,
@@ -3148,6 +3193,35 @@ mod tests {
         let tree = Tree::new("quoted");
         tree.file("a.rs");
         assert_eq!(expanded("ls '*.rs'", 1, &tree.root), ["*.rs"]);
+    }
+
+    /// What the planner is told of a line holds each pattern as written in every step of a
+    /// pipeline, a join and a group, and the person's plan holds the names the patterns matched.
+    /// The programs are named as the plan names them in both.
+    #[test]
+    fn a_plan_is_told_to_the_planner_with_each_pattern_as_it_was_written() {
+        let tree = Tree::new("told-as-written");
+        tree.executable("bin/ls")
+            .file("one-HOSTILE.rs")
+            .file("two-HOSTILE.rs");
+        tree.file("a.txt");
+        let line = "./bin/ls *.rs | ./bin/ls -l 'a b' && ( ./bin/ls a.* ; ./bin/ls z?.txt )";
+        let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
+
+        let shown = plan.display();
+        let told = display_as_written(&plan);
+
+        assert!(
+            shown.contains("one-HOSTILE.rs"),
+            "the plan lost the names: {shown}"
+        );
+        assert!(
+            !told.contains("HOSTILE"),
+            "the planner was told a matched name: {told}"
+        );
+        let bin = tree.root.join("bin/ls").display().to_string();
+        let expected = format!("{bin} *.rs | {bin} -l 'a b' && ( {bin} a.* ; {bin} z?.txt )");
+        assert_eq!(told, expected);
     }
 
     /// A compile with no rules in play, which is what a settings file holding none says.

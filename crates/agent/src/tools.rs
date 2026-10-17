@@ -617,6 +617,22 @@ impl SessionJobs {
     }
 }
 
+/// A job's line as two people are told it: the person, who is shown the plan they approved, and the
+/// planner, who is told the line with its operands as it wrote them.
+struct JobLines {
+    shown: String,
+    told: String,
+}
+
+impl JobLines {
+    fn new(shown: &str, told: &str) -> Self {
+        Self {
+            shown: shown.to_string(),
+            told: told.to_string(),
+        }
+    }
+}
+
 /// One background pipeline, and what it was started as.
 #[derive(Debug)]
 struct Job {
@@ -625,6 +641,8 @@ struct Job {
     running: crate::exec::Background,
     /// The line as the person approved it, for the account given afterwards.
     line: String,
+    /// The line as the planner wrote it, which is what the planner is told it started.
+    said: String,
     /// The initial output label. A later file revision can lower its integrity, never raise it.
     label: bravebot_core::label::Label,
     /// How much of each pipe has already been handed over, so a later look reports what is new.
@@ -702,6 +720,8 @@ pub struct Ended {
     pub name: String,
     /// The line as the person approved it.
     pub line: String,
+    /// The line as the planner wrote it, which is the only spelling the planner is told.
+    pub said: String,
     /// How it ended.
     pub outcome: crate::report::Outcome,
     /// What it printed that nobody has been handed yet, cut to the cap where it may be read.
@@ -760,7 +780,7 @@ impl Jobs {
     fn keep(
         &mut self,
         running: crate::exec::Background,
-        line: String,
+        lines: JobLines,
         label: bravebot_core::label::Label,
         file_authority: bravebot_core::file_authority::FileAuthority,
         file_revision: u64,
@@ -775,7 +795,8 @@ impl Jobs {
                 file_authority,
                 file_revision,
                 running,
-                line,
+                line: lines.shown,
+                said: lines.told,
                 label,
                 seen: crate::exec::Seen::default(),
                 reported: false,
@@ -807,7 +828,7 @@ impl Jobs {
         let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
         self.keep(
             running,
-            plan.display(),
+            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
             label,
             FileAuthority::new(TrustStore::new(&root)),
             0,
@@ -873,6 +894,7 @@ impl Jobs {
             finished.push(Ended {
                 name: name.clone(),
                 line: job.line.clone(),
+                said: job.said.clone(),
                 outcome,
                 printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
                 whole,
@@ -6554,7 +6576,7 @@ fn inferred_note(note: String, scanned: &Scanned) -> String {
 /// A path that would not go back is named to both. The planner is told because the value is
 /// still there and the next thing it does must not assume otherwise, and the person is told
 /// because they are the only one who can do anything about it.
-fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[String]) -> Produced {
+fn credential_refusal_after_a_line(said: &str, left: &Left<'_>, stuck: &[String]) -> Produced {
     let paths: Vec<&str> = left
         .refused_at
         .iter()
@@ -6563,12 +6585,12 @@ fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[St
     let instead = do_this_instead(left.scanned.only_the_value);
     let text = match stuck.is_empty() {
         true => format!(
-            "refused: `{displayed}` put a credential in {}, so what it wrote there was taken \
+            "refused: `{said}` put a credential in {}, so what it wrote there was taken \
              back out. Do not run it again. {instead}",
             paths.join(", ")
         ),
         false => format!(
-            "refused: `{displayed}` put a credential in {}, and {} could not be put back, so the \
+            "refused: `{said}` put a credential in {}, and {} could not be put back, so the \
              value is still there. Do not run it again, and tell the user which file to clear \
              out. {instead}",
             paths.join(", "),
@@ -7682,14 +7704,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // by a compaction has nothing else left in its context saying where the next one lands, and a
     // person asked to release what this printed would otherwise not be told which tree it came out
     // of. Structure either way: a path the driver resolved itself, never a byte of what ran.
-    let displayed = match plan.directory.as_path() == tools.workspace.root() {
-        true => plan.display(),
+    let in_directory = |line: String| match plan.directory.as_path() == tools.workspace.root() {
+        true => line,
         false => format!(
-            "{} (in {})",
-            plan.display(),
+            "{line} (in {})",
             tools.workspace.relative_display(&plan.directory)
         ),
     };
+    let displayed = in_directory(plan.display());
+    // What the planner is told the line was: the plan with its operands as the line wrote them. A
+    // glob in the line has been replaced by the names it matched, which came out of a directory
+    // nobody may have vouched for, and the planner is not shown those (CMDLINE-4).
+    let said = in_directory(crate::cmdline::display_as_written(&plan));
 
     // What this line reaches that nothing here holds, which the person approving it was shown at
     // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
@@ -7740,7 +7766,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 *tools.run_directory = plan.directory.clone();
                 let (name, stop) = tools.jobs.keep(
                     running,
-                    displayed.clone(),
+                    JobLines::new(&displayed, &said),
                     label,
                     authority.clone(),
                     started_revision,
@@ -7763,13 +7789,13 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
                     Labelled::new(String::new(), label),
-                    format!("`{displayed}` started in the background"),
+                    format!("`{said}` started in the background"),
                     format!("started as {name}"),
                 )
                 .started_in_the_background(name, tools.jobs.is_kept())
                 .having_run_a_program()
             }
-            Err(error) => Produced::problem(format!("error: `{displayed}` did not start: {error}"))
+            Err(error) => Produced::problem(format!("error: `{said}` did not start: {error}"))
                 .having_started_a_program(),
         };
     }
@@ -7825,7 +7851,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 *tools.run_directory = plan.directory.clone();
                 let (name, stop) = tools.jobs.keep(
                     moved.running,
-                    displayed.clone(),
+                    JobLines::new(&displayed, &said),
                     label,
                     authority.clone(),
                     started_revision,
@@ -7847,7 +7873,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 });
                 return Produced::new(
                     Labelled::new(String::new(), label),
-                    format!("`{displayed}` moved to the background"),
+                    format!("`{said}` moved to the background"),
                     format!(
                         "moved to the background after {:.1}s, as {name}",
                         moved.after.as_secs_f64()
@@ -8014,7 +8040,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     if !left.scanned.refused().is_empty() {
         // A program in the line put the credential there, so one ran whatever the line ended in
         // (TURN-4).
-        return credential_refusal_after_a_line(&displayed, &left, &stuck).having_run_a_program();
+        return credential_refusal_after_a_line(&said, &left, &stuck).having_run_a_program();
     }
 
     match ran {
@@ -8074,7 +8100,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
 
             let mut produced = Produced::new(
                 Labelled::new(text, label),
-                format!("what `{displayed}` printed"),
+                format!("what `{said}` printed"),
                 note,
             )
             .of_content()
@@ -8109,7 +8135,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // stopped only once its stages have been spawned, so one the turn stopped has run (TURN-4).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
-            let produced = Produced::problem(format!("error: `{displayed}` did not run: {error}"));
+            let produced = Produced::problem(format!("error: `{said}` did not run: {error}"));
             match stopped {
                 true => produced.having_run_a_program(),
                 false => produced.having_started_a_program(),
@@ -8703,6 +8729,7 @@ fn job_output<S: Sink, R: Reporter>(
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();
+    let said = job.said.clone();
     let label = job.label_now();
 
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
@@ -8762,7 +8789,7 @@ fn job_output<S: Sink, R: Reporter>(
 
     let mut produced = Produced::new(
         Labelled::new(fresh, label),
-        format!("what `{line}` has printed"),
+        format!("what `{said}` has printed"),
         note,
     )
     .of_content()
@@ -10782,7 +10809,7 @@ mod tests {
             let mut jobs = Jobs::new();
             jobs.keep(
                 running,
-                plan.display(),
+                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
                 Label::trusted_public(),
                 authority.clone(),
                 0,
@@ -10827,7 +10854,7 @@ mod tests {
             let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (_, stop) = jobs.keep(
                 running,
-                plan.display(),
+                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
@@ -10901,7 +10928,7 @@ mod tests {
             let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (name, stop) = jobs.keep(
                 running,
-                plan.display(),
+                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
