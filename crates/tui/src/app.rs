@@ -6881,6 +6881,39 @@ mod tests {
         assert_eq!(models[0].provider.as_deref(), Some("openrouter"));
     }
 
+    /// The note left when a model is chosen names the service that answers it, because the row that
+    /// carried the service is gone by then, and a model from Brave's own roster names none. The
+    /// regressions it rejects are a note that drops the service, and one that invents a service for
+    /// Brave's roster.
+    #[test]
+    fn the_note_left_on_choosing_a_model_names_its_service() {
+        let mut config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        let mut gateway_model = provider_models(&gateway(r#"{"z-ai/glm-4.6": {}}"#)).remove(0);
+        let mut brave_model = gateway_model.clone();
+        brave_model.display_name = "GPT-5.5".to_string();
+        brave_model.provider = None;
+        brave_model.key = "gpt-5.5".to_string();
+        gateway_model.key = "openrouter/z-ai/glm-4.6".to_string();
+
+        model_picked(&mut session, &mut config, gateway_model);
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter()
+                .any(|text| text.contains("z-ai/glm-4.6") && text.contains("openrouter")),
+            "{said:?}"
+        );
+
+        let mut session = Session::new("none");
+        model_picked(&mut session, &mut config, brave_model);
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(said.iter().any(|text| text.contains("GPT-5.5")), "{said:?}");
+        assert!(
+            said.iter().all(|text| !text.contains("openrouter")),
+            "{said:?}"
+        );
+    }
+
     /// Premium means a Leo subscription. A gateway reached with somebody's own bearer token does not
     /// involve one, and marking it premium would ask them to import a subscription to use what they
     /// already pay for.
