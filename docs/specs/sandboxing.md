@@ -1627,12 +1627,19 @@ prompt, then only those; whichever key ssh tried first, as the person chose for 
 prompt; whichever key ssh tried first, since neither an entry nor a choice names a readable public
 key for that owner; or no key from `git.identities`, since the step named its remote by name or by
 an address that is not ssh, and over ssh whichever key ssh tried first. Each case present in the
-line is said once. It then says that where GitHub refused a push for permission the key offered may
+line is said once. It then says whether the session's ssh agent socket was lent to the step, which
+it was where the session has one, how many public key files the step could read among those ssh
+looks for by default and those the person's ssh configuration names, and how many files an
+`IdentityFile` line names that it could not read. It then says that where GitHub refused a push for permission the key offered may
 belong to an account that cannot write to the repository, and where it refused the login no key
 offered is registered, that a retry offers the same key, and that only the person chooses the key:
-at the run prompt of the terminal interface, where ssh could offer more than one key and none was
-chosen for the owner, or, for one already chosen, where the planner's retry names `ssh-key` in
-`scopes`, or with the entry shape and the file it goes in. It says that in the terminal
+at the run prompt of the terminal interface, where ssh could offer from two to nine keys and an
+owner the step names has no entry or choice, or, for one already chosen, where the planner's retry
+names `ssh-key` in `scopes`, or with the entry shape and the file it goes in. Where no run prompt
+will list keys, because ssh could offer fewer than two or more than nine, the settings entry is the
+only way it names. Where the session would accept an `unconfined` request, it ends by saying the
+push can be run as its own line with `'unconfined': true`, which the person is asked to approve and
+which runs with no sandbox, on the condition that applies to the signing sentence. It says that in the terminal
 interface `/reach keys` lists the keys chosen at a prompt and `/reach keys remove <number>` forgets
 one, so that the next prompt asks again, and that in either case the planner asks the person rather
 than retrying. The text names no host, owner, address or key path and reads nothing a
@@ -1679,6 +1686,8 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_workspace_write`
 `verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
 `verified-by: bravebot_agent::confine::a_failed_step_says_where_the_key_was_chosen_at_a_prompt`
+`verified-by: bravebot_agent::confine::a_failed_push_says_whether_an_agent_was_lent_which_keys_were_readable_and_the_way_out`
+`verified-by: bravebot_agent::confine::a_failed_push_promises_a_key_prompt_only_where_one_will_be_shown`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries

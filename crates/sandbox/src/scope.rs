@@ -425,18 +425,7 @@ const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
 /// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
 /// fixed count of keys.
 fn named_public_keys(home: &Path) -> Vec<PathBuf> {
-    use std::io::Read;
-    let Ok(file) = std::fs::File::open(under(home, ".ssh/config")) else {
-        return Vec::new();
-    };
-    let mut configuration = Vec::new();
-    if file
-        .take(SSH_CONFIG_LIMIT)
-        .read_to_end(&mut configuration)
-        .is_err()
-    {
-        return Vec::new();
-    }
+    let configuration = ssh_configuration(home);
     let mut keys: Vec<PathBuf> = Vec::new();
     for line in configuration.split(|byte| *byte == b'\n') {
         // A lossy decode would name a different file than ssh opens.
@@ -459,6 +448,41 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
         }
     }
     keys
+}
+
+/// The bytes of the person's own `~/.ssh/config` up to [`SSH_CONFIG_LIMIT`], or none where it
+/// cannot be read.
+fn ssh_configuration(home: &Path) -> Vec<u8> {
+    use std::io::Read;
+    let mut configuration = Vec::new();
+    let read = std::fs::File::open(under(home, ".ssh/config"))
+        .and_then(|file| file.take(SSH_CONFIG_LIMIT).read_to_end(&mut configuration));
+    match read {
+        Ok(_) => configuration,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// How many `IdentityFile` lines of the person's `~/.ssh/config` name a public key file that
+/// [`candidate_public_keys`] leaves out because a stage could not read it: one that is missing,
+/// is not a regular `*.pub` file, or is in a credential location other than `~/.ssh`. A line that
+/// spells no absolute name adds nothing, since ssh would read it from somewhere this cannot know.
+pub fn refused_identity_files(home: &Path) -> usize {
+    let configuration = ssh_configuration(home);
+    let mut refused: Vec<PathBuf> = Vec::new();
+    for line in configuration.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some(named) = identity_file(line) else {
+            continue;
+        };
+        if judged_public_key(&named, home).is_none() && !refused.contains(&named) {
+            refused.push(named);
+        }
+    }
+    refused.len()
 }
 
 /// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
@@ -1603,6 +1627,48 @@ mod tests {
             read,
             [home.join(".ssh/after.pub"), home.join(".ssh/before.pub")]
         );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line holding bytes that are not UTF-8 is not counted as a refused file: a lossy decode
+    /// would spell its name with U+FFFD, find no such file and report one the person never named.
+    /// The lines either side of it are still counted.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_is_not_counted_as_refused() {
+        let home = a_home_with("identity-files-not-text-refused", "", &[".ssh/before.pub"]);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/gone\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 1);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and it is not counted as refused either.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_is_not_counted_as_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk-refused",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
