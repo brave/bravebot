@@ -27620,6 +27620,29 @@ mod tests {
         );
     }
 
+    /// The idle time the settings file names reaches the recap through `adopt_settings`, and is
+    /// not the built-in five minutes.
+    #[test]
+    fn adopting_settings_puts_the_recap_idle_time_in_force() {
+        use std::time::{Duration, Instant};
+        let settings = bravebot_config::Settings::parse(r#"{"awaySummaryIdleSeconds": 90}"#);
+        let mut session = Session::new("none");
+        adopt_settings(&mut session, &settings, None);
+
+        let start = Instant::now();
+        session.away.turn_done(start);
+        session.away.focus(false);
+        let turns = crate::away::FEWEST_TURNS;
+        assert!(
+            !session.away.due(start + Duration::from_secs(89), turns),
+            "the recap came before the named time"
+        );
+        assert!(
+            session.away.due(start + Duration::from_secs(90), turns),
+            "the idle time in the settings was not adopted"
+        );
+    }
+
     /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
     /// on is not one, so a turn running that sentence and asking for a later look gets no loop:
     /// otherwise the driver's own words would come back every quarter of an hour, and the person

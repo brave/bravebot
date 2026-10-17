@@ -47,12 +47,10 @@ impl Away {
         self.enabled = setting.unwrap_or(true);
     }
 
-    /// Take the idle time the settings named, in seconds. Anything but a usable count leaves the
-    /// built-in [`IDLE`].
+    /// Take the idle time the settings named, in seconds. Absence leaves the built-in [`IDLE`];
+    /// what counts as usable is `Settings::parse`'s rule alone.
     pub fn adopt_idle(&mut self, seconds: Option<u64>) {
-        self.idle = seconds
-            .filter(|seconds| *seconds > 0)
-            .map_or(IDLE, Duration::from_secs);
+        self.idle = seconds.map_or(IDLE, Duration::from_secs);
     }
 
     /// The terminal was left or came back to.
@@ -151,8 +149,8 @@ mod tests {
         assert!(!away.due(start + Duration::from_secs(59), FEWEST_TURNS));
         assert!(away.due(start + Duration::from_secs(60), FEWEST_TURNS));
 
-        for unusable in [None, Some(0)] {
-            away.adopt_idle(unusable);
+        {
+            away.adopt_idle(None);
             assert!(!away.due(start + IDLE - Duration::from_secs(1), FEWEST_TURNS));
             assert!(away.due(now, FEWEST_TURNS));
         }
