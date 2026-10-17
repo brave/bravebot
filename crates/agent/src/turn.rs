@@ -2973,9 +2973,6 @@ where
     // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
     // the change that gives a session somewhere to keep one.
     let run_directory = workspace.root().to_path_buf();
-    // Shared rather than handed over: a delegate takes the lock for one call and gives it back,
-    // and the turn keeps its own handle on all three.
-
     let plan = Plan {
         system,
         system_text,
