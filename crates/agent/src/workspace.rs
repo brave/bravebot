@@ -323,6 +323,21 @@ impl WorkspaceError {
                  working directory, and {ENDS_CHECKOUTS}"
             ),
             Self::Escapes {
+                remedy: Remedy::Credential,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, in a place that holds credentials, \
+                 which cannot be opened to the file tools; refusing to touch it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::CredentialDrop,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, in a place that holds credentials, \
+                 which cannot be opened to the file tools; refusing to touch it. The person can \
+                 drop the file on the window to have it read with their next message"
+            ),
+            Self::Escapes {
                 remedy: Remedy::Kept,
                 ..
             } => format!(
@@ -386,6 +401,7 @@ impl WorkspaceError {
             Remedy::Open => Remedy::OpenOrDrop,
             Remedy::OpenEndsCheckouts => Remedy::DropOrOpenEndsCheckouts,
             Remedy::Kept => Remedy::Drop,
+            Remedy::Credential => Remedy::CredentialDrop,
             other => other,
         };
         Self::Escapes { path, remedy }
@@ -418,8 +434,8 @@ const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; or what was refused is a command's
-    /// redirection or a rewind.
+    /// or to a place inside the root; a link carries it out; it names a credential location, which
+    /// cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened. It is named in some other way than relative to the root: from the top of the file
@@ -444,6 +460,14 @@ pub enum Remedy {
     /// [`Remedy::OpenItself`] where the directory holds the working directory, so opening it leaves
     /// no delegate a checkout (CHECKOUT-7).
     OpenItselfEndsCheckouts,
+    /// The directory a file is in, or a name nothing is at yet would be created in, is or lies
+    /// inside a credential location, which `/add-dir` and `request_path` both refuse (SANDBOX-18),
+    /// so no directory is offered. A write is still pointed at the unconfined line where the
+    /// session accepts one. A path that names such a directory is [`Remedy::Nothing`].
+    Credential,
+    /// [`Remedy::Credential`] for a call that reads the file, where a drop is the one way to have
+    /// it read.
+    CredentialDrop,
     /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
     /// which a drop would not serve (PERM-16).
     Kept,
@@ -470,6 +494,10 @@ impl Remedy {
             Self::OpenItselfEndsCheckouts => {
                 "open the directory itself, which holds the working directory and so ends \
                  checkouts"
+            }
+            Self::Credential => "none, since its directory is or lies inside a credential location",
+            Self::CredentialDrop => {
+                "drop the file, since its directory is or lies inside a credential location"
             }
             Self::Kept => {
                 "none, since permissions.readsStayInWorkspace refuses opening its directory"
@@ -2238,8 +2266,9 @@ impl Workspace {
     /// Inside the root a directory cannot be opened, and the relative path reaches the file.
     ///
     /// The directory to open is `resolved` itself where it is a directory, and the directory it is
-    /// in for a file or for a name nothing is at yet. The warning about checkouts is asked of that
-    /// directory.
+    /// in for a file or for a name nothing is at yet. A directory that is or lies inside a credential
+    /// location is refused by [`Workspace::resolve_directory`], so none is offered. The warning
+    /// about checkouts is asked of that directory.
     fn remedy_outside(&self, resolved: &Path) -> Remedy {
         if resolved.starts_with(&self.root) {
             return Remedy::Inside;
@@ -2253,6 +2282,15 @@ impl Workspace {
         } else {
             resolved.parent()
         };
+        if let (Some(directory), Some(home)) = (to_open, self.home.as_deref())
+            && bravebot_sandbox::rules::inside_a_credential_location(directory, home)
+        {
+            return if itself {
+                Remedy::Nothing
+            } else {
+                Remedy::Credential
+            };
+        }
         let ends_checkouts = to_open.is_some_and(|directory| self.ends_checkouts(directory));
         match (itself, ends_checkouts) {
             (false, false) => Remedy::Open,
@@ -7425,6 +7463,78 @@ mod tests {
                 "{climbing}"
             );
         }
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// A path whose directory `/add-dir` refuses as a credential location is not refused with
+    /// `/add-dir` as the way to reach it, and no `request_path` can open it either. A read is left
+    /// the drop, and a write or a directory is offered nothing here. A path beside a credential
+    /// location is still offered the directory.
+    ///
+    /// The failure this rejects is choosing the remedy without asking the question
+    /// [`Workspace::resolve_directory`] asks, which sends a person to a command that refuses the
+    /// directory.
+    #[test]
+    fn a_refusal_inside_a_credential_location_offers_no_directory_to_open() {
+        let (home, project) = home_and_project("credential-remedy");
+        for row in [".ssh", ".bravebot", ".aws", ".sshfoo"] {
+            std::fs::create_dir_all(home.join(row)).expect("a directory under the home");
+        }
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        for (typed, itself) in [
+            (".ssh/config", false),
+            (".bravebot/settings.json", false),
+            (".aws/credentials", false),
+            (".ssh/not-yet", false),
+            (".ssh", true),
+        ] {
+            let named = home.join(typed).display().to_string();
+            let error = workspace
+                .resolve(&named)
+                .expect_err("outside the workspace");
+            let expected = if itself {
+                Remedy::Nothing
+            } else {
+                Remedy::Credential
+            };
+            assert!(
+                matches!(&error, WorkspaceError::Escapes { remedy, .. } if *remedy == expected),
+                "{named}: {error:?}"
+            );
+            let told = error.describe(&named);
+            assert!(
+                !told.contains("add-dir") && !told.contains("drop"),
+                "{named}: a route that cannot work was named: {told}"
+            );
+            let read = error.for_a_read();
+            let told = read.describe(&named);
+            assert!(!told.contains("add-dir"), "{named}: {told}");
+            // A directory cannot be dropped, so a read that names one is offered nothing.
+            assert_eq!(
+                told.contains("drop the file on the window"),
+                !itself,
+                "{named}: {told}"
+            );
+        }
+
+        let beside = home.join(".sshfoo/config").display().to_string();
+        let error = workspace
+            .resolve(&beside)
+            .expect_err("outside the workspace");
+        assert!(
+            matches!(
+                &error,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::Open,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(error.describe(&beside).contains("/add-dir"));
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 

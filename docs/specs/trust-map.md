@@ -643,7 +643,11 @@ session would accept that request and the front end can ask about it. A path tha
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
 path work: a climb that lands inside the root, off the top of the file system or on a name that is
-not UTF-8, and one a link carries out.
+not UTF-8, and one a link carries out. So does a path whose directory is, or lies inside, a
+credential location, since `/add-dir` refuses to open one ([SANDBOX-18](sandboxing.md#SANDBOX-18))
+and `request_path` refuses to lend one ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A read of a
+file there is offered the drop alone, a write is offered the unconfined line alone where the
+session accepts one, and a name for the directory itself is offered nothing.
 A climb that lands inside the root stays refused even where a directory holding the root is open,
 since the relative spelling reaches the file.
 
@@ -690,6 +694,7 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_outside_the_workspace_says_what_the_person_can_do`
 `verified-by: bravebot_agent::turn::a_refused_write_outside_the_workspace_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
+`verified-by: bravebot_agent::workspace::a_refusal_inside_a_credential_location_offers_no_directory_to_open`
 `verified-by: bravebot_agent::workspace::an_absolute_path_inside_the_workspace_is_refused_by_saying_it_is_inside`
 `verified-by: bravebot_agent::workspace::a_path_that_leaves_the_workspace_is_still_refused_as_leaving_it`
 `verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
