@@ -32694,6 +32694,94 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
     );
 }
 
+/// DELEGATE-22: a name that is a handle the reply resolves is not compared with the one that came
+/// back. An `openai` alias is answered under the dated model it resolved to, which is the alias
+/// working, while any other gateway answers under the name it was sent, so the same reply from it
+/// is a substitution.
+#[test]
+fn a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution() {
+    let scratch = Scratch::new("delegate-model-alias");
+    let home = Scratch::new("delegate-model-alias-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    for (name, model) in [
+        ("alias-reader", "openai/an-alias"),
+        ("gateway-reader", "test-gateway/a-listed-model"),
+    ] {
+        std::fs::write(
+            home.path.join("agents").join(format!("{name}.md")),
+            format!("---\nname: {name}\ndescription: Reads.\nkind: reader\nmodel: {model}\n---\n\nREAD\n"),
+        )
+        .expect("write a definition");
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-ALIAS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"alias-reader","task":"CHECK-ON-ALIAS"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"gateway-reader","task":"CHECK-ON-GATEWAY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("CHECK-ON-ALIAS", vec![reply_with("clear")]),
+        ("CHECK-ON-GATEWAY", vec![reply_with("clear")]),
+    ]);
+    let mut config = config_for(&endpoint);
+    let root = serde_json::json!({"provider": {
+        "openai": {
+            "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+            "models": {"an-alias": {}}
+        },
+        "test-gateway": {
+            "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+            "models": {"a-listed-model": {}}
+        }
+    }});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-ALIAS").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        reporter.delegated.len(),
+        2,
+        "not every delegate ran, so this says nothing about the ones that did not"
+    );
+    let about_models: Vec<&String> = reporter
+        .notices
+        .iter()
+        .filter(|notice| notice.contains("asked for"))
+        .collect();
+    assert_eq!(
+        about_models,
+        [
+            "gateway-reader asked for test-gateway/a-listed-model and was answered by a different model"
+        ],
+        "only the gateway's name was expected back as it was sent"
+    );
+}
+
 /// A definition naming skills gives its delegate those and no others: the rest of what the turn
 /// found is neither listed for it nor loadable by it, where a definition naming none is offered
 /// the whole of it and one whose line is empty is offered nothing. A name nothing found selects

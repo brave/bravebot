@@ -856,6 +856,7 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution`
 
 <a id="DELEGATE-23"></a>
 ### DELEGATE-23: a definition may name the skills its delegate is offered
