@@ -48,12 +48,12 @@ pub use run::{RunAnswer, ask_run};
 pub use vet::{VetAnswer, ask_output, ask_vet, ask_vouch};
 #[cfg(test)]
 use vet::{
-    VetResponse, draw_output, draw_vet, draw_vouch, output_answer_for, vet_answer_for, vetting_fit,
+    draw_output, draw_vet, draw_vouch, output_answer_for, vet_answer_for, vetting_fit,
     vetting_source,
 };
 pub use write::{WriteAnswer, ask};
 #[cfg(test)]
-use write::{WriteResponse, draw, write_answer_for};
+use write::{draw, write_answer_for};
 
 /// Prompts in the terminal for each write.
 pub struct TerminalConfirmer<'t, B: Backend> {
@@ -143,6 +143,15 @@ pub enum Answer {
     Reject,
     /// Refuse the write and stop the turn that asked for it.
     Interrupt,
+}
+
+impl Approves for Answer {
+    fn approves(&self) -> bool {
+        match self {
+            Answer::Approve => true,
+            Answer::Reject | Answer::Interrupt => false,
+        }
+    }
 }
 
 impl Answer {
@@ -258,28 +267,34 @@ fn ask_scrolled_reading<B: Backend, A>(
     }
 }
 
-/// What a key press did.
+/// What a key press did at a question answered with `A`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Response {
-    Answer(Answer),
+enum Response<A> {
+    Answer(A),
     /// Move the body by this many rows, positive being further down.
     Scroll(i16),
 }
 
-impl pinned::Approving for Response {
+/// Whether an answer approves what was asked.
+///
+/// Matched exhaustively by each answer type, so a variant added to one has to be decided there.
+/// [`pinned::Approving`] asks the same of a whole response, which can also be a scroll, and
+/// `Response<A>` answers it from this.
+trait Approves {
+    fn approves(&self) -> bool;
+}
+
+impl<A: Approves> pinned::Approving for Response<A> {
     fn approves(&self) -> bool {
         match self {
-            Response::Answer(answer) => match answer {
-                Answer::Approve => true,
-                Answer::Reject | Answer::Interrupt => false,
-            },
+            Response::Answer(answer) => answer.approves(),
             Response::Scroll(_) => false,
         }
     }
 }
 
-impl From<Response> for Step<Answer> {
-    fn from(response: Response) -> Self {
+impl<A> From<Response<A>> for Step<A> {
+    fn from(response: Response<A>) -> Self {
         match response {
             Response::Answer(answer) => Step::Answer(answer),
             Response::Scroll(by) => Step::Scroll(by),
@@ -287,17 +302,31 @@ impl From<Response> for Step<Answer> {
     }
 }
 
+/// Draw a yes-or-no question and wait for an answer, refusing wherever it cannot be asked.
+///
+/// The one place the refusal of the prompts that answer with an [`Answer`] is written. `key` is
+/// the prompt's own key function.
+fn ask_plain<B: Backend>(
+    terminal: &mut Terminal<B>,
+    draw: impl FnMut(&mut ratatui::Frame, u16, &mut Seen) -> Drawn,
+    mut key: impl FnMut(KeyEvent, &Drawn) -> Option<Response<Answer>>,
+) -> Answer {
+    ask_scrolled(terminal, Answer::Reject, draw, |pressed, drawn| {
+        key(pressed, drawn).map(Step::from)
+    })
+}
+
 /// Interpret one key press at the question `drawn` put on the screen, or `None` for a key that
 /// answers nothing there.
 ///
 /// Separated from the loop so it can be tested without a terminal.
-fn answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+fn answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response<Answer>> {
     drawn.take(pressed(key, drawn.page()))
 }
 
 /// What one key press means, before the draw it was pressed at has had its say, with a page being
 /// `page` rows.
-fn pressed(key: KeyEvent, page: i16) -> Option<Response> {
+fn pressed(key: KeyEvent, page: i16) -> Option<Response<Answer>> {
     // The prompt blocks the whole interface, so without this Ctrl-C would do nothing at the one
     // moment a user is most likely to press it. It stops the turn as well as refusing, because
     // someone reaching for the interrupt wants the work to stop, not just this write.
@@ -3406,7 +3435,7 @@ mod tests {
                     &request,
                     &Drawn::taking_yes()
                 ),
-                Some(VetResponse::Answer(VetAnswer::Approve)),
+                Some(Response::Answer(VetAnswer::Approve)),
                 "{verdict}"
             );
             assert_eq!(
@@ -3415,7 +3444,7 @@ mod tests {
                     &request,
                     &Drawn::taking_yes()
                 ),
-                Some(VetResponse::Answer(VetAnswer::Reject)),
+                Some(Response::Answer(VetAnswer::Reject)),
                 "{verdict}"
             );
         }
@@ -3469,7 +3498,7 @@ mod tests {
                 &a_vetting(Verdict::Safe, None, "a page"),
                 &Drawn::taking_yes()
             ),
-            Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
+            Some(Response::Answer(VetAnswer::ApproveAlways)),
             "the key was not bound where the prompt draws it"
         );
     }
@@ -3666,7 +3695,7 @@ mod tests {
 
         assert_eq!(
             output_answer_for(pressed, &an_output("Darwin"), &Drawn::taking_yes()),
-            Some(VetResponse::Answer(VetAnswer::ApproveAlways)),
+            Some(Response::Answer(VetAnswer::ApproveAlways)),
             "a safe verdict did not bind the standing key"
         );
 
@@ -3701,7 +3730,7 @@ mod tests {
                     &request,
                     &Drawn::taking_yes()
                 ),
-                Some(VetResponse::Answer(VetAnswer::Approve)),
+                Some(Response::Answer(VetAnswer::Approve)),
                 "{verdict}"
             );
             assert_eq!(
@@ -3710,7 +3739,7 @@ mod tests {
                     &request,
                     &Drawn::taking_yes()
                 ),
-                Some(VetResponse::Answer(VetAnswer::Reject)),
+                Some(Response::Answer(VetAnswer::Reject)),
                 "{verdict}"
             );
         }
@@ -3795,13 +3824,13 @@ mod tests {
             (request("new\n", None), None, None),
             (
                 a_credential_write(true, false),
-                Some(WriteResponse::Answer(WriteAnswer::ApproveAlways)),
+                Some(Response::Answer(WriteAnswer::ApproveAlways)),
                 None,
             ),
             (
                 a_credential_write(true, true),
-                Some(WriteResponse::Answer(WriteAnswer::ApproveAlways)),
-                Some(WriteResponse::Answer(WriteAnswer::ApproveAndRecord)),
+                Some(Response::Answer(WriteAnswer::ApproveAlways)),
+                Some(Response::Answer(WriteAnswer::ApproveAndRecord)),
             ),
         ] {
             assert_eq!(
@@ -3823,7 +3852,7 @@ mod tests {
             }
             assert_eq!(
                 press(KeyCode::Char('y'), KeyModifiers::NONE, &request),
-                Some(WriteResponse::Answer(WriteAnswer::Approve)),
+                Some(Response::Answer(WriteAnswer::Approve)),
             );
         }
     }
@@ -4215,7 +4244,7 @@ mod tests {
         );
         assert_eq!(
             write_answer_for(press(KeyCode::Char('n')), &request, &drawn),
-            Some(WriteResponse::Answer(WriteAnswer::Reject))
+            Some(Response::Answer(WriteAnswer::Reject))
         );
     }
 
@@ -4522,7 +4551,7 @@ mod tests {
         assert!(bottom.iter().any(|row| row.contains("-const SPEED = 100;")));
         assert_eq!(
             write_answer_for(yes, &request, &drawn),
-            Some(WriteResponse::Answer(WriteAnswer::Approve))
+            Some(Response::Answer(WriteAnswer::Approve))
         );
     }
 
@@ -5889,7 +5918,7 @@ mod tests {
             let arrow = press(arrow);
             assert_eq!(
                 write_answer_for(key, &write, &drawn),
-                Some(WriteResponse::Scroll(by)),
+                Some(Response::Scroll(by)),
                 "write, {letter}"
             );
             assert_eq!(
@@ -5898,12 +5927,12 @@ mod tests {
             );
             assert_eq!(
                 vet_answer_for(key, &vet, &drawn),
-                Some(VetResponse::Scroll(by)),
+                Some(Response::Scroll(by)),
                 "vet, {letter}"
             );
             assert_eq!(
                 output_answer_for(key, &output, &drawn),
-                Some(VetResponse::Scroll(by)),
+                Some(Response::Scroll(by)),
                 "output, {letter}"
             );
             assert_eq!(
@@ -6149,5 +6178,121 @@ mod tests {
         );
         assert_eq!(answer, Answer::Approve);
         assert_eq!(scrolls, [0, 0, 1]);
+    }
+
+    /// Each yes-or-no prompt answers no where its question cannot be drawn. They share one refusal,
+    /// written in [`ask_plain`], and a wrong one there approves a question no one was shown.
+    #[test]
+    fn every_yes_or_no_prompt_refuses_a_question_the_terminal_cannot_draw() {
+        let mut terminal = Terminal::new(Unwritable(TestBackend::new(100, 30))).expect("terminal");
+        let server = ServerRequest {
+            language: "Rust".into(),
+            program: "/usr/bin/rust-analyzer".into(),
+            args: Vec::new(),
+            workspace: "/work".into(),
+            runs_build_tooling: true,
+            declared: false,
+        };
+        let exposure = ExposureRequest {
+            path: ".env".into(),
+            credentials: vec!["an AWS access key id at .env:1".into()],
+        };
+        let host = HostRequest {
+            hosts: vec!["example.com".into()],
+        };
+        let answers = [
+            (
+                "fetch",
+                ask_fetch(&mut terminal, &a_metadata_fetch_behind_a_long_userinfo()),
+            ),
+            ("server", ask_server(&mut terminal, &server)),
+            ("move", ask_move(&mut terminal, &a_move(false))),
+            ("path", ask_path(&mut terminal, &a_path_request(false))),
+            ("host", ask_host(&mut terminal, &host)),
+            (
+                "remove checkout",
+                ask_remove_checkout(&mut terminal, &a_checkout_forty_files_were_written_in()),
+            ),
+            (
+                "vouch",
+                ask_vouch(&mut terminal, &a_vouch("notes.md", "a note", false)),
+            ),
+            ("tool list", ask_tool_list(&mut terminal, &tool_list())),
+            ("exposure", ask_exposure(&mut terminal, &exposure)),
+            (
+                "manifest",
+                ask_manifest(&mut terminal, &a_plan(&["move a note"])),
+            ),
+        ];
+        for (prompt, answer) in answers {
+            assert_eq!(answer, Answer::Reject, "{prompt}");
+        }
+    }
+
+    /// A draw that takes no yes still takes a scroll, a refusal and an interrupt, whichever answer
+    /// type the prompt has, and holds back every approval. The rows that decide a question are
+    /// reached by scrolling to them, so a scroll held back until they had been drawn would leave the
+    /// person above them with no way down, and an interrupt held back would leave no way out.
+    #[test]
+    fn a_draw_taking_no_yes_still_takes_a_scroll_a_refusal_and_an_interrupt() {
+        fn check<A: Approves + Copy + PartialEq + std::fmt::Debug>(approving: &[A], others: &[A]) {
+            let looking = Drawn::default();
+            assert!(!looking.answerable(), "this draw takes a yes");
+            assert_eq!(
+                looking.take(Some(Response::<A>::Scroll(1))),
+                Some(Response::Scroll(1))
+            );
+            for answer in others {
+                assert_eq!(
+                    looking.take(Some(Response::Answer(*answer))),
+                    Some(Response::Answer(*answer)),
+                    "{answer:?}"
+                );
+            }
+            for answer in approving {
+                assert_eq!(
+                    looking.take(Some(Response::Answer(*answer))),
+                    None,
+                    "{answer:?}"
+                );
+            }
+        }
+        check(&[Answer::Approve], &[Answer::Reject, Answer::Interrupt]);
+        check(
+            &[
+                WriteAnswer::Approve,
+                WriteAnswer::ApproveAlways,
+                WriteAnswer::ApproveAndRecord,
+            ],
+            &[WriteAnswer::Reject, WriteAnswer::Interrupt],
+        );
+        check(
+            &[VetAnswer::Approve, VetAnswer::ApproveAlways],
+            &[VetAnswer::Reject, VetAnswer::Interrupt],
+        );
+    }
+
+    /// A response converted the wrong way is a prompt that scrolls up when the person pressed down,
+    /// or answers something other than the key they pressed. Every answer type that shares
+    /// [`Response`] goes through the one conversion, so each is checked.
+    #[test]
+    fn a_response_becomes_the_step_it_names() {
+        assert_eq!(
+            Step::from(Response::Answer(Answer::Interrupt)),
+            Step::Answer(Answer::Interrupt)
+        );
+        assert_eq!(
+            Step::from(Response::Answer(WriteAnswer::ApproveAndRecord)),
+            Step::Answer(WriteAnswer::ApproveAndRecord)
+        );
+        assert_eq!(
+            Step::from(Response::Answer(VetAnswer::ApproveAlways)),
+            Step::Answer(VetAnswer::ApproveAlways)
+        );
+        assert_eq!(Step::from(Response::<Answer>::Scroll(-3)), Step::Scroll(-3));
+        assert_eq!(
+            Step::from(Response::<WriteAnswer>::Scroll(5)),
+            Step::Scroll(5)
+        );
     }
 }

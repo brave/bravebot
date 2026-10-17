@@ -15,7 +15,7 @@ use crate::theme;
 
 use super::chrome::{approving, centred, panel, refusing, stopping};
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Response, Step, ask_scrolled, pressed};
+use super::{Answer, Approves, Response, Step, ask_scrolled, pressed};
 
 /// Unchanged lines shown either side of a change, for orientation.
 const CONTEXT_LINES: usize = 2;
@@ -60,6 +60,17 @@ impl WriteAnswer {
     }
 }
 
+impl Approves for WriteAnswer {
+    fn approves(&self) -> bool {
+        match self {
+            WriteAnswer::Approve | WriteAnswer::ApproveAlways | WriteAnswer::ApproveAndRecord => {
+                true
+            }
+            WriteAnswer::Reject | WriteAnswer::Interrupt => false,
+        }
+    }
+}
+
 /// Draw the prompt and wait for an answer.
 ///
 /// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
@@ -73,13 +84,6 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Wr
     )
 }
 
-/// What a key press did at a write prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WriteResponse {
-    Answer(WriteAnswer),
-    Scroll(i16),
-}
-
 /// Interpret one key press at a write prompt, or `None` for a key that answers nothing.
 ///
 /// Takes the request for the reason [`run_answer_for`] does: `a` is bound only where the driver
@@ -90,48 +94,25 @@ pub(super) fn write_answer_for(
     key: KeyEvent,
     request: &WriteRequest,
     drawn: &Drawn,
-) -> Option<WriteResponse> {
+) -> Option<Response<WriteAnswer>> {
     drawn.take(match key.code {
         KeyCode::Char('a' | 'A')
             if request.may_always && !key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
-            Some(WriteResponse::Answer(WriteAnswer::ApproveAlways))
+            Some(Response::Answer(WriteAnswer::ApproveAlways))
         }
         KeyCode::Char('r' | 'R')
             if request.record.is_some() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
-            Some(WriteResponse::Answer(WriteAnswer::ApproveAndRecord))
+            Some(Response::Answer(WriteAnswer::ApproveAndRecord))
         }
         _ => pressed(key, drawn.page()).map(|response| match response {
-            Response::Answer(Answer::Approve) => WriteResponse::Answer(WriteAnswer::Approve),
-            Response::Answer(Answer::Reject) => WriteResponse::Answer(WriteAnswer::Reject),
-            Response::Answer(Answer::Interrupt) => WriteResponse::Answer(WriteAnswer::Interrupt),
-            Response::Scroll(by) => WriteResponse::Scroll(by),
+            Response::Answer(Answer::Approve) => Response::Answer(WriteAnswer::Approve),
+            Response::Answer(Answer::Reject) => Response::Answer(WriteAnswer::Reject),
+            Response::Answer(Answer::Interrupt) => Response::Answer(WriteAnswer::Interrupt),
+            Response::Scroll(by) => Response::Scroll(by),
         }),
     })
-}
-
-impl pinned::Approving for WriteResponse {
-    fn approves(&self) -> bool {
-        match self {
-            WriteResponse::Answer(answer) => match answer {
-                WriteAnswer::Approve
-                | WriteAnswer::ApproveAlways
-                | WriteAnswer::ApproveAndRecord => true,
-                WriteAnswer::Reject | WriteAnswer::Interrupt => false,
-            },
-            WriteResponse::Scroll(_) => false,
-        }
-    }
-}
-
-impl From<WriteResponse> for Step<WriteAnswer> {
-    fn from(response: WriteResponse) -> Self {
-        match response {
-            WriteResponse::Answer(answer) => Step::Answer(answer),
-            WriteResponse::Scroll(by) => Step::Scroll(by),
-        }
-    }
 }
 
 /// Draw the confirmation over the session, returning what the draw decided for its keys.

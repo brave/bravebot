@@ -17,20 +17,19 @@ use super::chrome::{
     answer_keys, approving, centred, indented, panel, refusing, stopping, verdict_rows,
 };
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Next, Response, Step, answer_for, ask_scrolled, next_press};
+use super::{Answer, Next, Response, answer_for, ask_plain, next_press};
 
 /// Put the language-server question to the user.
 ///
 /// Its own prompt rather than a run's, because what a yes grants has a different shape: a process
 /// that lives for the session rather than one argv that exits. LSP-5 is where that is settled.
 pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_server(frame, request, scroll, seen),
         // Scrolls as well as answers: the question is a binary, a directory and two sentences, but
         // the binary and the directory can each be longer than the box.
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -115,11 +114,10 @@ pub(super) fn draw_server(
 
 /// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
 pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_move(frame, request, scroll, seen),
-        |key, drawn| answer_for(key, drawn).map(Step::from),
+        answer_for,
     )
 }
 
@@ -194,16 +192,15 @@ pub(super) fn draw_move(
 /// Answered with `1` or `2`, which are the rows it draws, and with `y` and `n` as at every other
 /// prompt here. A standing decision like the vouch offer, so the keys are the vouch offer's too.
 pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListRequest) -> Answer {
-    ask_scrolled(
+    ask_plain(
         terminal,
-        Answer::Reject,
         |frame, scroll, seen| draw_tool_list(frame, request, scroll, seen),
-        |key, drawn| tool_list_answer_for(key, drawn).map(Step::from),
+        tool_list_answer_for,
     )
 }
 
 /// One key at the tool list, or `None` for a key that answers nothing.
-pub(super) fn tool_list_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response> {
+pub(super) fn tool_list_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Response<Answer>> {
     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
         match key.code {
             KeyCode::Char('1') => return drawn.take(Some(Response::Answer(Answer::Approve))),
