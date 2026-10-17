@@ -3325,6 +3325,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     Some(tools::refused_without_running(
                                         &mut policy,
                                         &mut reporter,
+                                        mcp.as_ref().map(|(offer, _)| offer),
+                                        &*conversation.quarantine(),
                                         call,
                                         crate::repeated_call::refusal(
                                             &call.function.name,
