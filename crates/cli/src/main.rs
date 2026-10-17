@@ -2457,8 +2457,8 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
 
-    /// A session that stayed where it started needs no directory: the shell reading this line is
-    /// already standing in the one the id will be looked up under.
+    /// These commands start no session, so a flag that shapes one has nothing to shape. Taking it
+    /// and ignoring it would read as honoured, which is the reason CLI-13 refuses it by name.
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
         let thirteen = [
@@ -2494,6 +2494,8 @@ mod tests {
         assert!(without_a_tool_set_to_limit("-p").is_none());
     }
 
+    /// A session that stayed where it started needs no directory: the shell reading this line is
+    /// already standing in the one the id will be looked up under.
     #[test]
     fn a_session_that_stayed_put_is_named_by_its_id_alone() {
         let left = Resumable {
