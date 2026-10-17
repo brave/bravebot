@@ -20,8 +20,6 @@
 
 # Node (npm distribution wrapper)
 node_modules/
-npm/bin/*-bin
-npm/bin/*-bin.exe
 
 # macOS
 .DS_Store

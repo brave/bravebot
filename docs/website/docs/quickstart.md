@@ -16,8 +16,10 @@ bravebot
 
 ## Install
 
-The install downloads the release binary for your platform and verifies its checksum. macOS, Linux
-and Windows are supported, on both x86_64 and arm64. To build from source instead, see
+npm installs the binary for your platform from its own package, `@brave/bravebot-<platform>-<arch>`,
+and runs no install script, so `--ignore-scripts` does not affect it. `--omit=optional` leaves that
+package out, and then `bravebot` exits saying the binary is missing. macOS, Linux and Windows are
+supported, on both x86_64 and arm64. To build from source instead, see
 [Development](development.md).
 
 On macOS and Linux there is an install script, for a machine with no npm on it:

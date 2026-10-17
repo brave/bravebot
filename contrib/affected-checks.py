@@ -46,7 +46,7 @@ READ_BY_RUST = (
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
     "install.sh": frozenset({"rust"}),
-    "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
+    "npm/scripts/stage-platform-package.js": frozenset({"npm", "rust"}),
 }
 
 # The scripts that build, fuse and check the Windows installers. CI runs them only in the jobs
@@ -340,7 +340,7 @@ CASES = (
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
-    ("npm/scripts/postinstall.js", {"npm", "rust"}),
+    ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("pnpm-lock.yaml", {"npm"}),

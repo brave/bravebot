@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 
-// Downloads the release binary for this platform and verifies its checksum and its signature:
-// a detached GPG signature over the checksum on Linux, the code signature on the binary on macOS
-// and Windows.
+// Builds the npm package that holds one platform's binary: `node stage-platform-package.js
+// <platform> <directory>`, where <platform> is node's `process.platform` and `process.arch`
+// joined by a hyphen. It downloads that platform's release asset, verifies its checksum and its
+// signature, and writes the package into <directory>. The publish workflow runs it on a runner of
+// the platform's own kind and publishes what it wrote. Nothing here runs when somebody installs.
 //
 // The checksum check is not optional: without it, a network-fetched executable would
-// run on the strength of TLS alone, and a compromised or substituted release asset
+// be packaged on the strength of TLS alone, and a compromised or substituted release asset
 // would be indistinguishable from a good one.
 //
-// Nor is the signature check. The checksum is published beside the binary, so whoever can replace
-// one can replace both. On macOS the binary has to be signed by Brave's team and pass Gatekeeper's
-// assessment, which running it from a terminal would not ask for. On Windows its Authenticode
-// signature has to be valid and made by Brave.
+// Nor is the signature check: a detached GPG signature over the checksum on Linux, the code
+// signature on the binary on macOS and Windows. The checksum is published beside the binary, so
+// whoever can replace one can replace both. On macOS the binary has to be signed by Brave's team
+// and pass Gatekeeper's assessment, which running it from a terminal would not ask for. On Windows
+// its Authenticode signature has to be valid and made by Brave.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -20,13 +23,23 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
-const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
 // Composed from nothing: not an argument, not a file, and not the environment. The asset and
 // its checksum are fetched from the same release, so an origin something outside this file
 // could supply would move both halves of the comparison at once, and a substituted binary
-// published beside its own true digest would pass the check and be written onto PATH.
+// published beside its own true digest would pass the check and be published to the registry.
 // install.sh states the same repository the same way.
 const REPO = "brave/bravebot";
+// The platforms there is a package for, by node's platform and architecture, and the release
+// asset each one's binary is. The launcher names the package it runs from the same two values,
+// and package.json lists exactly these as optionalDependencies.
+const PLATFORMS = {
+  "darwin-arm64": "bravebot-darwin-arm64",
+  "darwin-x64": "bravebot-darwin-amd64",
+  "linux-arm64": "bravebot-linux-arm64",
+  "linux-x64": "bravebot-linux-amd64",
+  "win32-arm64": "bravebot-windows-arm64.exe",
+  "win32-x64": "bravebot-windows-amd64.exe",
+};
 const MAX_REDIRECTS = 5;
 // Who a macOS or Windows binary has to be signed by. codesign and Authenticode alone accept a
 // valid signature from any signer a trusted authority issued a certificate to, so a signature
@@ -71,30 +84,78 @@ function releaseBaseUrl(tag) {
   return `https://github.com/${REPO}/releases/download/${tag}`;
 }
 
-async function main() {
-  const pkg = require(path.join(__dirname, "../../package.json"));
-
-  // Lets the package install in CI or a sandbox with no network, and during local
-  // development where the binary is built rather than downloaded.
-  if (process.env[SKIP_ENV] === "1") {
-    console.log(`Skipping bravebot binary download because ${SKIP_ENV}=1`);
-    return;
-  }
-
-  const target = resolveTarget(process.platform, process.arch);
-  if (!target) {
-    console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
-    process.exit(1);
-  }
-
-  await install({
-    target,
-    tag: `v${pkg.version}`,
-    destination: path.join(__dirname, "..", "bin", target.binaryName),
-  });
+// The binary goes where the launcher looks for it: bin/ in the package, named for the platform.
+// The launcher in npm/bin/bravebot.js composes the same two names, and npm/tests holds the two
+// to each other.
+function binaryName(platform) {
+  return platform === "win32" ? "bravebot.exe" : "bravebot";
 }
 
-async function install({
+function packageName(key) {
+  return `@brave/bravebot-${key}`;
+}
+
+function resolveTarget(key) {
+  const asset = Object.hasOwn(PLATFORMS, key) ? PLATFORMS[key] : undefined;
+  if (!asset) {
+    return null;
+  }
+  const platform = key.slice(0, key.indexOf("-"));
+  return { asset, platform, binaryName: binaryName(platform) };
+}
+
+// The package's manifest. The version and the fields that identify the project are the root
+// package's, so there is one place each is written and the version cannot disagree with the
+// release the binary came from. `os` and `cpu` are what make npm install this package on the
+// platform it is for and nowhere else.
+function manifest(key, root) {
+  const [platform, arch] = key.split("-");
+  return {
+    name: packageName(key),
+    version: root.version,
+    description: `The bravebot binary for ${platform} on ${arch}. Install @brave/bravebot, which depends on this package.`,
+    license: root.license,
+    repository: root.repository,
+    bugs: root.bugs,
+    homepage: root.homepage,
+    os: [platform],
+    cpu: [arch],
+    files: ["bin", "LICENSE"],
+    publishConfig: root.publishConfig,
+  };
+}
+
+// The package for one platform, written into `directory`: the verified binary, then the manifest,
+// so a directory holding a manifest holds a binary that passed. `fetchBinary` is the download and
+// is replaceable so the layout can be checked without a release.
+async function build({ key, directory, root, fetchBinary = download }) {
+  const target = resolveTarget(key);
+  if (!target) {
+    throw new Error(`No package is built for ${key}; the platforms are ${Object.keys(PLATFORMS).join(", ")}`);
+  }
+  await fetchBinary({
+    target,
+    tag: `v${root.version}`,
+    destination: path.join(directory, "bin", target.binaryName),
+  });
+  fs.copyFileSync(path.join(__dirname, "../../LICENSE"), path.join(directory, "LICENSE"));
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    `${JSON.stringify(manifest(key, root), null, 2)}\n`
+  );
+}
+
+async function main(argv) {
+  const [key, directory] = argv;
+  if (!key || !directory || argv.length !== 2) {
+    console.error("usage: stage-platform-package.js <platform>-<arch> <directory>");
+    process.exit(2);
+  }
+  const root = require(path.join(__dirname, "../../package.json"));
+  await build({ key, directory, root });
+}
+
+async function download({
   target,
   tag,
   destination,
@@ -117,22 +178,23 @@ async function install({
   }
 
   // Linux ships no code signature, unlike Darwin (notarized) and Windows (Authenticode), so its
-  // checksum carries a detached GPG signature instead. With gpg here, a signature that is missing
-  // is refused like one that is wrong, since deleting it is what somebody replacing the release
-  // would do. Without gpg the check is skipped, and said to be. Verified against the exact bytes
-  // fetched for the checksum, not a reconstructed string, since that is what was actually signed.
+  // checksum carries a detached GPG signature instead. A signature that is missing is refused
+  // like one that is wrong, since deleting it is what somebody replacing the release would do.
+  // So is a machine with no gpg: this runs on a runner the workflow chose, which has it, and
+  // a build that skipped the check for want of the tool is the one an attacker arranges.
+  // Verified against the exact bytes fetched for the checksum, not a reconstructed string, since
+  // that is what was actually signed.
   if (target.asset.includes("-linux-")) {
-    if (hasGpg()) {
-      const ascBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256.asc`);
-      const publicKeyBytes = Buffer.from(publicKey, "utf8");
-      if (!verifySignature(shaBytes, ascBytes, publicKeyBytes, fingerprint)) {
-        throw new Error(
-          `Signature verification failed for ${target.asset}.sha256; refusing to install`
-        );
-      }
-    } else {
-      console.log(
-        "Note: gpg not found; skipping signature verification (the checksum above was still verified)."
+    if (!hasGpg()) {
+      throw new Error(
+        `gpg could not be run, so ${target.asset}.sha256 cannot be checked for Brave's signature; refusing to package`
+      );
+    }
+    const ascBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256.asc`);
+    const publicKeyBytes = Buffer.from(publicKey, "utf8");
+    if (!verifySignature(shaBytes, ascBytes, publicKeyBytes, fingerprint)) {
+      throw new Error(
+        `Signature verification failed for ${target.asset}.sha256; refusing to package`
       );
     }
   }
@@ -151,54 +213,7 @@ async function install({
   } finally {
     fs.rmSync(staged, { force: true });
   }
-  console.log(`Installed bravebot ${tag} (${target.asset})`);
-}
-
-function resolveTarget(platform, arch) {
-  const resolved = resolveArch(platform, arch);
-  const key = `${platform}-${resolved}`;
-  const table = {
-    "darwin-arm64": "bravebot-darwin-arm64",
-    "darwin-x64": "bravebot-darwin-amd64",
-    "linux-arm64": "bravebot-linux-arm64",
-    "linux-x64": "bravebot-linux-amd64",
-    "win32-arm64": "bravebot-windows-arm64.exe",
-    "win32-x64": "bravebot-windows-amd64.exe",
-  };
-  const asset = table[key];
-  if (!asset) {
-    return null;
-  }
-  return {
-    asset,
-    platform,
-    binaryName: platform === "win32" ? "bravebot-bin.exe" : "bravebot-bin",
-  };
-}
-
-// Under Rosetta, node reports x64 on an arm64 machine. Installing the x64 binary
-// would work but run translated, so prefer the native one.
-function resolveArch(platform, arch) {
-  const override = process.env.BRAVEBOT_INSTALL_ARCH;
-  if (override === "arm64" || override === "x64") {
-    return override;
-  }
-
-  if (platform === "darwin" && arch === "x64") {
-    const translated = sysctl("sysctl.proc_translated");
-    const arm64Capable = sysctl("hw.optional.arm64");
-    if (translated === "1" && arm64Capable === "1") {
-      console.log("Detected Rosetta translation; installing the native arm64 binary.");
-      return "arm64";
-    }
-  }
-
-  return arch;
-}
-
-function sysctl(name) {
-  const result = spawnSync("sysctl", ["-in", name], { encoding: "utf8" });
-  return result.status === 0 ? (result.stdout || "").trim() : null;
+  console.log(`Verified bravebot ${tag} (${target.asset})`);
 }
 
 function fetchToBuffer(url) {
@@ -223,7 +238,7 @@ function get(url, redirects, callback) {
   }
 
   https
-    .get(url, { headers: { "User-Agent": "bravebot-installer" } }, (response) => {
+    .get(url, { headers: { "User-Agent": "bravebot-npm-publish" } }, (response) => {
       const { statusCode, headers } = response;
       if (statusCode >= 300 && statusCode < 400 && headers.location) {
         response.resume();
@@ -270,7 +285,7 @@ function verifyCodeSignature(target, file) {
       }
       if (!accepted) {
         throw new Error(
-          `${target.asset} is not signed by Brave Software (team ${APPLE_TEAM_ID}), or Gatekeeper rejected it (checking notarization may need the network); refusing to install`
+          `${target.asset} is not signed by Brave Software (team ${APPLE_TEAM_ID}), or Gatekeeper rejected it (checking notarization may need the network); refusing to package`
         );
       }
       return;
@@ -285,7 +300,7 @@ function verifyCodeSignature(target, file) {
       const [status, signer] = (result.stdout || "").split(/\r?\n/).map((line) => line.trim());
       if (result.status !== 0 || status !== "Valid" || signer !== WINDOWS_SIGNER) {
         throw new Error(
-          `${target.asset} is not signed by ${WINDOWS_SIGNER} (Authenticode reports ${status || "no status"}, signer ${signer || "none"}); refusing to install`
+          `${target.asset} is not signed by ${WINDOWS_SIGNER} (Authenticode reports ${status || "no status"}, signer ${signer || "none"}); refusing to package`
         );
       }
       return;
@@ -301,7 +316,7 @@ function verifyCodeSignature(target, file) {
 function requireTool(result, name, target) {
   if (result.error) {
     throw new Error(
-      `${name} could not be run (${result.error.code || result.error.message}), so ${target.asset} cannot be checked for Brave's signature; refusing to install`
+      `${name} could not be run (${result.error.code || result.error.message}), so ${target.asset} cannot be checked for Brave's signature; refusing to package`
     );
   }
 }
@@ -372,14 +387,14 @@ function verifySignature(shaBytes, ascBytes, publicKeyBytes, fingerprint) {
   }
 }
 
-// Importable, so the origin can be checked without a network or an install: the download runs
-// only when node was pointed at this file. install is exported too, so the signature check can
+// Importable, so the origin and the layout can be checked without a network: the build runs
+// only when node was pointed at this file. `download` is exported too, so the signature check can
 // be run against a release the test made rather than the one this repository publishes.
 if (require.main === module) {
-  main().catch((error) => {
-    console.error(`Failed to install the bravebot binary: ${error.message}`);
+  main(process.argv.slice(2)).catch((error) => {
+    console.error(`Failed to build the bravebot package: ${error.message}`);
     process.exit(1);
   });
 }
 
-module.exports = { releaseBaseUrl, install };
+module.exports = { PLATFORMS, releaseBaseUrl, binaryName, packageName, manifest, build, download };
