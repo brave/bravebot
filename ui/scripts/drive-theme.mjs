@@ -1,6 +1,7 @@
 // That System / Light / Dark can be chosen and remembered.
 import { checker, launch } from './drive-support.mjs'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appState, locateProfile } from './drive-profile.mjs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const shots = '/tmp/bravebot-ui'
@@ -19,32 +20,12 @@ if (exportScript) {
 }
 check(/\bcolor-scheme:\s*light\b/.test(readFileSync(join(process.cwd(), 'src/renderer/export.css'), 'utf8')), 'export pins native controls to light')
 
-const naming = await launch()
-const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
-await naming.close()
-
-const stateFile = join(userData, 'bravebot-ui.json')
-
-const readState = () => {
-  try {
-    return JSON.parse(readFileSync(stateFile, 'utf8'))
-  } catch {
-    return {}
-  }
-}
+const { stateFile } = await locateProfile()
+const { readState, putKey } = appState(stateFile)
 
 const hadTheme = readState().theme
 
-const putTheme = (name) => {
-  const state = readState()
-  if (name === undefined) delete state.theme
-  else state.theme = name
-  try {
-    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
-  } catch {
-    // First launch may not have written the file yet.
-  }
-}
+const putTheme = (name) => putKey('theme', name)
 
 const restore = () => {
   try {

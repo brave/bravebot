@@ -27,7 +27,8 @@
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
 import { checker, launch } from './drive-support.mjs'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appState, locateProfile } from './drive-profile.mjs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
@@ -47,18 +48,8 @@ const { check, problems } = checker()
 // Electron's to decide and differs by platform. A launch of its own, because this driver's key has
 // to be cleared before the first launch that is measured — a bot left behind by an earlier run
 // would be a row these assertions did not make.
-const naming = await launch()
-const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
-await naming.close()
-
-const stateFile = join(userData, 'bravebot-ui.json')
-const readState = () => {
-  try {
-    return JSON.parse(readFileSync(stateFile, 'utf8'))
-  } catch {
-    return {}
-  }
-}
+const { userData, stateFile } = await locateProfile()
+const { readState, putKey } = appState(stateFile)
 
 // What was there before this ran, so it can be there after. This driver's two keys only.
 //
@@ -74,17 +65,6 @@ const readState = () => {
 // not the key.
 const MINE = ['release-notes', 'triage']
 const hadView = readState().view
-
-const putKey = (key, value) => {
-  const state = readState()
-  if (value === undefined) delete state[key]
-  else state[key] = value
-  try {
-    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
-  } catch {
-    // The app has not written the file yet, which is a state it handles on every first launch.
-  }
-}
 
 // Each bot gets a home folder the app makes under its own data directory. Removed at the end,
 // since these two are this driver's.

@@ -223,6 +223,10 @@ real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), 
 credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
 `drive-theme` put back the key they change; do not assume any of the others do.
 
+`drive-bots`, `drive-bot-turn`, `drive-bot-memory` and `drive-theme` write `bravebot-ui.json` through
+`appState` in `scripts/drive-profile.mjs`, the one place that code is written; it changes one key
+at a time, and a driver replaces only its own rows inside a shared key such as `bots`.
+
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,

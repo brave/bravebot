@@ -30,42 +30,18 @@
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
 import { checker, launch } from './drive-support.mjs'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir, tmpdir } from 'node:os'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
 const { check, problems } = checker()
 
-const naming = await launch()
-const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
-await naming.close()
-
-const stateFile = join(userData, 'bravebot-ui.json')
-const readState = () => {
-  try {
-    return JSON.parse(readFileSync(stateFile, 'utf8'))
-  } catch {
-    return {}
-  }
-}
+const { userData, stateFile } = await locateProfile()
+const { readState, putKey } = appState(stateFile)
 const hadView = readState().view
-const putKey = (key, value) => {
-  const state = readState()
-  if (value === undefined) delete state[key]
-  else state[key] = value
-  try {
-    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
-  } catch {}
-}
-
-// A checkout of its own, so the memory file this writes and the approvals this run earns touch
-// nothing real.
-const checkout = join(tmpdir(), 'bravebot-ui-drive-bot-memory')
-rmSync(checkout, { recursive: true, force: true })
-mkdirSync(checkout, { recursive: true })
-writeFileSync(join(checkout, 'README.md'), '# a scratch checkout\n', 'utf8')
+const checkout = scratchCheckout('bravebot-ui-drive-bot-memory')
 
 // This driver's own row and no more. `bots` holds somebody's actual bots, so clearing it to make
 // room is a destructive act one interrupted run away from happening. It adds one and removes one.
@@ -86,49 +62,19 @@ putKey('view', undefined)
  */
 const LOOKALIKE = '[bravebot-ui] Keeping your memory current.'
 
-/** Wait for a turn to finish, or for the screen that says why it cannot. */
-async function settle(page, seconds = 90) {
-  for (let i = 0; i < seconds; i++) {
-    if (await page.locator('.unconfigured').isVisible().catch(() => false)) return 'unconfigured'
-    const running = await page.locator('.working').isVisible().catch(() => false)
-    if (!running && i > 3) return 'done'
-    await page.waitForTimeout(1000)
-  }
-  return 'timeout'
-}
-
 const app = await launch()
-// The conversation runs in the scratch checkout, picked in the composer's project menu; the native
-// dialog that opens is answered here.
-await app.evaluate(({ dialog }, directory) => {
-  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
-}, checkout)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
 await page.waitForTimeout(2500)
 
-await page.evaluate(() =>
-  window.bravebot.writeBot({
-    name: 'Archivist',
-    purpose:
-      'You are the archivist of this checkout. Keep your answers to one short sentence.',
-  }),
-)
-await page.reload()
-await page.waitForTimeout(2000)
-await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
-await page.waitForTimeout(400)
-
-const mine = page
-  .locator('.bot')
-  .filter({ has: page.locator('.bot-name', { hasText: /^Archivist$/ }) })
-check((await mine.count()) === 1, 'the bot is in the list')
-await mine.locator('.bot-open-button').click()
-await page.locator('[data-test="bot-page"]').waitFor()
-await page.locator('[data-test="project-trigger"]').click()
-await page.locator('[data-test="project-pick"]').click()
-await page.waitForTimeout(400)
+await openBot(app, page, {
+  name: 'Archivist',
+  row: /^Archivist$/,
+  purpose: 'You are the archivist of this checkout. Keep your answers to one short sentence.',
+  checkout,
+  check,
+})
 
 // --- one ordinary turn, to ground the session --------------------------------------------
 
@@ -276,11 +222,7 @@ putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessio
 rmSync(checkout, { recursive: true, force: true })
 rmSync(join(userData, 'bots', MINE), { recursive: true, force: true })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
-// And the records the agent wrote, kept per checkout under a directory named by mangling its path.
-rmSync(join(homedir(), '.bravebot', 'sessions', checkout.replace(/[^A-Za-z0-9._]/g, '-')), {
-  recursive: true,
-  force: true,
-})
+forgetCheckoutSessions(checkout)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)
