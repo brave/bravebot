@@ -34,7 +34,7 @@ use bravebot_core::credentials::Scanned;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{RecordingSink, Sink};
 use bravebot_core::label::Label;
-use bravebot_core::policy::{Destination, Policy, RunRequestCause};
+use bravebot_core::policy::{Containment, Destination, Policy, RunRequestCause};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::todo::{self, Item, List, Status};
 use bravebot_core::value::Labelled;
@@ -7612,9 +7612,16 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    // How the sandbox holds the line, said from the compiled steps and the session's own settings:
+    // the person's trust of the directory answers only for a line it holds (RUN-5).
+    let containment = confinement
+        .as_ref()
+        .map_or(Containment::Unknown, |confinement| {
+            confinement.holds(&plan.steps(), &plan.directory)
+        });
     let asking = match unconfined {
         true => policy.plan_needs_approval_unconfined(),
-        false => policy.plan_needs_approval_requesting(&plan, &names),
+        false => policy.plan_needs_approval_held(&plan, &names, containment),
     };
     // Whether the record is what stopped the question. Read where the result is quarantined: the
     // advice about vouching is advice about a prompt, and no prompt will return here for this line

@@ -51,8 +51,13 @@ Asking is what the mode does, and not a promise that every one of those question
 question is not put again where the person answered it earlier in the session, where a rule they wrote
 in advance covers the line ([permissions.md](permissions.md)), or where the audited table proves it
 ([tools/command-line.md](tools/command-line.md)); the record [tools/run.md](tools/run.md) specifies
-is a fourth such road and one a one-shot run does not read. None of them is a mode, and choosing this
+is a fourth such road and one a one-shot run does not read. A fifth is the person's trust of the directory,
+for a line the sandbox holds ([tools/run.md](tools/run.md#RUN-5)). None of them is a mode, and choosing this
 one takes nothing back.
+
+**Known cost.** In a directory the person trusted at a question that said so, a plain line the sandbox holds
+runs in this mode without being asked about, so there this mode does not put every run to a person. The rule
+`Bash(*)` in `permissions.ask` restores asking for every line ([permissions.md](permissions.md#PERM-2)).
 
 **Why.** The mode nobody selected cannot be one that stops asking. Every other mode here is a
 decision somebody made; this one is what holds when they have made none.

@@ -381,6 +381,10 @@ It covers less than a yes does:
 - **The rule a yes writes, and nothing else.** What the earlier session went on to record, a file it
   marked untrusted included, is not carried. That is the [first cost below](#known-costs), and a
   kept answer does not close it.
+- **Whether confined lines run without asking.** The question says that a command the sandbox confines
+  then runs in the directory without asking ([the run tool](../reference/run-tool.md#a-confined-line-in-a-directory-you-trusted-does-not-ask)).
+  An answer kept before the question said so, and a session resumed from a record that predates it, keep
+  asking about every line until you answer again. The newest kept answer for a directory decides.
 - **Not everywhere.** It is not kept at a directory your settings file named, with
   `--dangerously-skip-permissions` (which asks nothing and writes nothing), or in the cases above. An
   incognito session still honours a yes an ordinary one kept.

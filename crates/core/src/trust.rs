@@ -69,6 +69,18 @@ pub struct TrustStore {
     /// this crate performs no I/O. `false` unless the caller says otherwise, so a map made without
     /// the answer compares bytes and never extends a rule to a spelling it was not written about.
     folds_case: bool,
+    /// The working directory the person's yes said confined `run` lines may start in without being
+    /// asked ([RUN-5]), or `None` where no yes did.
+    ///
+    /// Not a rule and not a decision about any file: a rule says what a path is read as, and this
+    /// says what a person agreed to when they trusted the directory. Held beside the rules so that
+    /// every caller that carries the map carries the answer with it, and keyed on the directory so
+    /// the map moving to another one ([`TrustStore::rebased`]) leaves the answer behind, since it
+    /// was about the first. A map made from a kept answer written before the question said this has
+    /// none, which is what makes such a directory ask until the person answers again.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    confined_lines_in: Option<String>,
 }
 
 impl TrustStore {
@@ -84,6 +96,7 @@ impl TrustStore {
             root: normalise(&root.as_ref().to_string_lossy()),
             rules: BTreeMap::new(),
             folds_case: false,
+            confined_lines_in: None,
         }
     }
 
@@ -256,10 +269,17 @@ impl TrustStore {
                 (path.clone(), integrity)
             })
             .collect();
+        // Both maps have to hold the answer for the same directory, since it widens what asks and
+        // the lower of two decisions is the one kept.
+        let confined_lines_in = match (&self.confined_lines_in, &other.confined_lines_in) {
+            (Some(ours), Some(theirs)) if ours == theirs => Some(ours.clone()),
+            _ => None,
+        };
         Self {
             root: self.root.clone(),
             rules,
             folds_case: self.folds_case,
+            confined_lines_in,
         }
     }
 
@@ -440,7 +460,31 @@ impl TrustStore {
             root: normalise(&to.to_string_lossy()),
             rules: self.rules.clone(),
             folds_case,
+            confined_lines_in: self.confined_lines_in.clone(),
         }
+    }
+
+    /// Record that the person's yes to the startup question said confined lines in the working
+    /// directory run without asking ([RUN-5]).
+    ///
+    /// Called where a yes is turned into a map, by a caller whose question said so, and nowhere else:
+    /// a map made from an answer that did not say so does not call it, so a directory trusted
+    /// before the question said it, or without being asked, keeps asking about every line.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    pub fn allow_confined_lines(&mut self) {
+        self.confined_lines_in = Some(self.root.clone());
+    }
+
+    /// Whether the person said confined lines run without asking in the directory this map works
+    /// in now.
+    ///
+    /// False once the map has moved to another directory ([`TrustStore::rebased`]): the answer was
+    /// about the first one, and a person who trusted `~/a` has said nothing about `~/b`. A map
+    /// that says so still decides nothing by itself. [`Policy`](crate::policy::Policy) asks it only
+    /// of a line that starts in the root, and only with the other conditions of RUN-5 met.
+    pub fn allows_confined_lines(&self) -> bool {
+        self.confined_lines_in.as_deref() == Some(self.root.as_str())
     }
 }
 
@@ -734,6 +778,47 @@ mod tests {
         assert!(store.is_empty());
         assert_eq!(store.integrity_of("src/main.rs"), None);
         assert!(!store.is_trusted("src/main.rs"));
+    }
+
+    /// RUN-5: a map says confined lines run without asking only where a yes said so, in the
+    /// directory the yes was about. A map that never heard the question says nothing, which is what
+    /// a directory trusted before the question said it keeps asking on.
+    #[test]
+    fn a_map_allows_confined_lines_only_after_a_yes_that_said_so() {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        assert!(
+            !store.allows_confined_lines(),
+            "trusting alone allowed them"
+        );
+        store.allow_confined_lines();
+        assert!(store.allows_confined_lines());
+    }
+
+    /// RUN-5: the answer is about one directory. Rebased onto another it is not carried, and the
+    /// weaker of two maps is the one that holds.
+    #[test]
+    fn the_answer_about_confined_lines_stays_with_its_directory_and_the_weaker_map_wins() {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.allow_confined_lines();
+        assert!(
+            !store
+                .rebased(Path::new("/other"), false)
+                .allows_confined_lines()
+        );
+        assert!(
+            store
+                .rebased(Path::new("/other"), false)
+                .rebased(Path::new("/work"), false)
+                .allows_confined_lines(),
+            "going back to the directory the answer was about lost it"
+        );
+        let mut without = TrustStore::new("/work");
+        without.trust(".");
+        assert!(!store.meet(&without).allows_confined_lines());
+        assert!(!without.meet(&store).allows_confined_lines());
+        assert!(store.meet(&store.clone()).allows_confined_lines());
     }
 
     #[test]

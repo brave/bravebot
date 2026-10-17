@@ -3737,9 +3737,10 @@ fn opening_for(
                 // After the mode, so a session bypassing every permission says the flag answered:
                 // the map is the same either way, and the flag is what is in force.
                 None => match kept() {
-                    Some(kept) => {
-                        Opening::Remembered(crate::trust_prompt::trusting_the_workspace(root), kept)
-                    }
+                    Some(kept) => Opening::Remembered(
+                        crate::trust_prompt::trusting_as_kept(root, &kept),
+                        kept,
+                    ),
                     None => Opening::Ask,
                 },
             }
@@ -3788,7 +3789,7 @@ fn keep_the_answer(
     root: &std::path::Path,
 ) -> Option<String> {
     let yes = answer == crate::trust_prompt::Answer::Trust;
-    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session)?;
+    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session, true)?;
     let directory = root.display();
     Some(match kept {
         true => t!(session_trust_kept, directory = directory),
@@ -20355,7 +20356,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
         let mut session = a_turn_running_on("first");
         let mut stored = bravebot_session::sessions::Handle::begin(
             &root,
@@ -24188,6 +24192,7 @@ mod tests {
             session: "1-2".to_string(),
             at: 7,
             root: here().to_path_buf(),
+            confined_lines: false,
         };
         for beginning in [Beginning::New, Beginning::Resumed(None)] {
             match opening_for(beginning, PermissionMode::Ask, here(), || {
@@ -24202,6 +24207,37 @@ mod tests {
                         "a remembered answer reached outside the directory",
                     );
                 }
+                opening => panic!("a remembered answer was not honoured: {opening:?}"),
+            }
+        }
+    }
+
+    /// RUN-5. A session a kept answer settles holds the map that answer's entry describes: held
+    /// lines run unasked only where the entry says the question did, and never below another root.
+    #[test]
+    fn a_remembered_answer_allows_confined_lines_only_where_its_entry_says_so() {
+        use bravebot_agent::PermissionMode;
+
+        let kept = |root: &std::path::Path, confined_lines| bravebot_agent::trusted::Kept {
+            session: "1-2".to_string(),
+            at: 7,
+            root: root.to_path_buf(),
+            confined_lines,
+        };
+        for (root, confined_lines, allowed) in [
+            (here(), true, true),
+            (here(), false, false),
+            (std::path::Path::new("/tmp"), true, false),
+        ] {
+            let entry = kept(root, confined_lines);
+            match opening_for(Beginning::New, PermissionMode::Ask, here(), || {
+                Some(entry.clone())
+            }) {
+                Opening::Remembered(trust, _) => assert_eq!(
+                    trust.allows_confined_lines(),
+                    allowed,
+                    "root {root:?}, confined_lines {confined_lines}"
+                ),
                 opening => panic!("a remembered answer was not honoured: {opening:?}"),
             }
         }
@@ -24362,7 +24398,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let said = forget_trust(Some(&home), &root);
 
@@ -24397,7 +24436,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let said = forget_trust(Some(&home), &package);
 

@@ -211,19 +211,64 @@ check can quarantine output after an unrelated file decision; it never broadens 
 `verified-by: bravebot_agent::tools::an_ended_job_revalidates_its_file_proof_before_releasing_output`
 
 <a id="RUN-5"></a>
-### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, or proven
+### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, proven, or held in a directory the person trusted
 
 There is no *declared* read-only category. `foo --bar` might write to disk and nothing here can
-tell, and a stage declaring itself harmless only helps if the declaration is honest. Four things
+tell, and a stage declaring itself harmless only helps if the declaration is honest. Five things
 may answer the question, and nothing else: a person having answered it before, in this session, for
 this exact command; that person having asked at a prompt for their answer to one exact command line
 to last past the session, which [RUN-19](#RUN-19) specifies; a rule the person
 wrote down in advance, which
 [permissions.md](../permissions.md) governs and which stops the asking without raising any label;
 and the audited table in [command-line.md](command-line.md) establishing that these exact arguments
-write nothing and read only paths the user vouched for. Never a property of the argv this system
-worked out for itself, never a declaration by a stage, never anything derived from what a program
-printed.
+write nothing and read only paths the user vouched for; and, last, the person's trust of the
+directory the line starts in, for a line the sandbox holds, below. Never a property of the argv this
+system worked out for itself, never a declaration by a stage, never anything derived from what a
+program printed.
+
+**The person's trust of the directory.** A yes to the startup question ([TRUST-7](../trust-map.md#TRUST-7))
+says, in the question, that a command the sandbox confines runs in that directory without asking.
+Such a line is not asked about when all of these hold, each read from the plan, the session's own
+settings and the person's answer and never from what a stage wrote or printed:
+
+- the line starts in the workspace root the yes was given for, not a directory beneath or beside it,
+  and the root is still trusted. The answer is keyed to that one directory ([RUN-8](#RUN-8)), so a
+  worktree is its own directory with its own answer and `/cd` leaves the answer behind;
+- the yes said so. A directory trusted before the question said so, one trusted by a kept answer
+  written before it, a session that resumed with a map from before it, a one-shot run given
+  `--trust-workspace` and the desktop interface (whose question does not say so, and which does not act
+  on a kept answer that does) keep asking about every line until the person answers a question that says so, and the newest kept answer decides;
+- every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
+  with the network closed for the session and none of the stages keeping it ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
+  on a platform that holds a `.git` back from every stage, which is macOS and not Linux or Windows
+  ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
+- nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
+  ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
+  `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
+  or a rule that says ask ([permissions.md](../permissions.md));
+- no stage's program is a file under a directory the plan may write to, and no stage is given such a file
+  as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
+  `node`, `env` and the like, known by the file its program resolved to). An argument is read as the words
+  in it, so `sh -c "./gen.sh a"` and `node --require=./hook.js` name the file they run. A stage could have
+  written it, and under this answer the line that runs it would not ask.
+
+It stops the asking and nothing else. What the line prints is quarantined as an unproven line's is, and
+no label is raised ([RUN-4](#RUN-4)). The setting that restores asking for every line is the rule
+`Bash(*)` in `permissions.ask`, which any layer may write, a checkout's file included, since it only asks for
+more ([PERM-14](../permissions.md#PERM-14)).
+
+**Why.** Without it, nearly every line in a trusted worktree asks, builds and tests included, though they
+run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
+give: a confined stage with no network and no way to write a `.git` cannot send what it reads anywhere or
+plant a hook that runs unconfined, and a line that asks for more than that is asked about as before.
+The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
+was told, and none can be decided by anything a stage did.
+
+**What it costs.** The default network is open ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), so until a person
+or a settings file closes it no line is held and nothing changes; running one line with the network closed is
+not specified here. A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with
+`-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
+list does not name does the same for a file that is not executable.
 
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
@@ -247,6 +292,20 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_held_line_in_a_directory_whose_yes_said_so_does_not_ask`
+`verified-by: bravebot_core::policy::a_line_run_on_the_trust_of_its_directory_prints_untrusted_output`
+`verified-by: bravebot_core::policy::a_held_line_that_asks_for_more_than_a_plain_line_still_asks`
+`verified-by: bravebot_core::policy::an_ask_rule_still_asks_about_a_held_line`
+`verified-by: bravebot_core::policy::the_answer_does_not_follow_a_move_and_does_not_outlive_the_trust`
+`verified-by: bravebot_core::policy::a_held_line_asks_when_no_root_is_known`
+`verified-by: bravebot_core::trust::a_map_allows_confined_lines_only_after_a_yes_that_said_so`
+`verified-by: bravebot_core::trust::the_answer_about_confined_lines_stays_with_its_directory_and_the_weaker_map_wins`
+`verified-by: bravebot_agent::confine::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
+`verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
+`verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
+`verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
+`verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
 
 <a id="RUN-6"></a>
 ### RUN-6: private input asks every time, whatever is vouched for
@@ -340,6 +399,13 @@ for at the root, and what it prints is `(U,priv)`, because no entry names `vendo
 `sub/nested/`. Matching a prefix would put this same hole one level down, since the relative
 argument that designates a different file at the root designates a different file in a subdirectory
 too.
+
+**The person's trust of a directory is one directory's too.** What a yes to the startup question
+says about confined lines ([RUN-5](#RUN-5)) is keyed to the workspace root it was given in, exactly as an
+entry is: it grants nothing in a directory beneath it, and none in another worktree of the same repository,
+which has a root and an answer of its own. Whether trust should follow the repository is not decided here.
+Reading the identity of a repository from a worktree's `.git` pointer or `commondir` is not an option, since
+a stage can write those bytes.
 
 **The canonical absolute path, as the only spelling.** `sub`, `./sub` and a symlink pointing at
 `sub` are one tree, and three keys for it would be three chances for a prompt somebody has already

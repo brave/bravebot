@@ -17,6 +17,7 @@ use crate::reach::{ChosenKey, Grant, Reached};
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
+use bravebot_core::policy::Containment;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
@@ -402,6 +403,77 @@ impl Confinement {
             }
         }
         self.filesystem.apply(self.path_reach.apply(policy))
+    }
+
+    /// Whether every stage of `steps`, started in `directory`, is held to a sandbox that leaves a
+    /// plain line nothing a person would be asked about, which is what lets a person's trust of
+    /// the directory answer for it (RUN-5).
+    ///
+    /// All of these hold, and each is read from the compiled steps and the session's own setting,
+    /// never from what a program printed:
+    ///
+    /// - the mode confines, and the platform holds a `.git` back from every stage (SANDBOX-14),
+    ///   which Linux and Windows do not, so no line there is held;
+    /// - the network is closed for the session and no stage keeps it (SANDBOX-20). Asked of each
+    ///   stage through [`Confinement::egress`], which is true for every stage while the network is
+    ///   open;
+    /// - no stage is git, whose profile lifts the hold-back, and none writes a `.git`;
+    /// - no stage is lent anything a person remembered for it;
+    /// - no stage starts a file under a directory the plan may write to, and no stage is handed
+    ///   such a file as an argument where it is an executable file or the stage is an interpreter or
+    ///   wrapper. A program a stage wrote is a line the person never saw, and under this answer the
+    ///   next line would not ask either.
+    ///
+    /// An interpreter is known by the file name its program resolved to, so a script run by a
+    /// program this list does not know and that is not executable, or through a module name, still
+    /// runs unasked. It is held to the same sandbox as the line that wrote it, which is what this
+    /// answer relies on.
+    pub fn holds(&self, steps: &[&Step], directory: &Path) -> Containment {
+        let held = !matches!(self.mode, SandboxMode::Off)
+            && self.prelude == Prelude::MacOs
+            && !steps.is_empty();
+        if !held {
+            return Containment::Unknown;
+        }
+        let environment = process_environment();
+        let every_stage = steps.iter().all(|step| {
+            !self.egress(step)
+                && self.granted(step).next().is_none()
+                && !self.writable_by_the_plan(&step.resolved)
+                && !self.writable_by_the_plan(&step.started_as)
+                && !self.composed(step, &environment).0.git_directories_writable
+                && !self.hands_over_a_file_the_plan_could_write(step, directory)
+        });
+        match every_stage {
+            true => Containment::Held,
+            false => Containment::Unknown,
+        }
+    }
+
+    /// Whether one of the words of `step`'s arguments names a regular file under a directory the
+    /// plan may write to, where the step is an interpreter or a wrapper, or the file is executable.
+    ///
+    /// An argument is cut into words at white space, shell punctuation and `=`, so `sh -c "./gen.sh
+    /// a"` and `node --require=./hook.js` name the file they run. A word is looked up as spelled,
+    /// under `directory` where it is relative. That reads whether a file exists, what kind it is and
+    /// whether it is executable, never what is in it, and a stage that creates or removes it can
+    /// only change whether this asks about the line that names it.
+    fn hands_over_a_file_the_plan_could_write(&self, step: &Step, directory: &Path) -> bool {
+        let interpreter = step
+            .resolved
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(runs_what_it_is_given);
+        step.args
+            .iter()
+            .flat_map(|arg| arg.split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c)))
+            .filter(|word| !word.is_empty())
+            .map(|word| directory.join(word))
+            .any(|file| {
+                file.is_file()
+                    && (interpreter || is_executable(&file))
+                    && self.writable_by_the_plan(&file)
+            })
     }
 
     /// What the trail records about the network for the stages of one run, or `None` where the
@@ -2260,6 +2332,69 @@ fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
+/// Whether a program, known by the file name it resolved to, starts a file or a program its
+/// arguments name: a shell, a language's interpreter, or a wrapper that runs its operand.
+fn runs_what_it_is_given(name: &str) -> bool {
+    const WRAPPERS: &[&str] = &[
+        "env", "xargs", "exec", "nohup", "time", "timeout", "nice", "setsid", "stdbuf", "command",
+        "busybox",
+    ];
+    const INTERPRETERS: &[&str] = &[
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "ksh",
+        "csh",
+        "tcsh",
+        "fish",
+        "node",
+        "nodejs",
+        "deno",
+        "bun",
+        "npx",
+        "tsx",
+        "ts-node",
+        "ruby",
+        "jruby",
+        "perl",
+        "php",
+        "lua",
+        "julia",
+        "groovy",
+        "swift",
+        "pwsh",
+        "osascript",
+        "Rscript",
+        "awk",
+        "gawk",
+        "mawk",
+        "tclsh",
+        "pypy",
+        "pypy3",
+    ];
+    // `python`, `python3`, `python3.12`: the name is `python` and a version.
+    let versioned = name
+        .strip_prefix("python")
+        .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'));
+    versioned || WRAPPERS.contains(&name) || INTERPRETERS.contains(&name)
+}
+
+/// Whether `file` has an execute bit set for anybody, which is how a program a stage wrote and made
+/// runnable is told from a file it only wrote. False where the platform has no such bit.
+fn is_executable(file: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(file).is_ok_and(|found| found.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        false
+    }
+}
+
 /// Whether the file a step resolved to is git, the one program whose stage writes a `.git`
 /// (SANDBOX-14, SANDBOX-18): a file named `git`, or `git.exe` in any case on Windows, beneath none
 /// of `planted`, the rows a stage may write, so a file a stage could have put there is not git by
@@ -2479,6 +2614,201 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+    }
+
+    fn held(confined: &Confinement, steps: &[&Step]) -> Containment {
+        confined.holds(steps, Path::new("/work/project"))
+    }
+
+    /// RUN-5: a plain line is held where the platform keeps a `.git` back, the session's network is
+    /// closed and the mode confines, and in no other combination. Each platform and the open
+    /// network are the controls for one another: dropping any one condition from `holds` makes one
+    /// of the rows below answer `Held`.
+    #[test]
+    fn a_plain_line_is_held_only_where_every_condition_of_the_answer_holds() {
+        let make = step("/usr/bin/make", &["test"]);
+        let closed = |prelude| {
+            reading_confinement(prelude, &["/work/project"]).with_network(Network::Closed)
+        };
+        assert_eq!(held(&closed(Prelude::MacOs), &[&make]), Containment::Held);
+        assert_eq!(
+            held(&closed(Prelude::Linux), &[&make]),
+            Containment::Unknown,
+            "Linux cannot hold a .git back (SANDBOX-14)"
+        );
+        assert_eq!(
+            held(&closed(Prelude::Windows), &[&make]),
+            Containment::Unknown
+        );
+        let open = reading_confinement(Prelude::MacOs, &["/work/project"]);
+        assert_eq!(
+            held(&open, &[&make]),
+            Containment::Unknown,
+            "a line with the network open was held"
+        );
+        let unconfining = closed(Prelude::MacOs).with_mode(SandboxMode::Off);
+        assert_eq!(held(&unconfining, &[&make]), Containment::Unknown);
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            let confined = closed(Prelude::MacOs).with_mode(mode);
+            assert_eq!(held(&confined, &[&make]), Containment::Held, "{mode:?}");
+        }
+        assert_eq!(held(&closed(Prelude::MacOs), &[]), Containment::Unknown);
+    }
+
+    /// RUN-5: one stage that keeps the network under a closed setting, or lifts the `.git`
+    /// hold-back, makes the whole line unheld, wherever in the pipeline it is.
+    #[test]
+    fn one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line() {
+        let confined =
+            reading_confinement(Prelude::MacOs, &["/work/project"]).with_network(Network::Closed);
+        let make = step("/usr/bin/make", &["test"]);
+        let grep = step("/usr/bin/grep", &["ok"]);
+        assert_eq!(held(&confined, &[&make, &grep]), Containment::Held);
+        for (name, other) in [
+            (
+                "a program that talks to a remote",
+                step("/usr/bin/curl", &["example.test"]),
+            ),
+            (
+                "a toolchain that fetches",
+                step("/usr/local/bin/cargo", &["build"]),
+            ),
+            ("git", step("/usr/bin/git", &["commit"])),
+        ] {
+            assert_eq!(
+                held(&confined, &[&make, &other]),
+                Containment::Unknown,
+                "{name} last"
+            );
+            assert_eq!(
+                held(&confined, &[&other, &make]),
+                Containment::Unknown,
+                "{name} first"
+            );
+        }
+    }
+
+    /// RUN-5: a program a stage could have written is a line nobody saw, so it is not held, and a
+    /// program under an install directory is. The regression it rejects: deciding on the name.
+    #[test]
+    fn a_program_the_plan_could_have_written_is_not_held() {
+        let confined =
+            reading_confinement(Prelude::MacOs, &["/work/project"]).with_network(Network::Closed);
+        for planted in [
+            "/work/project/build.sh",
+            "/work/project/bin/make",
+            "/var/scratch/tool",
+            "/tmp/tool",
+        ] {
+            assert_eq!(
+                held(&confined, &[&step(planted, &[])]),
+                Containment::Unknown,
+                "{planted}"
+            );
+        }
+        assert_eq!(
+            held(&confined, &[&step("/usr/bin/make", &[])]),
+            Containment::Held
+        );
+    }
+
+    /// RUN-5: an interpreter or a wrapper handed a file under a directory the plan may write is
+    /// not held, and the same line naming a file that is not there, or a program that is not an
+    /// interpreter, is. Run in a directory of its own so a file the session wrote is a real one.
+    #[test]
+    fn an_interpreter_handed_a_file_the_plan_could_write_is_not_held() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-held-script");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("scratch root");
+        let root = root.canonicalize().expect("canonical");
+        std::fs::write(root.join("script.py"), "").expect("script");
+        std::fs::write(root.join("sub/run.sh"), "").expect("script");
+        let confined = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![root.clone()],
+            None,
+        )
+        .with_network(Network::Closed);
+        let held_here = |step: Step| confined.holds(&[&step], &root);
+
+        assert_eq!(
+            held_here(step("/usr/bin/python3", &["script.py"])),
+            Containment::Unknown,
+            "an interpreter ran a file the session could have written"
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/python3", &["-u", "sub/run.sh"])),
+            Containment::Unknown
+        );
+        assert_eq!(
+            held_here(step("/usr/local/bin/python3.12", &["script.py"])),
+            Containment::Unknown,
+            "a versioned interpreter is still one"
+        );
+        assert_eq!(
+            held_here(step("/bin/sh", &["sub/run.sh"])),
+            Containment::Unknown
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/env", &["script.py"])),
+            Containment::Unknown,
+            "a wrapper runs its operand"
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/python3", &["missing.py"])),
+            Containment::Held,
+            "the control: the same line naming a file that is not there"
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/python3", &["-c", "print(1)"])),
+            Containment::Held
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/cat", &["script.py"])),
+            Containment::Held,
+            "a program that does not run its operand was refused for naming a file"
+        );
+        assert_eq!(
+            held_here(step("/bin/sh", &["-c", "./sub/run.sh --flag"])),
+            Containment::Unknown,
+            "a command string naming a file the session could have written"
+        );
+        assert_eq!(
+            held_here(step("/bin/sh", &["-c", "echo hi; ls"])),
+            Containment::Held,
+            "a command string naming no file"
+        );
+        assert_eq!(
+            held_here(step("/usr/bin/node", &["--require=script.py", "-e", "1"])),
+            Containment::Unknown,
+            "a file named by an option's value"
+        );
+
+        // An executable file the session could have written is a program whatever starts it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let tool = root.join("sub/tool");
+            std::fs::write(&tool, "").expect("tool");
+            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("mode");
+            assert_eq!(
+                held_here(step("/usr/bin/some-launcher", &["sub/tool"])),
+                Containment::Unknown,
+                "a program this list does not know ran an executable file the session wrote"
+            );
+            assert_eq!(
+                held_here(step("/usr/bin/some-launcher", &["sub/run.sh"])),
+                Containment::Held,
+                "the control: the same launcher given a file that is not executable"
+            );
+        }
     }
 
     fn refuses(policy: &SandboxPolicy, path: &str) -> bool {

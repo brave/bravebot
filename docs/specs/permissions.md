@@ -131,6 +131,10 @@ exceptions, and a matching ask rule prompts even where a more specific allow rul
 **Why.** It is what makes a deny rule readable as a flat statement about what will not happen. A
 list where the narrowest rule won could not be checked by reading it.
 
+An ask rule is also the setting that restores asking for every line in a directory the person trusted
+([RUN-5](tools/run.md#RUN-5)): `Bash(*)` in `permissions.ask` matches every line, any layer may write it, and
+a checkout's file included, since it only asks for more.
+
 `verified-by: bravebot_core::permissions::deny_beats_ask_and_ask_beats_allow_however_specific_the_loser`
 `verified-by: bravebot_core::permissions::deny_beats_ask_for_the_same_subject`
 

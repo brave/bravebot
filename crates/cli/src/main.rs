@@ -2951,6 +2951,37 @@ mod tests {
         assert_eq!(notice, None);
     }
 
+    /// RUN-5. A one-shot run starts from a kept answer, and what that answer says about confined
+    /// lines is what the entry said: an answer kept before the question said so does not allow
+    /// them, one that says so does, and neither changes what the run trusts.
+    #[test]
+    fn a_kept_answer_allows_confined_lines_only_where_its_entry_says_so() {
+        let scratch = Scratch::new("trust-kept-confined-lines");
+        let project = scratch.directory("project");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7, false), "not kept");
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(trust.is_trusted("."));
+        assert!(
+            !trust.allows_confined_lines(),
+            "an answer kept before the question said so allowed confined lines"
+        );
+
+        assert!(store.keep(&identity, "3-4", 8, true), "not kept");
+        let (trust, _) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(trust.allows_confined_lines(), "the entry said so");
+
+        let (flagged, _) = unattended_trust_with(Some(&state), None, &project, true);
+        assert!(
+            !flagged.allows_confined_lines(),
+            "--trust-workspace allowed confined lines"
+        );
+    }
+
     /// TRUST-23. A kept answer trusts a one-shot run in that directory and the run says where it
     /// came from, since nobody is watching it open.
     #[test]
@@ -2963,7 +2994,10 @@ mod tests {
             return;
         };
         let store = bravebot_agent::trusted::Store::new(&state, &project);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
 
@@ -2991,7 +3025,10 @@ mod tests {
             return;
         };
         let store = bravebot_agent::trusted::Store::new(&state, &repository);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let (trust, notice) = unattended_trust_with(Some(&state), None, &package, false);
 
@@ -3017,7 +3054,10 @@ mod tests {
             return;
         };
         let store = bravebot_agent::trusted::Store::new(&state, &project);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let (trust, notice) = unattended_trust_with(Some(&state), None, &other, false);
         assert!(!trust.is_trusted("."), "another directory was trusted");
