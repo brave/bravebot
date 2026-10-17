@@ -10,6 +10,7 @@ mod continued;
 mod doctor;
 mod exit;
 mod finish;
+mod flags;
 mod host;
 mod import;
 mod json;
@@ -39,6 +40,10 @@ use crate::finish::{
     Finished, ending_of_a_turn, failure_of_a_turn, print_trace, refusals, refused_with_the_usage,
     report, say_notices, say_the_result, say_what_a_stopped_manifest_produced,
     stopped_before_the_turn, what_ran,
+};
+use crate::flags::{
+    INCOGNITO, SAFE, SKIP_PERMISSIONS, VET, starts_neither_a_session_nor_a_task, take_flag,
+    take_valued,
 };
 use crate::model::{
     model_asked_for, model_for_this_run, model_not_served, nothing_serves, resolve_advisor,
@@ -127,13 +132,23 @@ fn main() -> ExitCode {
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
-    if take_incognito(&mut args) {
+    //
+    // Removed before anything dispatches on what leads the list, so the mode composes with every
+    // other way of starting rather than being a fourth flag that may lead: `--incognito -p "task"`,
+    // `--incognito --resume` and `--incognito` on its own all mean what they look like. Repeats are
+    // one flag rather than an error: `--incognito --incognito` asks for a mode that is already on,
+    // and refusing it would be a rule about privacy's typing rather than about privacy.
+    if take_flag(&mut args, INCOGNITO) {
         bravebot_core::incognito::engage();
     }
 
     // Beside the mode above and for the same reason: every loader it turns off is reached while a
     // session is assembled, and this is before the first of them.
-    if take_safe(&mut args) {
+    //
+    // It composes with every way of starting: a session, a resumed session, a session in lines and
+    // a one-shot run all load the same five things, so reading it per subcommand would be a chance
+    // to forget it in each.
+    if take_flag(&mut args, SAFE) {
         bravebot_core::safe::engage();
     }
 
@@ -149,7 +164,16 @@ fn main() -> ExitCode {
     // Beside the mode above and for the same reason: the switch has to be settled before a session
     // is assembled, and this is the last moment certain to be before every way of assembling one.
     // What it turns on is read once per session, where the three routes into it are resolved.
-    if take_vet(&mut args) {
+    //
+    // Turns auto-vetting on for this run, and outranks both standing answers because it is the
+    // narrowest in time: somebody typing it has said what they want of the run in front of them.
+    // That includes a recorded `off`, on the footing `--dangerously-skip-permissions` sits on,
+    // which is a strictly larger thing anything able to pass this flag could pass instead. There is
+    // no flag the other way. It would matter only to somebody who had turned the mode on standing
+    // and wanted one run without it, and for them the answer is the file the standing answer is
+    // kept in. A second flag whose absence and presence both mean something is worth adding when
+    // there is a case for it, not before.
+    if take_flag(&mut args, VET) {
         bravebot_core::vetting::ask_for_it();
     }
 
@@ -157,7 +181,11 @@ fn main() -> ExitCode {
     // way of starting: a session, a resumed session, and a one-shot run all put the same four
     // questions to the same trait. Reading it per subcommand would be four chances to read it in
     // three of them, and the flag would then be silently ignored wherever it was forgotten.
-    let skip_permissions = take_skip_permissions(&mut args);
+    //
+    // See [`bravebot_agent::PermissionMode`] for what giving it up costs. Deny rules from the
+    // settings file are not part of it: they refuse before there is anything to prompt about, so
+    // the flag means "stop asking me" rather than "forget what I wrote down".
+    let skip_permissions = take_flag(&mut args, SKIP_PERMISSIONS);
     if locked && skip_permissions {
         return stopped_before_the_turn(
             wants_json(&args),
@@ -601,25 +629,11 @@ fn background_start(
 /// Only the name is read here. The way of starting that follows matches it, because the set depends
 /// on the directory's trust, which has not been asked about yet.
 fn take_agent(args: &mut Vec<String>) -> Result<Option<String>, String> {
-    let mut named = None;
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] != "--agent" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
-        }
-        match args.get(index + 1).map(|name| name.trim()) {
-            Some(name) if !name.is_empty() && !name.starts_with('-') => {
-                named = Some(name.to_string());
-                index += 2;
-            }
-            _ => return Err(t!(cli_agent_needs_a_name).to_string()),
-        }
-    }
-    *args = kept;
-    Ok(named)
+    let named = take_valued(args, &["--agent"], |_, word| match word.map(str::trim) {
+        Some(name) if !name.is_empty() && !name.starts_with('-') => Ok(name.to_string()),
+        _ => Err(t!(cli_agent_needs_a_name).to_string()),
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Whether a leading `--resume` or `--continue` carries a task, which makes it a one-shot run
@@ -648,14 +662,8 @@ fn continues_with_a_task(args: &[String]) -> bool {
 /// The commands other than a session or a task start neither, so a name they would not use is
 /// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
-    match first? {
-        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "permissions"
-        | "sessions" | "attach" | "reply" | "import-leo-creds" | "import-providers"
-        | "completion" | "shell-init") => {
-            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
-        }
-        _ => None,
-    }
+    starts_neither_a_session_nor_a_task(first?)
+        .map(|command| t!(cli_agent_not_for_a_command, command = command).to_string())
 }
 
 /// Take `--system-prompt <prompt>` and `--append-system-prompt <prompt>` out of the arguments.
@@ -667,27 +675,22 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
 /// arguments and the run would answer in another format. A sentence opening with `-` holds a space
 /// and is text.
 fn take_system_prompts(args: &mut Vec<String>) -> Result<SystemPrompts, String> {
+    let given = take_valued(
+        args,
+        &["--system-prompt", "--append-system-prompt"],
+        |flag, word| match word.map(str::trim) {
+            Some(text) if is_a_value(text) => Ok((flag == "--system-prompt", text.to_string())),
+            _ => Err(t!(cli_system_prompt_needs_text, flag = flag).to_string()),
+        },
+    )?;
     let mut prompts = SystemPrompts::default();
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        let flag = args[index].as_str();
-        if flag != "--system-prompt" && flag != "--append-system-prompt" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
+    for (replacing, text) in given {
+        if replacing {
+            prompts.replacing = Some(text);
+        } else {
+            prompts.appending = Some(text);
         }
-        let text = match args.get(index + 1).map(|text| text.trim()) {
-            Some(text) if is_a_value(text) => text.to_string(),
-            _ => return Err(t!(cli_system_prompt_needs_text, flag = flag).to_string()),
-        };
-        match flag {
-            "--system-prompt" => prompts.replacing = Some(text),
-            _ => prompts.appending = Some(text),
-        }
-        index += 2;
     }
-    *args = kept;
     Ok(prompts)
 }
 
@@ -707,37 +710,14 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// the turns this process sends. The commands that start neither a session nor a task are refused
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
-    match first? {
-        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "permissions"
-        | "sessions" | "attach" | "reply" | "import-leo-creds" | "import-providers"
-        | "completion" | "shell-init") => Some(
-            t!(
-                cli_system_prompt_not_for_a_command,
-                flag = flag,
-                command = command
-            )
-            .to_string(),
-        ),
-        _ => None,
-    }
-}
-
-/// Take `--dangerously-skip-permissions` out of the arguments, reporting whether it was there.
-///
-/// Removed before dispatch for the reason `--incognito` is, and it composes with it: the flag belongs
-/// to every way of starting rather than to a task, since a session, a resumed session and a one-shot
-/// run all put the same questions to the same trait. Read per subcommand it would be three chances to
-/// read it in two of them.
-///
-/// See [`bravebot_agent::PermissionMode`] for what giving it up costs. Deny rules from the settings
-/// file are not part of it: they refuse before there is anything to prompt about, so the flag means
-/// "stop asking me" rather than "forget what I wrote down".
-///
-/// Repeats are one flag rather than an error, as with `--incognito`.
-fn take_skip_permissions(args: &mut Vec<String>) -> bool {
-    let asked = args.len();
-    args.retain(|arg| arg != "--dangerously-skip-permissions");
-    args.len() != asked
+    starts_neither_a_session_nor_a_task(first?).map(|command| {
+        t!(
+            cli_system_prompt_not_for_a_command,
+            flag = flag,
+            command = command
+        )
+        .to_string()
+    })
 }
 
 /// The file that made the bypass mode unreachable, where a layer in force asked for it (PERM-17).
@@ -781,28 +761,14 @@ fn bypass_made_unreachable(
 /// The arguments are rewritten only once the whole scan has succeeded, so a refusal leaves the list
 /// that was typed rather than one this had half consumed.
 fn take_settings(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
-    let mut named = None;
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] != "--settings" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
-        }
-        // A blank path is refused rather than read as no flag, on `--model`'s argument: a script
-        // whose variable expanded to nothing asked for a settings file and would otherwise be run
-        // under whatever the directory happened to carry, without being told.
-        match args.get(index + 1).map(|path| path.trim()) {
-            Some(path) if !path.is_empty() => {
-                named = Some(PathBuf::from(path));
-                index += 2;
-            }
-            _ => return Err(t!(cli_settings_needs_a_path).to_string()),
-        }
-    }
-    *args = kept;
-    Ok(named)
+    // A blank path is refused rather than read as no flag, on `--model`'s argument: a script
+    // whose variable expanded to nothing asked for a settings file and would otherwise be run
+    // under whatever the directory happened to carry, without being told.
+    let named = take_valued(args, &["--settings"], |_, word| match word.map(str::trim) {
+        Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),
+        _ => Err(t!(cli_settings_needs_a_path).to_string()),
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Take `--run-network <open|closed>` out of the arguments, answering with the setting it named.
@@ -814,26 +780,14 @@ fn take_settings(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
 fn take_run_network(
     args: &mut Vec<String>,
 ) -> Result<Option<bravebot_sandbox::network::Network>, String> {
-    let mut named = None;
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] != "--run-network" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
-        }
-        let Some(word) = args.get(index + 1) else {
+    let named = take_valued(args, &["--run-network"], |_, word| {
+        let Some(word) = word else {
             return Err(t!(cli_run_network_needs_a_word).to_string());
         };
-        match bravebot_sandbox::network::Network::parse(word) {
-            Some(network) => named = Some(network),
-            None => return Err(t!(cli_run_network_unknown, word = word.clone()).to_string()),
-        }
-        index += 2;
-    }
-    *args = kept;
-    Ok(named)
+        bravebot_sandbox::network::Network::parse(word)
+            .ok_or_else(|| t!(cli_run_network_unknown, word = word).to_string())
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Take `--log-level <error|info|debug>` out of the arguments, answering with the level it named.
@@ -842,26 +796,14 @@ fn take_run_network(
 /// word for the same one: a typo read as the default would leave a person without the log they
 /// asked for, discovered only when the failure they wanted it for had already happened.
 fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>, String> {
-    let mut named = None;
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] != "--log-level" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
-        }
-        let Some(word) = args.get(index + 1) else {
+    let named = take_valued(args, &["--log-level"], |_, word| {
+        let Some(word) = word else {
             return Err(t!(cli_log_level_needs_a_word).to_string());
         };
-        match bravebot_diag::Level::parse(word) {
-            Some(level) => named = Some(level),
-            None => return Err(t!(cli_log_level_unknown, word = word.clone()).to_string()),
-        }
-        index += 2;
-    }
-    *args = kept;
-    Ok(named)
+        bravebot_diag::Level::parse(word)
+            .ok_or_else(|| t!(cli_log_level_unknown, word = word).to_string())
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Take `--sandbox <mode>` out of the arguments, answering with the mode it named.
@@ -872,34 +814,16 @@ fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>
 /// refused rather than read as the default, because the modes differ in what a program may reach
 /// and a script whose variable expanded to nothing asked for one of them.
 fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
-    let mut named = None;
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] != "--sandbox" {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
-        }
-        match args
-            .get(index + 1)
-            .and_then(|word| SandboxMode::parse(word))
-        {
-            Some(mode) => {
-                named = Some(mode);
-                index += 2;
-            }
-            None => {
-                return Err(t!(
-                    cli_sandbox_needs_a_mode,
-                    names = SandboxMode::ALL.map(SandboxMode::name).join(", ")
-                )
-                .to_string());
-            }
-        }
-    }
-    *args = kept;
-    Ok(named)
+    let named = take_valued(args, &["--sandbox"], |_, word| {
+        word.and_then(SandboxMode::parse).ok_or_else(|| {
+            t!(
+                cli_sandbox_needs_a_mode,
+                names = SandboxMode::ALL.map(SandboxMode::name).join(", ")
+            )
+            .to_string()
+        })
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Whether the command line's first argument names a command that starts no program `run` would
@@ -982,70 +906,33 @@ fn take_sandbox_filesystem(
         ("--sandbox-allow-write", List::AllowWrite),
         ("--sandbox-deny-write", List::DenyWrite),
     ];
-    let mut lists = bravebot_sandbox::rules::Lists::default();
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        let Some((flag, list)) = FLAGS.iter().find(|(flag, _)| args[index] == *flag) else {
-            kept.push(args[index].clone());
-            index += 1;
-            continue;
+    let names = FLAGS.map(|(flag, _)| flag);
+    let taken = take_valued(args, &names, |flag, word| {
+        let Some(path) = word.filter(|path| !path.trim().is_empty()) else {
+            return Err(t!(cli_sandbox_flag_needs_a_path, flag = flag).to_string());
         };
-        let Some(path) = args.get(index + 1).filter(|path| !path.trim().is_empty()) else {
-            return Err(t!(cli_sandbox_flag_needs_a_path, flag = *flag).to_string());
-        };
+        let list = FLAGS
+            .iter()
+            .find(|(name, _)| *name == flag)
+            .map(|(_, list)| *list);
         let entry = Entry {
-            path: path.clone(),
+            path: path.to_string(),
             by: None,
             pinned: false,
         };
+        Ok((list, entry))
+    })?;
+    let mut lists = bravebot_sandbox::rules::Lists::default();
+    for (list, entry) in taken {
         match list {
-            List::AllowRead => lists.allow_read.push(entry),
-            List::DenyRead => lists.deny_read.push(entry),
-            List::AllowWrite => lists.allow_write.push(entry),
-            List::DenyWrite => lists.deny_write.push(entry),
+            Some(List::AllowRead) => lists.allow_read.push(entry),
+            Some(List::DenyRead) => lists.deny_read.push(entry),
+            Some(List::AllowWrite) => lists.allow_write.push(entry),
+            Some(List::DenyWrite) => lists.deny_write.push(entry),
+            None => {}
         }
-        index += 2;
     }
-    *args = kept;
     Ok(lists)
-}
-
-/// Take `--incognito` out of the arguments, reporting whether it was there.
-///
-/// Removed before anything dispatches on what leads the list, so the mode composes with every
-/// other way of starting rather than being a fourth flag that may lead: `--incognito -p "task"`,
-/// `--incognito --resume` and `--incognito` on its own all mean what they look like, and the
-/// dispatch below goes on matching against a list the mode is no longer in.
-///
-/// Repeats are one flag rather than an error. `--incognito --incognito` asks for a mode that is
-/// already on, and refusing it would be a rule about typing rather than about privacy.
-fn take_incognito(args: &mut Vec<String>) -> bool {
-    let asked = args.len();
-    args.retain(|arg| arg != "--incognito");
-    args.len() != asked
-}
-
-/// Take `--safe` out of the arguments, reporting whether it was there.
-///
-/// Removed before dispatch for the reason `--incognito` is, and it composes with every way of
-/// starting: a session, a resumed session, a session in lines and a one-shot run all load the same
-/// five things, so reading it per subcommand would be a chance to forget it in each.
-///
-/// Repeats are one flag rather than an error, as with `--incognito`.
-fn take_safe(args: &mut Vec<String>) -> bool {
-    let asked = args.len();
-    args.retain(|arg| arg != "--safe");
-    args.len() != asked
-}
-
-/// Take the flag `name` out of the arguments, reporting whether it was there.
-///
-/// Repeats are one flag rather than an error, as with `--safe`.
-fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
-    let asked = args.len();
-    args.retain(|arg| arg != name);
-    args.len() != asked
 }
 
 /// Every tool name `--tools` may name: the ones a turn is offered, wherever a surface offers them,
@@ -1079,39 +966,29 @@ fn nameable_tools() -> Vec<String> {
 /// twice, `--tools` takes the last list. The arguments are rewritten only once the scan has
 /// succeeded.
 fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Limit, String> {
-    let mut limit = bravebot_core::tool_set::Limit::default();
-    let mut kept = Vec::with_capacity(args.len());
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--no-shell" => {
-                limit.no_shell = true;
-                index += 1;
+    let lists = take_valued(args, &["--tools"], |_, word| {
+        let Some(list) = word.filter(|list| !list.trim().is_empty()) else {
+            return Err(t!(cli_tools_needs_a_list).to_string());
+        };
+        let known = nameable_tools();
+        let mut named = Vec::new();
+        for name in list.split(',').map(str::trim) {
+            if !known.iter().any(|tool| tool == name) {
+                return Err(
+                    t!(cli_tools_unknown, name = name, known = known.join(", ")).to_string()
+                );
             }
-            "--tools" => {
-                let Some(list) = args.get(index + 1).filter(|list| !list.trim().is_empty()) else {
-                    return Err(t!(cli_tools_needs_a_list).to_string());
-                };
-                let known = nameable_tools();
-                let mut named = Vec::new();
-                for name in list.split(',').map(str::trim) {
-                    if !known.iter().any(|tool| tool == name) {
-                        return Err(t!(cli_tools_unknown, name = name, known = known.join(", "))
-                            .to_string());
-                    }
-                    named.push(name.to_string());
-                }
-                limit.only = Some(named);
-                index += 2;
-            }
-            other => {
-                kept.push(other.to_string());
-                index += 1;
-            }
+            named.push(name.to_string());
         }
-    }
-    *args = kept;
-    Ok(limit)
+        Ok(named)
+    })?;
+    // After the list, so that `--tools --no-shell` still names `--no-shell` as the unknown tool it
+    // was taken for, and not as a list that is missing.
+    let no_shell = take_flag(args, "--no-shell");
+    Ok(bravebot_core::tool_set::Limit {
+        no_shell,
+        only: lists.into_iter().last(),
+    })
 }
 
 /// Why the tool limit cannot go with the command line's first argument, or `None` where it can.
@@ -1119,35 +996,10 @@ fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Li
 /// The commands that start no session and no task offer no tools, so the flags would be taken and do
 /// nothing. Refused rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_tool_set_to_limit(first: &str) -> Option<String> {
-    match first {
-        command @ ("doctor" | "update" | "auth" | "mcp" | "permissions" | "sessions" | "attach"
-        | "reply" | "import-leo-creds" | "import-providers" | "completion"
-        | "shell-init") => Some(t!(cli_tools_not_for_a_command, command = command).to_string()),
-        _ => None,
-    }
-}
-
-/// Take `--vet` out of the arguments, reporting whether it was there.
-///
-/// Removed before dispatch for the reason `--incognito` is, and it composes with everything the
-/// same way: a session, a resumed session and a one-shot run all reach the same check and the same
-/// prompt, so reading it per subcommand would be three chances to forget it in two of them.
-///
-/// Turns auto-vetting on for this run, and outranks both standing answers because it is the
-/// narrowest in time: somebody typing it has said what they want of the run in front of them. That
-/// includes a recorded `off`, on the footing `--dangerously-skip-permissions` sits on, which is a
-/// strictly larger thing anything able to pass this flag could pass instead.
-///
-/// There is no flag the other way. It would matter only to somebody who had turned the mode on
-/// standing and wanted one run without it, and for them the answer is the file the standing answer
-/// is kept in. A second flag whose absence and presence both mean something is worth adding when
-/// there is a case for it, not before.
-///
-/// Repeats are one flag rather than an error, as with `--incognito`.
-fn take_vet(args: &mut Vec<String>) -> bool {
-    let asked = args.len();
-    args.retain(|arg| arg != "--vet");
-    args.len() != asked
+    // CLI-26 lists the commands without `bug-report`, where CLI-19 names it, so it is left out here.
+    starts_neither_a_session_nor_a_task(first)
+        .filter(|command| *command != "bug-report")
+        .map(|command| t!(cli_tools_not_for_a_command, command = command).to_string())
 }
 
 /// What a one-shot invocation asked for, before anything runs.
@@ -2605,6 +2457,43 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
 
+    /// These commands start no session, so a flag that shapes one has nothing to shape. Taking it
+    /// and ignoring it would read as honoured, which is the reason CLI-13 refuses it by name.
+    #[test]
+    fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
+        let thirteen = [
+            "doctor",
+            "update",
+            "bug-report",
+            "auth",
+            "mcp",
+            "permissions",
+            "sessions",
+            "attach",
+            "reply",
+            "import-leo-creds",
+            "import-providers",
+            "completion",
+            "shell-init",
+        ];
+        for command in thirteen {
+            assert!(without_a_definition(Some(command)).is_some(), "{command}");
+            assert!(
+                without_a_prompt_to_give("--system-prompt", Some(command)).is_some(),
+                "{command}"
+            );
+            // CLI-26 does not name `bug-report`, so the tool limit is not refused beside it.
+            assert_eq!(
+                without_a_tool_set_to_limit(command).is_some(),
+                command != "bug-report",
+                "{command}"
+            );
+        }
+        assert!(without_a_definition(Some("-p")).is_none());
+        assert!(without_a_definition(None).is_none());
+        assert!(without_a_tool_set_to_limit("-p").is_none());
+    }
+
     /// A session that stayed where it started needs no directory: the shell reading this line is
     /// already standing in the one the id will be looked up under.
     #[test]
@@ -3025,7 +2914,7 @@ mod tests {
         ] {
             let mut arguments = args(typed);
             assert!(
-                take_incognito(&mut arguments),
+                take_flag(&mut arguments, INCOGNITO),
                 "{typed:?} did not engage it"
             );
             assert_eq!(
@@ -3040,7 +2929,7 @@ mod tests {
     #[test]
     fn asking_for_incognito_twice_is_asking_once() {
         let mut arguments = args(&["--incognito", "--incognito", "do a thing"]);
-        assert!(take_incognito(&mut arguments));
+        assert!(take_flag(&mut arguments, INCOGNITO));
         assert_eq!(arguments, args(&["do a thing"]));
     }
 
@@ -3049,7 +2938,7 @@ mod tests {
     #[test]
     fn incognito_alone_leaves_the_interactive_session() {
         let mut arguments = args(&["--incognito"]);
-        assert!(take_incognito(&mut arguments));
+        assert!(take_flag(&mut arguments, INCOGNITO));
         assert!(arguments.is_empty());
     }
 
@@ -3058,7 +2947,7 @@ mod tests {
     #[test]
     fn an_invocation_without_the_flag_is_left_alone() {
         let mut arguments = args(&["-p", "write about incognito mode"]);
-        assert!(!take_incognito(&mut arguments));
+        assert!(!take_flag(&mut arguments, INCOGNITO));
         assert_eq!(arguments, args(&["-p", "write about incognito mode"]));
     }
 
@@ -3072,11 +2961,11 @@ mod tests {
             &["-p", "do a thing", "--safe", "--safe"][..],
         ] {
             let mut arguments = args(typed);
-            assert!(take_safe(&mut arguments), "{typed:?}");
+            assert!(take_flag(&mut arguments, SAFE), "{typed:?}");
             assert!(!arguments.iter().any(|arg| arg == "--safe"), "{typed:?}");
         }
         let mut arguments = args(&["-p", "explain safe mode"]);
-        assert!(!take_safe(&mut arguments));
+        assert!(!take_flag(&mut arguments, SAFE));
         assert_eq!(arguments, args(&["-p", "explain safe mode"]));
     }
 
@@ -3113,6 +3002,16 @@ mod tests {
         );
     }
 
+    /// A list that is followed by `--no-shell` has taken it as a tool name, so the refusal names it
+    /// and the arguments are left as typed.
+    #[test]
+    fn a_tool_list_that_is_the_no_shell_flag_names_it_as_the_unknown_tool() {
+        let mut arguments = args(&["-p", "x", "--tools", "--no-shell"]);
+        let err = take_tool_limit(&mut arguments).expect_err("a flag is no tool");
+        assert!(err.contains("--no-shell"), "{err}");
+        assert_eq!(arguments, args(&["-p", "x", "--tools", "--no-shell"]));
+    }
+
     /// `--vet` belongs to every way of starting, so it is taken out wherever it appears and the
     /// dispatch below goes on matching a list it is no longer in. A flag left in the arguments
     /// would be refused as an unknown option by whichever subcommand read them next.
@@ -3124,7 +3023,10 @@ mod tests {
             &["-p", "do a thing", "--vet"][..],
         ] {
             let mut arguments = args(typed);
-            assert!(take_vet(&mut arguments), "{typed:?} did not ask for it");
+            assert!(
+                take_flag(&mut arguments, VET),
+                "{typed:?} did not ask for it"
+            );
             assert_eq!(
                 arguments,
                 args(&["-p", "do a thing"]),
@@ -3137,7 +3039,7 @@ mod tests {
     #[test]
     fn asking_to_vet_twice_is_asking_once() {
         let mut arguments = args(&["--vet", "--vet", "do a thing"]);
-        assert!(take_vet(&mut arguments));
+        assert!(take_flag(&mut arguments, VET));
         assert_eq!(arguments, args(&["do a thing"]));
     }
 
@@ -3146,7 +3048,7 @@ mod tests {
     #[test]
     fn an_invocation_that_only_mentions_vetting_does_not_ask_for_it() {
         let mut arguments = args(&["-p", "explain --vetting to me"]);
-        assert!(!take_vet(&mut arguments));
+        assert!(!take_flag(&mut arguments, VET));
         assert_eq!(arguments, args(&["-p", "explain --vetting to me"]));
     }
 
@@ -3159,8 +3061,8 @@ mod tests {
             &["--incognito", "--vet", "-p", "x"][..],
         ] {
             let mut arguments = args(typed);
-            assert!(take_vet(&mut arguments), "{typed:?}");
-            assert!(take_incognito(&mut arguments), "{typed:?}");
+            assert!(take_flag(&mut arguments, VET), "{typed:?}");
+            assert!(take_flag(&mut arguments, INCOGNITO), "{typed:?}");
             assert_eq!(arguments, args(&["-p", "x"]), "{typed:?}");
         }
     }
@@ -3397,7 +3299,7 @@ mod tests {
     #[test]
     fn permissions_are_enforced_unless_the_flag_is_given() {
         let mut arguments = args(&["do a thing"]);
-        assert!(!take_skip_permissions(&mut arguments));
+        assert!(!take_flag(&mut arguments, SKIP_PERMISSIONS));
         assert_eq!(arguments, args(&["do a thing"]));
     }
 
@@ -3412,7 +3314,7 @@ mod tests {
         ] {
             let mut arguments = args(typed);
             assert!(
-                take_skip_permissions(&mut arguments),
+                take_flag(&mut arguments, SKIP_PERMISSIONS),
                 "{typed:?} did not engage it"
             );
             assert_eq!(
@@ -3432,12 +3334,12 @@ mod tests {
             "1787860306-65099",
             "--dangerously-skip-permissions",
         ]);
-        assert!(take_skip_permissions(&mut arguments));
+        assert!(take_flag(&mut arguments, SKIP_PERMISSIONS));
         assert_eq!(arguments, args(&["--resume", "1787860306-65099"]));
 
         // Nothing but the flag is an interactive session, not an unknown option.
         let mut alone = args(&["--dangerously-skip-permissions"]);
-        assert!(take_skip_permissions(&mut alone));
+        assert!(take_flag(&mut alone, SKIP_PERMISSIONS));
         assert!(alone.is_empty());
     }
 
@@ -3450,8 +3352,8 @@ mod tests {
             &["--dangerously-skip-permissions", "--incognito", "-p", "x"][..],
         ] {
             let mut arguments = args(typed);
-            assert!(take_incognito(&mut arguments), "{typed:?}");
-            assert!(take_skip_permissions(&mut arguments), "{typed:?}");
+            assert!(take_flag(&mut arguments, INCOGNITO), "{typed:?}");
+            assert!(take_flag(&mut arguments, SKIP_PERMISSIONS), "{typed:?}");
             assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
         }
     }
@@ -3653,8 +3555,8 @@ mod tests {
             ),
         ] {
             let mut arguments = args(typed);
-            assert!(take_incognito(&mut arguments), "{typed:?}");
-            assert!(take_skip_permissions(&mut arguments), "{typed:?}");
+            assert!(take_flag(&mut arguments, INCOGNITO), "{typed:?}");
+            assert!(take_flag(&mut arguments, SKIP_PERMISSIONS), "{typed:?}");
             assert_eq!(
                 take_settings(&mut arguments).expect("names a file"),
                 Some(PathBuf::from("/etc/ci.json")),
@@ -3693,7 +3595,7 @@ mod tests {
             ),
         ] {
             let mut arguments = args(typed);
-            take_incognito(&mut arguments);
+            take_flag(&mut arguments, INCOGNITO);
             take_settings(&mut arguments).expect("names a file or none");
             assert_eq!(
                 take_agent(&mut arguments).expect("names a definition"),

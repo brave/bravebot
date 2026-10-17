@@ -54,7 +54,7 @@ const CONTEXT: usize = 3;
 /// Start a session in lines.
 ///
 /// `skip_permissions` is the same flag it is everywhere: the one way to stop being asked. It is
-/// read here rather than deeper in for the reason [`crate::take_skip_permissions`] takes it out of
+/// read here rather than deeper in for the reason [`crate::flags::take_flag`] takes it out of
 /// the arguments before anything dispatches.
 ///
 /// `agent` is the definition `--agent` named, which every prompt of the session is addressed to

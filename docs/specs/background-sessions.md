@@ -4,6 +4,7 @@ title: Background sessions
 status: proposed
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
