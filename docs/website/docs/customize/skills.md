@@ -82,6 +82,17 @@ not
 description: Notes about commits.
 ```
 
+Only a skill built into bravebot itself, such as the one that paces a `/loop` tick, is listed by
+default. A skill of your own or a project's is not: the planner finds it by calling
+`search_skills` with a word or phrase, which matches it by name or description and returns it in
+full, then loads it with `load_skill` the same way. The one exception is a definition's own
+`skills:` line: naming skills there already makes a short, deliberate list, so those are listed
+directly.
+
+A description nobody wrote to be long is still returned in full, never cut, however it is found.
+Where one is long enough to be worth saying so, past 1,024 characters, the session tells you a
+count of how many are, never which ones.
+
 ## Naming a skill after a slash
 
 Type `/` and the skills this session has are listed beneath the commands, each with its description

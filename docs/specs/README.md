@@ -101,6 +101,7 @@ the routing-versus-content split they share.
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
+| [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 3 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
