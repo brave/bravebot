@@ -239,6 +239,12 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// The headers the block asked for, resolved by the caller.
+    ///
+    /// Resolved elsewhere for the reason the token is: a value may name a variable, and this crate
+    /// reads none. Carried and attached, never read: a name and a value from a settings file are
+    /// the person's own words, and nothing here decides anything on them.
+    headers: Vec<(String, Secret)>,
 }
 
 impl<'a> AichatClient<'a> {
@@ -304,7 +310,20 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            headers: Vec::new(),
         });
+        self
+    }
+
+    /// Also send the headers the gateway's block asked for, already resolved.
+    ///
+    /// Separate from [`Self::for_gateway`] because a value may name a variable and this crate reads
+    /// none: the caller that resolved the token resolves these at the same moment, from the same
+    /// environment. Does nothing where no gateway is set, these being a property of a gateway block.
+    pub fn with_gateway_headers(mut self, headers: Vec<(String, Secret)>) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.headers = headers;
+        }
         self
     }
 
@@ -512,6 +531,12 @@ impl<'a> AichatClient<'a> {
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
                 http = http.header(name, value);
+            }
+            // After the credential, and never over it: a name this request already set is refused
+            // where the block is read, because `Request::header` appends and a second copy of one
+            // of these would be sent rather than replace the first.
+            for (name, value) in &gateway.headers {
+                http = http.header(name.clone(), value.expose());
             }
             return Ok(http);
         }

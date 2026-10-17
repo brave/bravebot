@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -457,7 +457,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
-| `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
 | `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
@@ -511,9 +511,9 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
-the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
+the host every request goes to, the headers it carries, the model, the advisor model, the fallback model, or the environment variables read as a
 gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel` or `summaryModel` key, in a project or local file is ignored, and `bravebot
-doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
+doctor` names each file whose block or key was dropped. A `headers` block lives inside `provider`, so it is dropped with the rest of the block. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
 do not take effect on being read: each is a question you answer when the session opens, the rules in
@@ -1394,7 +1394,8 @@ may reach; which theme is on and which keys do what are neither.
 **No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
 models and variable names are honoured without it. Everyone on the machine can read this file, so a
 token in it is a token handed to every account rather than one held by its owner. The service says what
-is missing on the first request.
+is missing on the first request. A `headers` block is kept, because a header is how this layer names a
+tenant or a route. Writing a value as `{env:NAME}` keeps it out of a file every account can read.
 
 **The `provider` block is pinned whole** rather than a name at a time, because pinning an endpoint
 pins nothing while anybody may add a destination beside it. A block that is present and empty says
@@ -1500,10 +1501,11 @@ has the variables, the signing in, and the assumed context window.
 
 ## Reaching an OpenAI-compatible gateway
 
-A `provider` block in a settings file names a gateway, the models it offers and the variable that
-holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
-a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
-has the fields, the credential, which models are offered, and how to name one.
+A `provider` block in a settings file names a gateway, the models it offers, the variable that
+holds its credential and any extra headers its requests carry. It is opencode's block, so one copied
+from `opencode.json` works unedited, and a local Ollama needs no key.
+[Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
+has the fields, the credential, the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
 needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which

@@ -1275,6 +1275,7 @@ impl Config {
             .map(|mut entry| {
                 if entry.bedrock.is_none() {
                     entry.stored_key = stored.get(&entry.id).cloned();
+                    entry.reconcile_stored_credential();
                 }
                 entry
             })
@@ -3219,6 +3220,60 @@ mod tests {
                 Some("placeholder-stored-key".to_string())
             )]
         );
+    }
+
+    /// BACKEND-54: a block naming no `env` and no `apiKey` still names a credential once a key is
+    /// stored for its id, and the header that credential goes in is refused the same way it would
+    /// be had the block named a variable. `Provider::one` cannot know this on its own, since
+    /// `stored_key` only reaches the block through this path, so this goes through
+    /// `Config::from_sources` rather than calling `reconcile_stored_credential` directly: a test
+    /// that set `stored_key` and called it by hand would stay green if the call in
+    /// `Config::from_sources` were deleted.
+    #[test]
+    fn a_stored_key_reaches_through_from_sources_refuses_the_authorization_it_names() {
+        let mut stored = keys::Keys::default();
+        stored.insert("mine", Secret::new("placeholder-stored-key"));
+        let settings = Settings::parse(
+            r#"{"provider": {"mine": {"options": {
+                "baseURL": "https://mine.invalid/v1",
+                "headers": {"authorization": "Bearer written-in-the-file"}
+            }}}}"#,
+        );
+
+        let config = Config::from_sources(
+            &settings,
+            &Managed::default(),
+            &stored,
+            |_| None,
+            complete_env,
+        )
+        .expect("configured");
+        let provider = config
+            .providers
+            .iter()
+            .find(|provider| provider.id == "mine")
+            .expect("the gateway is configured");
+
+        assert_eq!(
+            provider.headers_refused,
+            [("authorization".to_string(), provider::HeaderFault::Reserved)],
+            "a header naming the credential was not refused once the stored key made this a \
+             block that names one: {:?}",
+            provider.headers_refused
+        );
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a written authorization reached the request beside the stored key"
+        );
+        let (credential, source) = provider.credential_and_source(|_| None);
+        match credential {
+            provider::Credential::Token(token) => {
+                assert_eq!(token.expose(), "placeholder-stored-key");
+            }
+            provider::Credential::Absent => panic!("the stored key was read as absent"),
+            provider::Credential::NotNeeded => panic!("the stored key was read as not needed"),
+        }
+        assert_eq!(source, Some(provider::Source::Stored));
     }
 
     /// The only way to say there are to be no gateways at all, which is half of what pinning a

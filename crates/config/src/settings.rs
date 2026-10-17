@@ -5120,6 +5120,110 @@ mod tests {
         assert_eq!(settings.providers_ignored().count(), 0);
     }
 
+    /// BACKEND-24: `options.headers` goes on every request to that gateway, so a layer able to add
+    /// one could send the session's credential and the context of the conversation to a service
+    /// the person never named. A checkout's layers arrive with the checkout, so the header a
+    /// request carries is the person's own file's to name.
+    #[test]
+    fn a_project_layer_cannot_add_a_request_header() {
+        let layers = Layers::new("provider-headers")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"X-Tenant-Id": "team-7"}
+                }}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .local(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-also-copy-to": "this-machine.invalid"}
+                }}}}"#,
+            );
+        let settings = layers.read();
+
+        let mut sent: Vec<(String, String)> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        sent.sort();
+        assert_eq!(
+            sent,
+            [("x-tenant-id".to_string(), "team-7".to_string())],
+            "a header a checkout wrote is on the request"
+        );
+        // A name a checkout wrote is not read at all, so it is not among the names refused either:
+        // reporting it as a refusal would mean the block had been read.
+        let refused: Vec<&str> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.headers_refused.iter())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "a checkout's header was read: {refused:?}"
+        );
+
+        let dropped: Vec<PathBuf> = settings
+            .providers_ignored()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ]
+        );
+
+        let only_project = Layers::new("provider-headers-only-project")
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://this-checkout.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .read();
+        assert!(
+            only_project
+                .providers()
+                .iter()
+                .all(|provider| provider.request_headers(|_| None).is_empty()),
+            "a checkout with no home layer above it configured a header"
+        );
+        assert_eq!(only_project.providers_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it names headers as the home
+        // file does and is not reported.
+        let named = Layers::new("provider-headers-named")
+            .named(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://flag.invalid/v1",
+                    "headers": {"x-route": "named-eu"}
+                }}}}"#,
+            )
+            .read();
+        let from_named: Vec<(String, String)> = named
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            from_named,
+            [("x-route".to_string(), "named-eu".to_string())]
+        );
+        assert_eq!(named.providers_ignored().count(), 0);
+    }
+
     /// A mistake in a checkout must not decide that somebody's own profile no longer applies, which
     /// is what refusing the whole stack over one bad layer would do.
     #[test]

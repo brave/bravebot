@@ -950,8 +950,36 @@ fn gateway_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
 ) -> Result<AichatClient<'a>, BackendError> {
-    let token = gateway_token(provider, |name| std::env::var(name).ok())?;
-    Ok(AichatClient::new(config, egress).for_gateway(provider, wire_model, token))
+    let (token, headers) = gateway_request_parts(provider, |name| std::env::var(name).ok())?;
+    Ok(AichatClient::new(config, egress)
+        .for_gateway(provider, wire_model, token)
+        .with_gateway_headers(headers))
+}
+
+/// A gateway's credential and the headers its block names, both resolved.
+///
+/// The credential is `None` where the block named none.
+type GatewayRequestParts = (
+    Option<bravebot_config::Secret>,
+    Vec<(String, bravebot_config::Secret)>,
+);
+
+/// `provider`'s token and the headers its block names, resolved through `lookup`.
+///
+/// One lookup for both. A header value may name a variable ([BACKEND-54]), and it is read at the
+/// point a request needs it on the footing [BACKEND-16] gives a credential: a value read when
+/// settings were loaded is stale in a session where somebody exported another. Resolving both here
+/// means a header is read in the same place and by the same means as the token.
+///
+/// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+/// [BACKEND-54]: ../../../docs/specs/backends.md#BACKEND-54
+fn gateway_request_parts(
+    provider: &bravebot_config::provider::Provider,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<GatewayRequestParts, BackendError> {
+    let token = gateway_token(provider, &lookup)?;
+    let headers = provider.request_headers(&lookup);
+    Ok((token, headers))
 }
 
 /// What to attach to `provider`'s requests, or the refusal its block earned.
@@ -1559,6 +1587,69 @@ mod tests {
         assert!(
             gateway_client(&config, provider, wire, &egress).is_ok(),
             "a gateway that names no credential was refused one"
+        );
+    }
+
+    /// BACKEND-54: a header value may be a whole-value `{env:NAME}` reference, read from the
+    /// environment at the point a request needs it, on BACKEND-16's footing for a credential.
+    ///
+    /// A value resolved when settings were loaded and held on the provider would pass a test that
+    /// only checked some value arrives. Two builds from one configuration are asserted here, each
+    /// through a lookup holding a different value, so a cached value shows up as the second build
+    /// carrying the first build's header. The written reference text is asserted absent for the
+    /// same reason: a block whose value was never resolved sends `{env:A_HEADER_VARIABLE}` to the
+    /// service, which is a header the person did not write.
+    #[test]
+    fn a_header_naming_a_variable_is_read_where_the_token_is() {
+        let config = with_providers(
+            r#"{"provider": {"openrouter": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {
+                    "baseURL": "https://openrouter.example.invalid/api/v1",
+                    "headers": {"X-Tenant": "{env:A_HEADER_VARIABLE}"}
+                },
+                "models": {"z-ai/glm-4.6": {}}
+            }}}"#,
+        );
+        let (provider, _) = config.provider_for("z-ai/glm-4.6").expect("offered");
+
+        let built = |held: &'static str| {
+            let (token, headers) = gateway_request_parts(provider, move |name| match name {
+                "A_TOKEN_VARIABLE" => Some("a-token".to_string()),
+                "A_HEADER_VARIABLE" => Some(held.to_string()),
+                _ => None,
+            })
+            .expect("not refused");
+            let token = token
+                .expect("a token was named and held")
+                .expose()
+                .to_string();
+            let headers: Vec<(String, String)> = headers
+                .into_iter()
+                .map(|(name, value)| (name, value.expose().to_string()))
+                .collect();
+            (token, headers)
+        };
+
+        let (token, headers) = built("the-first-value");
+        assert_eq!(token, "a-token");
+        assert_eq!(
+            headers,
+            vec![("x-tenant".to_string(), "the-first-value".to_string())],
+            "the header did not carry what the lookup held"
+        );
+
+        let (_, headers) = built("the-second-value");
+        assert_eq!(
+            headers,
+            vec![("x-tenant".to_string(), "the-second-value".to_string())],
+            "the header carried a value from an earlier resolution"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|(_, value)| value.contains("{env:") || value.contains("A_HEADER_VARIABLE")),
+            "the reference was sent unresolved: {headers:?}"
         );
     }
 

@@ -451,6 +451,10 @@ doctor-gateway-token-stored = enregistré par bravebot auth login gateway (jamai
 doctor-gateway-token-absent =
     aucun trouvé (définissez une variable nommée dans `env`, ou lancez bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
+doctor-header-reserved = { $name } dans le bloc provider n'est pas envoyé : ce programme définit lui-même cet en-tête
+doctor-header-not-a-name = { $name } dans le bloc provider n'est pas envoyé : ce n'est pas un nom d'en-tête
+doctor-header-not-a-value = { $name } dans le bloc provider n'est pas envoyé : une valeur d'en-tête ne peut pas contenir de fin de ligne ni de caractère de contrôle
+doctor-header-substitution = { $name } dans le bloc provider n'est pas envoyé : une référence à une variable n'est lue que comme valeur entière, pas à l'intérieur d'une valeur plus longue
 doctor-gateway-keys = clés de passerelle
 doctor-gateway-keys-unreadable =
     { $path } ne peut pas être lu, donc aucune clé qu'il contient n'est envoyée (bravebot auth login gateway le laisse tel quel)

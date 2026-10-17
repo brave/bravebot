@@ -3173,6 +3173,9 @@ fn fetch_gateway_models(
 
     let mut sink = Trail::new();
     let egress = Egress::new();
+    // Resolved beside the token, from the same environment, for the same reason: a value may name a
+    // variable, and one read at startup is stale once somebody exports another.
+    let headers = provider.request_headers(|name| std::env::var(name).ok());
 
     // Both destinations are the gateway's own endpoint, which came from configuration. Nothing
     // fetched decides either, which is what makes asking a service for a list of names safe at all.
@@ -3191,7 +3194,7 @@ fn fetch_gateway_models(
     .map_err(|denial| denial.to_string())
     .and_then(|mut policy| {
         let token = token.as_ref().map(bravebot_config::Secret::expose);
-        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &headers, &egress)
             .map_err(|error| error.to_string())
     })
 }

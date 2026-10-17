@@ -35,6 +35,7 @@ was, and the conversation budget stays where it was too.
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
 | `options` | `baseURL` | where requests go |
 | | `apiKey` | a token written into the file directly |
+| | `headers` | extra request headers, keyed by header name |
 | a model | `limit.context` | that model's context window, in prompt tokens |
 | | `options` | anything extra to put in the request body |
 
@@ -96,6 +97,53 @@ is how to keep the picker to the models you use:
 
 A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
 in with a ChatGPT account instead of a key is not supported.
+
+### Extra request headers
+
+`options.headers` adds headers to every request this gateway answers, including the one that asks
+for its model list. A gateway in front of several services usually routes on one: a tenant id, a
+routing key, a second credential.
+
+```json
+{
+  "provider": {
+    "acme-gateway": {
+      "env": ["ACME_API_KEY"],
+      "options": {
+        "baseURL": "https://gateway.acme.internal/v1",
+        "headers": {
+          "x-tenant-id": "platform-eng",
+          "x-acme-route": "{env:ACME_ROUTE}"
+        }
+      }
+    }
+  }
+}
+```
+
+A value written as `{env:NAME}` on its own is read from that variable when a request needs it, the
+way a credential is, so exporting a new one takes effect in a session already open and the value
+stays out of a file people paste into issues. A variable holding nothing sends no header. Braces
+inside a longer value are refused rather than substituted.
+
+Header values are treated as credentials: they are in no trace, no error text, and nothing
+`doctor` prints.
+
+**Some names are refused, and the rest of the block still goes.** `host`, `content-length`,
+`content-type`, `transfer-encoding` and `connection` are the request's own framing. So is the
+header your credential goes in, `authorization` or `x-goog-api-key` on a `google-vertex` entry,
+where the entry names a credential at all; an entry naming none may set `authorization` itself. A
+Bedrock entry takes no headers from here, because AWS signs over the headers it sends.
+
+`bravebot doctor` lists every refused header under the gateway block it was written on, with the
+name as you wrote it and which of those reasons refused it, so there is a name to go and edit. The
+value is not printed.
+
+**This is read from your own settings file, the file `--settings` names, and a managed layer only.**
+A `provider` block in a checkout's `.bravebot/settings.json` or `settings.local.json` is ignored
+whole and `bravebot doctor` names the file. A header is where a request goes as much as `baseURL`
+is: a checkout that could add one could send your credential and your context somewhere you did not
+agree to.
 
 ### Google Vertex AI
 

@@ -134,6 +134,69 @@ impl Model {
     }
 }
 
+/// One header a block asked for, with the value as the file wrote it.
+#[derive(Debug, Clone)]
+pub struct Header {
+    /// The name, lowercased. HTTP names are case-insensitive, so one spelling here makes a name
+    /// written two ways one header rather than two.
+    pub name: String,
+    /// The value as the block wrote it, which may be an `{env:NAME}` reference rather than a value.
+    ///
+    /// A [`Secret`] for the reason [`Provider::api_key`] is one: the header a gateway wants is
+    /// often a second credential, and a block reaches a person's screen whenever a diagnostic
+    /// prints one or an assertion about one fails
+    /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+    pub value: Secret,
+}
+
+/// Why a header a block named is not sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderFault {
+    /// A name this program sets itself, or one that says how the request is framed.
+    Reserved,
+    /// Not a header name: empty, or holding a character a name may not.
+    NotAName,
+    /// A value holding a line ending, a NUL or a character that is not sendable, which would end
+    /// the header and let what follows start another.
+    NotAValue,
+    /// A value holding `{env:` or `{file:` as part of something longer, which is a substitution
+    /// nothing here makes. Refused rather than sent, the unsubstituted text being what would go.
+    Substitution,
+}
+
+/// The variable a whole-value `{env:NAME}` reference names.
+///
+/// The same form `crate::import` reads, so a value written for one path means the same on the
+/// other. Whole-value only: a reference inside a longer string is refused at load rather than
+/// sent with the braces still in it.
+fn env_reference(value: &str) -> Option<&str> {
+    let inner = value.strip_prefix('{')?.strip_suffix('}')?;
+    if inner.contains(['{', '}']) {
+        return None;
+    }
+    let name = inner.strip_prefix("env:")?.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether `value` is one a header can carry.
+///
+/// A line ending would end this header and let the rest of the value start another, which is a
+/// block choosing headers nobody wrote down. A NUL and the other control characters are refused
+/// with it because no service reads one and an intermediary may read several of them differently.
+fn sendable(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c == '\t' || (c.is_ascii() && !c.is_ascii_control()))
+}
+
+/// Whether `name` holds only the characters an HTTP field name may.
+fn a_field_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
+}
+
 /// One gateway, and the models it was configured to offer.
 ///
 /// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
@@ -179,6 +242,23 @@ pub struct Provider {
     /// for and a profile to resolve credentials from, and both are properties of this block.
     /// `None` for every other entry, which is reached as an OpenAI-compatible gateway.
     pub bedrock: Option<crate::bedrock::Bedrock>,
+    /// The headers `options.headers` asked for, in the order the block listed them.
+    ///
+    /// Carried rather than resolved, on [BACKEND-16]'s footing for a token: a value may name a
+    /// variable, and one read at startup is stale in a session where somebody exported another.
+    /// [`Self::request_headers`] resolves them at the point a request needs them.
+    ///
+    /// Person-written, like every other name in a settings file, so nothing here is untrusted
+    /// content and no decision is made on a byte a turn produced.
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub headers: Vec<Header>,
+    /// The names under `options.headers` this block will not send, with why.
+    ///
+    /// Kept rather than dropped for the reason `crate::settings::Settings::references_unread` is
+    /// kept: a header somebody wrote and this program refuses is the one worth saying out loud,
+    /// since a gateway that answers 401 says nothing about a line in a settings file.
+    pub headers_refused: Vec<(String, HeaderFault)>,
 }
 
 impl Provider {
@@ -220,6 +300,23 @@ impl Provider {
             .filter(|url| !url.is_empty());
         // A stated endpoint wins, so a block pointing a known name at a proxy or a private
         // deployment reaches the host it named rather than the one compiled in.
+        // The credential header is this provider's own, whichever one `credential_header` chooses,
+        // and a block naming a credential has already said how the request authenticates. Settled
+        // here rather than in the parse so that Vertex refuses `x-goog-api-key` and nothing else
+        // has to know that is the name.
+        let names_a_credential = !names(entry.get("env")).is_empty()
+            || options
+                .and_then(|options| string(options.get("apiKey")))
+                .is_some();
+        let credential_name = match id == GOOGLE_VERTEX_ID {
+            true => VERTEX_KEY_HEADER,
+            false => "authorization",
+        };
+        let (headers, headers_refused) = header_entries(
+            options.and_then(|options| options.get("headers")),
+            credential_name,
+            names_a_credential,
+        );
         let base_url = match stated {
             Some(url) => url.to_string(),
             None if id == GOOGLE_VERTEX_ID => vertex_endpoint(
@@ -240,6 +337,8 @@ impl Provider {
             stored_key: None,
             models: models(entry.get("models")),
             bedrock: None,
+            headers,
+            headers_refused,
         })
     }
 
@@ -268,6 +367,8 @@ impl Provider {
             stored_key: None,
             models: Vec::new(),
             bedrock: None,
+            headers: Vec::new(),
+            headers_refused: Vec::new(),
         })
     }
 
@@ -286,6 +387,13 @@ impl Provider {
         let profile = string(options.and_then(|options| options.get("profile")));
         let models = models(entry.get("models"));
         let entries = bedrock_entries(entry.get("models"));
+        // Bedrock takes a signature over the request and the headers it is computed across, so a
+        // header added from a file would either be left out of the signature or change what was
+        // signed. Every name an AWS entry writes is refused for that reason rather than some of
+        // them.
+        let headers_refused = header_names(options.and_then(|options| options.get("headers")))
+            .map(|name| (name, HeaderFault::Reserved))
+            .collect();
 
         Some(Self {
             id: id.to_string(),
@@ -298,6 +406,8 @@ impl Provider {
             bedrock: Some(crate::bedrock::Bedrock::from_provider(
                 region, profile, entries,
             )),
+            headers: Vec::new(),
+            headers_refused,
         })
     }
 
@@ -341,6 +451,32 @@ impl Provider {
         } else {
             ("authorization", format!("Bearer {token}"))
         }
+    }
+
+    /// The headers to put on a request to this service beyond the ones it builds, resolved.
+    ///
+    /// A value naming a variable is read through `lookup` at this moment, which is the moment and
+    /// the reason a token is read ([BACKEND-16]). A reference whose variable holds nothing sends no
+    /// header: unlike a credential there is nothing to refuse on its behalf, since nothing here
+    /// knows whether the service requires it, and a request that reaches the gateway without it is
+    /// answered by the gateway rather than failing for a reason only this file could explain.
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub fn request_headers(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Vec<(String, Secret)> {
+        self.headers
+            .iter()
+            .filter_map(|header| {
+                let value = match env_reference(header.value.expose()) {
+                    Some(name) => Secret::new(lookup(name)?.trim()),
+                    None => header.value.clone(),
+                };
+                (!value.expose().is_empty() && sendable(value.expose()))
+                    .then(|| (header.name.clone(), value))
+            })
+            .collect()
     }
 
     /// Whether a tool call's `extra_content` is sent back to this service.
@@ -445,6 +581,37 @@ impl Provider {
     /// Whether anywhere a token could live is named, by the block or by a key stored for its id.
     pub(crate) fn names_a_credential(&self) -> bool {
         !self.env.is_empty() || self.api_key.is_some() || self.stored_key.is_some()
+    }
+
+    /// Refuse a header named for the credential now that a stored key makes this block one that
+    /// names a credential, which `Self::one` could not know when it built `headers`.
+    ///
+    /// `stored_key` is filled in after parsing, by whichever caller reads
+    /// `~/.bravebot/gateway-keys.json` (`Config::from_sources`), so a block naming no `env` and no
+    /// `apiKey` passed `header_entries` its `names_a_credential` as `false` and kept a header named
+    /// for the credential as an ordinary one. Left uncorrected, the request this block builds would
+    /// carry that header's value and the stored key both: two credentials on one request, with
+    /// whichever `Request::header` call ran last deciding which one a reader of the request sees.
+    ///
+    /// A no-op where `stored_key` is still `None`, or where `self.headers` holds nothing by that
+    /// name, so a block already refusing it from `env` or `apiKey` is not reported twice.
+    pub(crate) fn reconcile_stored_credential(&mut self) {
+        if self.stored_key.is_none() {
+            return;
+        }
+        let credential_name = match self.id == GOOGLE_VERTEX_ID {
+            true => VERTEX_KEY_HEADER,
+            false => "authorization",
+        };
+        if let Some(position) = self
+            .headers
+            .iter()
+            .position(|held| held.name == credential_name)
+        {
+            let header = self.headers.remove(position);
+            self.headers_refused
+                .push((header.name, HeaderFault::Reserved));
+        }
     }
 }
 
@@ -561,6 +728,80 @@ fn bedrock_entries(value: Option<&serde_json::Value>) -> Vec<crate::bedrock::Ent
             }
         })
         .collect()
+}
+
+/// The names one `headers` block is keyed by.
+fn header_names(value: Option<&serde_json::Value>) -> impl Iterator<Item = String> + '_ {
+    let block = match value {
+        Some(serde_json::Value::Object(block)) => Some(block),
+        _ => None,
+    };
+    block.into_iter().flat_map(|block| block.keys().cloned())
+}
+
+/// The `headers` block as headers to send and names refused.
+///
+/// `credential_name` is the header this provider's credential goes in, refused where the block
+/// named somewhere for a credential to live: two things authenticating one request is a request
+/// nobody can read the authentication of, and which of them won would depend on the order headers
+/// were attached in.
+fn header_entries(
+    value: Option<&serde_json::Value>,
+    credential_name: &str,
+    names_a_credential: bool,
+) -> (Vec<Header>, Vec<(String, HeaderFault)>) {
+    // `content-type` and the framing names are this program's own: a body is encoded here and its
+    // length and destination are properties of the request being sent, so a block restating any of
+    // them describes a request other than the one that goes.
+    const FRAMING: &[&str] = &[
+        "host",
+        "content-length",
+        "content-type",
+        "transfer-encoding",
+        "connection",
+    ];
+
+    let Some(serde_json::Value::Object(block)) = value else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut kept: Vec<Header> = Vec::new();
+    let mut refused = Vec::new();
+    for (written, value) in block {
+        let name = written.trim().to_ascii_lowercase();
+        let fault = |fault| Some((written.clone(), fault));
+        let entry = if !a_field_name(&name) {
+            fault(HeaderFault::NotAName)
+        } else if FRAMING.contains(&name.as_str())
+            || (names_a_credential && name == credential_name.to_ascii_lowercase())
+            || kept.iter().any(|held| held.name == name)
+        {
+            fault(HeaderFault::Reserved)
+        } else {
+            match string(Some(value)) {
+                // A name with nothing under it is a line somebody has not finished writing, on the
+                // same footing as every other empty value in this file: absence, not a refusal.
+                None => None,
+                Some(value) if !sendable(&value) => fault(HeaderFault::NotAValue),
+                Some(value)
+                    if env_reference(&value).is_none()
+                        && ["{env:", "{file:"]
+                            .iter()
+                            .any(|opening| value.contains(opening)) =>
+                {
+                    fault(HeaderFault::Substitution)
+                }
+                Some(value) => {
+                    kept.push(Header {
+                        name,
+                        value: Secret::new(&value),
+                    });
+                    None
+                }
+            }
+        };
+        refused.extend(entry);
+    }
+    (kept, refused)
 }
 
 /// The `models` block, in the order the file listed it.
@@ -1316,5 +1557,414 @@ mod tests {
         ] {
             assert!(parsed(text).is_empty(), "{text:?} configured something");
         }
+    }
+
+    /// The case the block exists for: a gateway that routes on a header of its own. Both spellings
+    /// of one name are asserted, because a reading that kept the name as written would send two
+    /// headers where the person wrote one.
+    #[test]
+    fn a_header_a_block_asked_for_is_read() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"X-Tenant-Id": "team-7", "x-route": "eu"}
+                }
+            }}}"#);
+        let mut seen: Vec<(String, String)> = provider
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("x-route".to_string(), "eu".to_string()),
+                ("x-tenant-id".to_string(), "team-7".to_string())
+            ]
+        );
+        assert!(
+            provider.headers_refused.is_empty(),
+            "a header nobody objected to was refused: {:?}",
+            provider.headers_refused
+        );
+    }
+
+    /// `Request::header` appends, so a name this program already set would go twice and an
+    /// intermediary would choose between them. The name is reported as the file wrote it, because
+    /// a person looking for the line they typed is looking for their own spelling.
+    #[test]
+    fn a_header_that_would_change_framing_is_refused() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {
+                        "Host": "elsewhere.invalid",
+                        "content-length": "3",
+                        "Content-Type": "text/plain",
+                        "transfer-encoding": "chunked",
+                        "connection": "close",
+                        "x-route": "eu"
+                    }
+                }
+            }}}"#);
+        let kept: Vec<(String, String)> = provider
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            kept,
+            [("x-route".to_string(), "eu".to_string())],
+            "a reserved name was sent"
+        );
+        let mut refused: Vec<(String, HeaderFault)> = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                ("Content-Type".to_string(), HeaderFault::Reserved),
+                ("Host".to_string(), HeaderFault::Reserved),
+                ("connection".to_string(), HeaderFault::Reserved),
+                ("content-length".to_string(), HeaderFault::Reserved),
+                ("transfer-encoding".to_string(), HeaderFault::Reserved)
+            ],
+            "a refused name was not reported as the file wrote it, or was refused for another reason"
+        );
+    }
+
+    /// One name written twice in two spellings is one header. `Request::header` appends, so
+    /// keeping both would send two values and let the service pick, which is not a thing the
+    /// person asked for in either line.
+    #[test]
+    fn one_name_written_twice_sends_one_header() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-route": "eu", "X-Route": "us"}
+                }
+            }}}"#);
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "one name produced two headers: {sent:?}");
+        assert_eq!(sent[0].0, "x-route");
+        assert_eq!(
+            provider.headers_refused.len(),
+            1,
+            "the spelling that lost was not reported: {:?}",
+            provider.headers_refused
+        );
+        assert_eq!(provider.headers_refused[0].1, HeaderFault::Reserved);
+    }
+
+    /// Two things authenticating one request is a request nobody can read the authentication of,
+    /// and which won would depend on the order headers were attached in. The same name is kept
+    /// where the block names no credential, because then nothing else is putting it there.
+    #[test]
+    fn the_header_a_credential_goes_in_is_refused_only_where_one_is_named() {
+        let with_key = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "apiKey": "in-the-file",
+                    "headers": {"Authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert!(
+            with_key.request_headers(|_| None).is_empty(),
+            "a second credential was sent beside the configured one"
+        );
+        assert_eq!(
+            with_key.headers_refused,
+            [("Authorization".to_string(), HeaderFault::Reserved)]
+        );
+
+        let named_variable = one(r#"{"provider": {"gw": {
+                "env": ["GW_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert!(
+            named_variable.request_headers(|_| None).is_empty(),
+            "a block naming a variable for its token still sent a written authorization"
+        );
+
+        let no_credential = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Basic abc"}
+                }
+            }}}"#);
+        let sent = no_credential.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "nothing else was going to set that header");
+        assert_eq!(sent[0].0, "authorization");
+    }
+
+    /// A block naming no `env` and no `apiKey` still names a credential once a key is stored for
+    /// its id, but `Self::one` cannot know that: `stored_key` is filled in later, by
+    /// `Config::from_sources`. Left alone, the written `authorization` would reach the request
+    /// beside the stored key `credential_header` adds, carrying two credentials on one request.
+    /// `reconcile_stored_credential` is what `Config::from_sources` calls to settle this once the
+    /// key is known.
+    #[test]
+    fn a_stored_key_refuses_a_written_authorization_once_it_is_known() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        // Before the key is stored, nothing named a credential, so the header was kept.
+        assert_eq!(
+            provider.request_headers(|_| None).len(),
+            1,
+            "a block naming no credential yet should still send its own header"
+        );
+        assert!(provider.headers_refused.is_empty());
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a second credential was sent beside the stored key"
+        );
+        assert_eq!(
+            provider.headers_refused,
+            [("authorization".to_string(), HeaderFault::Reserved)]
+        );
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("stored-placeholder"));
+        assert_eq!(source, Some(Source::Stored));
+    }
+
+    /// Nothing to do where the block already refused the header from `env` or `apiKey`: a second
+    /// pass over a name no longer in `headers` must not report it twice.
+    #[test]
+    fn reconciling_a_stored_key_is_a_no_op_once_a_credential_was_already_named() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "env": ["GW_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert_eq!(provider.headers_refused.len(), 1);
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert_eq!(
+            provider.headers_refused.len(),
+            1,
+            "a header already refused was reported a second time: {:?}",
+            provider.headers_refused
+        );
+    }
+
+    /// Vertex AI takes its key in a header of its own, so the name to refuse is that one and not
+    /// `authorization`. A gateway that is not Vertex has nothing putting `x-goog-api-key` on a
+    /// request, so a block that wants one there gets one.
+    #[test]
+    fn a_vertex_block_refuses_the_header_its_key_goes_in() {
+        let all = vertex(&format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "apiKey": "in-the-file",
+                "headers": {{"x-goog-api-key": "another", "authorization": "Bearer another"}}}}"#
+        ));
+        let provider = &all[0];
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(
+            sent.len(),
+            1,
+            "the key's own header was sent twice or the other was dropped: {sent:?}"
+        );
+        assert_eq!(sent[0].0, "authorization");
+        assert_eq!(
+            provider.headers_refused,
+            [(VERTEX_KEY_HEADER.to_string(), HeaderFault::Reserved)]
+        );
+
+        let elsewhere = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "apiKey": "in-the-file",
+                    "headers": {"x-goog-api-key": "a-value"}
+                }
+            }}}"#);
+        assert_eq!(elsewhere.request_headers(|_| None).len(), 1);
+    }
+
+    /// A header a gateway wants is often a second credential, and a block reaches a person's
+    /// screen whenever a diagnostic prints one. The value went out in plain text while this field
+    /// was a `String`, since the derived `Debug` prints whatever a field holds.
+    #[test]
+    fn printing_a_block_does_not_print_a_header_value() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-second-key": "in-the-file"}
+                }
+            }}}"#);
+
+        let printed = format!("{provider:?}");
+
+        assert!(
+            !printed.contains("in-the-file"),
+            "the header value is in what was printed: {printed}"
+        );
+        assert!(
+            printed.contains("x-second-key"),
+            "the name is withheld too, so nothing says which header was configured: {printed}"
+        );
+    }
+
+    /// A value naming a variable is read where a token is read, at the point of use: one read at
+    /// startup is stale in a session where somebody exported another. A variable holding nothing
+    /// sends no header, because nothing here knows whether the service requires it and the gateway
+    /// is the one that can say.
+    #[test]
+    fn a_header_value_naming_a_variable_is_resolved_at_the_point_of_use() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-tenant-id": "{env:GW_TENANT}"}
+                }
+            }}}"#);
+        assert_eq!(
+            provider.headers[0].value.expose(),
+            "{env:GW_TENANT}",
+            "the reference was substituted at load"
+        );
+
+        let first = provider.request_headers(|name| match name {
+            "GW_TENANT" => Some("team-7".to_string()),
+            _ => None,
+        });
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].1.expose(), "team-7");
+
+        // The same block, a different environment: a value cached at load would answer "team-7".
+        let later = provider.request_headers(|_| Some("team-8".to_string()));
+        assert_eq!(later[0].1.expose(), "team-8");
+
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a variable holding nothing sent the reference as a value"
+        );
+        assert!(
+            provider
+                .request_headers(|_| Some("   ".to_string()))
+                .is_empty(),
+            "a variable holding only spaces sent an empty header"
+        );
+    }
+
+    /// Nothing here substitutes, so a reference inside a longer value would go out with the braces
+    /// still in it and the service would route on the literal text. Refused at load, where the key
+    /// that wrote it can be named.
+    #[test]
+    fn a_reference_inside_a_longer_header_value_is_refused() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-tenant-id": "tenant-{env:GW_TENANT}", "x-key": "{file:/tmp/k}"}
+                }
+            }}}"#);
+        assert!(
+            provider
+                .request_headers(|_| Some("team-7".to_string()))
+                .is_empty(),
+            "an unsubstituted reference was sent"
+        );
+        let mut refused = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                ("x-key".to_string(), HeaderFault::Substitution),
+                ("x-tenant-id".to_string(), HeaderFault::Substitution)
+            ]
+        );
+    }
+
+    /// A line ending in a value would end the header and let the rest start another, which is a
+    /// settings file choosing headers nobody wrote down. A name that is not a field name is
+    /// refused with it, because what it would produce is a request no service parses.
+    #[test]
+    fn a_header_that_is_not_sendable_is_refused() {
+        let provider = one(&serde_json::json!({"provider": {"gw": {"options": {
+            "baseURL": "https://example.invalid/v1",
+            "headers": {
+                "x-split": "eu\r\nx-admin: yes",
+                "x-nul": "a\u{0}b",
+                "x bad": "eu",
+                "": "eu",
+                "x-ok": "eu"
+            }
+        }}}})
+        .to_string());
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "something unsendable went out: {sent:?}");
+        assert_eq!(sent[0].0, "x-ok");
+        let mut refused: Vec<(String, HeaderFault)> = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                (String::new(), HeaderFault::NotAName),
+                ("x bad".to_string(), HeaderFault::NotAName),
+                ("x-nul".to_string(), HeaderFault::NotAValue),
+                ("x-split".to_string(), HeaderFault::NotAValue)
+            ]
+        );
+    }
+
+    /// Every failure reads as absence, on the same footing as the rest of the block: a half-typed
+    /// settings file must not stop a session. A name with nothing under it is a line somebody has
+    /// not finished writing, so it is neither sent nor reported.
+    #[test]
+    fn a_malformed_headers_block_configures_no_headers() {
+        for headers in [
+            "\"not a block\"",
+            "[]",
+            "{}",
+            r#"{"x-route": null}"#,
+            r#"{"x-route": 7}"#,
+            r#"{"x-route": {"a": "b"}}"#,
+            r#"{"x-route": ""}"#,
+            r#"{"x-route": "   "}"#,
+        ] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{
+                    "baseURL": "https://example.invalid/v1", "headers": {headers}
+                }}}}}}}}"#
+            ));
+            assert!(
+                provider
+                    .request_headers(|_| Some("a-value".to_string()))
+                    .is_empty(),
+                "{headers} configured a header"
+            );
+            assert!(
+                provider.headers_refused.is_empty(),
+                "{headers} was reported as a refusal rather than read as absence"
+            );
+        }
+    }
+
+    /// Bedrock signs over the headers it sends, so one added here either breaks the signature or
+    /// is not covered by it. Refused by name so the block says why rather than failing at the
+    /// service.
+    #[test]
+    fn an_aws_block_sends_no_configured_header() {
+        let provider = one(r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "headers": {"x-tenant-id": "team-7"}}
+            }}}"#);
+        assert!(provider.bedrock.is_some());
+        assert!(provider.request_headers(|_| None).is_empty());
+        assert_eq!(
+            provider.headers_refused,
+            [("x-tenant-id".to_string(), HeaderFault::Reserved)]
+        );
     }
 }

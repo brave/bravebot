@@ -4109,6 +4109,68 @@ fn doctor_labels_an_ignored_setting_and_an_unread_key_apart() {
     );
 }
 
+/// A header the person's own `provider` block asked for and this build does not send is named by
+/// `doctor`, with the reason and without the value (BACKEND-54).
+///
+/// Two refusals in one block, for different reasons, because a report that printed one line for
+/// the block would leave whoever wrote the other line without the name to go and edit. The value
+/// stays out of the report on both: a header a gateway routes on is often a second credential, and
+/// a report that held one is a report people paste into issues.
+#[test]
+fn doctor_names_a_refused_header_without_its_value() {
+    let scratch = Scratch::new("cli-running-doctor-refused-header").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {
+                        "baseURL": "http://127.0.0.1:1/api/v1",
+                        "headers": {
+                            "Host": "a-routing-secret",
+                            "x tenant": "a-second-credential"
+                        }
+                    },
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let framing = line("Host");
+    assert!(
+        framing.contains("is not sent") && framing.contains("sets that header itself"),
+        "a header this program sets itself went unreported: {stdout}"
+    );
+    let misshapen = line("x tenant");
+    assert!(
+        misshapen.contains("is not sent") && misshapen.contains("not a header name"),
+        "a name that is not a header name went unreported: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a-routing-secret") && !stdout.contains("a-second-credential"),
+        "doctor printed a refused header's value: {stdout}"
+    );
+}
+
 /// A checkout's `advisorModel` is dropped, and `doctor` says so rather than leaving whoever wrote
 /// it to conclude the conversation is being sent to the model it names (BACKEND-24).
 #[test]

@@ -512,6 +512,12 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# A header a gateway block named and this build does not send, with the name the file wrote and the
+# reason. The name only: a header a gateway routes on is often a second credential.
+doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
+doctor-header-not-a-name = { $name } in the provider block is not sent: it is not a header name
+doctor-header-not-a-value = { $name } in the provider block is not sent: a header value cannot hold a line ending or a control character
+doctor-header-substitution = { $name } in the provider block is not sent: a variable reference is read as the whole value, not inside a longer one
 doctor-gateway-keys = gateway keys
 doctor-gateway-keys-unreadable =
     { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)

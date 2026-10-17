@@ -2193,8 +2193,9 @@ fn a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated() {
     )
     .expect("policy");
 
-    let models = bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &egress)
-        .expect("the roster was fetched");
+    let models =
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &[], &egress)
+            .expect("the roster was fetched");
     assert_eq!(models[0].key, "ollama/qwen3-coder:30b");
 
     let captured = received.recv().expect("request captured");
@@ -2225,8 +2226,14 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     )
     .expect("policy");
 
-    bravebot_aichat::models::list_from_gateway(&mut policy, &provider, Some("a-token"), &egress)
-        .expect("the roster was fetched");
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &[],
+        &egress,
+    )
+    .expect("the roster was fetched");
 
     let captured = received.recv().expect("request captured");
     assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
@@ -2251,7 +2258,7 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
         )
         .expect("policy");
 
-        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &[], &egress)
             .expect("the roster was fetched");
 
         let captured = received.recv().expect("request captured");
@@ -2266,6 +2273,73 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
             "a gateway's roster request named this product (credential: {token:?})"
         );
     }
+}
+
+/// BACKEND-54: the roster request carries `options.headers` the same way a chat request does. A
+/// gateway that needs a header to route a request needs it to answer a listing too, so a roster
+/// asked without one is a person seeing no models with nothing local to explain it. Dropping the
+/// loop that attaches `headers` in `list_from_gateway` would pass every other test here, since
+/// each of them passes `&[]`; this is the one that would catch it.
+#[test]
+fn a_header_the_block_asked_for_reaches_the_roster_request() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-route": "{{env:GW_ROUTE}}"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let headers = provider.request_headers(|name| match name {
+        "GW_ROUTE" => Some("eu".to_string()),
+        _ => None,
+    });
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &headers,
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the roster request: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("x-route"),
+        Some("eu"),
+        "the value went out as the reference the file wrote, not what it resolved to: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("authorization"),
+        Some("Bearer a-token"),
+        "a configured header replaced the credential on the roster request: {:?}",
+        captured.headers
+    );
 }
 
 /// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
@@ -2295,6 +2369,7 @@ fn a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_rost
             &mut policy,
             &provider,
             Some("a-token"),
+            &[],
             &egress,
         )
         .unwrap_or_else(|e| panic!("{name}: the roster was not fetched: {e:?}"));
@@ -2357,6 +2432,7 @@ fn an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists() 
         &mut policy,
         &provider,
         Some("a-token"),
+        &[],
         &egress,
     )
     .expect("the roster was fetched");
@@ -2419,7 +2495,7 @@ fn a_google_vertex_entry_offers_the_compiled_models_without_asking() {
 
     for token in [Some("placeholder-key"), None] {
         let models =
-            bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+            bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &[], &egress)
                 .expect("nothing to fetch is not a failure");
         let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
         let expected: Vec<String> = compiled
@@ -2480,6 +2556,90 @@ fn a_refused_google_vertex_request_does_not_repeat_the_key() {
     for said in [error.to_string(), format!("{error:?}")] {
         assert!(!said.contains(KEY), "the key is in {said}");
     }
+}
+
+/// A gateway in front of a service routes on headers of its own, and a request that arrives
+/// without them is refused or sent to the wrong tenant. The configured header has to arrive
+/// beside the credential the client sets. A request carrying only the configured header is
+/// unauthenticated. A request carrying only the credential is the request the block was written
+/// to change. A header value naming a variable is resolved by the caller, so the resolved value
+/// is what has to be on the wire.
+#[test]
+fn a_header_the_block_asked_for_reaches_the_request() {
+    let model = "a-model-behind-a-routing-header";
+    let (endpoint, received) = serve(REPLY);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{
+                "baseURL": "{endpoint}",
+                "headers": {{"X-Tenant-Id": "team-7", "x-route": "{{env:GW_ROUTE}}"}}
+            }},
+            "models": {{"{model}": {{}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let headers = provider.request_headers(|name| match name {
+        "GW_ROUTE" => Some("eu".to_string()),
+        _ => None,
+    });
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(
+            &provider,
+            model,
+            Some(bravebot_config::Secret::new("a-token")),
+        )
+        .with_gateway_headers(headers)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("hi")]),
+        )
+        .expect("the gateway answered");
+
+    let sent = received.recv().expect("request captured");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-route"),
+        Some("eu"),
+        "the value went out as the reference the file wrote: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("authorization"),
+        Some("Bearer a-token"),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-tenant-id"))
+            .count(),
+        1,
+        "one configured header was sent twice: {:?}",
+        sent.headers
+    );
 }
 
 /// A malformed tool call must not hide a valid bill.

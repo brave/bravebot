@@ -1179,6 +1179,12 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         t!(doctor_key_name),
         gateway_credential(provider, |name| std::env::var(name).ok()),
     );
+    // A header the block asked for and this build does not send. Worth a line, because a gateway
+    // that routes on a header it never receives answers about the request rather than about the
+    // line in the file, and nothing else says the line was read and dropped.
+    for (name, fault) in &provider.headers_refused {
+        fact(t!(doctor_settings_ignored), refused_header(name, *fault));
+    }
     if let Some(bedrock) = provider.bedrock.as_ref() {
         // A block naming no profile is on the one the `aws` it starts inherits, and asked about
         // by that name so a profile the CLI does not have is told from a lapsed session.
@@ -1244,6 +1250,26 @@ pub(crate) fn gateway_credential(
             id = progress::printable(&provider.id)
         ),
         (Credential::NotNeeded, _) => t!(doctor_gateway_token_not_needed).to_string(),
+    }
+}
+
+/// What `doctor` says about one header a gateway block named and this build does not send.
+///
+/// Separate from the printing so the wording is testable, and a `match` over the fault rather than a
+/// field on it because `bravebot-config` holds no words a person reads: a fault added there does not
+/// compile until it has one here.
+///
+/// The name as the file wrote it, through [`progress::printable`], since a settings file can hold an
+/// escape sequence and one here would redraw the lines around it. Never the value: the header a
+/// gateway routes on is often a second credential (BACKEND-54).
+pub(crate) fn refused_header(name: &str, fault: bravebot_config::provider::HeaderFault) -> String {
+    use bravebot_config::provider::HeaderFault;
+    let name = progress::printable(name);
+    match fault {
+        HeaderFault::Reserved => t!(doctor_header_reserved, name = name),
+        HeaderFault::NotAName => t!(doctor_header_not_a_name, name = name),
+        HeaderFault::NotAValue => t!(doctor_header_not_a_value, name = name),
+        HeaderFault::Substitution => t!(doctor_header_substitution, name = name),
     }
 }
 
@@ -2759,6 +2785,60 @@ mod tests {
         assert_eq!(
             gateway_credential(&names_one, |_| None),
             t!(doctor_gateway_token_absent, id = "gw")
+        );
+    }
+
+    /// BACKEND-54: a header the block named and this build will not send is reported by the name the
+    /// file wrote, which is the name there is to go and edit, and by which reason refused it. The
+    /// value is withheld, because the header a gateway routes on is often a second credential. A
+    /// control character in a name is shown as a picture rather than sent to the terminal.
+    #[test]
+    fn a_refused_header_is_reported_with_its_name_and_reason_and_never_its_value() {
+        let provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://example.invalid/v1", "headers": {
+                    "Host": "a-routing-secret",
+                    "x tenant": "a-second-credential",
+                    "x-bell\u0007": "a-third-value"
+                }}
+            }}}"#,
+        );
+
+        let reported: Vec<String> = provider
+            .headers_refused
+            .iter()
+            .map(|(name, fault)| refused_header(name, *fault))
+            .collect();
+
+        assert_eq!(reported.len(), 3, "{reported:?}");
+        for name in ["Host", "x tenant", "x-bell"] {
+            assert!(
+                reported.iter().any(|line| line.contains(name)),
+                "{name} is not named: {reported:?}"
+            );
+        }
+        for withheld in [
+            "a-routing-secret",
+            "a-second-credential",
+            "a-third-value",
+            "\u{7}",
+        ] {
+            assert!(
+                !reported.iter().any(|line| line.contains(withheld)),
+                "a refusal carries what it withholds: {reported:?}"
+            );
+        }
+
+        assert_eq!(
+            refused_header("Host", bravebot_config::provider::HeaderFault::Reserved),
+            t!(doctor_header_reserved, name = "Host")
+        );
+        // Two faults with one wording would leave the reader unable to tell a name this program
+        // sets itself from a name no header may have.
+        assert_ne!(
+            refused_header("x tenant", bravebot_config::provider::HeaderFault::NotAName),
+            refused_header("x tenant", bravebot_config::provider::HeaderFault::Reserved)
         );
     }
 
