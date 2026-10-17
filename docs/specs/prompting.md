@@ -119,7 +119,10 @@ with no sandbox ([SANDBOX-18](sandboxing.md#SANDBOX-18)); whether a stage's prog
 decision its profile is built with. It asks for the side effects and the
 output together, and names the exact command it would vouch for. The output prompt says
 what approving does. The vetting prompt says what approving does and, because nothing else on the
-screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers. The prompt
+screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers, and says that a command the
+sandbox confines then runs in the directory without asking ([RUN-5](tools/run.md#RUN-5)), above the lines
+that scroll so that it is on the screen whenever a yes can be taken. The desktop interface's question does
+not say so yet, so its yes does not grant it and it does not act on a kept answer that says so. The prompt
 about a directory a settings file asked for says that opening it grants reach and trust, and that a
 file asked for it. The plan prompt says that nothing the run reads can add a step, drop one, or send
 anything anywhere the plan does not already name; that approving the plan is not approving its
@@ -148,6 +151,8 @@ run one keypress settles.
 `verified-by: bravebot_tui::confirm::the_vet_prompt_says_what_approving_does_and_does_not_do`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_explains_the_consequence`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_names_the_directory_and_both_answers`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_says_confined_lines_run_without_asking_wherever_a_yes_can_be_taken`
+`verified-by: bravebot_tui::trust_prompt::only_a_yes_that_said_so_allows_confined_lines`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_explains_what_opening_does`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
 

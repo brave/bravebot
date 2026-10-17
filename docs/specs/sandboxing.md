@@ -814,6 +814,9 @@ the case of the name does not matter.
 written as any other directory, and so is a directory a process lays out as a repository itself, a
 `HEAD` file beside `objects` and `refs` directories, which git started inside it opens.
 
+A person's trust of a directory lets a plain line run there without asking only where every stage of it
+is held back from a `.git` by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
+
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 `verified-by: bravebot_sandbox::macos::a_policy_allowing_git_directory_writes_reaches_a_git_directory`
 `verified-by: bravebot_sandbox::macos::the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it`
@@ -1717,6 +1720,11 @@ every path the account can write, so counting them would take the reason from ev
 account installed, rustup's `cargo` and a Homebrew `git` among them. Under bypass a stage can
 therefore still write a file the account owns, name it `curl`, and have a later stage keep the
 network by running it.
+
+A person's trust of a directory lets a line run there without asking only where the session's network is
+closed and no stage of the line keeps it for one of the three reasons above ([RUN-5](tools/run.md#RUN-5)).
+Under `open` no line qualifies. Running one line with the network closed while the session's is open is not
+specified.
 
 The setting is read from `--run-network <open|closed>`, from `run.network` in a settings file, and
 from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and

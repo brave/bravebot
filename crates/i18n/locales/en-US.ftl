@@ -1437,6 +1437,12 @@ trust-directory-explained =
 trust-directory-regardless =
     Either way, anything derived from the web or from an untrusted file is still shown
     before it is written.
+# What a yes grants beyond the files (RUN-5), above the lines that scroll so that it is on the screen
+# whenever the yes can be taken. It names the cases where a line still asks, since a person who
+# reads it should not expect more than they get.
+trust-directory-confined-lines =
+    A yes also lets a command run here without asking when the sandbox confines it and the
+    network is closed, which today is on macOS only. Anything that needs more still asks.
 # The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
 # directory or one holding it, a filesystem that does not say when a directory was made, or an
 # incognito session.

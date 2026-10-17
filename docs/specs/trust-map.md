@@ -420,7 +420,10 @@ who has already decided to vouch for the tree, on a screen that names what a yes
 
 At startup the user is asked whether they trust the working directory. Yes writes a rule covering
 the tree and, where the answer may be kept ([TRUST-23](#TRUST-23)), keeps it for later sessions.
-Declining writes nothing, so every write is shown, and keeps nothing, so the next session asks
+The question also says that a command the sandbox confines then runs in the directory without asking
+([RUN-5](tools/run.md#RUN-5)), and a yes to it records that beside the rule, for the directory it was given
+in. A map made any other way (a kept answer written before the question said so, a resumed session whose record
+has none, `--trust-workspace`, the desktop's yes) does not record it. Declining writes nothing, so every write is shown, and keeps nothing, so the next session asks
 again. Leaving at the question starts no session. There is no third key: `r` answers nothing. Where
 the yes may not be kept the question says so, and yes trusts this session only. A key is held to
 the rule the others are, so a `y` or `n` arriving with other bytes answers nothing. The desktop
@@ -1272,7 +1275,11 @@ writes nothing, and the question once answered offers nothing more.
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
 line kept before one names no session; the name decides nothing. A line that cannot be written
-leaves the answer as a yes for this session, and the session says so and names the file.
+leaves the answer as a yes for this session, and the session says so and names the file. A yes to a
+question that said confined lines run without asking ([RUN-5](tools/run.md#RUN-5)) also writes
+`confined_lines`, and a line without it, as every line kept before the field is, says nothing of it: a session
+it starts asks about every line until the person answers again, and the newest line for the directory decides.
+An older build refuses a line holding a field it does not know, as it does for any such field, and asks.
 
 **Honoured.** A later session started in that directory, fresh, by `/clear`, by a new session in the
 desktop interface, by a session in lines, or by a resume or reopening whose record keeps no map, is
@@ -1324,6 +1331,7 @@ grant elsewhere: this directory, this one of the directories that has had that n
 yes writes rather than everything the session went on to record.
 
 `verified-by: bravebot_agent::trusted::a_kept_answer_is_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other`
 `verified-by: bravebot_agent::trusted::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
 `verified-by: bravebot_agent::trusted::another_directory_at_the_same_path_is_asked_about`

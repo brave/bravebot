@@ -3737,9 +3737,10 @@ fn opening_for(
                 // After the mode, so a session bypassing every permission says the flag answered:
                 // the map is the same either way, and the flag is what is in force.
                 None => match kept() {
-                    Some(kept) => {
-                        Opening::Remembered(crate::trust_prompt::trusting_the_workspace(root), kept)
-                    }
+                    Some(kept) => Opening::Remembered(
+                        crate::trust_prompt::trusting_as_kept(root, &kept),
+                        kept,
+                    ),
                     None => Opening::Ask,
                 },
             }
@@ -3788,7 +3789,7 @@ fn keep_the_answer(
     root: &std::path::Path,
 ) -> Option<String> {
     let yes = answer == crate::trust_prompt::Answer::Trust;
-    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session)?;
+    let kept = bravebot_agent::trusted::keep_a_yes(record, yes, session, true)?;
     let directory = root.display();
     Some(match kept {
         true => t!(session_trust_kept, directory = directory),
@@ -20355,7 +20356,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
         let mut session = a_turn_running_on("first");
         let mut stored = bravebot_session::sessions::Handle::begin(
             &root,
@@ -24188,6 +24192,7 @@ mod tests {
             session: "1-2".to_string(),
             at: 7,
             root: here().to_path_buf(),
+            confined_lines: false,
         };
         for beginning in [Beginning::New, Beginning::Resumed(None)] {
             match opening_for(beginning, PermissionMode::Ask, here(), || {
@@ -24362,7 +24367,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let said = forget_trust(Some(&home), &root);
 
@@ -24397,7 +24405,10 @@ mod tests {
             return;
         };
         let store = Store::new(&home, &root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let said = forget_trust(Some(&home), &package);
 

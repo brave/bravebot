@@ -211,18 +211,39 @@ pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore>
 pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
-        Answer::Trust => Some(trusting_the_workspace(directory)),
+        Answer::Trust => Some(trusting_the_workspace_and_confined_lines(directory)),
         Answer::Decline => Some(bravebot_agent::workspace::trust_store(directory)),
     }
 }
 
 /// The rule trusting the workspace records: the root, which covers everything beneath it.
 ///
-/// One place, so the map reached without the question is the map a yes would have written.
+/// One place, so the map reached without the question is the map a yes would have written. It does
+/// not say that confined lines run without asking ([`trusting_the_workspace_and_confined_lines`]):
+/// only a yes to a question that said so does, so a map reached any other way keeps asking about
+/// every line (RUN-5).
 pub fn trusting_the_workspace(directory: &Path) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(directory);
     trust.trust(".");
     trust
+}
+
+/// [`trusting_the_workspace`] for a yes to the startup question as it is asked now, which says that
+/// confined lines in the directory run without asking, or for a kept answer whose entry says so
+/// ([`bravebot_agent::trusted::Kept::confined_lines`]).
+pub fn trusting_the_workspace_and_confined_lines(directory: &Path) -> TrustStore {
+    let mut trust = trusting_the_workspace(directory);
+    trust.allow_confined_lines();
+    trust
+}
+
+/// The map a kept answer starts a session with: the rule a yes writes, and the answer about
+/// confined lines only where the entry says the question said so.
+pub fn trusting_as_kept(directory: &Path, kept: &bravebot_agent::trusted::Kept) -> TrustStore {
+    match kept.confined_lines {
+        true => trusting_the_workspace_and_confined_lines(directory),
+        false => trusting_the_workspace(directory),
+    }
 }
 
 /// Block until the user answers.
@@ -472,6 +493,9 @@ fn draw(
             t!(trust_directory_question),
             &directory.display().to_string(),
         ),
+        // What a yes grants beyond the files stays above what scrolls with the question, so it is
+        // on the screen whenever a yes can be taken (RUN-5).
+        Line::from(Span::raw(t!(trust_directory_confined_lines))),
         Line::raw(""),
     ];
     let mut lines = vec![
@@ -1091,7 +1115,7 @@ mod tests {
     /// Takes the drawing rather than a path, so both questions are measured by one helper and an
     /// assertion about what a prompt says cannot be made of one and forgotten on the other.
     fn rendered(draw_it: impl FnOnce(&mut ratatui::Frame)) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(72, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(72, 24)).expect("terminal");
         terminal.draw(draw_it).expect("draw");
         terminal
             .backend()
@@ -1199,6 +1223,67 @@ mod tests {
         assert!(
             output.contains("Say no if you"),
             "no guidance on when to decline: {output}"
+        );
+    }
+
+    /// RUN-5: what a yes grants beyond the files is said in the question, which stays above what
+    /// scrolls, so it is on the screen wherever a yes can be taken: both where a yes is kept and
+    /// where it is not, and in a box short enough that the rest scrolls.
+    #[test]
+    fn the_prompt_says_confined_lines_run_without_asking_wherever_a_yes_can_be_taken() {
+        let said = |output: &str| output.contains("without asking");
+        assert!(said(&rendered(|frame| draw_at_rest(frame, here()))));
+        let store =
+            bravebot_agent::trusted::Store::new(Path::new("/Users/somebody/.bravebot"), here());
+        let record = store.path();
+        assert!(said(&rendered(|frame| {
+            draw(frame, here(), Some(record), false, 0, &mut false);
+        })));
+        let mut terminal = Terminal::new(TestBackend::new(72, 14)).expect("terminal");
+        let mut drawn = None;
+        terminal
+            .draw(|frame| {
+                drawn = Some(draw(frame, here(), None, false, u16::MAX, &mut false));
+            })
+            .expect("draw");
+        assert!(
+            drawn.expect("drawn").answerable,
+            "a yes was taken in a box where the sentence was scrolled away"
+        );
+        assert!(
+            said(&inside(terminal.backend().buffer())),
+            "the sentence scrolled away with what scrolls"
+        );
+    }
+
+    /// RUN-5: only a yes to the question as it is asked now, or a kept answer whose entry says so,
+    /// records that confined lines run without asking. Declining, bypassing and a kept answer from
+    /// before the question said so do not.
+    #[test]
+    fn only_a_yes_that_said_so_allows_confined_lines() {
+        let yes = trust_for(Answer::Trust, here()).expect("trusting starts a session");
+        assert!(yes.allows_confined_lines());
+        let no = trust_for(Answer::Decline, here()).expect("declining starts a session");
+        assert!(!no.allows_confined_lines());
+        assert!(!trust_for(Answer::Leave, here()).is_some());
+        assert!(
+            !answered_by(PermissionMode::Bypass, here())
+                .expect("bypass answers")
+                .allows_confined_lines()
+        );
+
+        let kept = |confined_lines| bravebot_agent::trusted::Kept {
+            session: "1-2".to_string(),
+            at: 7,
+            root: here().to_path_buf(),
+            confined_lines,
+        };
+        assert!(trusting_as_kept(here(), &kept(true)).allows_confined_lines());
+        let before = trusting_as_kept(here(), &kept(false));
+        assert!(before.is_trusted("."), "the older answer stopped trusting");
+        assert!(
+            !before.allows_confined_lines(),
+            "an answer kept before the question said so allowed them"
         );
     }
 
@@ -1737,7 +1822,7 @@ mod tests {
     #[test]
     fn a_directory_question_longer_than_the_box_keeps_its_keys_and_scrolls_to_the_rest() {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
-        let size = (80, 13);
+        let size = (80, 16);
         let at = |scroll| {
             let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("terminal");
             let mut drawn = None;
@@ -1951,7 +2036,7 @@ mod tests {
         let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
         let mut recorded = false;
         let at = |scroll, recorded: &mut bool| {
-            let mut terminal = Terminal::new(TestBackend::new(72, 16)).expect("terminal");
+            let mut terminal = Terminal::new(TestBackend::new(72, 19)).expect("terminal");
             let mut drawn = None;
             terminal
                 .draw(|frame| {
