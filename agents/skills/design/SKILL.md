@@ -252,8 +252,9 @@ they differ. From `ui/`:
   `drive:panels`, `drive:models`, `drive:menu`, `drive:export`, `drive:fork`, `drive:tree`,
   `drive:theme`, `drive:bots`, `drive:about`, `drive:vetting`, `drive:remembered-trust`,
   `drive:markdown`, `drive:perf`, `drive:session-list`, `drive:visual`, and
-  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`. If you moved a label or a DOM
-  location, update the drivers and demo scenes that assert on it.
+  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`, which take their bridge fixture
+  from `acceptance-fixture.mjs`. If you moved a label or a DOM location, update the drivers and
+  demo scenes that assert on it.
 - Docs: update `ui/docs/interface.md` (layout, toolbar, keyboard model), `ui/docs/development.md`
   (tokens, components, check rules) and `ui/docs/testing.md` (drivers, fixtures, budgets) when the
   behaviour they describe changes. Update this file when the application's look changes.

@@ -106,7 +106,9 @@ matter:
   and `node scripts/drive-models.mjs`: isolated Electron acceptance checks with deterministic
   provider replies. These cover the current tab layout, search, history, drafts, approvals,
   memory, and model selection. Command approvals include the resolved execution plan and
-  files written by redirections.
+  files written by redirections. `drive-ux-acceptance`, `drive-bot-history` and
+  `drive-conversation-workflow` build their profile and install their bridge replies through
+  `scripts/acceptance-fixture.mjs`, so a method the bridge gains is added to the fixture once.
 - `node scripts/drive-secure-files.mjs`: real preview and memory IPC, symlink rejection,
   edit conflicts, history deletion and bot recreation, without model calls. To verify packaging,
   build with `node scripts/package.mjs`, then set `SECURE_FILES_APP` to the packaged executable
