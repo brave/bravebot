@@ -73,6 +73,7 @@ struct Settled {
     skip_permissions: bool,
     carried: Option<String>,
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     prompts: SystemPrompts,
 }
 
@@ -285,6 +286,25 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
     }
 
+    // Taken out beside `--agent`, for its reason: it names what the session it opens is about.
+    let links = match take_links(args) {
+        Ok(links) => links,
+        Err(complaint) => {
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                complaint,
+            ));
+        }
+    };
+    if links != bravebot_tui::app::Links::default() && !opens_a_session(args) {
+        return Err(stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_links_need_a_session).to_string(),
+        ));
+    }
+
     // Taken out here for the same reason: a session, a session in lines, a resumed session and a
     // one-shot run all carry the words the same way (CLI-19).
     let prompts = match take_system_prompts(args) {
@@ -395,6 +415,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         skip_permissions,
         carried,
         agent,
+        links,
         prompts,
     })
 }
@@ -431,6 +452,7 @@ fn main() -> ExitCode {
         skip_permissions,
         carried,
         agent,
+        links,
         prompts,
     } = match settle_flags(&mut args) {
         Ok(settled) => settled,
@@ -452,23 +474,25 @@ fn main() -> ExitCode {
         None => interactive(
             bravebot_tui::app::Start::Fresh,
             agent,
+            links,
             skip_permissions,
             prompts,
         ),
         // The same session, with a prompt from the command line sent as its first turn (CLI-31). A
         // flag of its own because `bravebot "<task>"` is the one-shot run scripts already call.
         Some("-i" | "--interactive") => {
-            open_on(&args[1..], as_json, agent, skip_permissions, prompts)
+            open_on(&args[1..], as_json, agent, links, skip_permissions, prompts)
         }
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
             run_task(&args, skip_permissions, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
-            Some(id) => resume_named(id, agent, skip_permissions, prompts),
+            Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
             None => interactive(
                 bravebot_tui::app::Start::Choose,
                 agent,
+                links,
                 skip_permissions,
                 prompts,
             ),
@@ -480,6 +504,7 @@ fn main() -> ExitCode {
             Some(wanted) if !wanted.is_empty() && !wanted.starts_with('-') => interactive(
                 bravebot_tui::app::Start::ChooseFromPr(wanted.to_string()),
                 agent,
+                links,
                 skip_permissions,
                 prompts,
             ),
@@ -488,11 +513,11 @@ fn main() -> ExitCode {
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
         Some("--continue" | "-c") if !continues_with_a_task(&args) => {
-            continue_here(agent, skip_permissions, prompts)
+            continue_here(agent, links, skip_permissions, prompts)
         }
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
-            Some(id) => fork_named(id, agent, skip_permissions, prompts),
+            Some(id) => fork_named(id, agent, links, skip_permissions, prompts),
             // No result object here, and none is owed: reaching this arm means the arguments held
             // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
             // `bravebot --fork --json` reads the flag as the session id and is refused by name in
@@ -583,6 +608,7 @@ fn open_on(
     words: &[String],
     as_json: bool,
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -596,6 +622,7 @@ fn open_on(
     interactive(
         bravebot_tui::app::Start::Sending(prompt, named),
         agent,
+        links,
         skip_permissions,
         prompts,
     )
@@ -706,6 +733,49 @@ fn take_agent(args: &mut Vec<String>) -> Result<Option<String>, String> {
         _ => Err(t!(cli_agent_needs_a_name).to_string()),
     })?;
     Ok(named.into_iter().last())
+}
+
+/// Take `--issue <url>` and `--pr <url>` out of the arguments, answering with the links they gave.
+///
+/// Removed before dispatch, like `--agent`, and the last of two of a kind is used. A value that is
+/// not one `http` or `https` address with a host in printable ASCII is refused with a sentence that
+/// does not repeat it, as `/issue` and `/pr` refuse one (PANEL-12): it may hold the escape that
+/// made it not one. A missing value is refused too, so a script whose variable expanded to nothing
+/// is not run with no link, untold.
+fn take_links(args: &mut Vec<String>) -> Result<bravebot_tui::app::Links, String> {
+    use bravebot_session::sessions::{Link, Url};
+    let taken = take_valued(args, &["--issue", "--pr"], |flag, word| {
+        let kind = match flag {
+            "--issue" => Link::Issue,
+            _ => Link::PullRequest,
+        };
+        match word.and_then(Url::read) {
+            Some(url) => Ok((kind, url)),
+            None => Err(match kind {
+                Link::Issue => t!(cli_issue_needs_a_link).to_string(),
+                Link::PullRequest => t!(cli_pr_needs_a_link).to_string(),
+            }),
+        }
+    })?;
+    let mut links = bravebot_tui::app::Links::default();
+    for (kind, url) in taken {
+        match kind {
+            Link::Issue => links.issue = Some(url),
+            Link::PullRequest => links.pull_request = Some(url),
+        }
+    }
+    Ok(links)
+}
+
+/// Whether the arguments left after the flags are taken open an interactive session, which is the
+/// only thing a link from `--issue` or `--pr` can be given to: a one-shot run, a session in lines
+/// and a background one would drop it, and so do the commands that start no session.
+fn opens_a_session(args: &[String]) -> bool {
+    match args.first().map(String::as_str) {
+        None | Some("-i" | "--interactive" | "--fork" | "-f" | "--from-pr") => true,
+        Some("--resume" | "-r" | "--continue" | "-c") => !continues_with_a_task(args),
+        Some(_) => false,
+    }
 }
 
 /// Whether a leading `--resume` or `--continue` carries a task, which makes it a one-shot run
@@ -2345,6 +2415,7 @@ fn piped_input(source: impl Read, is_tty: bool) -> Result<Option<String>, String
 fn resume_named(
     id: &str,
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -2375,6 +2446,7 @@ fn resume_named(
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
             agent,
+            links,
             skip_permissions,
             prompts,
         ),
@@ -2385,6 +2457,7 @@ fn resume_named(
 fn fork_named(
     id: &str,
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -2407,6 +2480,7 @@ fn fork_named(
             Some(record) => interactive(
                 bravebot_tui::app::Start::Resuming(Box::new(record)),
                 agent,
+                links,
                 skip_permissions,
                 prompts,
             ),
@@ -2423,6 +2497,7 @@ fn fork_named(
 /// somebody who meant to carry on and got an empty transcript has lost the thing they asked for.
 fn continue_here(
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -2432,7 +2507,7 @@ fn continue_here(
     match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
-        Some(session) => resume_named(&session.id, agent, skip_permissions, prompts),
+        Some(session) => resume_named(&session.id, agent, links, skip_permissions, prompts),
         None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
@@ -2440,6 +2515,7 @@ fn continue_here(
 fn interactive(
     start: bravebot_tui::app::Start,
     agent: Option<String>,
+    links: bravebot_tui::app::Links,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -2532,6 +2608,7 @@ fn interactive(
         started,
         start,
         agent,
+        links,
         skip_permissions,
         prompts,
     ) {
@@ -4112,6 +4189,81 @@ mod tests {
 
         let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
         assert_eq!(invocation.advisor, None);
+    }
+
+    /// PANEL-12. `--issue` and `--pr` are taken out of the line wherever they stand, give each its
+    /// own link, and let the last of two of a kind win.
+    #[test]
+    fn issue_and_pr_flags_are_taken_out_and_set_their_own_link() {
+        use bravebot_session::sessions::Url;
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const OTHER: &str = "https://github.com/brave/bravebot/issues/9";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        let mut line = args(&[
+            "--issue", OTHER, "-i", "fix it", "--pr", PULL, "--issue", ISSUE,
+        ]);
+        let links = take_links(&mut line).expect("links");
+        assert_eq!(links.issue, Url::read(ISSUE));
+        assert_eq!(links.pull_request, Url::read(PULL));
+        assert_eq!(line, args(&["-i", "fix it"]));
+
+        let mut line = args(&["--pr", PULL]);
+        let links = take_links(&mut line).expect("links");
+        assert_eq!(links.issue, None, "--pr set the issue");
+        assert!(line.is_empty());
+    }
+
+    /// PANEL-12. A value that `/issue` and `/pr` would refuse, or none, stops the line, and the
+    /// sentence does not repeat what was typed, which may hold the escape that made it no link.
+    #[test]
+    fn a_value_that_is_not_one_web_address_is_refused_and_not_repeated() {
+        for flag in ["--issue", "--pr"] {
+            for value in [
+                "https://example.com/a\nhttps://example.com/b",
+                "https://example.com/\u{1b}]0;owned\u{7}",
+                "ftp://example.com/pull/1",
+                "not a link",
+                "https:///pull/1",
+                "",
+            ] {
+                let complaint = take_links(&mut args(&[flag, value])).expect_err("refused");
+                assert!(complaint.contains(flag), "{flag} {value:?}: {complaint}");
+                assert!(
+                    value.is_empty() || !complaint.contains(value),
+                    "{flag} {value:?}: {complaint}"
+                );
+            }
+            let complaint = take_links(&mut args(&[flag])).expect_err("refused");
+            assert!(complaint.contains(flag), "{complaint}");
+        }
+    }
+
+    /// The links go to a session that opens, and a line that opens none refuses them rather than
+    /// dropping them.
+    #[test]
+    fn only_a_line_that_opens_a_session_takes_links() {
+        for opens in [
+            &[][..],
+            &["-i", "fix it"],
+            &["--resume", "abc"],
+            &["--resume"],
+            &["-c"],
+            &["--fork", "abc"],
+            &["--from-pr", "12"],
+        ] {
+            assert!(opens_a_session(&args(opens)), "{opens:?}");
+        }
+        for opens_none in [
+            &["fix it"][..],
+            &["-p", "fix it"],
+            &["--resume", "abc", "-p", "go"],
+            &["--bg", "fix it"],
+            &["--plain"],
+            &["doctor"],
+            &["--mode", "manifest", "go"],
+        ] {
+            assert!(!opens_a_session(&args(opens_none)), "{opens_none:?}");
+        }
     }
 
     /// A script that computed an empty variable asked for an advisor, and running without one would
