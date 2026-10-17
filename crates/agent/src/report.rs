@@ -595,6 +595,23 @@ pub struct HeardMessage {
     pub body: Reported,
 }
 
+/// A message this session's planner put to another session (MSG-11).
+///
+/// Drawn where the person reads the transcript, and drawn for every message, so one sent under a
+/// standing answer is seen as it goes. The target's id and name are the roster's, the label is the
+/// one the policy layer gave the words, and the words are the planner's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentMessage {
+    /// The receiver's id.
+    pub to: String,
+    /// The receiver's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was sent under.
+    pub label: String,
+    /// What the planner wrote.
+    pub text: String,
+}
+
 pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
@@ -783,6 +800,13 @@ pub trait Reporter {
     /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
     fn session_message(&mut self, _heard: HeardMessage) {}
 
+    /// A message this session's planner sent to another session has gone.
+    ///
+    /// Said once it is queued in the other session's process, and for every message: the person is
+    /// asked about the first to a session in a turn and may have said to send the rest, so this is
+    /// the only place the later ones are seen.
+    fn message_sent(&mut self, _sent: SentMessage) {}
+
     /// Whose work the reports that follow describe: one delegate, or the turn itself.
     ///
     /// Set by the driver immediately before each report, and the only thing that says where a
@@ -874,6 +898,8 @@ pub struct RecordingReporter {
     pub interjected: Vec<String>,
     /// Every message from another session, in the order it reached the planner.
     pub heard: Vec<HeardMessage>,
+    /// Every message this session's planner sent to another session, in the order it was sent.
+    pub sent: Vec<SentMessage>,
     /// Every delegate announced as starting, in order.
     pub delegated: Vec<Delegation>,
     /// How each delegate ended, in the order they finished.
@@ -987,6 +1013,10 @@ impl Reporter for RecordingReporter {
         self.heard.push(heard);
     }
 
+    fn message_sent(&mut self, sent: SentMessage) {
+        self.sent.push(sent);
+    }
+
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {
         self.attributed_to = delegate;
     }
@@ -1044,6 +1074,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "schedule_next" => t!(verb_schedule_next),
         "watch_file" => t!(verb_watch_file),
         "advisor" => t!(verb_advisor),
+        "message_session" => t!(verb_message_session),
         // Every server's tool is offered under a wire name of this shape, and no built-in is.
         server if server.starts_with("mcp__") => t!(verb_mcp_call),
         _ => t!(verb_unknown),
@@ -1191,7 +1222,13 @@ mod tests {
             crate::watch::Arming::Allowed { free: 1 },
             crate::exec::Deadlines::BUILT_IN,
             crate::tools::Running::Offered,
-        )) {
+        ))
+        .chain({
+            let mut added = Vec::new();
+            crate::tools::offer_advisor(&mut added);
+            crate::tools::offer_message_session(&mut added);
+            added
+        }) {
             let name = &tool.function.name;
             assert_ne!(
                 verb_for(name),

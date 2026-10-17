@@ -106,6 +106,9 @@ pub(super) fn offered_tools<S: Sink>(
         if advisor.is_some() {
             tools::offer_advisor(&mut offered);
         }
+        if task.courier.is_some() {
+            tools::offer_message_session(&mut offered);
+        }
         offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
         let names: Vec<&str> = offered
             .iter()
@@ -127,6 +130,9 @@ pub(super) fn offered_tools<S: Sink>(
                 );
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);
+                }
+                if task.courier.is_some() {
+                    tools::offer_message_session(&mut offered);
                 }
                 offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
             }

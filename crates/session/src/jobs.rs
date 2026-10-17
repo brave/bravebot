@@ -112,6 +112,8 @@ pub enum Held {
     Manifest,
     /// A question the planner asks, or the startup question.
     Question,
+    /// A message the planner wants to send to another session.
+    Message,
 }
 
 impl Held {
@@ -128,6 +130,7 @@ impl Held {
             Self::Move => "move",
             Self::Manifest => "manifest",
             Self::Question => "question",
+            Self::Message => "message",
         }
     }
 }

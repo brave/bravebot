@@ -15,7 +15,7 @@
 // The socket half of this is unix only, and the rest of it is only reached through that half.
 #![cfg_attr(not(unix), allow(dead_code))]
 
-use bravebot_agent::messages::{Arrived, Inbox};
+use bravebot_agent::messages::{Arrived, Courier, Delivery, Found, Inbox, Target};
 use bravebot_session::jobs::{Held, Job, Mode, Roster, State};
 use std::collections::VecDeque;
 use std::io::{BufRead, Read, Write};
@@ -38,7 +38,7 @@ const MESSAGES_WAITING: usize = 8;
 
 /// The most characters a message may hold. A sender refuses a longer one (MSG-1), and the receiver
 /// does as well, because it cannot rely on the sender having done so (MSG-6).
-const MOST_CHARACTERS: usize = 4_000;
+const MOST_CHARACTERS: usize = bravebot_core::message::MOST_CHARACTERS;
 
 /// What the session is doing, as far as taking a line goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,6 +450,8 @@ pub(crate) struct Hosting {
     pub(crate) mode: Mode,
     /// Where messages from other sessions wait for the planner's next request (MSG-6).
     pub(crate) inbox: Arc<dyn Inbox>,
+    /// How this session's planner reaches the other background sessions (MSG-1, MSG-5).
+    pub(crate) courier: Arc<dyn Courier>,
 }
 
 impl Hosting {
@@ -459,6 +461,10 @@ impl Hosting {
             (inner.job.id.clone(), inner.job.mode)
         };
         Self {
+            courier: Arc::new(RosterCourier {
+                roster: shared.roster.clone(),
+                id: id.clone(),
+            }),
             id,
             mode,
             input: Intake {
@@ -477,6 +483,56 @@ impl Hosting {
         Self {
             after_an_interruption: interrupted,
             ..self
+        }
+    }
+}
+
+/// The way a background session finds another in the roster and offers it a message.
+///
+/// Reads the roster and the secret of the process it writes to, and nothing the session produced:
+/// the text and the label are carried to the other process and read by neither side's driver
+/// (MSG-8).
+#[derive(Debug)]
+struct RosterCourier {
+    roster: Roster,
+    id: String,
+}
+
+impl Courier for RosterCourier {
+    fn own_id(&self) -> &str {
+        &self.id
+    }
+
+    fn find(&self, name: &str) -> Found {
+        let named: Vec<_> = self
+            .roster
+            .list()
+            .into_iter()
+            .filter(|seen| seen.job.name == name)
+            .collect();
+        match named.as_slice() {
+            [] => Found::Missing,
+            [only] if only.job.id == self.id => Found::Itself,
+            [only] if !only.live => Found::NotLive,
+            [only] => Found::Session(Target {
+                id: only.job.id.clone(),
+                name: only.job.name.clone(),
+                state: only.state().word().to_string(),
+                directory: only.job.directory.clone(),
+            }),
+            _ => Found::Ambiguous,
+        }
+    }
+
+    fn deliver(&self, to: &Target, label: &str, text: &str) -> Delivery {
+        #[cfg(unix)]
+        {
+            socket::offer_message(&self.roster, &self.id, &to.id, label, text)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (to, label, text);
+            Delivery::Unreached
         }
     }
 }
@@ -513,7 +569,6 @@ pub(crate) fn bounded_line(from: &mut impl BufRead) -> Option<String> {
 
 /// The text of a message as the one line the socket carries it on: a backslash, a newline and a
 /// return are each written as a backslash and a letter.
-#[cfg(test)]
 fn on_one_line(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('\n', "\\n")
@@ -567,6 +622,45 @@ mod socket {
     /// Connect to the process for `socket`.
     pub(crate) fn reach(socket: &Path) -> std::io::Result<UnixStream> {
         UnixStream::connect(socket)
+    }
+
+    /// Offer `text` to the process of the session `to` as a message from `from`, and say what it
+    /// answered (MSG-5).
+    ///
+    /// Sends the secret of that process first, as any client does (BG-15), then the sender's id, the
+    /// word the label was written as and the text on one line. A process with no socket or no
+    /// secret is not running, and nothing is started to take the message.
+    pub(crate) fn offer_message(
+        roster: &Roster,
+        from: &str,
+        to: &str,
+        label: &str,
+        text: &str,
+    ) -> Delivery {
+        let (Some(socket), Some(token)) = (roster.socket_of(to), roster.attach_token(to)) else {
+            return Delivery::Unreached;
+        };
+        let Ok(mut stream) = reach(&socket) else {
+            return Delivery::Unreached;
+        };
+        let _ = stream.set_read_timeout(Some(PATIENCE));
+        let _ = stream.set_write_timeout(Some(PATIENCE));
+        let sent = writeln!(
+            stream,
+            "{token}\nmessage\n{from}\n{label}\n{}",
+            on_one_line(text)
+        );
+        if sent.is_err() {
+            return Delivery::Unreached;
+        }
+        match bounded_line(&mut BufReader::new(stream)).as_deref() {
+            Some("ok") => Delivery::Queued,
+            Some("full") => Delivery::Full,
+            Some("too-long") => Delivery::TooLong,
+            Some("stopping") => Delivery::Stopping,
+            Some("unknown") => Delivery::Unknown,
+            _ => Delivery::Unreached,
+        }
     }
 
     /// Run the session for `id` in this process, until it is stopped.
@@ -1451,5 +1545,178 @@ mod tests {
             "x".repeat(MOST_CHARACTERS + 1)
         );
         assert_eq!(served(&shared, &too_long), "too-long\n");
+    }
+
+    const OTHER: &str = "33333333-3333-4333-8333-333333333333";
+    const THIRD: &str = "44444444-4444-4444-8444-444444444444";
+
+    fn named(id: &str, name: &str) -> Job {
+        let mut job = Job::starting(
+            id.to_string(),
+            std::path::Path::new("/work/somewhere"),
+            "the first prompt",
+            Mode::Ask,
+        );
+        job.name = name.to_string();
+        job
+    }
+
+    /// A roster in a directory of its own, short enough to bind a socket under: a path past the
+    /// length a socket address holds cannot be bound at all.
+    #[cfg(unix)]
+    fn a_short_roster() -> Roster {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::path::PathBuf::from(format!(
+            "/tmp/bb-host-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Roster::at(root)
+    }
+
+    /// MSG-1, MSG-5: a name finds exactly one session, as typed. No session with it, two with it,
+    /// the sender itself and a session no process runs are each found as what they are, and the
+    /// session found carries what the roster holds for the person to be shown.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_finds_one_live_session_other_than_the_sender_and_says_why_it_found_none() {
+        let roster = a_short_roster();
+        let mut leases = Vec::new();
+        for (id, name, live) in [
+            (SENDER, "me", true),
+            (OTHER, "build", true),
+            (THIRD, "docs", false),
+            ("55555555-5555-4555-8555-555555555555", "twin", true),
+            ("66666666-6666-4666-8666-666666666666", "twin", true),
+        ] {
+            let mut job = named(id, name);
+            if name == "build" {
+                job.is(State::NeedsInput, Some(Held::Run));
+            }
+            roster.publish(&job).expect("published");
+            if live {
+                leases.push(roster.claim(id).expect("claimed").expect("not held"));
+            }
+        }
+        let courier = RosterCourier {
+            roster: roster.clone(),
+            id: SENDER.to_string(),
+        };
+        assert_eq!(
+            courier.find("build"),
+            Found::Session(Target {
+                id: OTHER.to_string(),
+                name: "build".to_string(),
+                state: "needs-input".to_string(),
+                directory: "/work/somewhere".to_string(),
+            })
+        );
+        assert_eq!(courier.find("me"), Found::Itself);
+        assert_eq!(courier.find("docs"), Found::NotLive);
+        assert_eq!(courier.find("twin"), Found::Ambiguous);
+        for typed in ["nobody", "Build", "build ", "bui", ""] {
+            assert_eq!(courier.find(typed), Found::Missing, "{typed:?}");
+        }
+        assert_eq!(courier.own_id(), SENDER);
+        let _ = std::fs::remove_dir_all(roster_root(&roster));
+    }
+
+    #[cfg(unix)]
+    fn roster_root(roster: &Roster) -> std::path::PathBuf {
+        roster
+            .socket_of(SENDER)
+            .and_then(|socket| socket.parent()?.parent().map(std::path::Path::to_path_buf))
+            .expect("a root")
+    }
+
+    /// A process behind `id` in `roster`: a lock, a secret, a socket and a thread answering what
+    /// arrives on it, as `host` sets them up.
+    #[cfg(unix)]
+    fn listening_as(roster: &Roster, id: &str, name: &str) -> Arc<Shared> {
+        let job = named(id, name);
+        roster.publish(&job).expect("published");
+        let lease = roster.claim(id).expect("claimed").expect("not held");
+        std::mem::forget(lease);
+        let token = roster.issue_attach_token(id).expect("a secret");
+        let socket = roster.socket_of(id).expect("a socket path");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bound");
+        let shared = Shared::new(roster.clone(), job, None);
+        let serving = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let shared = Arc::clone(&serving);
+                let token = token.clone();
+                std::thread::spawn(move || socket::serve(stream, &shared, &token));
+            }
+        });
+        shared
+    }
+
+    /// MSG-5, MSG-6, MSG-7: a message offered through the courier arrives in the receiver's process
+    /// whole, with the sender's id and the label word it was sent under, and the courier says what
+    /// the receiver answered. A receiver that does not list the sender, one with no room and one
+    /// that cannot be reached are each told apart, and a session with no process starts nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_courier_offers_a_message_to_the_process_and_says_what_it_answered() {
+        let roster = a_short_roster();
+        roster
+            .publish(&named(SENDER, "me"))
+            .expect("the sender is listed");
+        let receiver = listening_as(&roster, OTHER, "build");
+        let courier = RosterCourier {
+            roster: roster.clone(),
+            id: SENDER.to_string(),
+        };
+        let Found::Session(to) = courier.find("build") else {
+            panic!("the receiver is not found");
+        };
+
+        let text = "first\nsecond \\n with a backslash\r\nthird";
+        assert_eq!(courier.deliver(&to, "(T,priv)", text), Delivery::Queued);
+        let [arrived] = waiting(&receiver).try_into().expect("one message");
+        assert_eq!(
+            (
+                arrived.from.as_str(),
+                arrived.label.as_str(),
+                arrived.text.as_str()
+            ),
+            (SENDER, "(T,priv)", text)
+        );
+        assert_eq!(arrived.name, "me", "the name is the roster's");
+
+        for _ in 0..MESSAGES_WAITING {
+            assert_eq!(courier.deliver(&to, "(T,pub)", "hi"), Delivery::Queued);
+        }
+        assert_eq!(courier.deliver(&to, "(T,pub)", "hi"), Delivery::Full);
+        waiting(&receiver);
+
+        let stranger = RosterCourier {
+            roster: roster.clone(),
+            id: THIRD.to_string(),
+        };
+        assert_eq!(stranger.deliver(&to, "(T,pub)", "hi"), Delivery::Unknown);
+        assert!(waiting(&receiver).is_empty());
+
+        let nobody = Target {
+            id: "77777777-7777-4777-8777-777777777777".to_string(),
+            name: "gone".to_string(),
+            state: "idle".to_string(),
+            directory: "/work".to_string(),
+        };
+        assert_eq!(
+            courier.deliver(&nobody, "(T,pub)", "hi"),
+            Delivery::Unreached
+        );
+        assert!(
+            roster.get(&nobody.id).is_none()
+                && roster
+                    .socket_of(&nobody.id)
+                    .is_some_and(|socket| !socket.exists()),
+            "a message to a session with no process made something"
+        );
+        let _ = std::fs::remove_dir_all(roster_root(&roster));
     }
 }

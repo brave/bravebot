@@ -9,7 +9,7 @@
 //! corrupt it.
 
 use crate::json::{self, Call, Stream, Tokens};
-use bravebot_agent::report::{Activity, HeardMessage, Reported, Reporter, Shown};
+use bravebot_agent::report::{Activity, HeardMessage, Reported, Reporter, SentMessage, Shown};
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
 use bravebot_tui::wrap::display_width;
@@ -248,20 +248,45 @@ impl<W: Write> Reporter for Progress<W> {
             .to_string(),
         ));
         match heard.body {
-            Reported::Said(text) => {
-                for line in text.lines() {
-                    for row in marked("  > ", line) {
-                        self.say(&row);
-                    }
-                }
-                self.say("");
-            }
+            Reported::Said(text) => self.draw_quoted(&text),
             Reported::Kept(shown) => self.draw_quarantined(&shown),
         }
+    }
+
+    /// Written apart from the person's prompts, as a message that came in is: a heading naming the
+    /// receiver as the roster does, then every word quoted. Drawn for every message, so one sent
+    /// under a standing answer is seen as it goes (MSG-11).
+    fn message_sent(&mut self, sent: SentMessage) {
+        let to: String = sent
+            .to
+            .chars()
+            .take(bravebot_agent::messages::ID_SHOWN)
+            .collect();
+        self.say("");
+        self.say(&printable(
+            &t!(
+                session_message_sent_heading,
+                to = to,
+                name = sent.name,
+                label = sent.label
+            )
+            .to_string(),
+        ));
+        self.draw_quoted(&sent.text);
     }
 }
 
 impl<W: Write> Progress<W> {
+    /// The words of a message, one quoted row to each line of them.
+    fn draw_quoted(&mut self, text: &str) {
+        for line in text.lines() {
+            for row in marked("  > ", line) {
+                self.say(&row);
+            }
+        }
+        self.say("");
+    }
+
     fn draw_quarantined(&mut self, shown: &Shown) {
         let margin = format!("  {QUARANTINE_BAR} ");
 
@@ -487,6 +512,54 @@ mod tests {
         assert!(
             words.contains(BAR),
             "the words are drawn outside the margin: {words:?}"
+        );
+    }
+
+    fn sent(text: &str) -> SentMessage {
+        SentMessage {
+            to: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "fix the build".to_string(),
+            label: "(T,priv)".to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    /// MSG-11: a message this session sent is drawn under a heading that names the receiver and the
+    /// label it went under, with every row of the words quoted, so it cannot be read as a line the
+    /// person typed or as one that came in.
+    #[test]
+    fn a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted() {
+        let written = log(|p| p.message_sent(sent("first\nsecond")));
+        assert!(
+            written.contains("message to session 22222222 (fix the build) \u{b7} (T,priv)"),
+            "got: {written}"
+        );
+        assert!(
+            written.contains("  > first\n  > second\n"),
+            "got: {written}"
+        );
+        assert!(
+            !written.contains("message from session"),
+            "a sent message was drawn as one that came in: {written}"
+        );
+    }
+
+    /// MSG-11: control characters in the receiver's name or in the words are replaced, so a session
+    /// named or worded to move the cursor cannot paint over the heading or the margin of what was
+    /// sent.
+    #[test]
+    fn a_sent_message_cannot_move_the_cursor_through_the_name_or_the_words() {
+        let mut message = sent("\u{1b}[2Kfine");
+        message.name = "x\u{1b}[2J\nname".to_string();
+        let written = log(|p| p.message_sent(message));
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+        assert_eq!(
+            written
+                .lines()
+                .filter(|row| row.contains("message to session"))
+                .count(),
+            1,
+            "a name started a heading of its own: {written:?}"
         );
     }
 

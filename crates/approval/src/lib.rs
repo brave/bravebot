@@ -416,6 +416,41 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
     lines
 }
 
+/// A message the planner wants to send to another background session (MSG-3).
+pub struct Message<'a> {
+    /// The target's name, as the roster holds it.
+    pub name: &'a str,
+    /// The roster's word for what the target is doing.
+    pub state: &'a str,
+    /// Where the target works.
+    pub directory: &'a str,
+    /// The whole text, which is what the receiving planner will be told.
+    pub text: &'a str,
+    /// The label the text is sent under, in its own form.
+    pub label: &'a str,
+}
+
+/// The lines a message is read before it is sent: who it goes to, the whole text behind the margin,
+/// the label, and what a yes does and does not do.
+///
+/// Nothing of the text is left out. A yes sends every byte of it into another planner's context, so
+/// a line counted instead of shown would be approved unread.
+pub fn message_lines(message: &Message<'_>) -> Vec<String> {
+    let mut lines = vec![
+        t!(
+            message_to,
+            name = printable(message.name),
+            state = printable(message.state),
+            directory = printable(message.directory)
+        )
+        .to_string(),
+    ];
+    lines.extend(quarantined_in_full(message.text));
+    lines.push(t!(message_label, label = printable(message.label)).to_string());
+    lines.push(t!(message_explained).to_string());
+    lines
+}
+
 /// A language server the planner would like started.
 pub struct Server<'a> {
     /// The agent's one-line description of the server.
@@ -603,6 +638,32 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
+    /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
+    /// left out would be approved unread.
+    #[test]
+    fn a_message_is_shown_in_full_behind_the_margin() {
+        let text: String = (0..MOST_CONTENT_LINES * 3)
+            .map(|n| format!("row {n}\u{1b}[31m\n"))
+            .collect();
+        let lines = message_lines(&Message {
+            name: "build",
+            state: "idle",
+            directory: "/work",
+            text: &text,
+            label: "(T,pub)",
+        });
+        let rows: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert_eq!(rows.len(), MOST_CONTENT_LINES * 3);
+        assert_eq!(rows[0], "\u{2503} row 0\u{241b}[31m");
+        assert!(lines.iter().all(|line| !line.contains('\u{1b}')));
+        assert!(lines.first().is_some_and(|line| line.contains("build")));
+        assert!(lines.iter().any(|line| line.contains("(T,pub)")));
+    }
 
     #[test]
     fn a_word_that_names_no_check_reassures_least() {

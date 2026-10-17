@@ -48,6 +48,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         mcp: None,
         beside: None,
         inbox: None,
+        courier: None,
         auto_vetting: false,
         kept: None,
     }
@@ -218,4 +219,87 @@ fn a_message_waiting_for_a_hosted_session_reaches_the_planner_of_its_next_turn_o
         "{}",
         sent[1]
     );
+}
+
+/// A courier that finds one session and counts the lookups.
+#[derive(Debug, Default)]
+struct FindsBuild(std::sync::atomic::AtomicUsize);
+
+impl bravebot_agent::messages::Courier for FindsBuild {
+    fn own_id(&self) -> &str {
+        "11111111-1111-4111-8111-111111111111"
+    }
+
+    fn find(&self, _name: &str) -> bravebot_agent::messages::Found {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        bravebot_agent::messages::Found::Session(bravebot_agent::messages::Target {
+            id: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "build".to_string(),
+            state: "idle".to_string(),
+            directory: "/work".to_string(),
+        })
+    }
+
+    fn deliver(
+        &self,
+        _to: &bravebot_agent::messages::Target,
+        _label: &str,
+        _text: &str,
+    ) -> bravebot_agent::messages::Delivery {
+        bravebot_agent::messages::Delivery::Queued
+    }
+}
+
+/// MSG-1, MSG-12: the planner of a hosted session is offered `message_session` and its call reaches
+/// the session's courier, and a session without one is offered nothing. Nobody is at the end of this
+/// session's input, so the person's question is declined and the planner is told only that the
+/// message was not sent.
+#[test]
+fn the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reaches_the_courier() {
+    for hosted in [true, false] {
+        let directory = Scratch::new(if hosted {
+            "plain-session-sends"
+        } else {
+            "plain-session-cannot-send"
+        });
+        let workspace = Workspace::new(directory.path()).unwrap();
+        let (config, requests, server) = endpoint::endpoint(vec![
+            endpoint::tool("message_session", r#"{"target":"build","text":"hi"}"#),
+            endpoint::answer(),
+        ]);
+        let courier = std::sync::Arc::new(FindsBuild::default());
+        let mut session = running(&config, &workspace, TrustStore::new(workspace.root()));
+        session.courier = hosted.then(|| {
+            std::sync::Arc::clone(&courier) as std::sync::Arc<dyn bravebot_agent::messages::Courier>
+        });
+        let turn = session.take("tell build", &mut bravebot_agent::confirm::Unattended);
+        assert!(turn.failure.is_none(), "{:?}", turn.failure);
+        server.join().unwrap();
+
+        let sent: Vec<_> = requests.try_iter().collect();
+        assert_eq!(sent.len(), 2, "hosted {hosted}");
+        assert_eq!(
+            sent[0].contains(r#""name":"message_session""#),
+            hosted,
+            "hosted {hosted}: {}",
+            sent[0]
+        );
+        assert_eq!(
+            courier.0.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(hosted),
+            "hosted {hosted}"
+        );
+        assert_eq!(
+            sent[1].contains("the message was not sent"),
+            hosted,
+            "hosted {hosted}: {}",
+            sent[1]
+        );
+        assert_eq!(
+            sent[1].contains("error: no such tool 'message_session'"),
+            !hosted,
+            "hosted {hosted}: {}",
+            sent[1]
+        );
+    }
 }

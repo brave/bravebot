@@ -116,6 +116,9 @@ fn run(
     let inbox = hosting
         .as_ref()
         .map(|hosting| std::sync::Arc::clone(&hosting.inbox));
+    let courier = hosting
+        .as_ref()
+        .map(|hosting| std::sync::Arc::clone(&hosting.courier));
     let interrupted = hosting
         .as_ref()
         .is_some_and(|hosting| hosting.after_an_interruption);
@@ -479,6 +482,7 @@ fn run(
         mcp: reached.session(),
         beside: beside_turns,
         inbox,
+        courier,
         auto_vetting: bravebot_core::vetting::auto(
             bravebot_core::vetting::asked_for(),
             bravebot_session::store::load_vetting(),
@@ -660,6 +664,8 @@ struct Running<'a> {
     beside: Option<crate::host::Broadcast>,
     /// Where messages from other sessions wait for the planner, in a background session (MSG-6).
     inbox: Option<std::sync::Arc<dyn bravebot_agent::messages::Inbox>>,
+    /// How the planner of a background session reaches the other background sessions (MSG-1).
+    courier: Option<std::sync::Arc<dyn bravebot_agent::messages::Courier>>,
     /// The record a background session writes after each turn, which is what starting it again
     /// resumes from (BG-1).
     kept: Option<Kept>,
@@ -774,6 +780,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .already_asked_about(self.answers.asked_about.clone())
             .already_exposed(self.answers.exposed.clone())
             .with_inbox(self.inbox.clone())
+            .with_courier(self.courier.clone())
             .addressing(self.agent.as_ref().map(|agent| agent.name.clone()));
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
@@ -1449,6 +1456,45 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         let lines = bravebot_approval::host_lines(&request.hosts);
         self.about(Held::Question);
         self.ask(&lines, t!(host_title))
+    }
+
+    /// The target, the whole text behind the margin, the label and what a yes does, and two answers:
+    /// `y` sends this one, and the key of its own sends this one and the later ones to this session
+    /// until the turn ends (MSG-3, MSG-4). A line has room for them here because this is the one
+    /// session that sends, and the second answer lasts only as long as the turn.
+    fn confirm_message(
+        &mut self,
+        request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        use bravebot_agent::confirm::MessageDecision;
+
+        let label = request.label.to_string();
+        let mut lines = bravebot_approval::message_lines(&bravebot_approval::Message {
+            name: &request.name,
+            state: &request.state,
+            directory: &request.directory,
+            text: &request.text,
+            label: &label,
+        });
+        lines.push(t!(message_explained_turn, key = t!(message_answer_turn)).to_string());
+        for line in &lines {
+            self.say(line);
+        }
+        let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
+        let _ = self.output.flush();
+        self.about(Held::Message);
+        let on = self.answering();
+        let Some(typed) = self.line(on) else {
+            return MessageDecision::Decline;
+        };
+        let typed = typed.trim().to_lowercase();
+        if typed == t!(line_answer_yes) {
+            MessageDecision::Once
+        } else if typed == t!(message_answer_turn) {
+            MessageDecision::ForTheTurn
+        } else {
+            MessageDecision::Decline
+        }
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2799,6 +2845,89 @@ mod tests {
             let screen = String::from_utf8(asking.output).expect("text");
             assert!(screen.contains("news"), "{screen}");
             assert!(screen.contains("[1/2/3]"), "{screen}");
+        }
+    }
+
+    fn a_message_to_ask_about() -> bravebot_agent::confirm::MessageRequest {
+        bravebot_agent::confirm::MessageRequest {
+            name: "build \u{1b}[2J".to_string(),
+            state: "needs-input".to_string(),
+            directory: "/work/build".to_string(),
+            text: "first line\nsecond line\u{1b}[31m".to_string(),
+            label: bravebot_core::label::Label::trusted_private(),
+        }
+    }
+
+    /// MSG-3 in lines: a text of more lines than a question shows of a file is put to the person whole,
+    /// every row behind the margin and none counted in place of shown, because a yes sends all of it.
+    #[test]
+    fn a_long_message_is_asked_about_whole_in_lines() {
+        let mut request = a_message_to_ask_about();
+        request.text = (0..120).map(|n| format!("row {n}\n")).collect();
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+            Vec::new(),
+        );
+        asking.confirm_message(&request);
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for n in 0..120 {
+            let row = format!("\u{2503} row {n}\n");
+            assert!(drawn.contains(&row), "row {n} is not drawn");
+        }
+        assert!(
+            !drawn.contains("more line"),
+            "a row was counted in place of shown: {drawn}"
+        );
+    }
+
+    /// MSG-3, MSG-4 in lines: the session as the roster holds it, the whole text behind the margin
+    /// with its control characters pictured, the label and what a yes does are put to the person, and
+    /// the answers are `y` for this one, `t` for this one and the later ones this turn, and nothing
+    /// else: an empty line, another word and the end of the input send nothing. The question reaches
+    /// the watcher as a message, the kind the list shows.
+    #[test]
+    fn a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing() {
+        use bravebot_agent::confirm::MessageDecision::{Decline, ForTheTurn, Once};
+        for (typed, expected) in [
+            ("y\n", Once),
+            ("Y\n", Once),
+            ("t\n", ForTheTurn),
+            ("T\n", ForTheTurn),
+            ("\n", Decline),
+            ("n\n", Decline),
+            ("yes\n", Decline),
+            ("yt\n", Decline),
+            ("", Decline),
+        ] {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut asking = Prompting::watched(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+                Box::new(Recorded(seen.clone())),
+            );
+            assert_eq!(
+                asking.confirm_message(&a_message_to_ask_about()),
+                expected,
+                "{typed:?}"
+            );
+            assert_eq!(
+                *seen.lock().expect("the record"),
+                vec![Waiting::Answer(Held::Message)],
+                "{typed:?}"
+            );
+            let drawn = String::from_utf8(asking.output).expect("text");
+            for line in [
+                "To the session \"build \u{241b}[2J\" (needs-input), working in /work/build:",
+                "\u{2503} first line",
+                "\u{2503} second line\u{241b}[31m",
+                "Sent as (T,priv).",
+                "A yes sends this text to that session's planner as advice from another session.",
+                "Answering t sends this one and the later ones to this session until this turn ends.",
+                "send a message to another session? [y/t/N]",
+            ] {
+                assert!(drawn.contains(line), "{line:?} is not drawn in {drawn:?}");
+            }
+            assert!(!drawn.contains('\u{1b}'), "{drawn:?}");
         }
     }
 

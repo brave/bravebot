@@ -9,6 +9,7 @@ guards:
   - symbol: Produced::problem
     sites:
       - crates/agent/src/tools.rs: 233
+      - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -53,6 +54,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`advisor`](advisor.md) | none | `question` | the advisor's reply |
+| [`message_session`](../session-messages.md#MSG-1) | `target` | `text` | confirmation that the message is queued in the other session's process |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 | [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
 

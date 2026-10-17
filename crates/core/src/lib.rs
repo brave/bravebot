@@ -28,6 +28,7 @@ pub mod file_authority;
 pub mod incognito;
 pub mod label;
 pub mod manifest;
+pub mod message;
 pub mod permissions;
 pub mod policy;
 pub mod processor;

@@ -522,6 +522,24 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Declined where every check is being bypassed, and asked in every other.
+    ///
+    /// No mode answers this one yes: a yes puts words into another planner's context, and the mode
+    /// that answers every other question in a person's place has nothing to say about where those
+    /// words go (MSG-3). Bypassing is refused for a background session, the only kind that sends, so
+    /// the arm that declines is the one a session that could send never reaches.
+    fn confirm_message(
+        &mut self,
+        request: &crate::confirm::MessageRequest,
+    ) -> crate::confirm::MessageDecision {
+        match self.mode.get() {
+            PermissionMode::Bypass => crate::confirm::MessageDecision::Decline,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_message(request)
+            }
+        }
+    }
+
     /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
     /// in every other. SERVERS-13.
     ///
@@ -642,6 +660,13 @@ mod tests {
             Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -663,6 +688,12 @@ mod tests {
         fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
+        }
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
         }
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
@@ -714,6 +745,99 @@ mod tests {
         }
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
+        }
+    }
+
+    /// Says yes to a message question and counts the times it was asked; refuses everything else.
+    struct YesToMessages(usize);
+
+    impl Confirmer for YesToMessages {
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            self.0 += 1;
+            crate::confirm::MessageDecision::ForTheTurn
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// MSG-3: a message question is put to the person in every mode but bypass, which declines it
+    /// without asking, and no mode answers it. The regressions it rejects: a mode that answers
+    /// runs and writes in the person's place also sending words into another planner, and a
+    /// confirmer that dropped the question before it reached the person.
+    #[test]
+    fn a_message_question_is_asked_in_every_mode_but_bypass_which_declines_it() {
+        use crate::confirm::{MessageDecision, MessageRequest};
+        let request = MessageRequest {
+            name: "build".to_string(),
+            state: "idle".to_string(),
+            directory: "/work".to_string(),
+            text: "rotate the key".to_string(),
+            label: bravebot_core::label::Label::trusted_public(),
+        };
+        for (mode, asked, answer) in [
+            (PermissionMode::Ask, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::AcceptEdits, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::Plan, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::Bypass, 0, MessageDecision::Decline),
+        ] {
+            let mut yes = YesToMessages(0);
+            let decided = Confining::new(&mut yes, mode, false).confirm_message(&request);
+            assert_eq!((yes.0, decided), (asked, answer), "{mode:?}");
         }
     }
 
@@ -995,6 +1119,13 @@ mod tests {
             Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
@@ -1058,6 +1189,12 @@ mod tests {
         }
         fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
             Unattended.confirm_host(request)
+        }
+        fn confirm_message(
+            &mut self,
+            request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            Unattended.confirm_message(request)
         }
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
@@ -1489,6 +1626,13 @@ mod tests {
 
         fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
         }
 
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {

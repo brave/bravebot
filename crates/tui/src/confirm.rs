@@ -119,6 +119,15 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
         ask_host(self.terminal, request).decision()
     }
 
+    /// Declined: a session in a terminal is offered no way to send, so this is never asked, and a
+    /// question that cannot be drawn is not answered yes (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         ask_move(self.terminal, request).decision()
     }

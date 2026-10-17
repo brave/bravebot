@@ -34,7 +34,7 @@ that is merely carried.
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Four more are offered only where they mean something.
+Five more are offered only where they mean something.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
@@ -44,6 +44,8 @@ will ask again, which is a one-shot run, the desktop application, or a line the 
 run or a planned run. [`advisor`](#advisor) goes to a session that named a model to consult with
 [`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
 setting or [`/advisor`](commands.md#advisor-model--off), so not to one that did not, and not to a delegate.
+[`message_session`](#message_session) goes to a background session, so not to a session in a terminal, a
+delegate or a one-shot run.
 
 Every tool also takes `why`, one line from the planner saying what the call is for. It is content
 on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
@@ -1154,6 +1156,34 @@ like any other content nobody vouched for.
 A turn may ask at most three times, and a fourth call is refused without a request. Each call is
 counted in the turn's tokens and recorded in the trail with its model and cost. A call that fails is
 reported to the planner as a category of failure, without anything the service said.
+
+---
+
+## `message_session`
+
+Sends a message to another background session on this machine. The result says the message is queued in
+that session's process.
+
+| Parameter | |
+|---|---|
+| `target` | the name of the session, as you gave it to the planner |
+| `text` | what the planner wants that session's planner to be told, at most 4,000 characters |
+
+You are asked before the first message to a session in a turn. The question shows the session's name,
+its state and its working directory as the list of background sessions holds them, the whole text, and
+the label it is sent under. A background session holds the question until you attach. You can answer
+`y` to send that one, or `t` to send that one and the later ones to the same session until the turn
+ends. Nothing else sends, and no permission mode answers the question for you.
+
+The other session's planner is told the text is advice from another session, not your words. The text
+grants it no permission and answers nothing it is waiting on. A message starts no turn. It is read
+at the start of that planner's next request, so a session that is idle or waiting for you reads it later.
+The planner is not told whether it was read.
+
+The target is a name, so a name that no session has, that two sessions have, that is this session's own,
+or that belongs to a session no process is running is refused, and so is a text over the limit. A
+refusal does not ask you. A turn may put at most ten messages to one session, counting the ones you
+declined. A session that has met content nobody vouched for sends nothing at all.
 
 ---
 

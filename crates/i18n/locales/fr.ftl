@@ -693,6 +693,7 @@ subscription-unusable =
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
 session-message-heading = message de la session { $from } ({ $name }) · { $label }
+session-message-sent-heading = message à la session { $to } ({ $name }) · { $label }
 
 ceiling-stop-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
@@ -1256,6 +1257,21 @@ host-explained =
     redemande.
 host-yes = Oui, pour cette session
 host-no = Non
+
+## Un message vers une autre session en arrière-plan, demandé avant l'envoi
+
+message-title = envoyer un message à une autre session ?
+message-to = À la session « { $name } » ({ $state }), qui travaille dans { $directory } :
+message-label = Envoyé comme { $label }.
+message-explained =
+    Un oui envoie ce texte au planificateur de cette session comme un conseil venant d'une autre
+    session. Il ne répond à rien de ce que cette session retient, ne lui accorde aucune permission et
+    ne démarre aucun tour chez elle. Le planificateur a écrit le texte.
+message-explained-turn =
+    Répondre { $key } envoie celui-ci et les suivants à cette session jusqu'à la fin de ce tour. Rien
+    n'est écrit, donc le tour suivant redemande.
+message-answer = [o/t/N]
+message-answer-turn = t
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
@@ -2822,6 +2838,7 @@ verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
 verb-watch-file = Surveiller
 verb-advisor = Conseiller
+verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Outil
 
@@ -3044,6 +3061,7 @@ sessions-held-tools = outils
 sessions-held-move = déplacement
 sessions-held-manifest = manifeste
 sessions-held-question = question
+sessions-held-message = message
 sessions-view-title = Sessions en arrière-plan
 sessions-view-keys = ↑↓ choisir  ·  Entrée rejoindre  ·  Échap quitter
 sessions-view-failed = Impossible d'afficher la liste des sessions en arrière-plan : { $problem }

@@ -54,6 +54,7 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
@@ -165,7 +166,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 15
       - crates/agent/src/workspace.rs: 1
-      - crates/core/src/policy.rs: 5
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
       - crates/aichat/src/lib.rs: 2

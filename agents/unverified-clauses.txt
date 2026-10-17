@@ -24,14 +24,7 @@ docs/specs/plugins.md:PLUGIN-8: a marketplace is an index naming sources and dig
 docs/specs/plugins.md:PLUGIN-9: update, remove and list work from the recorded source
 docs/specs/plugins.md:PLUGIN-10: a plugin's text reaches a turn only as the part it is
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
-docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
-docs/specs/session-messages.md:MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held
-docs/specs/session-messages.md:MSG-3: the first message to a session is put to a person, with the target and the whole text
-docs/specs/session-messages.md:MSG-4: a second answer covers later messages to the same session for the rest of the turn, and no longer
-docs/specs/session-messages.md:MSG-5: a message is delivered to a live process, and starts nothing
-docs/specs/session-messages.md:MSG-10: a session sends a bounded number of messages
 docs/specs/session-messages.md:MSG-11: both transcripts show the message, and the trail records that it happened
-docs/specs/session-messages.md:MSG-12: a delegate and a processor are offered no `message_session`
 docs/specs/worktrees.md:WORKTREE-1: `--worktree` starts a fresh interactive session in a worktree made for it
 docs/specs/worktrees.md:WORKTREE-2: a name is a label of ASCII letters, digits, `.`, `_` and `-`, and decides no path
 docs/specs/worktrees.md:WORKTREE-3: `--worktree` is refused where a delegate's checkout would be, and where a checkout would not be kept

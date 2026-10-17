@@ -3157,6 +3157,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &bravebot_agent::confirm::MessageRequest,
+        ) -> bravebot_agent::confirm::MessageDecision {
+            bravebot_agent::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -3588,6 +3595,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(
@@ -6211,6 +6225,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -7859,6 +7880,13 @@ impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(
@@ -10571,6 +10599,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::HostRequest,
         ) -> bravebot_agent::confirm::Decision {
             bravebot_agent::confirm::Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &bravebot_agent::confirm::MessageRequest,
+        ) -> bravebot_agent::confirm::MessageDecision {
+            bravebot_agent::confirm::MessageDecision::Decline
         }
 
         fn confirm_move(
@@ -17557,6 +17592,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -18050,6 +18092,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     /// Refuses. A test double is not a person agreeing to a plan.
@@ -23446,6 +23495,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -27748,6 +27804,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -28236,6 +28299,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(
@@ -41124,6 +41194,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -48041,6 +48118,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -49125,6 +49209,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(
@@ -55794,6 +55885,13 @@ mod spend_limit {
             Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &bravebot_agent::confirm::MessageRequest,
+        ) -> bravebot_agent::confirm::MessageDecision {
+            bravebot_agent::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(&mut self, _: &MoveRequest) -> Decision {
             Decision::Reject
         }
@@ -59864,4 +59962,403 @@ fn an_asides_cut_is_made_inside_the_kernel() {
     .expect("a recap must not be refused");
 
     gate_at(&sink, "render", "btw: content reshaped without being read");
+}
+
+/// A roster of one live session, and everything offered to it.
+#[derive(Debug, Default)]
+struct OneSession {
+    delivered: std::sync::Mutex<Vec<(String, String)>>,
+    looked_up: std::sync::atomic::AtomicUsize,
+}
+
+impl bravebot_agent::messages::Courier for OneSession {
+    fn own_id(&self) -> &str {
+        "11111111-1111-4111-8111-111111111111"
+    }
+
+    fn find(&self, name: &str) -> bravebot_agent::messages::Found {
+        self.looked_up.fetch_add(1, Ordering::SeqCst);
+        match name {
+            "build" => bravebot_agent::messages::Found::Session(bravebot_agent::messages::Target {
+                id: "22222222-2222-4222-8222-222222222222".to_string(),
+                name: "build".to_string(),
+                state: "idle".to_string(),
+                directory: "/work/build".to_string(),
+            }),
+            _ => bravebot_agent::messages::Found::Missing,
+        }
+    }
+
+    fn deliver(
+        &self,
+        _to: &bravebot_agent::messages::Target,
+        label: &str,
+        text: &str,
+    ) -> bravebot_agent::messages::Delivery {
+        self.delivered
+            .lock()
+            .unwrap()
+            .push((label.to_string(), text.to_string()));
+        bravebot_agent::messages::Delivery::Queued
+    }
+}
+
+/// A person who answers each question about a message in turn, declining once the answers run out.
+/// Refuses everything else, since a test that wanted something approved says so.
+struct AnswersAboutMessages {
+    answers: std::collections::VecDeque<bravebot_agent::confirm::MessageDecision>,
+    asked: Vec<bravebot_agent::confirm::MessageRequest>,
+}
+
+impl AnswersAboutMessages {
+    fn saying(answers: &[bravebot_agent::confirm::MessageDecision]) -> Self {
+        Self {
+            answers: answers.iter().copied().collect(),
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl bravebot_agent::confirm::Confirmer for AnswersAboutMessages {
+    fn confirm_message(
+        &mut self,
+        request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        self.asked.push(request.clone());
+        self.answers
+            .pop_front()
+            .unwrap_or(bravebot_agent::confirm::MessageDecision::Decline)
+    }
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::WriteDecision {
+        bravebot_agent::confirm::Unattended.confirm_write(request)
+    }
+    fn confirm_run(
+        &mut self,
+        request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::Unattended.confirm_run(request)
+    }
+    fn confirm_read_output(
+        &mut self,
+        request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_read_output(request)
+    }
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_vetted_read(request)
+    }
+    fn confirm_fetch(
+        &mut self,
+        request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_fetch(request)
+    }
+    fn confirm_server(
+        &mut self,
+        request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_server(request)
+    }
+    fn confirm_manifest(
+        &mut self,
+        request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_manifest(request)
+    }
+    fn confirm_vouch(
+        &mut self,
+        request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_vouch(request)
+    }
+    fn confirm_exposing_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_exposing_read(request)
+    }
+    fn confirm_tool_list(
+        &mut self,
+        request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_tool_list(request)
+    }
+    fn confirm_mcp_call(
+        &mut self,
+        request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::Unattended.confirm_mcp_call(request)
+    }
+    fn confirm_path(
+        &mut self,
+        request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_path(request)
+    }
+    fn confirm_host(
+        &mut self,
+        request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_host(request)
+    }
+    fn confirm_move(
+        &mut self,
+        request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Unattended.confirm_move(request)
+    }
+    fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
+        bravebot_agent::confirm::Unattended.ask_user(asking)
+    }
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+const A_MESSAGE_CALL: &str =
+    r#"{"target":"build","text":"MESSAGE-WORDS\\nsecond line","why":"it needs to know"}"#;
+
+/// Run one turn of `prompt` for a session that can send through `courier`, and give back the
+/// requests the endpoint saw and what the screen was told.
+fn sending(
+    name: &str,
+    courier: Option<Arc<OneSession>>,
+    person: &mut AnswersAboutMessages,
+    replies: Vec<String>,
+) -> (
+    Vec<serde_json::Value>,
+    bravebot_agent::report::RecordingReporter,
+) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("tell the build session").with_courier(
+            courier.map(|courier| courier as Arc<dyn bravebot_agent::messages::Courier>),
+        ),
+        person,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    (requests, reporter)
+}
+
+/// MSG-1, MSG-12: the tool is offered to a session that can reach the others and to no other, and a
+/// call from a session that was not offered it is answered as an unknown name, without reading a
+/// roster or asking anyone.
+#[test]
+fn message_session_is_offered_only_to_a_session_that_can_send() {
+    use bravebot_agent::confirm::MessageDecision;
+    let courier = Arc::new(OneSession::default());
+    let mut person = AnswersAboutMessages::saying(&[MessageDecision::Once]);
+    let (able, _) = sending(
+        "message-offered",
+        Some(Arc::clone(&courier)),
+        &mut person,
+        vec![reply_with("done")],
+    );
+    assert!(the_tools_in(&able[0]).contains(&"message_session".to_string()));
+
+    let (unable, _) = sending(
+        "message-not-offered",
+        None,
+        &mut person,
+        vec![
+            tool_request("message_session", A_MESSAGE_CALL),
+            reply_with("done"),
+        ],
+    );
+    assert!(
+        !the_tools_in(&unable[0]).contains(&"message_session".to_string()),
+        "a session with no way to send was offered the tool"
+    );
+    assert!(
+        unable[1]
+            .to_string()
+            .contains("error: no such tool 'message_session'"),
+        "a call to a tool nobody was offered was not answered as an unknown name"
+    );
+    assert!(
+        person.asked.is_empty(),
+        "a person was asked about a call that cannot send"
+    );
+}
+
+/// MSG-12: a delegate is offered no `message_session` even when the session that started it can
+/// send, and a call it makes by name is answered as an unknown name. The parent's own list holds it.
+#[test]
+fn a_delegate_is_offered_no_message_session_and_its_call_is_an_unknown_name() {
+    let scratch = Scratch::new("message-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-MESSAGE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DELEGATE-TELLS-A-SESSION"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "DELEGATE-TELLS-A-SESSION",
+            vec![
+                tool_request("message_session", A_MESSAGE_CALL),
+                reply_with("reported"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let courier = Arc::new(OneSession::default());
+    let mut person =
+        AnswersAboutMessages::saying(&[bravebot_agent::confirm::MessageDecision::Once]);
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-MESSAGE").with_courier(Some(
+            Arc::clone(&courier) as Arc<dyn bravebot_agent::messages::Courier>
+        )),
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    let (parent, delegate): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = requests
+        .iter()
+        .partition(|request| request.to_string().contains("HAVE-A-DELEGATE-MESSAGE"));
+    assert!(
+        the_tools_in(parent[0]).contains(&"message_session".to_string()),
+        "the session that can send was not offered the tool"
+    );
+    assert!(!delegate.is_empty(), "no request came from a delegate");
+    for request in &delegate {
+        assert!(
+            !the_tools_in(request).contains(&"message_session".to_string()),
+            "a delegate was offered the tool"
+        );
+    }
+    assert!(
+        delegate.iter().any(|request| request
+            .to_string()
+            .contains("error: no such tool 'message_session'")),
+        "a delegate's call by name was not answered as an unknown name"
+    );
+    assert!(
+        person.asked.is_empty(),
+        "a delegate's call put a question to the person"
+    );
+    assert!(courier.delivered.lock().unwrap().is_empty());
+    assert_eq!(courier.looked_up.load(Ordering::SeqCst), 0);
+}
+
+/// MSG-5, MSG-11: a message the person agreed to is delivered with the text as written and the label
+/// its context gave it, the planner is told it is queued and not that it was read, and the screen is
+/// told of it. The person was shown the text.
+#[test]
+fn an_approved_message_is_delivered_queued_and_drawn_and_the_planner_is_not_told_it_was_read() {
+    use bravebot_agent::confirm::MessageDecision;
+    let courier = Arc::new(OneSession::default());
+    let mut person = AnswersAboutMessages::saying(&[MessageDecision::Once]);
+    let (requests, reporter) = sending(
+        "message-delivered",
+        Some(Arc::clone(&courier)),
+        &mut person,
+        vec![
+            tool_request("message_session", A_MESSAGE_CALL),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(
+        courier.delivered.lock().unwrap().clone(),
+        vec![(
+            "(T,pub)".to_string(),
+            "MESSAGE-WORDS\nsecond line".to_string()
+        )]
+    );
+    assert_eq!(person.asked.len(), 1);
+    assert_eq!(person.asked[0].text, "MESSAGE-WORDS\nsecond line");
+    assert_eq!(person.asked[0].name, "build");
+    let told = requests[1].to_string();
+    assert!(
+        told.contains("queued in the process of the session named 'build'")
+            && told.contains("does not say its planner has read it")
+            && told.contains("starts no turn"),
+        "the planner was not told what queued means: {told}"
+    );
+    assert_eq!(
+        reporter.sent,
+        vec![bravebot_agent::report::SentMessage {
+            to: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "build".to_string(),
+            label: "(T,pub)".to_string(),
+            text: "MESSAGE-WORDS\nsecond line".to_string(),
+        }]
+    );
+}
+
+/// MSG-4: the answer that covers the later messages to a session lasts until the turn ends. The
+/// same session, the same courier and the same person in the next turn are asked again, and within
+/// the turn that gave it the second message is not.
+#[test]
+fn a_standing_answer_ends_with_the_turn_that_gave_it() {
+    use bravebot_agent::confirm::MessageDecision;
+    let courier = Arc::new(OneSession::default());
+    let mut person =
+        AnswersAboutMessages::saying(&[MessageDecision::ForTheTurn, MessageDecision::Once]);
+    sending(
+        "message-standing-first",
+        Some(Arc::clone(&courier)),
+        &mut person,
+        vec![
+            tool_request("message_session", A_MESSAGE_CALL),
+            tool_request("message_session", A_MESSAGE_CALL),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(
+        person.asked.len(),
+        1,
+        "the second message in the turn was asked about"
+    );
+    assert_eq!(courier.delivered.lock().unwrap().len(), 2);
+
+    sending(
+        "message-standing-next",
+        Some(Arc::clone(&courier)),
+        &mut person,
+        vec![
+            tool_request("message_session", A_MESSAGE_CALL),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(person.asked.len(), 2, "the next turn was not asked");
+    assert_eq!(courier.delivered.lock().unwrap().len(), 3);
 }
