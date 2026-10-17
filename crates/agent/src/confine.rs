@@ -29,7 +29,7 @@ use bravebot_sandbox::rules::{
 };
 use bravebot_sandbox::scope::{
     Reach, Requested, Scope, candidate_public_keys, environment_reach, identity_key,
-    requested_reach, ssh_address, ssh_command,
+    refused_identity_files, requested_reach, ssh_address, ssh_command,
 };
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
@@ -655,9 +655,26 @@ impl Confinement {
     /// The candidates come from the person's own files and the address from the argv, so nothing a
     /// program or a repository wrote is among the inputs.
     pub fn key_choice(&self, steps: &[&Step], record: &Path) -> Option<KeyChoice> {
+        let asked_again = self.requested.contains(&Requested::SshKey);
+        let (address, candidates) = self.open_key_choice(steps, asked_again)?;
+        Some(KeyChoice {
+            address,
+            candidates,
+            record: record.to_path_buf(),
+        })
+    }
+
+    /// The owner [`Confinement::key_choice`] asks about and the keys it numbers, where `asked_again`
+    /// says the planner's request names `ssh-key`. The failure sentence reads it with `asked_again`
+    /// set, since that is the retry it points the planner at, so it promises a prompt only where
+    /// the prompt would be shown.
+    fn open_key_choice(
+        &self,
+        steps: &[&Step],
+        asked_again: bool,
+    ) -> Option<(bravebot_sandbox::scope::Address, Vec<PathBuf>)> {
         let home = self.home.as_deref()?;
         let mut asked: Option<bravebot_sandbox::scope::Address> = None;
-        let asked_again = self.requested.contains(&Requested::SshKey);
         for step in steps {
             let open = match self.identified(step) {
                 Some(Identified::Unchosen) => true,
@@ -678,20 +695,21 @@ impl Confinement {
             }
         }
         let address = asked?;
-        let candidates: Vec<PathBuf> = candidate_public_keys(home)
+        let candidates = self.offerable_candidates(home);
+        (2..=KEY_CHOICES)
+            .contains(&candidates.len())
+            .then_some((address, candidates))
+    }
+
+    /// The public keys ssh could offer that a stage may be given ([`Confinement::offerable`]).
+    fn offerable_candidates(&self, home: &Path) -> Vec<PathBuf> {
+        candidate_public_keys(home)
             .into_iter()
             .filter(|key| {
                 key.to_str()
                     .is_some_and(|key| self.offerable(key, home).is_some())
             })
-            .collect();
-        (2..=KEY_CHOICES)
-            .contains(&candidates.len())
-            .then(|| KeyChoice {
-                address,
-                candidates,
-                record: record.to_path_buf(),
-            })
+            .collect()
     }
 
     /// Whether a request can be applied: the rows of both kinds are under the account's home.
@@ -1174,6 +1192,16 @@ impl Confinement {
     /// `unconfined_offered` says the session would accept the request, so a planner is never
     /// pointed at an argument it would be refused.
     pub fn profile_offering(&self, steps: &[&Step], unconfined_offered: bool) -> String {
+        self.profile_offering_in(steps, unconfined_offered, &process_environment())
+    }
+
+    /// [`Confinement::profile_offering`] for stages that start with `environment`.
+    fn profile_offering_in(
+        &self,
+        steps: &[&Step],
+        unconfined_offered: bool,
+        environment: &[(String, String)],
+    ) -> String {
         let (signs, refused) = self.signing_state(steps);
         let source = match (signs, unconfined_offered) {
             (false, _) => String::new(),
@@ -1195,7 +1223,7 @@ impl Confinement {
         format!(
             "{}{source}{refusal}{}{commit}{git}{}",
             self.reach(steps),
-            self.identity_sentence(steps),
+            self.identity_sentence(steps, unconfined_offered, environment),
             credential_locations_sentence(self.mode),
         )
     }
@@ -1206,7 +1234,12 @@ impl Confinement {
     /// Fixed text chosen by what [`Confinement::identified`] decided for each step, which reads the
     /// argv, the person's settings and their choices at run prompts, and nothing a program printed.
     /// It names no host, owner or path.
-    fn identity_sentence(&self, steps: &[&Step]) -> String {
+    fn identity_sentence(
+        &self,
+        steps: &[&Step],
+        unconfined_offered: bool,
+        environment: &[(String, String)],
+    ) -> String {
         let decided: Vec<Identified> = steps
             .iter()
             .filter_map(|step| self.identified(step))
@@ -1247,8 +1280,58 @@ impl Confinement {
                 said.push_str(sentence);
             }
         }
-        said.push_str(IDENTITY_SENTENCE);
+        let home = self.home.as_deref();
+        said.push_str(&self.push_reach_sentence(home, environment));
+        said.push_str(IDENTITY_OPENING);
+        if self.open_key_choice(steps, true).is_some() {
+            said.push_str(IDENTITY_PROMPT_CLAUSE);
+            said.push_str(IDENTITY_ENTRY_CLAUSE);
+            said.push_str(IDENTITY_PROMPT_TAIL);
+        } else {
+            said.push_str(IDENTITY_ENTRY_CLAUSE);
+            said.push_str(IDENTITY_NO_PROMPT_TAIL);
+        }
+        if unconfined_offered {
+            said.push_str(IDENTITY_UNCONFINED_WAY_OUT);
+        }
         said
+    }
+
+    /// What a stage that pushes over ssh had to authenticate with: whether the session's agent
+    /// socket was lent, and how many public key files ssh could be given and how many its
+    /// configuration names that could not be read.
+    ///
+    /// Counted from the environment the stage starts with and the person's own files, never from
+    /// what a program printed.
+    fn push_reach_sentence(&self, home: Option<&Path>, environment: &[(String, String)]) -> String {
+        let agent = match variable(environment, "SSH_AUTH_SOCK") {
+            Some(_) => IDENTITY_AGENT_LENT_SENTENCE,
+            None => IDENTITY_NO_AGENT_SENTENCE,
+        };
+        let Some(home) = home else {
+            return agent.to_string();
+        };
+        let readable = self.offerable_candidates(home).len();
+        let refused = refused_identity_files(home);
+        let files = |count: usize| match count {
+            1 => "1 public key file".to_string(),
+            _ => format!("{count} public key files"),
+        };
+        let unreadable = match refused {
+            0 => String::new(),
+            _ => format!(
+                ", and {} named by an `IdentityFile` line could not be read",
+                files(refused)
+            ),
+        };
+        format!(
+            "{agent} The step could read {} among those ssh looks for by default and those its \
+             configuration names{unreadable}.",
+            match readable {
+                0 => "no public key file".to_string(),
+                count => files(count),
+            }
+        )
     }
 
     /// Whether a step of `steps` carries the signing scope or was asked to carry it, whether or
@@ -1884,18 +1967,45 @@ const IDENTITY_NO_ADDRESS_SENTENCE: &str = " A git step that named its remote by
      only to an ssh address written in the argv; where it connected over ssh, ssh offered whichever \
      key it tried first.";
 
-const IDENTITY_SENTENCE: &str = " Where GitHub refused a push for permission, the key ssh offered \
+/// Said of a push over ssh when the session's agent socket was lent to the stage.
+const IDENTITY_AGENT_LENT_SENTENCE: &str = " The session's ssh agent socket was lent to that git \
+     step.";
+
+/// Said of a push over ssh when the session has no agent socket to lend.
+const IDENTITY_NO_AGENT_SENTENCE: &str = " No ssh agent socket was lent to that git step, because \
+     the session has none, and a stage never reads a private key, so ssh had none to offer.";
+
+/// How the fixed text about the key ssh offers begins, and the marker that it was said.
+const IDENTITY_OPENING: &str = " Where GitHub refused a push for permission, the key ssh offered \
      may belong to an account that cannot write to the repository, and where it refused the login, \
      no key offered is registered. ssh offers an agent's keys in order and GitHub accepts the first \
      one any account holds, so a retry offers the same key. Only the person chooses the key, for a \
-     git step whose argv names the ssh address: at its run prompt in the terminal interface, which \
-     offers the public keys ssh could use where there is more than one and no key was chosen for \
-     the owner, or for one already chosen where the retry's `scopes` names `ssh-key`, or with an \
-     entry \
+     git step whose argv names the ssh address: ";
+
+/// Said where a run prompt will list the keys for the owner a step names.
+const IDENTITY_PROMPT_CLAUSE: &str = "at its run prompt in the terminal interface, which offers \
+     the public keys ssh could use, or for one already chosen where the retry's `scopes` names \
+     `ssh-key`, or ";
+
+/// The way to choose a key that needs no prompt.
+const IDENTITY_ENTRY_CLAUSE: &str = "with an entry \
      `\"git\": {\"identities\": {\"<host>/<owner>\": \"<public key file>\"}}` in \
-     ~/.bravebot/settings.json. In the terminal interface `/reach keys` lists the keys chosen at a \
-     prompt and `/reach keys remove <number>` forgets one, so the next prompt asks again. In either \
-     case ask them rather than retrying.";
+     ~/.bravebot/settings.json.";
+
+/// Ends the text where a run prompt will list keys.
+const IDENTITY_PROMPT_TAIL: &str = " In the terminal interface `/reach keys` lists the keys \
+     chosen at a prompt and `/reach keys remove <number>` forgets one, so the next prompt asks \
+     again. In either case ask them rather than retrying.";
+
+/// Ends the text where no run prompt will list keys, since the prompt offers from two to nine
+/// public keys and asks only about an owner no setting or earlier choice names.
+const IDENTITY_NO_PROMPT_TAIL: &str = " No run prompt will list keys for this step, so ask them \
+     rather than retrying.";
+
+/// Said of a push over ssh where the session would accept an `unconfined` request.
+const IDENTITY_UNCONFINED_WAY_OUT: &str = " A push refused for permission can also be run as \
+     its own line with 'unconfined': true, which the person is asked to approve and which runs \
+     with no sandbox.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence(mode: SandboxMode) -> String {
@@ -7150,7 +7260,7 @@ mod tests {
             ] {
                 assert_eq!(says(line, sentence), sentence == holds, "{line}");
             }
-            assert!(says(line, IDENTITY_SENTENCE), "{line}");
+            assert!(says(line, IDENTITY_OPENING), "{line}");
             assert!(line.ends_with(CREDENTIAL_LOCATIONS_SENTENCE), "{line}");
             for named in ["acmecorp", "zenithco", "widgetry", ".ssh/work"] {
                 assert!(!line.contains(named), "{named} is in {line}");
@@ -7178,7 +7288,7 @@ mod tests {
             step("/usr/bin/cargo", &["build"]),
         ] {
             let line = confined.profile(&[&quiet]);
-            assert!(!says(&line, IDENTITY_SENTENCE), "{:?}: {line}", quiet.args);
+            assert!(!says(&line, IDENTITY_OPENING), "{:?}: {line}", quiet.args);
         }
 
         let both = confined.profile(&[
@@ -7190,10 +7300,138 @@ mod tests {
         ]);
         assert!(says(&both, IDENTITY_CHOSEN_SENTENCE) && says(&both, IDENTITY_NO_ADDRESS_SENTENCE));
         assert_eq!(
-            both.matches(IDENTITY_SENTENCE.trim_start()).count(),
+            both.matches(IDENTITY_OPENING.trim_start()).count(),
             1,
             "{both}"
         );
+    }
+
+    /// SANDBOX-19: the failure text of a push over ssh says what the stage had: whether the
+    /// session's agent socket was lent, how many public key files it could read and how many an
+    /// `IdentityFile` line named that it could not, and, where the session accepts the request,
+    /// that `'unconfined': true` is available. The regression it rejects is a rejected push that
+    /// leaves the planner to guess whether an agent was lent, and to conclude from a missing
+    /// scope that no program it starts can reach one.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_push_says_whether_an_agent_was_lent_which_keys_were_readable_and_the_way_out() {
+        let places = IdentityPlaces::with_two_keys("reach");
+        let confined = places.confinement(&[]);
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let by_name = step("/usr/bin/git", &["push", "origin", "main"]);
+        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+
+        let lent = confined.profile_offering_in(&[&push], false, &socket);
+        let absent = confined.profile_offering_in(&[&push], false, &[]);
+        assert!(says(&lent, IDENTITY_AGENT_LENT_SENTENCE), "{lent}");
+        assert!(!says(&lent, IDENTITY_NO_AGENT_SENTENCE), "{lent}");
+        assert!(says(&absent, IDENTITY_NO_AGENT_SENTENCE), "{absent}");
+        assert!(!says(&absent, IDENTITY_AGENT_LENT_SENTENCE), "{absent}");
+        let named = confined.profile_offering_in(&[&by_name], false, &socket);
+        assert!(says(&named, IDENTITY_AGENT_LENT_SENTENCE), "{named}");
+
+        // The key in the session directory is one the plan could have written, so it is not
+        // counted as readable.
+        assert!(lent.contains("could read 2 public key files"), "{lent}");
+        assert!(!lent.contains("could not be read"), "{lent}");
+        let mut configuration =
+            std::fs::read_to_string(places.home.join(".ssh/config")).expect("configuration");
+        configuration.push_str("  IdentityFile ~/.ssh/gone\n  IdentityFile ~/.ssh/lost\n");
+        std::fs::write(places.home.join(".ssh/config"), configuration).expect("configuration");
+        let unreadable = confined.profile_offering_in(&[&push], false, &socket);
+        assert!(
+            unreadable
+                .contains("2 public key files named by an `IdentityFile` line could not be read"),
+            "{unreadable}"
+        );
+        for named in [
+            "gone",
+            "lost",
+            "acme",
+            "widgets",
+            places.home.to_str().unwrap(),
+        ] {
+            assert!(!unreadable.contains(named), "{named} is in {unreadable}");
+        }
+
+        let nothing = IdentityPlaces::new("reach-none").confinement(&[]);
+        let none = nothing.profile_offering_in(&[&push], false, &socket);
+        assert!(none.contains("could read no public key file"), "{none}");
+
+        assert!(!says(&lent, IDENTITY_UNCONFINED_WAY_OUT), "{lent}");
+        let offered = confined.profile_offering_in(&[&push], true, &socket);
+        assert_eq!(
+            offered
+                .matches(IDENTITY_UNCONFINED_WAY_OUT.trim_start())
+                .count(),
+            1,
+            "{offered}"
+        );
+        let status = step("/usr/bin/git", &["status"]);
+        let quiet = confined.profile_offering_in(&[&status], true, &socket);
+        for sentence in [
+            IDENTITY_AGENT_LENT_SENTENCE,
+            IDENTITY_NO_AGENT_SENTENCE,
+            IDENTITY_UNCONFINED_WAY_OUT,
+        ] {
+            assert!(!says(&quiet, sentence), "{quiet}");
+        }
+    }
+
+    /// SANDBOX-19: the failure text promises a run prompt that lists keys only where the prompt
+    /// will be shown: two to nine keys ssh could offer and an owner no setting or choice names.
+    /// The regression it rejects is a planner told to expect a prompt that never appears.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_push_promises_a_key_prompt_only_where_one_will_be_shown() {
+        let says = |line: &str, sentence: &str| line.contains(sentence.trim_start());
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+
+        let two = IdentityPlaces::with_two_keys("prompt-two");
+        let shown = two
+            .confinement(&[])
+            .profile_offering_in(&[&push], false, &[]);
+        assert!(says(&shown, IDENTITY_PROMPT_CLAUSE), "{shown}");
+        assert!(!says(&shown, IDENTITY_NO_PROMPT_TAIL), "{shown}");
+        assert!(says(&shown, IDENTITY_PROMPT_TAIL), "{shown}");
+
+        let decided = two
+            .confinement(&[("github.com/acme", "~/.ssh/work")])
+            .profile_offering_in(&[&push], false, &[]);
+        let by_name = two.confinement(&[]).profile_offering_in(
+            &[&step("/usr/bin/git", &["push", "origin"])],
+            false,
+            &[],
+        );
+        let refused = two
+            .confinement(&[("github.com/acme", "~/.ssh/missing.pub")])
+            .profile_offering_in(&[&push], false, &[]);
+        let one = IdentityPlaces::new("prompt-one")
+            .confinement(&[])
+            .profile_offering_in(&[&push], false, &[]);
+        std::fs::write(two.home.join(".ssh/id_rsa.pub"), "ssh-rsa CCCC\n").expect("key file");
+        let configuration = std::fs::read_to_string(two.home.join(".ssh/config")).expect("config");
+        std::fs::write(
+            two.home.join(".ssh/config"),
+            configuration + "  IdentityFile ~/.ssh/spare\n",
+        )
+        .expect("configuration");
+        let three = two
+            .confinement(&[])
+            .profile_offering_in(&[&push], false, &[]);
+        assert!(says(&three, IDENTITY_PROMPT_CLAUSE), "{three}");
+        for (why, line) in [
+            ("an entry names the owner", &decided),
+            ("an entry names a key it refuses", &refused),
+            ("the remote is named, not addressed", &by_name),
+            ("ssh has no key to choose between", &one),
+        ] {
+            assert!(says(line, IDENTITY_NO_PROMPT_TAIL), "{why}: {line}");
+            assert!(!says(line, IDENTITY_PROMPT_CLAUSE), "{why}: {line}");
+            assert!(says(line, IDENTITY_OPENING), "{why}: {line}");
+            assert!(says(line, IDENTITY_ENTRY_CLAUSE), "{why}: {line}");
+        }
     }
 
     /// SANDBOX-16: a key the person chose at a run prompt is offered by a push to that owner's
@@ -7484,7 +7722,7 @@ mod tests {
             ] {
                 assert_eq!(says(line, sentence), sentence == holds, "{line}");
             }
-            assert!(says(line, IDENTITY_SENTENCE), "{line}");
+            assert!(says(line, IDENTITY_OPENING), "{line}");
             for named in ["acme", "widgets", ".ssh/work"] {
                 assert!(!line.contains(named), "{named} is in {line}");
             }

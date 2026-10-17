@@ -425,18 +425,7 @@ const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
 /// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
 /// fixed count of keys.
 fn named_public_keys(home: &Path) -> Vec<PathBuf> {
-    use std::io::Read;
-    let Ok(file) = std::fs::File::open(under(home, ".ssh/config")) else {
-        return Vec::new();
-    };
-    let mut configuration = Vec::new();
-    if file
-        .take(SSH_CONFIG_LIMIT)
-        .read_to_end(&mut configuration)
-        .is_err()
-    {
-        return Vec::new();
-    }
+    let configuration = ssh_configuration(home);
     let mut keys: Vec<PathBuf> = Vec::new();
     for line in configuration.split(|byte| *byte == b'\n') {
         // A lossy decode would name a different file than ssh opens.
@@ -459,6 +448,41 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
         }
     }
     keys
+}
+
+/// The bytes of the person's own `~/.ssh/config` up to [`SSH_CONFIG_LIMIT`], or none where it
+/// cannot be read.
+fn ssh_configuration(home: &Path) -> Vec<u8> {
+    use std::io::Read;
+    let mut configuration = Vec::new();
+    let read = std::fs::File::open(under(home, ".ssh/config"))
+        .and_then(|file| file.take(SSH_CONFIG_LIMIT).read_to_end(&mut configuration));
+    match read {
+        Ok(_) => configuration,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// How many `IdentityFile` lines of the person's `~/.ssh/config` name a public key file that
+/// [`candidate_public_keys`] leaves out because a stage could not read it: one that is missing,
+/// is not a regular `*.pub` file, or is in a credential location other than `~/.ssh`. A line that
+/// spells no absolute name adds nothing, since ssh would read it from somewhere this cannot know.
+pub fn refused_identity_files(home: &Path) -> usize {
+    let configuration = ssh_configuration(home);
+    let mut refused: Vec<PathBuf> = Vec::new();
+    for line in configuration.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some(named) = identity_file(line) else {
+            continue;
+        };
+        if judged_public_key(&named, home).is_none() && !refused.contains(&named) {
+            refused.push(named);
+        }
+    }
+    refused.len()
 }
 
 /// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
