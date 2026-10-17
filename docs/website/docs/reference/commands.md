@@ -890,7 +890,7 @@ reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-
 link with a host: a value with a space, a line break, an escape, a character outside ASCII or
 another scheme sets nothing and is not repeated back. Alone, each says what is set, and `clear` removes that one. The session record is
 rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. Typed
-while a turn runs with nothing waiting, each is carried out at once, as `/rename` is.
+while a turn runs with nothing waiting, each is carried out at once, as `/rename` is. [`--issue` and `--pr`](cli.md#--issue-url-and---pr-url) set the same links when a session opens.
 
 ## `/compact [focus]`
 

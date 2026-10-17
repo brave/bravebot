@@ -139,6 +139,8 @@ pub(crate) fn print_help() {
         ),
         ("--log-level <error|info|debug>", t!(cli_option_log_level)),
         ("--agent <name>", t!(cli_option_agent)),
+        ("--issue <url>", t!(cli_option_issue)),
+        ("--pr <url>", t!(cli_option_pr)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
         (
             "--append-system-prompt <prompt>",

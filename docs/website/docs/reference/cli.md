@@ -97,6 +97,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
+| `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
@@ -119,6 +120,8 @@ each combines with every way of starting, one another included: `--incognito`, `
 `--dangerously-skip-permissions`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
+`--issue` and `--pr` are taken out there too, and combine with a session opened by no command,
+`-i`, `--resume`, `--continue`, `--fork` or `--from-pr`, and with nothing else.
 `--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
 way of starting except `--mode manifest`.
 
@@ -301,6 +304,23 @@ from here.
 What is checked is that the file is there. What is in it is read by the rule every layer gets, where
 a file that is oversized or unparseable leaves the others in force, and `bravebot doctor` lists the
 layers it read, so a named file that did not parse shows up by its absence from that list.
+
+## `--issue <url>` and `--pr <url>`
+
+```sh
+bravebot --issue https://github.com/brave/bravebot/issues/1267
+bravebot -i "work on this issue" --issue https://github.com/brave/bravebot/issues/1267
+bravebot --resume <id> --pr https://github.com/brave/bravebot/pull/1270
+```
+
+Set the session's issue or pull request link as [`/issue` and `/pr`](commands.md) do, so the
+[info panel](../using/sessions.md#telling-sessions-apart) says what the session is about from the first frame. A value
+that is not one `http` or `https` address with a host in printable ASCII is refused before the
+session opens, with status 2, and the message does not repeat it. A missing value is refused too.
+Given twice, the last of a kind is used. On `--resume`, `--continue` and `--fork` the link replaces
+the one the record held, and a link the line does not give is left alone. A line that opens no
+interactive session (a one-shot run, `--plain`, `--bg` or a command such as `doctor`) refuses them
+rather than dropping them.
 
 ## `--agent <name>`
 

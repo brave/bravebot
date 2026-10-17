@@ -159,6 +159,8 @@ cli-option-log-level =
     Ce qui est écrit de la forme d'un échec dans le journal de diagnostic : error (par défaut), info ou debug.
     Hôtes, statuts et décomptes seulement, jamais de contenu ; une session incognito n'écrit rien
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
+cli-option-issue = Donner à la session ouverte ce lien d'issue, comme /issue
+cli-option-pr = Donner à la session ouverte ce lien de pull request, comme /pr
 cli-option-system-prompt =
     Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
 cli-option-append-system-prompt =
@@ -299,6 +301,10 @@ cli-directory-unknown = impossible de savoir de quel répertoire il s'agit
 cli-no-such-session = aucune session { $id } dans ce répertoire
 cli-manifest-run = { $id } est une exécution planifiée : il n'y a rien à poursuivre, voici ce qu'elle a fait
 cli-nothing-to-continue = aucune session à reprendre dans ce répertoire
+cli-issue-needs-a-link = --issue nécessite une adresse http ou https
+cli-pr-needs-a-link = --pr nécessite une adresse http ou https
+cli-links-need-a-session =
+    --issue et --pr donnent leurs liens à la session qu'ils ouvrent, et cette ligne de commande n'ouvre aucune session interactive
 cli-from-pr-needs-a-value = --from-pr nécessite un numéro ou une adresse de pull request
 cli-interactive-needs-a-prompt = -i prend l'invite à envoyer comme premier tour de la session
 # Dit quand autre chose que --model ou --effort suit l'invite de -i. La session ouverte prend les

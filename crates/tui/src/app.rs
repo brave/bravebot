@@ -1298,6 +1298,29 @@ pub struct AskedFor {
     pub effort: Option<bravebot_aichat::protocol::Effort>,
 }
 
+/// The links the command line gave the session it opens, with `--issue` and `--pr`, each already
+/// read as a link (PANEL-12). Set on the first session only, after any link its record held.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Links {
+    pub issue: Option<bravebot_session::sessions::Url>,
+    pub pull_request: Option<bravebot_session::sessions::Url>,
+}
+
+impl Links {
+    /// Set each link the command line gave on the session's record, leaving the other as it is.
+    fn give_to(self, stored: &mut bravebot_session::sessions::Handle) {
+        use bravebot_session::sessions::Link;
+        for (kind, url) in [
+            (Link::Issue, self.issue),
+            (Link::PullRequest, self.pull_request),
+        ] {
+            if url.is_some() {
+                stored.set_link(kind, url);
+            }
+        }
+    }
+}
+
 /// What a session begins with.
 #[derive(Debug, Default)]
 pub enum Start {
@@ -1353,6 +1376,7 @@ pub fn run(
     mut servers: crate::state::Servers,
     start: Start,
     agent: Option<String>,
+    links: Links,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> io::Result<Ended> {
@@ -1411,6 +1435,8 @@ pub fn run(
             // Only the first session is the one the command line named a definition for. A
             // session `/resume` switches to works under the definition its own record names.
             let mut named = agent;
+            // Likewise: a link the command line gave belongs to the session it opened.
+            let mut links = links;
             // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the
             // command lasts until the process ends.
             let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
@@ -1426,6 +1452,7 @@ pub fn run(
                     &mut servers,
                     start,
                     named.take(),
+                    std::mem::take(&mut links),
                     skip_permissions,
                     prompts.clone(),
                     &mut switch,
@@ -2160,6 +2187,7 @@ fn begin_session(
     servers: &mut crate::state::Servers,
     start: Start,
     named: Option<String>,
+    links: Links,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> Result<Begun, Ended> {
@@ -2366,6 +2394,10 @@ fn begin_session(
         return Err(Ended::Refused(refused));
     }
 
+    // After the record is open, so a link the command line gave replaces one a resumed record held,
+    // as `/issue` and `/pr` would (PANEL-12).
+    links.give_to(&mut stored);
+
     // Held rather than sent: the loop's first pass sends it, and the loop runs only once this has
     // returned with every startup question answered. No unit test reaches this call, because this
     // function needs a real terminal; a scripted session (`contrib/drive_tui.py`) started with `-i`
@@ -2402,6 +2434,7 @@ fn event_loop(
     servers: &mut crate::state::Servers,
     start: Start,
     named: Option<String>,
+    links: Links,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
     switch: &mut Option<Switch>,
@@ -2425,6 +2458,7 @@ fn event_loop(
         servers,
         start,
         named,
+        links,
         skip_permissions,
         prompts,
     ) {
@@ -19917,6 +19951,42 @@ mod tests {
                 assert_eq!(stored.link(kind), kept, "{command} {value:?} set a link");
             }
         }
+    }
+
+    /// A link the command line gave replaces the one the record held, and a link it did not give is
+    /// left as the record had it rather than cleared.
+    #[test]
+    fn links_from_the_command_line_replace_what_it_names_and_leave_the_other() {
+        use bravebot_session::sessions::{Link, Url};
+        const OLD_ISSUE: &str = "https://github.com/brave/bravebot/issues/1";
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            std::path::Path::new("/work"),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        stored.set_link(Link::Issue, Url::read(OLD_ISSUE));
+        stored.set_link(Link::PullRequest, Url::read(PULL));
+
+        Links::default().give_to(&mut stored);
+        assert_eq!(stored.link(Link::Issue), Some(OLD_ISSUE));
+        assert_eq!(stored.link(Link::PullRequest), Some(PULL));
+
+        Links {
+            issue: Url::read(ISSUE),
+            pull_request: None,
+        }
+        .give_to(&mut stored);
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE));
+        assert_eq!(
+            stored.link(Link::PullRequest),
+            Some(PULL),
+            "an issue given alone cleared the pull request"
+        );
     }
 
     /// `/pr` mid-turn is carried out as it is typed, as `/rename` is: the turn holds only the
