@@ -240,7 +240,14 @@ pub fn trusting_the_workspace_and_confined_lines(directory: &Path) -> TrustStore
 /// The map a kept answer starts a session with: the rule a yes writes, and the answer about
 /// confined lines only where the entry says the question said so.
 pub fn trusting_as_kept(directory: &Path, kept: &bravebot_agent::trusted::Kept) -> TrustStore {
-    match kept.confined_lines {
+    // An entry about the root of the worktree is honoured for a package below it (TRUST-23), but its
+    // answer covers the root it was given for and not a directory beneath it (RUN-5).
+    let about_this_directory = kept.root == directory
+        || matches!(
+            (kept.root.canonicalize(), directory.canonicalize()),
+            (Ok(kept), Ok(here)) if kept == here
+        );
+    match kept.confined_lines && about_this_directory {
         true => trusting_the_workspace_and_confined_lines(directory),
         false => trusting_the_workspace(directory),
     }
@@ -1284,6 +1291,17 @@ mod tests {
         assert!(
             !before.allows_confined_lines(),
             "an answer kept before the question said so allowed them"
+        );
+
+        let root_above = bravebot_agent::trusted::Kept {
+            root: std::path::PathBuf::from("/"),
+            ..kept(true)
+        };
+        let below = trusting_as_kept(here(), &root_above);
+        assert!(below.is_trusted("."), "the root's answer stopped trusting");
+        assert!(
+            !below.allows_confined_lines(),
+            "a yes given at the repository root allowed them in a package below it"
         );
     }
 

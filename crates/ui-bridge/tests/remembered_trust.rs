@@ -557,6 +557,36 @@ fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
     );
 }
 
+/// RUN-5: the window's question does not say that confined lines run without asking, so its yes is
+/// kept without that field and a directory it answered about is read as not saying so.
+#[test]
+fn a_desktop_yes_is_kept_without_saying_confined_lines_run_unasked() {
+    let scratch = Scratch::new("bridge-trust-confined-lines");
+    if !scratch.tells_directories_apart() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+    let keeping = remember(&mut front, &scratch.project());
+    let written = std::fs::read_to_string(&keeping).expect("the yes was written down");
+    assert!(
+        !written.contains("confined_lines"),
+        "a yes to a question that did not say so was kept as saying so: {written}"
+    );
+    let store = Store::new(&scratch.home().join(".bravebot"), &scratch.project());
+    let identity = Identity::of(&scratch.project()).expect("an identity");
+    assert!(!store.kept(&identity).expect("kept").confined_lines);
+    drop(front);
+
+    // An entry the terminal kept for the same directory says so, and the window still settles on it
+    // as the rule a yes writes and nothing more.
+    assert!(store.keep(&identity, "terminal", 9, true));
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&scratch.project());
+    assert_eq!(question, None, "a kept answer was asked again");
+    let listed = front.call("permissions.list", json!({"session": handle(&opened)}));
+    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+}
+
 /// A line that cannot be written leaves the answer a yes for this session, and says so, and the next
 /// session is asked.
 #[test]

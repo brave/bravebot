@@ -56,7 +56,7 @@ for a line the sandbox holds ([tools/run.md](tools/run.md#RUN-5)). None of them 
 one takes nothing back.
 
 **Known cost.** In a directory the person trusted at a question that said so, a plain line the sandbox holds
-runs in this mode without being asked about, so the mode no longer puts every run to a person there. The rule
+runs in this mode without being asked about, so there this mode does not put every run to a person. The rule
 `Bash(*)` in `permissions.ask` restores asking for every line ([permissions.md](permissions.md#PERM-2)).
 
 **Why.** The mode nobody selected cannot be one that stops asking. Every other mode here is a

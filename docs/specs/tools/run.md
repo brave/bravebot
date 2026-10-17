@@ -257,8 +257,8 @@ no label is raised ([RUN-4](#RUN-4)). The setting that restores asking for every
 `Bash(*)` in `permissions.ask`, which any layer may write, a checkout's file included, since it only asks for
 more ([PERM-14](../permissions.md#PERM-14)).
 
-**Why.** Run in a worktree under a trusted project, nearly every line asked, including builds and
-tests that run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
+**Why.** Without it, nearly every line in a trusted worktree asks, builds and tests included, though they
+run inside the sandbox and need nothing beyond it. The sandbox is what makes the answer safe to
 give: a confined stage with no network and no way to write a `.git` cannot send what it reads anywhere or
 plant a hook that runs unconfined, and a line that asks for more than that is asked about as before.
 The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
