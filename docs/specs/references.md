@@ -43,6 +43,7 @@ apply. A later layer's block replaces an earlier one's.
 silently does nothing is the one a person spends an afternoon looking for.
 
 `verified-by: bravebot_config::settings::the_references_block_reads_each_entry_and_names_the_ones_it_cannot_use`
+`verified-by: bravebot_config::settings::a_later_layers_references_block_replaces_an_earlier_ones`
 
 <a id="REFER-2"></a>
 ### REFER-2: only the person's own settings declare a reference

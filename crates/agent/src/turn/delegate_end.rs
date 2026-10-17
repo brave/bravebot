@@ -153,14 +153,86 @@ pub(super) fn checkout_account(
                 None => format!("its checkout {} was kept", checkout.id()),
             },
         ),
-        Retired::Stuck => (
-            format!(
-                "Its checkout {} of commit {} could not be removed and is at {}.",
-                checkout.id(),
-                checkout.commit(),
-                checkout.path().display()
-            ),
-            "its checkout could not be removed".to_string(),
+        Retired::Stuck => stuck_checkout(checkout.id(), checkout.commit(), checkout.path()),
+    }
+}
+
+/// What is said of a checkout nothing was done in that could not be removed: where it is and the
+/// commit it holds, for the planner, and the fact alone for the person.
+fn stuck_checkout(id: &str, commit: &str, path: &std::path::Path) -> (String, String) {
+    (
+        format!(
+            "Its checkout {id} of commit {commit} could not be removed and is at {}.",
+            path.display()
         ),
+        "its checkout could not be removed".to_string(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stuck_checkout, unfinished_account};
+    use bravebot_core::delegate::{DelegateId, Finish};
+    use std::path::Path;
+    use std::time::Duration;
+
+    /// TRACE-8. The person's note names the cause of each ending that handed nothing back: the
+    /// fixed name of a failure, a stop, and a loss. A stop must not read as a failure, nor a loss as
+    /// one the delegate stopped for, since each calls for a different response.
+    #[test]
+    fn the_note_for_a_delegate_that_did_not_answer_names_why_it_ended() {
+        let took = Duration::from_secs(3);
+        let spent = |bound| Some((took, bound));
+        let note = |finish: Finish, ran, bound| {
+            unfinished_account(&finish, ran, bound, DelegateId::nth(2)).0
+        };
+        assert_eq!(
+            note(
+                Finish::Failed {
+                    took,
+                    rounds: 4,
+                    why: "unavailable"
+                },
+                spent(4),
+                9
+            ),
+            "the delegate could not finish (unavailable)"
+        );
+        assert_eq!(
+            note(Finish::Stopped { took, rounds: 4 }, spent(4), 9),
+            "the delegate was stopped"
+        );
+        assert_eq!(note(Finish::Lost, None, 9), "the delegate could not finish");
+        // A failure at the limit says so as well, after the cause rather than instead of it.
+        assert_eq!(
+            note(
+                Finish::Failed {
+                    took,
+                    rounds: 9,
+                    why: "transport"
+                },
+                spent(9),
+                9
+            ),
+            "the delegate could not finish (transport), having spent its limit of 9 rounds"
+        );
+    }
+
+    /// CHECKOUT-18. A checkout that could not be removed is reported with its number, the commit it
+    /// holds and where it is, which is all the planner has to go on, and the person's line says it
+    /// was not removed rather than that it was.
+    #[test]
+    fn a_checkout_that_could_not_be_removed_is_named_with_its_place_and_commit() {
+        let (said, mark) = stuck_checkout(
+            "c4",
+            "0123456789abcdef0123456789abcdef01234567",
+            Path::new("/state/checkouts/project/c4"),
+        );
+        assert_eq!(
+            said,
+            "Its checkout c4 of commit 0123456789abcdef0123456789abcdef01234567 could not be \
+             removed and is at /state/checkouts/project/c4."
+        );
+        assert_eq!(mark, "its checkout could not be removed");
     }
 }

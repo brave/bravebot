@@ -928,6 +928,7 @@ in the checkout wrote, and nothing the planner does turns on it.
 `verified-by: bravebot_agent::turn::a_checkout_nothing_was_done_in_is_removed_when_its_delegate_ends`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
 `verified-by: bravebot_agent::delegate::a_kept_checkouts_note_names_twenty_paths_and_counts_the_rest`
+`verified-by: bravebot_agent::turn::delegate_end::a_checkout_that_could_not_be_removed_is_named_with_its_place_and_commit`
 
 <a id="CHECKOUT-19"></a>
 ### CHECKOUT-19: the trail records each checkout made, applied from and removed
