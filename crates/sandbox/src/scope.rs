@@ -1630,6 +1630,48 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    /// A line holding bytes that are not UTF-8 is not counted as a refused file: a lossy decode
+    /// would spell its name with U+FFFD, find no such file and report one the person never named.
+    /// The lines either side of it are still counted.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_is_not_counted_as_refused() {
+        let home = a_home_with("identity-files-not-text-refused", "", &[".ssh/before.pub"]);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/gone\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 1);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and it is not counted as refused either.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_is_not_counted_as_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk-refused",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     /// On a file system that holds a name that is not UTF-8, the file the line spells exists
     /// beside its lossy lookalike, and neither is granted.
     #[test]
