@@ -122,7 +122,7 @@ what approving does. The vetting prompt says what approving does and, because no
 screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers, and says that a command the
 sandbox confines then runs in the directory without asking ([RUN-5](tools/run.md#RUN-5)), above the lines
 that scroll so that it is on the screen whenever a yes can be taken. The desktop interface's question does
-not say so yet, so its yes does not grant it and it does not act on a kept answer that says so. The prompt
+not say so, so its yes does not grant it and it does not act on a kept answer that says so. The prompt
 about a directory a settings file asked for says that opening it grants reach and trust, and that a
 file asked for it. The plan prompt says that nothing the run reads can add a step, drop one, or send
 anything anywhere the plan does not already name; that approving the plan is not approving its

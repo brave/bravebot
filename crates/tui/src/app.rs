@@ -24212,6 +24212,37 @@ mod tests {
         }
     }
 
+    /// RUN-5. A session a kept answer settles holds the map that answer's entry describes: held
+    /// lines run unasked only where the entry says the question did, and never below another root.
+    #[test]
+    fn a_remembered_answer_allows_confined_lines_only_where_its_entry_says_so() {
+        use bravebot_agent::PermissionMode;
+
+        let kept = |root: &std::path::Path, confined_lines| bravebot_agent::trusted::Kept {
+            session: "1-2".to_string(),
+            at: 7,
+            root: root.to_path_buf(),
+            confined_lines,
+        };
+        for (root, confined_lines, allowed) in [
+            (here(), true, true),
+            (here(), false, false),
+            (std::path::Path::new("/tmp"), true, false),
+        ] {
+            let entry = kept(root, confined_lines);
+            match opening_for(Beginning::New, PermissionMode::Ask, here(), || {
+                Some(entry.clone())
+            }) {
+                Opening::Remembered(trust, _) => assert_eq!(
+                    trust.allows_confined_lines(),
+                    allowed,
+                    "root {root:?}, confined_lines {confined_lines}"
+                ),
+                opening => panic!("a remembered answer was not honoured: {opening:?}"),
+            }
+        }
+    }
+
     /// A directory to answer about and the record a yes there is kept in, under a state directory
     /// of its own. `None` on a filesystem that cannot say when a directory was made, which keeps
     /// nothing.

@@ -236,7 +236,7 @@ settings and the person's answer and never from what a stage wrote or printed:
   worktree is its own directory with its own answer and `/cd` leaves the answer behind;
 - the yes said so. A directory trusted before the question said so, one trusted by a kept answer
   written before it, a session that resumed with a map from before it, a one-shot run given
-  `--trust-workspace` and the desktop interface (whose question does not say so yet, and which does not act
+  `--trust-workspace` and the desktop interface (whose question does not say so, and which does not act
   on a kept answer that does) keep asking about every line until the person answers a question that says so, and the newest kept answer decides;
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
   with the network closed for the session and none of the stages keeping it ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
