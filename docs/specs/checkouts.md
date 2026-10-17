@@ -17,6 +17,7 @@ governs:
   - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/core/src/delegate.rs
   - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
