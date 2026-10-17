@@ -116,7 +116,9 @@ impl Record {
                 },
                 // What a call returned is not recounted, and a file the session read is not in
                 // the record, so that the excerpt has no account of either is said below.
-                Said::Tool { .. } | Said::Composed { .. } => unkept = true,
+                // A message to or from another session is not the person's turn and is not the
+                // assistant's, so it is left out and said to be.
+                Said::Tool { .. } | Said::Sent { .. } | Said::Composed { .. } => unkept = true,
             }
         }
         if turns.is_empty() {

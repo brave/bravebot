@@ -97,19 +97,64 @@ fn lines_in(text: &str) -> usize {
 
 /// One replayed line.
 ///
+/// The start of a session's id, as the list of background sessions and the frame name it.
+fn id_shown(id: &str) -> String {
+    id.chars()
+        .take(bravebot_agent::messages::ID_SHOWN)
+        .collect()
+}
+
 /// A line the agent composed is drawn as the message it was, which is what this transcript has
 /// always drawn for one and what a file read for a turn has to keep being: the record says where
 /// the prompt was, so the context around it is drawn without asking what any of it says. There is
 /// no row of this interface's own to draw instead, and inventing one from a tag this build happens
-/// to know would put a line on the screen that the live session never had.
+/// to know would put a line on the screen that the live session never had. The exception is a
+/// message to or from another session, which the live session drew apart from the prompts and so
+/// does this (MSG-11).
 ///
 /// A reply goes through [`crate::reasoning::spoken`] as it did live (VIEW-18): the record holds
 /// the reply whole, reasoning block included, and a resume that drew it would put back the
 /// paragraph the live session kept off the screen. A reply with nothing left is no entry, as
 /// [`Session::narrate`] drops it.
 fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
-    use bravebot_agent::conversation::Said;
+    use bravebot_agent::conversation::{Composed, Said};
     Some(match line {
+        // Drawn from the tag's fields and never from the frame the planner was shown: the frame
+        // is the driver's sentence for the planner, and the words in it are the sender's (MSG-11).
+        Said::Composed {
+            why:
+                Composed::SessionMessage {
+                    from,
+                    name,
+                    label,
+                    text,
+                },
+            ..
+        } => Entry::session_message(
+            t!(
+                session_message_heading,
+                from = id_shown(from),
+                name = name.as_str(),
+                label = label.as_str()
+            )
+            .to_string(),
+            text.as_deref(),
+        ),
+        Said::Sent {
+            to,
+            name,
+            label,
+            text,
+        } => Entry::session_message(
+            t!(
+                session_message_sent_heading,
+                to = id_shown(to),
+                name = name.as_str(),
+                label = label.as_str()
+            )
+            .to_string(),
+            Some(text),
+        ),
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => {
             let text = crate::reasoning::spoken(text);
@@ -13275,6 +13320,50 @@ mod tests {
             .expect("a composed message is always drawn");
             assert_eq!(fired.speaker, Speaker::User);
             assert_eq!(fired.text, sentence);
+        }
+
+        /// MSG-11: a message from another session is drawn from the tag's fields as a block marked
+        /// as a message, apart from the person's prompts, and one the planner was given only a
+        /// reference to is drawn with its words absent and says so. A message this session sent is
+        /// drawn the same way under the receiver's name. The frame the planner was shown is not
+        /// what is drawn.
+        #[test]
+        fn a_replayed_session_message_is_drawn_as_a_message_and_not_as_a_prompt() {
+            use bravebot_agent::conversation::{Composed, Said};
+
+            let heard = |text: Option<&str>| Said::Composed {
+                why: Composed::SessionMessage {
+                    from: "11111111-1111-4111-8111-111111111111".into(),
+                    name: "fix the build".into(),
+                    label: "(T,pub)".into(),
+                    text: text.map(str::to_string),
+                },
+                text: "A message from another bravebot session reached you. FRAME".into(),
+            };
+            let said = recalled_entry(&heard(Some("go\nahead"))).expect("drawn");
+            assert_eq!(said.speaker, Speaker::Message);
+            assert_eq!(
+                said.text,
+                "message from session 11111111 (fix the build) \u{b7} (T,pub)\n> go\n> ahead"
+            );
+
+            let kept = recalled_entry(&heard(None)).expect("drawn");
+            assert_eq!(kept.speaker, Speaker::Message);
+            assert!(!kept.text.contains("FRAME"), "{}", kept.text);
+            assert!(kept.text.contains("kept from the planner"), "{}", kept.text);
+
+            let sent = recalled_entry(&Said::Sent {
+                to: "22222222-2222-4222-8222-222222222222".into(),
+                name: "build".into(),
+                label: "(T,priv)".into(),
+                text: "run it".into(),
+            })
+            .expect("drawn");
+            assert_eq!(sent.speaker, Speaker::Message);
+            assert_eq!(
+                sent.text,
+                "message to session 22222222 (build) \u{b7} (T,priv)\n> run it"
+            );
         }
 
         /// The record holds a reply whole, so a model with no channel of its own for its working

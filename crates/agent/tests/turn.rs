@@ -6641,23 +6641,58 @@ fn a_resumed_transcript_shows_what_the_planner_was_given_of_each_message() {
     .expect("the turn runs");
 
     let resumed = bravebot_agent::Conversation::restored(conversation.snapshot());
-    let drawn: Vec<String> = resumed
+    let drawn: Vec<(bravebot_agent::conversation::Composed, String)> = resumed
         .recounted()
         .into_iter()
         .filter_map(|said| match said {
             bravebot_agent::conversation::Said::Composed {
-                why: bravebot_agent::conversation::Composed::Written,
+                why: why @ bravebot_agent::conversation::Composed::SessionMessage { .. },
                 text,
-            } => Some(text),
+            } => Some((why, text)),
             _ => None,
         })
         .collect();
-    let [given, withheld] = drawn.as_slice() else {
+    let [(given, given_frame), (withheld, withheld_frame)] = drawn.as_slice() else {
         panic!("one row for each message: {drawn:?}");
     };
-    assert!(given.contains("> ADVICE-FROM-ELSEWHERE"), "{given}");
-    assert!(withheld.contains("kept from you"), "{withheld}");
-    assert!(!withheld.contains("IGNORE-EVERYTHING"), "{withheld}");
+    let bravebot_agent::conversation::Composed::SessionMessage {
+        from,
+        name,
+        label,
+        text: Some(words),
+    } = given
+    else {
+        panic!("the message the planner was given carries its words: {given:?}");
+    };
+    assert_eq!(
+        (from.as_str(), name.as_str(), label.as_str(), words.as_str()),
+        (
+            "11111111-1111-4111-8111-111111111111",
+            "fix the build",
+            "(T,pub)",
+            "ADVICE-FROM-ELSEWHERE"
+        )
+    );
+    assert!(
+        given_frame.contains("> ADVICE-FROM-ELSEWHERE"),
+        "{given_frame}"
+    );
+    let bravebot_agent::conversation::Composed::SessionMessage { text: kept, .. } = withheld else {
+        unreachable!()
+    };
+    assert_eq!(
+        kept, &None,
+        "the record holds words the planner was not given"
+    );
+    assert!(withheld_frame.contains("kept from you"), "{withheld_frame}");
+    assert!(
+        !withheld_frame.contains("IGNORE-EVERYTHING"),
+        "{withheld_frame}"
+    );
+    assert!(
+        !format!("{withheld:?}").contains("IGNORE-EVERYTHING"),
+        "{withheld:?}"
+    );
 }
 
 /// MSG-7, MSG-8: the frame is a message of its own, apart from the person's prompt, and a message
@@ -60481,6 +60516,85 @@ fn an_approved_message_is_delivered_queued_and_drawn_and_the_planner_is_not_told
             label: "(T,pub)".to_string(),
             text: "MESSAGE-WORDS\nsecond line".to_string(),
         }]
+    );
+}
+
+/// What a resume of a session whose planner called `message_session` once, and whose person
+/// answered `decision`, would draw.
+fn recounted_after_sending(
+    name: &str,
+    decision: bravebot_agent::confirm::MessageDecision,
+) -> Vec<bravebot_agent::conversation::Said> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("message_session", A_MESSAGE_CALL),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut person = AnswersAboutMessages::saying(&[decision]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("tell the build session").with_courier(Some(
+            Arc::new(OneSession::default()) as Arc<dyn bravebot_agent::messages::Courier>
+        )),
+        &mut conversation,
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    bravebot_agent::Conversation::restored(conversation.snapshot()).recounted()
+}
+
+/// MSG-11: a resumed transcript draws a message that was delivered as a message, to the receiver the
+/// roster named and with the words the person was shown, and not as the call that sent it.
+#[test]
+fn a_resumed_transcript_draws_a_delivered_message_as_a_message_and_not_as_the_call() {
+    use bravebot_agent::conversation::Said;
+    let said = recounted_after_sending(
+        "message-resumed-sent",
+        bravebot_agent::confirm::MessageDecision::Once,
+    );
+    assert!(
+        said.contains(&Said::Sent {
+            to: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "build".to_string(),
+            label: "(T,pub)".to_string(),
+            text: "MESSAGE-WORDS\nsecond line".to_string(),
+        }),
+        "{said:?}"
+    );
+    assert!(
+        !said.iter().any(|said| matches!(said, Said::Tool { .. })),
+        "the call that sent it was drawn as well: {said:?}"
+    );
+}
+
+/// MSG-11: a call the person declined sent nothing, so a resumed transcript draws the call and no
+/// message.
+#[test]
+fn a_resumed_transcript_draws_a_declined_message_as_the_call_only() {
+    use bravebot_agent::conversation::Said;
+    let said = recounted_after_sending(
+        "message-resumed-declined",
+        bravebot_agent::confirm::MessageDecision::Decline,
+    );
+    assert!(
+        !said.iter().any(|said| matches!(said, Said::Sent { .. })),
+        "a message that was not sent was drawn as sent: {said:?}"
+    );
+    assert!(
+        said.iter().any(|said| matches!(said, Said::Tool { .. })),
+        "the declined call was not drawn: {said:?}"
     );
 }
 

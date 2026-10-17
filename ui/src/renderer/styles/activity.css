@@ -200,3 +200,22 @@
 .attached.consolidation { font-family: inherit; }
 .watch-turn { flex-wrap: wrap; }
 .watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
+
+/* A message between two background sessions: a heading, then the words quoted. Line breaks are kept. */
+.session-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  padding-inline: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+}
+.session-message strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
+.session-message blockquote {
+  margin: 0;
+  padding-inline-start: var(--leo-spacing-m);
+  border-inline-start: 2px solid var(--ink-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

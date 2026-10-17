@@ -35,11 +35,10 @@ driver wrote, under the label it arrived with ([MSG-6](#MSG-6) to [MSG-9](#MSG-9
 is built too: the `message_session` tool and its refusals ([MSG-1](#MSG-1), [MSG-5](#MSG-5),
 [MSG-12](#MSG-12)), the sender's gate and label ([MSG-2](#MSG-2)), the prompt and its standing answer
 ([MSG-3](#MSG-3), [MSG-4](#MSG-4)) and the bound on a sender ([MSG-10](#MSG-10)). Only a background
-session is offered the tool, and the prompt is put in lines, to whoever attaches. A clause with a
-part still to build reads `verified-by: none` until all of it lands, and the part not built is a
-block marked as a message in a resumed transcript, which draws a message that came in as plain text
-today, and a message that went out as the tool call that sent it ([MSG-11](#MSG-11)). A session
-that is running draws both as they happen, and the trail records the one that went out.
+session is offered the tool, and the prompt is put in lines, to whoever attaches. Both transcripts
+draw a message ([MSG-11](#MSG-11)): a session that is running draws each as it happens, and a resumed
+one draws a block marked as a message, from the tags the record holds, for a message that came in
+and for one that went out. The trail records the one that went out.
 
 A **message** is text one session's planner wrote for another session's planner. It is not the
 sender's conversation, files, references or quarantined content, none of which cross. The **sender**
@@ -310,7 +309,19 @@ its planner was shown and, for a quarantined message, the reference and no conte
 has to be able to see that it was used and by whom. The trail holds labels and gate names and no
 content.
 
-`verified-by: none`
+`verified-by: bravebot_cli::progress::a_message_is_drawn_under_its_sender_with_the_words_quoted`
+`verified-by: bravebot_cli::progress::a_withheld_message_is_drawn_behind_the_quarantine_margin`
+`verified-by: bravebot_cli::progress::a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted`
+`verified-by: bravebot_cli::progress::a_message_cannot_move_the_cursor_through_its_name_or_its_words`
+`verified-by: bravebot_cli::progress::a_sent_message_cannot_move_the_cursor_through_the_name_or_the_words`
+`verified-by: bravebot_core::policy::a_message_is_recorded_in_the_trail_without_its_words`
+`verified-by: bravebot_core::policy::a_sent_message_is_recorded_with_its_ids_label_length_and_answer`
+`verified-by: bravebot_agent::turn::a_resumed_transcript_shows_what_the_planner_was_given_of_each_message`
+`verified-by: bravebot_agent::turn::a_resumed_transcript_draws_a_delivered_message_as_a_message_and_not_as_the_call`
+`verified-by: bravebot_agent::turn::a_resumed_transcript_draws_a_declined_message_as_the_call_only`
+`verified-by: bravebot_tui::state::tests::replay::a_replayed_session_message_is_drawn_as_a_message_and_not_as_a_prompt`
+`verified-by: bravebot_tui::render::transcript::tests::a_message_between_sessions_is_drawn_under_its_heading_with_the_words_quoted`
+`verified-by: bravebot_ui_bridge::wire::a_message_between_sessions_crosses_as_its_own_kind_without_the_frame`
 
 <a id="MSG-12"></a>
 ### MSG-12: a delegate and a processor are offered no `message_session`

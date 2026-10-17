@@ -156,7 +156,8 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
             | bravebot_agent::conversation::Said::Tool { line: t, .. } => Some(t.as_str()),
             // A message the agent composed reports the tag it was recorded with beside its words.
             // Nothing in this conversation is one.
-            bravebot_agent::conversation::Said::Composed { .. } => None,
+            bravebot_agent::conversation::Said::Composed { .. }
+            | bravebot_agent::conversation::Said::Sent { .. } => None,
         })
         .collect();
 

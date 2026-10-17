@@ -827,6 +827,11 @@ session-message-heading = message from session { $from } ({ $name }) · { $label
 # as the list of background sessions names it, and the label is the one the message was sent under.
 session-message-sent-heading = message to session { $to } ({ $name }) · { $label }
 
+# Under the heading of a resumed session's message that the planner was not given the words of: a
+# message whose label was not trusted reaches the planner as a reference, and the record keeps no
+# content for it.
+session-message-kept = its words were kept from the planner and are not in this record
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.

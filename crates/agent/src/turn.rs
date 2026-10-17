@@ -1464,6 +1464,8 @@ fn take_session_messages<S: Sink, R: Reporter>(
             }
         };
         let given = content.label();
+        let sender = from.clone();
+        let sender_name = name.clone();
         let (told, drawn) = match &presented {
             Presentation::Visible(text) => {
                 policy.heard_from_session(given);
@@ -1486,18 +1488,27 @@ fn take_session_messages<S: Sink, R: Reporter>(
                 )
             }
         };
+        let shown_words = match &drawn {
+            crate::report::Reported::Said(text) => Some(text.clone()),
+            crate::report::Reported::Kept(_) => None,
+        };
         reporter.session_message(crate::report::HeardMessage {
             from,
             name,
             label: given.to_string(),
             body: drawn,
         });
-        // Written rather than a notice: a person resuming the session is shown the frame as it
-        // went to the planner, so the record says why it changed course, and the words of a
-        // message the planner was only given a reference to are not in it.
+        // Tagged rather than a notice or plain text: a person resuming the session is shown a
+        // block marked as a message from the sender, drawn from the tag's fields (MSG-11), and the
+        // words of a message the planner was only given a reference to are not in it.
         conversation.push_composed_from(
             Message::user(told),
-            Composed::Written,
+            Composed::SessionMessage {
+                from: sender,
+                name: sender_name,
+                label: given.to_string(),
+                text: shown_words,
+            },
             provenance_of(&presented, "session message"),
         );
         conversation.observed(policy.context_label());
@@ -3952,6 +3963,7 @@ where
             let mut shown_window = false;
             // Set where a skill's text was shown, so the result is tagged with it.
             let mut skill_shown: Option<String> = None;
+            let mut message_sent: Option<Composed> = None;
             // Set in each arm below, where the presentation that decides it is in scope.
             let result_from: Provenance;
             let body = if let Some(entries) = &output.entries {
@@ -4269,6 +4281,7 @@ where
                         // (READ-8). A quarantined one put nothing in front of it.
                         shown_window = true;
                         skill_shown = output.skill.clone();
+                        message_sent = output.message_sent.clone();
                         // After the sample rather than in the middle of it, where the
                         // notice naming what went is: what wrote that notice dropped the
                         // bytes and does not know the slot they were kept in.
@@ -4430,9 +4443,14 @@ where
             match call.id.as_deref().filter(|_| replayed.is_some()) {
                 Some(id) => {
                     let result = Message::tool_result(id, body);
-                    match skill_shown {
-                        Some(name) => conversation.push_skill_result(result, name, result_from),
-                        None => conversation.push_from(result, result_from),
+                    match (skill_shown, message_sent) {
+                        (Some(name), _) => {
+                            conversation.push_skill_result(result, name, result_from)
+                        }
+                        (None, Some(sent)) => {
+                            conversation.push_message_result(result, sent, result_from)
+                        }
+                        (None, None) => conversation.push_from(result, result_from),
                     }
                     if shown_window && let Some(window) = output.window.take() {
                         conversation.shown_read(window);

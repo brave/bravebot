@@ -117,6 +117,11 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                 out.push_str("## Shell Output\n\n");
                 out.push_str(&format!("{fence}\n{}\n{fence}\n\n", entry.text.trim()));
             }
+            // The heading is the entry's first line and the quoted words follow it.
+            crate::state::Speaker::Message => {
+                let (heading, words) = entry.text.split_once('\n').unwrap_or((&entry.text, ""));
+                out.push_str(&format!("## {}\n\n{words}\n\n", heading.trim()));
+            }
             crate::state::Speaker::Delegate => {
                 if let Some(delegate) = &entry.delegate {
                     out.push_str(&format!("## Delegate {}\n\n", delegate.id));
