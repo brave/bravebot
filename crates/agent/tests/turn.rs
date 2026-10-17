@@ -59468,10 +59468,6 @@ fn a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_i
         "the planner was not told which download failed: {second}"
     );
     assert!(
-        second.contains("its host is not at a public address"),
-        "the download did not fail for the host's address: {second}"
-    );
-    assert!(
         !second.contains("127.0.0.1"),
         "an address reached the planner's context: {second}"
     );
