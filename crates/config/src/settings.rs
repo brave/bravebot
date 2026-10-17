@@ -6784,6 +6784,36 @@ mod tests {
         assert_eq!(named.references_ignored().count(), 0);
     }
 
+    /// REFER-1: the person's file named on the command line replaces the home file's block as a
+    /// whole, so an alias only the earlier block held is gone and so is a fault only it had.
+    #[test]
+    fn a_later_layers_references_block_replaces_an_earlier_ones() {
+        let settings = Layers::new("references-replaced")
+            .global(
+                r#"{"references": {
+                    "kept-home": "/srv/home",
+                    "shared": "/srv/from-home",
+                    "bad/alias": "/srv/x"
+                }}"#,
+            )
+            .named(r#"{"references": {"shared": "/srv/from-named", "chosen": "/srv/chosen"}}"#)
+            .read();
+        let used: Vec<_> = settings
+            .references()
+            .iter()
+            .map(|r| (r.alias.as_str(), r.path.as_str()))
+            .collect();
+        assert_eq!(
+            used,
+            [("chosen", "/srv/chosen"), ("shared", "/srv/from-named")]
+        );
+        assert!(
+            settings.references_unread().is_empty(),
+            "a fault of the replaced block was still reported: {:?}",
+            settings.references_unread()
+        );
+    }
+
     #[test]
     fn a_project_or_local_layer_cannot_name_an_advisor() {
         let settings = Layers::new("advisor-checkout")

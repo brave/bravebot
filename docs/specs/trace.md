@@ -269,6 +269,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from
