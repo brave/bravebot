@@ -397,8 +397,8 @@ pub struct Tools<'a> {
     /// [`bravebot_core::vetting::auto`]; by the time it reaches here it is one answer, settled
     /// before the session opened and unchanged for its life.
     ///
-    /// Read by `vet_content` and by `read_output` and by nothing else: the two prompts that
-    /// promote one slot's bytes once, which `docs/specs/vetting.md`'s CHECK-12 divides from the
+    /// Read by `vet_content`, by `read_output` and by `whole_of_it`, which reads it only to word
+    /// a refusal, and by nothing else: the two prompts that promote one slot's bytes once, which `docs/specs/vetting.md`'s CHECK-12 divides from the
     /// third. That third one writes a trust rule about a whole path, which is a standing decision
     /// rather than bytes in front of a reader, and not something a word from a model may answer
     /// with nobody asked.
@@ -5515,6 +5515,21 @@ fn watch_file<S: Sink>(
 /// other verdict still draws it, which is CHECK-12 and the third of the known costs
 /// `docs/specs/labels.md` admits.
 ///
+/// What a `read_output` call without an offset or a pattern does with quarantined output, said for
+/// the session as it stands: a person is asked only where one answers. Names neither the mode nor
+/// a check, as MODE-3 and CHECK-9 require, and is the wording of `ReadOutputIs::stated` (OUTPUT-5).
+fn whole_of_it(tools: &Tools<'_>) -> &'static str {
+    let mode = tools.permission_mode.get();
+    if !mode.checks_before_promoting(tools.auto_vetting) {
+        "read_output brings the whole of it back to you as text you can read"
+    } else if tools.auto_vetting {
+        "read_output brings the whole of it back to you as text you can read, or tells you it \
+         was kept back"
+    } else {
+        "read_output asks the user to show you the whole of it"
+    }
+}
+
 /// The driver never reads the output. The text goes from the slot to the screen and, on approval,
 /// from the kernel to the planner; nothing here branches on a byte of it.
 fn read_output<S: Sink, C: Confirmer, R: Reporter>(
@@ -5593,7 +5608,8 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     if offset.is_some() {
         return Produced::problem(format!(
             "refused: an offset pages through output you may already read, and {slot} is \
-             quarantined. Without one, read_output asks the user to show you the whole of it."
+             quarantined. Without one, {}.",
+            whole_of_it(tools)
         ));
     }
     if !patterns.is_empty() {
@@ -5601,8 +5617,8 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
             "refused: a pattern searches output you may already read, and {slot} is quarantined. \
              Which lines matched, how many there are and where the result stopped are all worked \
              out from the bytes, so searching this one would answer with numbers nobody vouched \
-             for. Without a pattern, read_output asks the user to show you the whole of it, and \
-             run can put the output through a program instead."
+             for. Without a pattern, {}, and run can put the output through a program instead.",
+            whole_of_it(tools)
         ));
     }
 

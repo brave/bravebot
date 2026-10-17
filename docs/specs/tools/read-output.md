@@ -184,7 +184,9 @@ A `pattern` on a slot the planner may not read is refused before anybody is aske
 checked, as an `offset` is. The match set, the count and the point the result stopped at are all
 worked out from the bytes, so answering would hand the planner numbers nobody vouched for. The
 refusal says what to do instead: ask for the whole of it, or put the output through a program with
-`run`.
+`run`. It says who answers the way the `read_output` description does
+([RUN-14](run.md#RUN-14)): a person is shown the output only where one answers, and elsewhere it
+comes back as text or is reported kept back.
 
 The pattern is compiled before any byte of the slot is opened, as [SEARCH-4](search.md#SEARCH-4)
 requires, and a pattern that will not compile is reported as a pattern error. An empty pattern is
@@ -197,6 +199,8 @@ a page would not.
 
 `verified-by: bravebot_agent::turn::a_pattern_over_output_the_planner_may_read_answers_with_matching_lines_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_pattern_over_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::a_refusal_of_a_pattern_or_offset_says_who_answers_for_the_session`
+`verified-by: bravebot_core::reference::a_description_does_not_say_the_user_is_asked_to_show_it`
 `verified-by: bravebot_agent::turn::an_empty_pattern_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::turn::a_pattern_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`

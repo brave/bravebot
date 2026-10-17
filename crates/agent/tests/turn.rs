@@ -39850,6 +39850,78 @@ fn a_pattern_over_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
     assert!(!refused.contains("SENTINEL-XYZZY"));
 }
 
+/// OUTPUT-5. What a refusal of a pattern or an offset says of reading the whole of the output is
+/// true of the session: a person is asked only where one answers. Where permissions are bypassed
+/// nobody is, and a refusal that said they were sent the planner away from output it could read.
+#[test]
+fn a_refusal_of_a_pattern_or_offset_says_who_answers_for_the_session() {
+    for (mode, vetting, said, not_said) in [
+        (
+            bravebot_agent::PermissionMode::default(),
+            false,
+            "read_output asks the user to show you the whole of it",
+            "comes back",
+        ),
+        (
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            "read_output brings the whole of it back to you as text you can read",
+            "asks the user",
+        ),
+        (
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            "or tells you it was kept back",
+            "asks the user",
+        ),
+    ] {
+        for argument in [r#""pattern":"SENTINEL""#, r#""offset":0"#] {
+            let scratch = Scratch::new("read-output-refusal-says-who-answers");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+            let (endpoint, received) = serve_sequence(vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+                tool_request("read_output", &format!(r#"{{"ref":"ref:1",{argument}}}"#)),
+                reply_with("done"),
+            ]);
+            let config = config_for(&endpoint);
+            let egress = bravebot_net::Egress::new();
+            let mut confirmer = ReadsWhatItRan::new(true);
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("find out")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(vetting),
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut RecordingSink::new(),
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+
+            let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+            let refused = newest_tool_result(bodies[2].clone());
+            assert!(refused.contains("refused:"), "{mode:?} {vetting} {refused}");
+            assert!(
+                refused.contains(said),
+                "{mode:?} {vetting} {argument}: {refused}"
+            );
+            assert!(
+                !refused.contains(not_said),
+                "{mode:?} {vetting} {argument}: {refused}"
+            );
+        }
+    }
+}
+
 /// OUTPUT-5. An empty pattern is a mistake in the call, reported before the slot is opened: read
 /// as a search for nothing it would answer with every line, which is a page by another name and
 /// not what an empty value meant.
