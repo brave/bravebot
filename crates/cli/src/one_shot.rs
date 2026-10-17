@@ -157,6 +157,13 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_host(request)
     }
 
+    fn confirm_message(
+        &mut self,
+        request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        self.refusing.confirm_message(request)
+    }
+
     fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
         self.refusing.confirm_move(request)
     }

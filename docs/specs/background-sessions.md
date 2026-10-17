@@ -185,7 +185,8 @@ was nearest.
 not open the list of [BG-16](#BG-16): the first eight characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
 cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
-a word for each kind a foreground session puts, and shows nothing of what the prompt is about.
+a word for each kind a foreground session puts and one for a message the session's planner wants to send
+([MSG-3](session-messages.md#MSG-3)), and shows nothing of what the prompt is about.
 
 Every part of a line is something the person typed, a fact about the process, or one of a fixed set
 of words. No part of it comes from a reply, a tool result, a file's contents, a command's output or
@@ -201,6 +202,7 @@ sentence, which is the reason the info panel draws nothing from either.
 
 `verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_write_a_row`
 `verified-by: bravebot_cli::background::a_held_prompt_shows_its_kind_and_nothing_else`
+`verified-by: bravebot_cli::background::a_session_holding_a_message_to_send_is_listed_with_that_kind`
 `verified-by: bravebot_cli::background::a_session_with_no_process_is_not_listed_as_working`
 `verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
@@ -548,8 +550,9 @@ it is stated.
 - **A session ends with its terminal, and no process holds a record.** Both are statements about a
   session that is not a background one. [sessions.md](sessions.md) says so where it describes the
   record, and the state directory lists `jobs/` as proposed.
-- **A message between sessions is proposed apart.** [session-messages.md](session-messages.md) has a
+- **A message between sessions is specified apart.** [session-messages.md](session-messages.md) has a
   session's planner tell another's something, and starts no process and no turn, so BG-2 still holds.
+  The question of whether to send one is held like every other ([BG-7](#BG-7)).
 - **The info panel tells open sessions apart.** The list in [BG-5](#BG-5) tells the background ones
   apart and draws nothing the panel would not.
 - **Where nobody can be asked, the answer is no** ([PROMPT-9](prompting.md#PROMPT-9)). Somebody can

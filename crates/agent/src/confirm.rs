@@ -1253,6 +1253,32 @@ pub struct HostRequest {
     pub hosts: Vec<String>,
 }
 
+/// A message the planner wants to send to another background session (MSG-3).
+///
+/// The name, the state and the directory are the roster's, read when the call was made. The text is
+/// the planner's whole message, and the label is the one it will be sent under, assigned by the
+/// policy layer from what the planner's context held. A person who answers yes is approving the
+/// session named, and the words as drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRequest {
+    pub name: String,
+    pub state: String,
+    pub directory: String,
+    pub text: String,
+    pub label: bravebot_core::label::Label,
+}
+
+/// What the person decided about a message (MSG-3, MSG-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDecision {
+    /// Send this one.
+    Once,
+    /// Send this one and the later ones to this session until the turn ends.
+    ForTheTurn,
+    /// Send nothing. Also what nobody being there to ask comes to.
+    Decline,
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallDecision {
@@ -1667,6 +1693,15 @@ pub trait Confirmer {
     /// were chosen by a program, and a yes widens the network and no directory.
     fn confirm_host(&mut self, request: &HostRequest) -> Decision;
 
+    /// Ask whether a message the planner wrote may be sent to another background session.
+    /// Implementations must decline when they cannot ask.
+    ///
+    /// Separate from every other question here because what a yes grants is a place for words to go:
+    /// the text becomes part of another planner's context, and the person is the only check on it
+    /// that does not rest on the sender's model. Only a background session sends, so a front end
+    /// that hosts none declines. No mode and no allow rule answers it.
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -1720,6 +1755,10 @@ impl Confirmer for Unattended {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     /// Refuses. Nobody is there to say a server is where its reply pointed.
@@ -1857,6 +1896,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1930,6 +1973,10 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2023,6 +2070,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2098,6 +2149,10 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2171,6 +2226,10 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2251,6 +2310,10 @@ impl Confirmer for VetsContent {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2336,6 +2399,10 @@ impl Confirmer for ExposesReads {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2408,6 +2475,10 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2484,6 +2555,10 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2580,6 +2655,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_host(&mut self, request: &HostRequest) -> Decision {
         self.timing(|inner| inner.confirm_host(request))
+    }
+
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
+        self.timing(|inner| inner.confirm_message(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2896,6 +2975,10 @@ mod tests {
 
         fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
             Decision::Reject
+        }
+
+        fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+            MessageDecision::Decline
         }
 
         fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {

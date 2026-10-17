@@ -823,6 +823,10 @@ background-job-finished = `{ $command }` finished in the background: { $outcome 
 # where it was a label.
 session-message-heading = message from session { $from } ({ $name }) · { $label }
 
+# The heading over a message this session's planner sent to another session. The receiver is named
+# as the list of background sessions names it, and the label is the one the message was sent under.
+session-message-sent-heading = message to session { $to } ({ $name }) · { $label }
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
@@ -1434,6 +1438,23 @@ host-explained =
     Nothing is written to disk, so the next session asks again.
 host-yes = Yes, for this session
 host-no = No
+
+## A message to another background session, asked before it is sent
+
+message-title = send a message to another session?
+message-to = To the session "{ $name }" ({ $state }), working in { $directory }:
+message-label = Sent as { $label }.
+message-explained =
+    A yes sends this text to that session's planner as advice from another session. It answers
+    nothing that session is holding, grants it no permission and starts no turn there. The planner
+    wrote the text.
+message-explained-turn =
+    Answering { $key } sends this one and the later ones to this session until this turn ends.
+    Nothing is written down, so the next turn asks again.
+# What a line on a terminal accepts: y sends this one, the key named in message-answer-turn sends
+# this one and the later ones this turn, and any other line, and the end of the input, sends nothing.
+message-answer = [y/t/N]
+message-answer-turn = t
 
 ## Vouching for a directory, asked once when a session starts somewhere new
 
@@ -3353,6 +3374,7 @@ verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
 verb-advisor = Advise
+verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -3570,6 +3592,7 @@ sessions-held-tools = tools
 sessions-held-move = move
 sessions-held-manifest = manifest
 sessions-held-question = question
+sessions-held-message = message
 sessions-view-title = Background sessions
 sessions-view-keys = ↑↓ choose  ·  Enter attach  ·  Esc leave
 sessions-view-failed = Could not draw the list of background sessions: { $problem }

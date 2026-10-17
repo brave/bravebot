@@ -663,6 +663,15 @@ impl Confirmer for BridgeConfirmer {
         })
     }
 
+    /// Declined without asking: the desktop hosts no background session, and a session offered no
+    /// way to send is never asked (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
     ///
     /// Nothing was sent there. A yes declares the server at the new address, and every later

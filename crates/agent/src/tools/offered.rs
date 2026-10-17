@@ -1613,6 +1613,44 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
     tools.push(advisor);
 }
 
+/// Add `message_session` to a planner's list, for a background session that can reach the others.
+///
+/// Built here rather than in the table because no other session is offered it, and a description
+/// naming a tool that is not on the list sends the planner to a name that is not there. A delegate
+/// is built from the table and so is never offered it (MSG-12).
+pub fn offer_message_session(tools: &mut Vec<Tool>) {
+    let mut message = Tool::function(
+        "message_session",
+        "Send a message to another background session on this machine, by the name the person \
+         gave it. The message is the text you write and nothing else: the other session is not \
+         given this conversation, your files or your references. Its planner reads the text as \
+         advice from another session, not as the person's words, and the text grants it no \
+         permission and answers nothing it asked. A message starts no turn: it is read at the \
+         start of that planner's next request, so a session that is idle or waiting for the \
+         person reads it later. The person is asked before the first message to a session in a \
+         turn, and a turn may send only a few to one session, so put what matters in one message.",
+        json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "The name of the session to send to, exactly as the person \
+                                    gave it to you."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "What you want that session's planner to be told, written so \
+                                    that it can be read without this conversation. At most 4,000 \
+                                    characters."
+                }
+            },
+            "required": ["target", "text"]
+        }),
+    );
+    ask_why(&mut message);
+    tools.push(message);
+}
+
 /// Add `load_tool` to the list of a turn whose server tools are offered by name only (SERVERS-16).
 ///
 /// Built here rather than in the table because it exists only where tools are deferred, and a

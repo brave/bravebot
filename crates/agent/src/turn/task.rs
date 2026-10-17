@@ -165,6 +165,18 @@ pub struct Task {
     ///
     /// [`Reporter::session_message`]: crate::report::Reporter::session_message
     pub inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>,
+    /// How this session reaches the other background sessions, or `None` where it cannot send
+    /// (MSG-12).
+    ///
+    /// `None` for every session that is not a background one and for every delegate, so none of
+    /// them is offered `message_session` and a call to it by name is answered as an unknown name.
+    /// A caller that sets one also implements [`Reporter::message_sent`] and answers
+    /// [`Confirmer::confirm_message`]: the first is the only thing that shows the person a message
+    /// going out under a standing answer, and the second is where the person approves the target.
+    ///
+    /// [`Reporter::message_sent`]: crate::report::Reporter::message_sent
+    /// [`Confirmer::confirm_message`]: crate::confirm::Confirmer::confirm_message
+    pub courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -462,6 +474,7 @@ impl Task {
             remembering: None,
             advisor: None,
             inbox: None,
+            courier: None,
             model: None,
             effort: None,
             output_schema: None,
@@ -640,6 +653,15 @@ impl Task {
     /// Give the turn the inbox of the background session it runs in, or `None` for any other.
     pub fn with_inbox(mut self, inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>) -> Self {
         self.inbox = inbox;
+        self
+    }
+
+    /// Give the turn the courier of the background session it runs in, or `None` for any other.
+    pub fn with_courier(
+        mut self,
+        courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
+    ) -> Self {
+        self.courier = courier;
         self
     }
 

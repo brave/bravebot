@@ -697,6 +697,7 @@ fn state_in_words(seen: &Seen) -> String {
                 Held::Move => t!(sessions_held_move),
                 Held::Manifest => t!(sessions_held_manifest),
                 Held::Question => t!(sessions_held_question),
+                Held::Message => t!(sessions_held_message),
             }
         )
         .to_string(),
@@ -794,6 +795,26 @@ mod tests {
             "{rows:?}"
         );
         assert!(rows[0].contains("fix the build"), "{rows:?}");
+    }
+
+    /// BG-5: a session holding the question of whether to send a message is listed as needing input
+    /// and with the word for that kind, which is not the word for a question the planner asked.
+    #[test]
+    fn a_session_holding_a_message_to_send_is_listed_with_that_kind() {
+        let rows = lines_of(&[seen(
+            "fix the build",
+            State::NeedsInput,
+            Some(Held::Message),
+            true,
+        )]);
+        assert!(
+            rows[0].contains(&t!(sessions_held_message).to_string()),
+            "{rows:?}"
+        );
+        assert!(
+            !rows[0].contains(&t!(sessions_held_question).to_string()),
+            "{rows:?}"
+        );
     }
 
     /// BG-6: the list says what is true of the process now. An entry that said it was working and

@@ -62,7 +62,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sessions.md](sessions.md) | `SESSION` | 37 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
-| [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, receiving built and sending not: one background session sending text to another, put to a person and never starting a turn |
+| [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, receiving and sending built and the marked block in a resumed transcript not: one background session sending text to another, put to a person and never starting a turn |
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |

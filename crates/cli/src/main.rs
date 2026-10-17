@@ -1078,7 +1078,7 @@ fn take_sandbox_filesystem(
 }
 
 /// Every tool name `--tools` may name: the ones a turn is offered, wherever a surface offers them,
-/// and the `advisor` a session may add.
+/// and the `advisor` and `message_session` a session may add.
 fn nameable_tools() -> Vec<String> {
     use bravebot_agent::tools::{Running, Scheduling, available};
     let mut names: Vec<String> = [Scheduling::ArrangingALook, Scheduling::PacingALoop]
@@ -1094,6 +1094,7 @@ fn nameable_tools() -> Vec<String> {
         .map(|tool| tool.function.name)
         .collect();
     names.push("advisor".to_string());
+    names.push("message_session".to_string());
     names.sort();
     names.dedup();
     names
@@ -3262,6 +3263,19 @@ mod tests {
         assert!(
             err.contains("nothing") && err.contains("read_file"),
             "{err}"
+        );
+    }
+
+    /// `message_session` is added to a background session's list and not to `available`, so the list
+    /// `--tools` is checked against has to name it as it names `advisor`, or a person who limits the
+    /// tools can never keep it.
+    #[test]
+    fn the_tool_limit_may_name_message_session() {
+        let mut arguments = args(&["-p", "x", "--tools", "read_file,message_session"]);
+        let limit = take_tool_limit(&mut arguments).expect("a list of tools");
+        assert_eq!(
+            limit.only,
+            Some(vec!["read_file".to_string(), "message_session".to_string()])
         );
     }
 

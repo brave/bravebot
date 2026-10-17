@@ -918,6 +918,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             cache: task.cache.as_deref(),
             remembering: task.remembering.as_deref(),
             advising: None,
+            messaging: None,
             delegated: false,
             confined_to: None,
             servers: None,
@@ -2241,6 +2242,9 @@ struct State<'s> {
     watches: Vec<String>,
     armed: usize,
     advice_asked: usize,
+    // What the planner has put to other sessions this turn, which the bound on them and a
+    // standing answer are read from. Both end with the turn (MSG-4, MSG-10).
+    messages_sent: crate::messages::Ledger,
     jobs: &'s mut tools::Jobs,
     told_of_kept_jobs: bool,
     run_directory: std::path::PathBuf,
@@ -2949,6 +2953,7 @@ where
     // How many questions the planner has put to its advisor this turn, which the bound on them
     // is read against.
     let advice_asked = 0usize;
+    let messages_sent = crate::messages::Ledger::default();
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3002,6 +3007,7 @@ where
         watches,
         armed,
         advice_asked,
+        messages_sent,
         jobs,
         told_of_kept_jobs,
         run_directory,
@@ -3772,6 +3778,14 @@ where
                             context: &request.messages,
                             asked: &mut state.advice_asked,
                         }),
+                        messaging: task
+                            .courier
+                            .as_deref()
+                            .filter(|_| task.delegate.is_none())
+                            .map(|courier| crate::messages::Messaging {
+                                courier,
+                                ledger: &mut state.messages_sent,
+                            }),
                         delegated: task.delegate.is_some(),
                         confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                         servers: state.servers.as_deref_mut(),

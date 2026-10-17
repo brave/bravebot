@@ -452,6 +452,13 @@ impl Confirmer for Answering {
         Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.moves.push(request.clone());
         self.moved

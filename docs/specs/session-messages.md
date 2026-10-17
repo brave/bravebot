@@ -5,9 +5,16 @@ status: proposed
 governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
+  - crates/agent/src/tools/message.rs
   - crates/agent/src/messages.rs
+  - crates/core/src/message.rs
   - crates/cli/src/host.rs
   - crates/session/src/jobs.rs
+guards:
+  - symbol: Policy::before_message
+    sites:
+      - crates/agent/src/tools/message.rs: 1
+      - crates/core/src/policy.rs: 8
 documented-by:
   - none (gap: a page on one session sending text to another, owed until the design is built)
 ---
@@ -25,14 +32,14 @@ are not.
 The receiving half is built: a background session's socket takes a message, holds up to eight for
 its planner, and puts each in front of the planner at the start of its next request in a frame the
 driver wrote, under the label it arrived with ([MSG-6](#MSG-6) to [MSG-9](#MSG-9)). The sending half
-is not: there is no `message_session` tool in `crates/agent/src/tools.rs` or
-`crates/agent/src/tools/offered.rs`, no prompt, and no client that writes to another session's
-socket, so nothing in this program sends. A clause with a part still
-to build reads `verified-by: none` until all of it lands, and the parts not built are the tool and
-its refusals ([MSG-1](#MSG-1), [MSG-5](#MSG-5)), the sender's gate and label ([MSG-2](#MSG-2)), the
-prompt ([MSG-3](#MSG-3), [MSG-4](#MSG-4)), the bound on a sender ([MSG-10](#MSG-10)), the sender's
-transcript and trail, and a block marked as a message in a resumed transcript, which draws the frame
-as plain text today ([MSG-11](#MSG-11)), and the tool's absence from a delegate ([MSG-12](#MSG-12)).
+is built too: the `message_session` tool and its refusals ([MSG-1](#MSG-1), [MSG-5](#MSG-5),
+[MSG-12](#MSG-12)), the sender's gate and label ([MSG-2](#MSG-2)), the prompt and its standing answer
+([MSG-3](#MSG-3), [MSG-4](#MSG-4)) and the bound on a sender ([MSG-10](#MSG-10)). Only a background
+session is offered the tool, and the prompt is put in lines, to whoever attaches. A clause with a
+part still to build reads `verified-by: none` until all of it lands, and the part not built is a
+block marked as a message in a resumed transcript, which draws a message that came in as plain text
+today, and a message that went out as the tool call that sent it ([MSG-11](#MSG-11)). A session
+that is running draws both as they happen, and the trail records the one that went out.
 
 A **message** is text one session's planner wrote for another session's planner. It is not the
 sender's conversation, files, references or quarantined content, none of which cross. The **sender**
@@ -74,7 +81,10 @@ machine is not reachable.
 about where text goes. The text is what the planner wrote and is carried to that place, so it is
 content, as a delegate's task is content.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_target_that_is_not_one_live_other_session_is_refused_before_anyone_is_asked`
+`verified-by: bravebot_core::policy::a_text_over_the_bound_is_refused_whole_and_one_at_the_bound_is_sent`
+`verified-by: bravebot_cli::host::a_name_finds_one_live_session_other_than_the_sender_and_says_why_it_found_none`
+`verified-by: bravebot_agent::turn::message_session_is_offered_only_to_a_session_that_can_send`
 
 <a id="MSG-2"></a>
 ### MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held
@@ -95,7 +105,10 @@ two places this can be stopped are the sender's context, where nothing untrusted
 the receiver, where [MSG-9](#MSG-9) stops what arrives anyway. A message does not need a label chosen
 for it, because the context already has one.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_message_is_sent_only_from_a_context_that_has_met_nothing_untrusted`
+`verified-by: bravebot_core::policy::a_message_carries_the_label_of_the_context_that_wrote_it`
+`verified-by: bravebot_agent::tools::a_context_that_has_met_something_untrusted_sends_nothing_and_reads_no_roster`
+`verified-by: bravebot_agent::tools::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
 
 <a id="MSG-3"></a>
 ### MSG-3: the first message to a session is put to a person, with the target and the whole text
@@ -118,7 +131,12 @@ background session, which is the only kind that sends.
 were not shown. The text is shown in full because it is what the receiver will be told, and a person
 who reads it is the only check on it that does not rest on the sender's model.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::the_person_is_shown_the_roster_entry_the_whole_text_and_the_label_and_a_decline_sends_nothing`
+`verified-by: bravebot_cli::plain::a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing`
+`verified-by: bravebot_cli::plain_retention_tests::the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reaches_the_courier`
+`verified-by: bravebot_cli::plain::a_long_message_is_asked_about_whole_in_lines`
+`verified-by: bravebot_agent::permission_mode::a_message_question_is_asked_in_every_mode_but_bypass_which_declines_it`
+`verified-by: bravebot_cli::background::a_session_holding_a_message_to_send_is_listed_with_that_kind`
 
 <a id="MSG-4"></a>
 ### MSG-4: a second answer covers later messages to the same session for the rest of the turn, and no longer
@@ -134,7 +152,10 @@ A message sent under it is still drawn in the sender's transcript as it is sent 
 person on each. A grant that lasts past the turn would let the next turn, whose first prompt the
 person typed for another purpose, send without asking.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_standing_answer_covers_the_later_messages_to_that_session_and_no_other`
+`verified-by: bravebot_agent::turn::a_standing_answer_ends_with_the_turn_that_gave_it`
+`verified-by: bravebot_cli::plain::a_message_is_asked_in_lines_with_two_answers_and_anything_else_sends_nothing`
+`verified-by: bravebot_cli::progress::a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted`
 
 <a id="MSG-5"></a>
 ### MSG-5: a message is delivered to a live process, and starts nothing
@@ -155,7 +176,10 @@ has read it.
 planner the power the roster reserves to a typed line. A roster that held a message would hold the
 planner's words in a place the list is drawn from.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::what_became_of_a_message_is_told_and_recorded_without_the_text`
+`verified-by: bravebot_cli::host::a_courier_offers_a_message_to_the_process_and_says_what_it_answered`
+`verified-by: bravebot_cli::host::a_name_finds_one_live_session_other_than_the_sender_and_says_why_it_found_none`
+`verified-by: bravebot_agent::turn::an_approved_message_is_delivered_queued_and_drawn_and_the_planner_is_not_told_it_was_read`
 
 <a id="MSG-6"></a>
 ### MSG-6: a message never starts a turn
@@ -268,7 +292,7 @@ that target until the next turn. A refused call does not ask a person.
 **Why.** A planner in a loop could otherwise fill a receiver's queue ([MSG-6](#MSG-6)) or put a prompt
 in front of a person each round.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_turn_puts_at_most_ten_messages_to_one_session_whether_or_not_they_were_sent`
 
 <a id="MSG-11"></a>
 ### MSG-11: both transcripts show the message, and the trail records that it happened
@@ -298,7 +322,8 @@ answered as any other unknown name is. A processor, which has no tools, is not.
 person to arbitrate something they never set up. What a delegate has to say goes in its report, and its
 parent decides whether to say it to another session.
 
-`verified-by: none`
+`verified-by: bravebot_agent::tools::a_call_to_message_session_nobody_was_offered_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::turn::a_delegate_is_offered_no_message_session_and_its_call_is_an_unknown_name`
 
 ## What this changes in other specs
 

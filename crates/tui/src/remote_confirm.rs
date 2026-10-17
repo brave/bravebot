@@ -347,6 +347,14 @@ impl Confirmer for RemoteConfirmer {
         }
     }
 
+    /// Declined without asking: a session in a terminal is offered no way to send (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     /// A yes to the call is not a yes to where its reply pointed.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         match self.exchange(ToMain::Move(request.clone())) {
