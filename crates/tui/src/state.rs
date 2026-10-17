@@ -4267,12 +4267,10 @@ impl Session {
     }
 
     fn forget_cancelled_prompt(&mut self) {
-        let mut withdrawn = false;
         for ticket in std::mem::take(&mut self.recall) {
-            withdrawn |= self.history.withdraw(ticket);
-        }
-        if withdrawn && self.persist {
-            bravebot_session::store::save_history(self.history.entries());
+            if let (Some(entry), true) = (self.history.withdraw(ticket), self.persist) {
+                bravebot_session::store::remove_history_entry(&entry);
+            }
         }
     }
 

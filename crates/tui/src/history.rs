@@ -243,24 +243,22 @@ impl History {
         self.claims.last().expect("a submitted prompt").0
     }
 
-    /// Cancel one submission without removing other submissions that share its words. Reports
-    /// whether an entry left the list.
-    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> bool {
+    /// Cancel one submission without removing other submissions that share its words. Returns the
+    /// entry that left the list, if one did.
+    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> Option<Entry> {
         self.leave();
-        let Some(at) = self.claims.iter().position(|(id, _)| *id == ticket) else {
-            return false;
-        };
+        let at = self.claims.iter().position(|(id, _)| *id == ticket)?;
         self.claims[at].1 -= 1;
         if self.claims[at].1 == 0 {
             self.claims.remove(at);
             self.mine.remove(at);
-            self.entries.remove(at);
+            let entry = self.entries.remove(at);
             if !self.holds(self.scope) {
                 self.scope = Scope::All;
             }
-            return true;
+            return Some(entry);
         }
-        false
+        None
     }
 
     /// How many prompts are stored.
@@ -479,7 +477,7 @@ mod tests {
         assert_eq!(history.cycle().as_deref(), Some("new"));
         assert_eq!(history.scope(), Scope::Session);
 
-        assert!(history.withdraw(history.ticket()));
+        assert!(history.withdraw(history.ticket()).is_some());
 
         assert_eq!(history.scope(), Scope::All);
         assert_eq!(history.next_scope(), None);
@@ -853,7 +851,7 @@ mod tests {
         assert_eq!(history.cycle().as_deref(), Some("new"));
         assert_eq!(history.scope(), Scope::Project);
 
-        assert!(history.withdraw(history.ticket()));
+        assert!(history.withdraw(history.ticket()).is_some());
 
         assert_eq!(history.scope(), Scope::All);
         assert_eq!(history.older("").as_deref(), Some("old"));
