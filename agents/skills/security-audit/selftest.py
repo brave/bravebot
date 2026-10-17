@@ -2074,8 +2074,8 @@ def test_the_prompt_lane_starts_from_every_prompt():
     )
     names = {(Path(site["path"]).name, site["function"]) for site in real}
     wanted = {
-        ("confirm.rs", "ask"),
-        ("confirm.rs", "ask_mcp_call"),
+        ("write.rs", "ask"),
+        ("mcp.rs", "ask_mcp_call"),
         ("trust_prompt.rs", "ask"),
         ("Transcript.tsx", "case 'confirm'"),
         ("Transcript.tsx", "case 'vet'"),

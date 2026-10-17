@@ -22,6 +22,7 @@ governs:
   - crates/agent/src/permission_mode.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/mcp.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
   - crates/ui-bridge/src/connectors.rs
