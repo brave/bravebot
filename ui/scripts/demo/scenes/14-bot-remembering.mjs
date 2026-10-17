@@ -1,3 +1,4 @@
+import { SIDEBAR_TAB } from '../../drive-support.mjs'
 // The half of a bot's memory nobody presses a key for.
 //
 // `13-bot-memory` films the memory being written because somebody asked for it in so many words,
@@ -30,7 +31,7 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
+    const tab = page.locator(SIDEBAR_TAB).nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
     await s.click(tab)
     await page.waitForTimeout(600)

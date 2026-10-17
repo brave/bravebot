@@ -13,7 +13,7 @@
 // persisted layout with every other driver, so it puts the columns back before it leaves.
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -192,14 +192,14 @@ if (hasSessions) {
   check(openItem('turn.send').enabled === false, 'an empty composer still leaves Send grey')
 
   // The assertion that proves the state channel is live in both directions.
-  await page.locator('.composer textarea').fill('hello')
+  await page.locator(COMPOSER_INPUT).fill('hello')
   await page.waitForTimeout(400)
   open = await readMenu()
   check(
     open.flatMap((m) => m.items).find((i) => i.id === 'turn.send').enabled === true,
     'typing into the composer enables Send',
   )
-  await page.locator('.composer textarea').fill('')
+  await page.locator(COMPOSER_INPUT).fill('')
   await page.waitForTimeout(400)
   open = await readMenu()
   check(

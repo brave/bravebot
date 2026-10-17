@@ -29,7 +29,7 @@
 // Run it the way `drive-bot-turn.mjs` is run. It costs two turns. Like the other drivers it
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT } from './drive-support.mjs'
 import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -80,7 +80,7 @@ await openBot(app, page, {
 
 // Sent from the bot's page, which starts the conversation; the message waits for the trust
 // question a new folder asks.
-await page.locator('.composer textarea').fill('Name one file in this checkout.')
+await page.locator(COMPOSER_INPUT).fill('Name one file in this checkout.')
 await page.locator('.send').click()
 await page.waitForTimeout(1500)
 const trust = page.locator('.trust button').first()
@@ -138,7 +138,7 @@ const prompt = [
   'down the name of the file you just mentioned, and nothing else.',
 ].join('\n')
 
-await page.locator('.composer textarea').fill(prompt)
+await page.locator(COMPOSER_INPUT).fill(prompt)
 await page.locator('.send').click()
 await page.waitForTimeout(1200)
 

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-model-picker-'))
 const app = await electron.launch({ args: ['.', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
@@ -57,7 +58,7 @@ try {
   assert.match(await trigger.getAttribute('aria-label'), /claude-haiku-4.5/)
   assert.equal(await page.locator('.model-current').innerText(), 'claude-haiku-4.5')
   const triggerBox = await trigger.boundingBox()
-  const entryBox = await page.locator('.composer textarea').boundingBox()
+  const entryBox = await page.locator(COMPOSER_INPUT).boundingBox()
   assert(triggerBox.y >= entryBox.y + entryBox.height, 'model picker is below the text entry');
   const sendBox = await page.locator('.composer .send').boundingBox();
   assert(Math.abs(triggerBox.y + triggerBox.height / 2 - sendBox.y - sendBox.height / 2) < 2,
@@ -92,7 +93,7 @@ try {
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
 
-  const entry = page.locator('.composer textarea')
+  const entry = page.locator(COMPOSER_INPUT)
   await entry.fill('')
   await entry.press('Enter')
   assert.equal(await app.evaluate(() => globalThis.modelTest.sent.length), 0)
@@ -187,7 +188,7 @@ try {
   await botRow.locator('.bot-open-button').click()
   await page.locator('[data-test="bot-page"]').waitFor()
   await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
-  await page.locator('.composer textarea').fill('Use the saved bot model')
+  await page.locator(COMPOSER_INPUT).fill('Use the saved bot model')
   await page.locator('.composer .send').click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({state:'hidden'})

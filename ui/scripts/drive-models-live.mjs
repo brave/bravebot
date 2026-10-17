@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { _electron as electron } from 'playwright-core'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 const profile = mkdtempSync('/tmp/bravebot-model-live-profile-')
 const project = mkdtempSync('/tmp/bravebot-model-live-project-')
 const shots = '/tmp/bravebot-model-live'
@@ -27,7 +28,7 @@ try {
   assert.match(await trigger.getAttribute('aria-label'), /claude-haiku-4.5/)
   const send = async (prompt, expected, shot) => {
     const before = await page.locator('.bubble.assistant').count()
-    await page.locator('.composer textarea').fill(prompt)
+    await page.locator(COMPOSER_INPUT).fill(prompt)
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await page.waitForFunction((count) => {
       return document.querySelector('.unconfigured') || document.querySelector('.bubble.failed') ||

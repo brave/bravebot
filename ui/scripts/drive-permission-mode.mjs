@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 // A planner that makes the one call the last prompt names, and ends the turn once a tool answered.
 const { service, rounds } = await startModelService(({ messages }) => {
@@ -36,7 +37,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   await openProject(page, app, project, { trust: false })
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const replies = page.locator('.bubble.assistant')
   const mode = page.locator('[data-test="mode-trigger"]')

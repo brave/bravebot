@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE'
 
@@ -36,7 +37,7 @@ try {
   }
   await openProject(page, app, project)
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const cards = page.locator('.confirm.exposure')
   const ask = async (prompt) => {

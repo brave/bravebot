@@ -26,7 +26,7 @@
 // Like the other drivers this perturbs `bravebot-ui.json`, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, SIDEBAR_TAB } from './drive-support.mjs'
 import { appState, locateProfile } from './drive-profile.mjs'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -114,7 +114,7 @@ await page.waitForTimeout(2500)
 
 // --- the column has two lists ----------------------------------------------------------
 
-const tabs = page.locator('.sidebar-tabs [role="option"]')
+const tabs = page.locator(SIDEBAR_TAB)
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
   (await tabs.nth(0).getAttribute('aria-selected')) !== null,
@@ -152,7 +152,7 @@ await makeBot(page, 'Triage', 'Read new issues and say which are duplicates.')
 // The list is the main process's; the window reads it back the way it does after saving one.
 await page.reload()
 await page.waitForTimeout(2000)
-await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
+await page.locator(SIDEBAR_TAB).nth(1).click()
 await page.waitForTimeout(400)
 
 // Located by name rather than by position. The list holds whatever bots the person running this
@@ -235,7 +235,7 @@ const backRow = (name) =>
 const backMine = backRow('Release Notes (weekly)')
 
 check(
-  (await back.locator('.sidebar-tabs [role="option"]').nth(1).getAttribute('aria-selected')) !== null,
+  (await back.locator(SIDEBAR_TAB).nth(1).getAttribute('aria-selected')) !== null,
   'the column comes back on the tab it was left on',
 )
 check(
@@ -412,7 +412,7 @@ check(
 // are in the DOM and invisible. The same courtesy `drive-panels.mjs` pays when it turns every
 // panel back on — and the restore below is not enough on its own, since it puts back whatever
 // this driver *found*, which may itself have been a bots tab left by an interrupted run.
-await back.locator('.sidebar-tabs [role="option"]').first().click()
+await back.locator(SIDEBAR_TAB).first().click()
 await back.waitForTimeout(300)
 
 await second_app.close()

@@ -8,7 +8,7 @@
 // Asserts on DOM shape rather than exact text: the model is asked to produce a document,
 // and it will not echo one byte for byte.
 import { mkdirSync } from 'node:fs'
-import { launchLive } from './drive-support.mjs'
+import { launchLive, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -40,7 +40,7 @@ await page.waitForTimeout(2000)
 await page.locator('.session').first().click()
 await page.waitForTimeout(1200)
 
-await page.locator('.composer textarea').fill(ASK)
+await page.locator(COMPOSER_INPUT).fill(ASK)
 await page.locator('.send').click()
 console.log('sent; waiting for the turn…')
 

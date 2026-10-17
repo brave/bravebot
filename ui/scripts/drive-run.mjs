@@ -6,7 +6,7 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -44,7 +44,7 @@ if (await page.locator('.trust').isVisible().catch(() => false)) {
 }
 
 await page
-  .locator('.composer textarea')
+  .locator(COMPOSER_INPUT)
   .fill('Run `git status --short` in this directory, then tell me how many lines it printed.')
 await page.locator('.send').click()
 console.log('sent; waiting for the command to be put to us…')
@@ -69,7 +69,7 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
     await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
     'the send control is Stop while the question stands',
   )
-  const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
+  const placeholder = await page.locator(COMPOSER_INPUT).getAttribute('placeholder')
   check(
     (placeholder ?? '').includes('command'),
     `and says which question is waiting (${placeholder})`,
@@ -120,7 +120,7 @@ if (sawOutput) {
 
 // --- the turn finishes ----------------------------------------------------------------
 const done = await page
-  .locator('.composer textarea:not([disabled])')
+  .locator(COMPOSER_IDLE)
   .waitFor({ state: 'visible', timeout: 120000 })
   .then(() => true)
   .catch(() => false)

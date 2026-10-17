@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { SIDEBAR_TAB } from './drive-support.mjs'
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-about-'))
 const app = await electron.launch({
@@ -16,7 +17,7 @@ try {
   page.on('pageerror', error => errors.push(error.message))
   await page.waitForLoadState('domcontentloaded')
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.locator('.sidebar-tabs [role="option"]').first().waitFor()
+  await page.locator(SIDEBAR_TAB).first().waitFor()
   await app.evaluate(({ Menu }) => {
     Menu.getApplicationMenu().getMenuItemById('app.about').click()
   })

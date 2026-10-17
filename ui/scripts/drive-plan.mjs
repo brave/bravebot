@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 /** A line of the file the plan reads and releases. It may reach a screen and no model. */
 const SENTINEL = 'SENTINEL-README-BYTES'
@@ -40,7 +41,7 @@ try {
   await openProject(page, app, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const mode = page.locator('[data-test="composer-mode"]')
   const send = page.locator('[data-test="send-message"]')
   // Plan is chosen for the next message from the mode menu, and Send starts the run.

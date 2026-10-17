@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 // Both outside the project: workspace-write and read-only read the first and refuse a write to the
 // second, strict refuses both. Both are under the real home, because a session may use the temporary directory,
@@ -44,7 +45,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   await openProject(page, app, project, { trust: false })
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const replies = page.locator('.bubble.assistant')
   const sandbox = page.locator('[data-test="sandbox-trigger"]')

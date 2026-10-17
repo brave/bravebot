@@ -218,6 +218,10 @@ launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use 
 `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
 `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
 
+`drive-support.mjs` also exports the selectors the drivers share for the composer's text box
+(`COMPOSER_INPUT`, `COMPOSER_IDLE`) and the left column's tabs (`SIDEBAR_TAB`), so a markup
+change to either is made there and in the test that pins them to the renderer.
+
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends
 credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
