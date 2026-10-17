@@ -11,7 +11,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
-use super::{FOR_A_PERSON, OPENING, PLANNING, Task, TurnError};
+use super::{FOR_A_PERSON, OPENING, PLANNING, ReadOutputIs, Task, TurnError};
 use crate::report::Reporter;
 use crate::request_view::{Prompt, Provenance};
 use crate::styles::{self, Style};
@@ -144,6 +144,25 @@ pub(super) fn offered_tools<S: Sink>(
         offered.retain(|tool| tool.function.name != "lsp");
     }
     Ok((None, offered))
+}
+
+/// Who answers a read of what a run printed: nobody in a bypass with no screening, a check's
+/// word wherever screening is asked for, and a person elsewhere. The first two hold only in a
+/// turn offered read_output: a definition or a delegate left without it has no release for
+/// `read` to make a round early, and making one would widen what it was confined to, and it
+/// has no tool to be pointed at. The mode is read once for each answer and asked again
+/// wherever it is used, since the person can leave bypassing while the turn runs.
+pub(super) fn read_output_is(task: &Task, offers_read_output: bool) -> ReadOutputIs {
+    let mode = task.permission_mode.get();
+    if !offers_read_output {
+        ReadOutputIs::Asked
+    } else if !mode.checks_before_promoting(task.auto_vetting) {
+        ReadOutputIs::Unasked
+    } else if task.auto_vetting {
+        ReadOutputIs::ByACheck
+    } else {
+        ReadOutputIs::Asked
+    }
 }
 
 /// What a turn runs on and who pinned it there: the model a definition named where the turn is
