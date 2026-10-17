@@ -71,6 +71,9 @@ Running a bundled script is not part of this: `run` keeps its own gate.
 `verified-by: bravebot_agent::tools::the_listing_names_regular_files_inside_the_directory_and_nothing_a_rule_covers`
 `verified-by: bravebot_agent::tools::the_listing_leaves_out_generated_directories_and_compiled_files`
 `verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
+`verified-by: bravebot_agent::tools::the_listing_leaves_out_a_name_holding_a_control_character`
+`verified-by: bravebot_agent::tools::the_listing_stops_at_two_hundred_files`
+`verified-by: bravebot_agent::tools::the_listing_searches_six_directories_down_and_no_further`
 
 <a id="LOAD-5"></a>
 ### LOAD-5: loading a skill of the user's own lets its directory be read, and nothing else

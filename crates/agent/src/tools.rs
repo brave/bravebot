@@ -19323,6 +19323,69 @@ mod tests {
         assert_eq!(files, &["demo.py", "reference.md", "scripts/helper.sh"]);
     }
 
+    /// The regression it rejects: a listing that names a file whose name holds a control
+    /// character, so a newline in a name starts a line of its own in the result a planner reads
+    /// (LOAD-4). The plain file beside them is the control: an empty listing would pass.
+    #[cfg(unix)]
+    #[test]
+    fn the_listing_leaves_out_a_name_holding_a_control_character() {
+        let fixture = SkillFixture::new("skill-files-control");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        std::fs::write(beside.join("two\nlines.md"), "x").unwrap();
+        std::fs::write(beside.join("tab\there.md"), "x").unwrap();
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(files, &["reference.md", "scripts/helper.sh"]);
+    }
+
+    /// The regression it rejects: a listing with no count cap, so a skill that keeps thousands
+    /// of files makes an unbounded `load_skill` result (LOAD-4). The cap keeps the first names
+    /// in order, which is what makes the same directory read the same every time.
+    #[cfg(unix)]
+    #[test]
+    fn the_listing_stops_at_two_hundred_files() {
+        let fixture = SkillFixture::new("skill-files-count-cap");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        for n in 0..205 {
+            std::fs::write(beside.join(format!("a{n:03}.md")), "x").unwrap();
+        }
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(files.len(), 200, "{}", files.len());
+        assert_eq!(files.first().map(String::as_str), Some("a000.md"));
+        assert_eq!(files.last().map(String::as_str), Some("a199.md"));
+    }
+
+    /// The regression it rejects: a listing that searches without a depth bound, or one that
+    /// stops a level early or late (LOAD-4). A file under six directories is named and one
+    /// under seven is not.
+    #[cfg(unix)]
+    #[test]
+    fn the_listing_searches_six_directories_down_and_no_further() {
+        let fixture = SkillFixture::new("skill-files-depth-cap");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        let six = beside.join("d1/d2/d3/d4/d5/d6");
+        std::fs::create_dir_all(six.join("d7")).unwrap();
+        std::fs::write(six.join("at-six.md"), "x").unwrap();
+        std::fs::write(six.join("d7/at-seven.md"), "x").unwrap();
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(
+            files,
+            &[
+                "d1/d2/d3/d4/d5/d6/at-six.md",
+                "reference.md",
+                "scripts/helper.sh"
+            ]
+        );
+    }
+
     /// The regression it rejects: a project's skill naming a file the trust map does not vouch
     /// for (a name is content), or being handed the provenance reach that is for the user's own.
     #[cfg(unix)]
