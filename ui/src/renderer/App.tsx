@@ -48,7 +48,8 @@ import { useExperience, conversationPreferences, setConversation, dropConversati
 import { showToast } from './toasts'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
-import { planRewind, pointForPrompt, RequestFailed, rewindFailure } from './rewind'
+import { planRewind, pointForPrompt, rewindFailure } from './rewind'
+import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
 
@@ -60,48 +61,6 @@ function hadConversation(bot: Bot, summary: { id: string; directory: string }): 
 
 /** What a chat in a bot's home folder is listed under. */
 const NO_PROJECT = 'No project'
-
-/** Raised for the one failure that needs its own screen rather than a line of text. */
-class Unconfigurable extends Error {}
-
-/** Which kinds of question a person can be put. Declared beside the method each is answered by. */
-export type Asked = t.Asked
-
-/** Which method answers which question. See [`t.REPLY`], which is where they are written down. */
-const METHOD: Record<Asked, string> = t.REPLY
-
-async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
-  const answer = await window.bravebot.request<T>(method, params)
-  if (answer.error) {
-    // `config` is `Config::from_env` failing, which for a packaged app or one launched from a checkout
-    // means the credentials were not baked in at compile time. It is not recoverable
-    // from here and needs saying properly.
-    if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new RequestFailed(answer.error.code, answer.error.message)
-  }
-  return answer.ok as T
-}
-
-/**
- * Send a turn as a bot.
- *
- * The same failure handling as [`call`], over a different channel — and a different channel
- * because this is the one kind of turn that carries files. See `bravebot:bots:send`.
- */
-async function callBot(request: {
-  session: string
-  slug: string
-  prompt: string
-  grounded: boolean
-  model: string | null
-  attachments?: string[]
-}): Promise<void> {
-  const answer = await window.bravebot.sendBotTurn(request)
-  if (answer.error) {
-    if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new RequestFailed(answer.error.code, answer.error.message)
-  }
-}
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -186,15 +145,7 @@ export function App(): React.JSX.Element {
    */
   const [chosen, setChosen] = useState<Appearance>(SYSTEM)
 
-  // Read inside the event handler, which is installed once and must not close over a
-  // stale session handle.
-
-
-  // The whole of what is on screen, for the same reason: `send` is installed once and has to know
-  // whether this session belongs to a bot and whether it still carries its briefing.
-
-
-  // Read inside `open`, which is installed once for the same reason. The list lives in the
+  // Read inside `showSession`, which is installed once for the same reason. The list lives in the
   // main process; this is the copy on screen, refreshed when it can have changed.
   const forksRef = useRef<Fork[]>(forks)
   forksRef.current = forks
@@ -602,7 +553,7 @@ export function App(): React.JSX.Element {
    * this must not be wrong in.
    */
   const answer = useCallback(
-    async (kind: Asked, request: number, approve: boolean, remember = false) => {
+    async (kind: t.Asked, request: number, approve: boolean, remember = false) => {
       const handle = handleRef.current
       if (!handle) return
       const decision = approve ? 'approve' : 'reject'
@@ -720,17 +671,6 @@ export function App(): React.JSX.Element {
     (info.status === 'answer' || info.status === 'approval') &&
     key !== (live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? '') : '')).length
 
-  /**
-   * Show a bot.
-   *
-   * Two paths, and which one is taken says whether the bot has ever spoken. One that has is
-   * resumed — the same session, every time, which is the whole of what makes it persistent. One
-   * that has not has no session to resume: the agent writes no record until a first turn, so
-   * there is nothing on disk to open and a fresh one is begun in its checkout instead. Its
-   * durable id is learned when the turn that creates it finishes, by the main process, off what
-   * the agent answered.
-   */
-  /** The bot whose session is on screen, if one is — for the header, which names it. */
   useEffect(() => {
     const edited = (event: Event) => {
       const slug = (event as CustomEvent<string>).detail
@@ -742,6 +682,7 @@ export function App(): React.JSX.Element {
     return () => document.removeEventListener('bravebot:memory-edited', edited)
   }, [])
 
+  /** The bot whose session is on screen, if one is — for the header, which names it. */
   const openBotRecord = useMemo(
     () => (live?.bot ? (bots.find((each) => each.slug === live.bot?.slug) ?? null) : null),
     [live?.bot, bots],

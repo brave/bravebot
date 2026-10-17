@@ -10,7 +10,6 @@ import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRu
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
-import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
 import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
@@ -72,7 +71,7 @@ interface Live {
  * the card that drew the question is the only thing that knows which one it was.
  */
 export type Answer = (
-  kind: Asked,
+  kind: t.Asked,
   request: number,
   approve: boolean,
   remember?: boolean,
@@ -1492,7 +1491,7 @@ function YesOrNo({
   approved,
   rejected,
 }: {
-  kind: Asked
+  kind: t.Asked
   request: number
   answerable: boolean
   decision: 'approve' | 'reject' | null
@@ -1540,7 +1539,7 @@ function ThreeAnswers({
   approvedAlways,
   rejected,
 }: {
-  kind: Asked
+  kind: t.Asked
   request: number
   answerable: boolean
   decision: 'approve' | 'reject' | null
