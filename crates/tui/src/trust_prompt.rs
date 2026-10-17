@@ -216,42 +216,9 @@ pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     }
 }
 
-/// The rule trusting the workspace records: the root, which covers everything beneath it.
-///
-/// One place, so the map reached without the question is the map a yes would have written. It does
-/// not say that confined lines run without asking ([`trusting_the_workspace_and_confined_lines`]):
-/// only a yes to a question that said so does, so a map reached any other way keeps asking about
-/// every line (RUN-5).
-pub fn trusting_the_workspace(directory: &Path) -> TrustStore {
-    let mut trust = bravebot_agent::workspace::trust_store(directory);
-    trust.trust(".");
-    trust
-}
-
-/// [`trusting_the_workspace`] for a yes to the startup question as it is asked now, which says that
-/// confined lines in the directory run without asking, or for a kept answer whose entry says so
-/// ([`bravebot_agent::trusted::Kept::confined_lines`]).
-pub fn trusting_the_workspace_and_confined_lines(directory: &Path) -> TrustStore {
-    let mut trust = trusting_the_workspace(directory);
-    trust.allow_confined_lines();
-    trust
-}
-
-/// The map a kept answer starts a session with: the rule a yes writes, and the answer about
-/// confined lines only where the entry says the question said so.
-pub fn trusting_as_kept(directory: &Path, kept: &bravebot_agent::trusted::Kept) -> TrustStore {
-    // An entry about the root of the worktree is honoured for a package below it (TRUST-23), but its
-    // answer covers the root it was given for and not a directory beneath it (RUN-5).
-    let about_this_directory = kept.root == directory
-        || matches!(
-            (kept.root.canonicalize(), directory.canonicalize()),
-            (Ok(kept), Ok(here)) if kept == here
-        );
-    match kept.confined_lines && about_this_directory {
-        true => trusting_the_workspace_and_confined_lines(directory),
-        false => trusting_the_workspace(directory),
-    }
-}
+pub use bravebot_agent::trusted::{
+    trusting_as_kept, trusting_the_workspace, trusting_the_workspace_and_confined_lines,
+};
 
 /// Block until the user answers.
 ///
@@ -502,7 +469,7 @@ fn draw(
         ),
         // What a yes grants beyond the files stays above what scrolls with the question, so it is
         // on the screen whenever a yes can be taken (RUN-5).
-        Line::from(Span::raw(t!(trust_directory_confined_lines))),
+        Line::from(Span::raw(bravebot_agent::trusted::confined_lines_notice())),
         Line::raw(""),
     ];
     let mut lines = vec![

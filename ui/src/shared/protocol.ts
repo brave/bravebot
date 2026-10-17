@@ -210,6 +210,8 @@ export interface OpenedSession {
   remembered?: KeptTrust | null
   /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -325,6 +327,7 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
@@ -845,7 +848,7 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null }
+  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }

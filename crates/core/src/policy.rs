@@ -358,6 +358,11 @@ pub struct Policy<'sink, S: Sink> {
     grants: Vec<Grant>,
     sink: &'sink mut S,
     denials: usize,
+    /// Whether the last line put to [`Policy::plan_needs_approval_held`] was answered by the
+    /// person's trust of its directory and by nothing else ([RUN-5]).
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    answered_by_directory_trust: bool,
     /// Which paths the user vouched for.
     trust: crate::file_authority::FileAuthority,
     /// The working directory this turn runs in.
@@ -559,6 +564,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: Vec::new(),
             sink,
             denials: 0,
+            answered_by_directory_trust: false,
             path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
@@ -1222,6 +1228,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             grants: self.grants.clone(),
             sink: record,
             denials: 0,
+            answered_by_directory_trust: false,
             path_requests_unasked: self.path_requests_unasked,
             trust: self.trust.clone(),
             root: self.root.clone(),
@@ -6054,6 +6061,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             && self.trust.integrity_of("") == Some(Integrity::Trusted)
     }
 
+    /// Whether the last line put to [`Policy::plan_needs_approval_held`] was let through by the
+    /// person's trust of its directory ([RUN-5]) and not by a vouched entry, a remembered line, a
+    /// rule or the audited table.
+    ///
+    /// What the caller reads to run that line, and only that line, with the network closed: the
+    /// answer was given about a line the sandbox holds, so the sandbox has to hold it. Never a
+    /// property of what a program printed.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    pub fn answered_by_directory_trust(&self) -> bool {
+        self.answered_by_directory_trust
+    }
+
     /// Whether the plan runs where the person's standing answers were given.
     ///
     /// The workspace root, and only it. Everything a person settled in advance is spelled against
@@ -6288,6 +6308,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         requested: &[&str],
         containment: Containment,
     ) -> bool {
+        self.answered_by_directory_trust = false;
         if plan.releases_private() {
             self.allow(
                 "approval",
@@ -6403,6 +6424,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // for: private input, a scope, an unconfined start, a write, another tree, an assignment, a
         // rule and a fed reference all asked before it was reached. What remains is a plain line.
         if containment == Containment::Held && self.confined_lines_were_allowed(plan) {
+            self.answered_by_directory_trust = true;
             self.allow(
                 "approval",
                 "the line is held to a closed sandbox in the directory the person trusted, and \
@@ -10991,6 +11013,35 @@ five
         assert!(
             policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
             "a yes that did not say so answered for a held line"
+        );
+    }
+
+    /// RUN-5: the caller closes the network for a line the person's trust of the directory let
+    /// through, so the policy says when that was the road: not for a line a rule let through
+    /// first, not for a line that asked, and not left over from the line before.
+    #[test]
+    fn only_a_line_the_trust_of_the_directory_let_through_is_said_to_be_answered_by_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        assert!(!policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held));
+        assert!(
+            policy.answered_by_directory_trust(),
+            "a line the trust of the directory let through was not said to be"
+        );
+        assert!(policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Unknown));
+        assert!(
+            !policy.answered_by_directory_trust(),
+            "the answer for the line before was carried to a line that asked"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]))
+            .with_permissions(permissions(&[], &[], &["Bash(make *)"]));
+        assert!(!policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held));
+        assert!(
+            !policy.answered_by_directory_trust(),
+            "a line the person's own rule let through was said to be answered by their trust of \
+             the directory, so it would run with a network they approved it without"
         );
     }
 

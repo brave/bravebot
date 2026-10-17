@@ -235,11 +235,16 @@ settings and the person's answer and never from what a stage wrote or printed:
   and the root is still trusted. The answer is keyed to that one directory ([RUN-8](#RUN-8)), so a
   worktree is its own directory with its own answer and `/cd` leaves the answer behind;
 - the yes said so. A directory trusted before the question said so, one trusted by a kept answer
-  written before it, a session that resumed with a map from before it, a one-shot run given
-  `--trust-workspace` and the desktop interface (whose question does not say so, and which does not act
-  on a kept answer that does) keep asking about every line until the person answers a question that says so, and the newest kept answer decides;
+  written before it, a session that resumed from a record that kept no answer or kept one for another
+  directory (a resume brings back the answer its own record kept, for the directory it was given in and no
+  other, in the terminal, in lines and in the desktop interface), a one-shot run given
+  `--trust-workspace` and a client of the bridge whose reply did not say it showed the sentence (the host's
+  `trust.reply` takes no such field) keep asking about every line until the person answers a question that
+  says so, and the newest kept answer decides. The desktop window shows the sentence the terminal draws,
+  which the bridge hands it, and says so in its reply (`confinedLines`); a kept answer settles a window
+  as it settles the terminal, with the answer about confined lines where its entry says so;
 - every stage runs confined in `workspace-write` or a stricter mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)),
-  with the network closed for the session and none of the stages keeping it ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
+  with no stage keeping the network ([SANDBOX-20](../sandboxing.md#SANDBOX-20)),
   on a platform that holds a `.git` back from every stage, which is macOS and not Linux or Windows
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back;
 - nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
@@ -251,6 +256,15 @@ settings and the person's answer and never from what a stage wrote or printed:
   `node`, `env` and the like, known by the file its program resolved to). An argument is read as the words
   in it, so `sh -c "./gen.sh a"` and `node --require=./hook.js` name the file they run. A stage could have
   written it, and under this answer the line that runs it would not ask.
+
+A line this answer lets through starts with the network closed for that line, whatever the session's
+setting: the answer was given about a line the sandbox holds, and a stage with the network open is not held
+([SANDBOX-20](../sandboxing.md#SANDBOX-20)). Under a closed session that is what every stage already had. Under
+an open one the stages of that line are started as the closed setting would start them, and the next line is
+built from the session's setting again. A line any other road let through, or a person approved at the prompt,
+keeps the network it was approved with. A program that needs the network and is not one of the three kinds that
+keep it fails with the sandbox's refusal, and the planner is told in the `run` description that a plain line in
+a trusted directory runs without it.
 
 It stops the asking and nothing else. What the line prints is quarantined as an unproven line's is, and
 no label is raised ([RUN-4](#RUN-4)). The setting that restores asking for every line is the rule
@@ -264,9 +278,10 @@ plant a hook that runs unconfined, and a line that asks for more than that is as
 The conditions are the ones the paragraph above lists because each is a way a line gets past what the person
 was told, and none can be decided by anything a stage did.
 
-**What it costs.** The default network is open ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), so until a person
-or a settings file closes it no line is held and nothing changes; running one line with the network closed is
-not specified here. A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with
+**What it costs.** A plain line that needs the network and is none of the three kinds that keep it
+([SANDBOX-20](../sandboxing.md#SANDBOX-20)), such as a one-off `python3 -c` that fetches a page, fails in a trusted
+directory where it asked and succeeded before, and the planner has to run it with `unconfined` to get the network
+back, which asks. A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with
 `-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
 list does not name does the same for a file that is not executable.
 
@@ -293,6 +308,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_held_line_in_a_directory_whose_yes_said_so_does_not_ask`
+`verified-by: bravebot_core::policy::only_a_line_the_trust_of_the_directory_let_through_is_said_to_be_answered_by_it`
+`verified-by: bravebot_agent::confined_lines_open_network::a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_approved_line_does_not`
 `verified-by: bravebot_core::policy::a_line_run_on_the_trust_of_its_directory_prints_untrusted_output`
 `verified-by: bravebot_core::policy::a_held_line_that_asks_for_more_than_a_plain_line_still_asks`
 `verified-by: bravebot_core::policy::an_ask_rule_still_asks_about_a_held_line`

@@ -125,6 +125,57 @@ pub fn record_to_keep(
     record_for(home, profile, directory)
 }
 
+/// The rule trusting the workspace records: the root, which covers everything beneath it.
+///
+/// Shared by every front end that turns a yes into a map, the terminal, a session in lines and the
+/// desktop's bridge, so none has a reading of TRUST-7 of its own.
+///
+/// One place, so the map reached without the question is the map a yes would have written. It does
+/// not say that confined lines run without asking ([`trusting_the_workspace_and_confined_lines`]):
+/// only a yes to a question that said so does, so a map reached any other way keeps asking about
+/// every line (RUN-5).
+pub fn trusting_the_workspace(directory: &Path) -> bravebot_core::trust::TrustStore {
+    let mut trust = crate::workspace::trust_store(directory);
+    trust.trust(".");
+    trust
+}
+
+/// [`trusting_the_workspace`] for a yes to the startup question as it is asked now, which says that
+/// confined lines in the directory run without asking, or for a kept answer whose entry says so
+/// ([`Kept::confined_lines`]).
+pub fn trusting_the_workspace_and_confined_lines(
+    directory: &Path,
+) -> bravebot_core::trust::TrustStore {
+    let mut trust = trusting_the_workspace(directory);
+    trust.allow_confined_lines();
+    trust
+}
+
+/// The map a kept answer starts a session with: the rule a yes writes, and the answer about
+/// confined lines only where the entry says the question said so.
+pub fn trusting_as_kept(directory: &Path, kept: &Kept) -> bravebot_core::trust::TrustStore {
+    // An entry about the root of the worktree is honoured for a package below it (TRUST-23), but its
+    // answer covers the root it was given for and not a directory beneath it (RUN-5).
+    let about_this_directory = kept.root == directory
+        || matches!(
+            (kept.root.canonicalize(), directory.canonicalize()),
+            (Ok(kept), Ok(here)) if kept == here
+        );
+    match kept.confined_lines && about_this_directory {
+        true => trusting_the_workspace_and_confined_lines(directory),
+        false => trusting_the_workspace(directory),
+    }
+}
+
+/// The sentence a startup question carries about what a yes grants beyond the files (RUN-5), in the
+/// words every front end shows, so the one a person reads in a window is the one a terminal draws.
+///
+/// A front end whose question carries it, and tells the session so, gets the answer about confined
+/// lines when the person says yes ([`trusting_the_workspace_and_confined_lines`]).
+pub fn confined_lines_notice() -> &'static str {
+    bravebot_i18n::t!(trust_directory_confined_lines)
+}
+
 /// Write a yes down in `record` for later sessions, and say whether it was written, or `None` where
 /// nothing is kept: a no, or a yes with no record to write it in ([`record_to_keep`]).
 ///

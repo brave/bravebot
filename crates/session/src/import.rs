@@ -174,6 +174,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         timing: Default::default(),
         todos: Default::default(),
         trust: None,
+        confined_lines_in: None,
         programs: Vec::new(),
         directories: Vec::new(),
         build: None,

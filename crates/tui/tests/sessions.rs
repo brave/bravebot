@@ -5560,3 +5560,120 @@ fn resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory() {
         );
     }
 }
+
+/// RUN-5, TRUST-6: a resume brings back the answer that confined lines run without asking, in the
+/// directory it was given for and nowhere else, whichever turn wrote the record.
+///
+/// The controls make each half attributable: a map whose yes did not say so comes back without it,
+/// so the answer is not read from the rules; and the same record resumed in another directory
+/// comes back without it, so the answer does not follow a move.
+#[test]
+fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
+    let scratch = Scratch::new("confined-lines-resume");
+    let conversation = a_conversation();
+    let trusting = |saying: bool| {
+        let mut trust = bravebot_agent::workspace::trust_store(&scratch.project);
+        trust.trust(".");
+        if saying {
+            trust.allow_confined_lines();
+        }
+        trust
+    };
+    let snapshot = conversation.snapshot();
+    let (spend, timing, todos, programs) =
+        (BTreeMap::new(), BTreeMap::new(), a_plan(), a_program_list());
+    macro_rules! standing {
+        ($trust:expr) => {
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 1,
+                spend: &spend,
+                timing: &timing,
+                model: None,
+                todos: &todos,
+                asides: &[],
+                trust: $trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            }
+        };
+    }
+
+    let said = trusting(true);
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save("first", standing!(&said));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a resume lost the answer its own user gave"
+    );
+    assert!(
+        !record
+            .trust_map(scratch.project.join("moved"))
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "the answer followed the record into another directory"
+    );
+
+    let unsaid = trusting(false);
+    let mut other = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    other.save("first", standing!(&unsaid));
+    let record = sessions::load(&scratch.project, other.id()).expect("the session loads");
+    assert!(
+        !record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a yes that did not say so came back as one that did"
+    );
+
+    // A later turn, written back to the record it came from, carries the answer of that turn.
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    macro_rules! next {
+        ($trust:expr) => {
+            sessions::Continuation {
+                conversation: &snapshot,
+                prompt: "second",
+                tokens: 1,
+                model: "test-model",
+                trust: $trust,
+                begins: 0,
+                ends: 0,
+                prompt_at: None,
+                rewind: &[],
+            }
+        };
+    }
+    assert!(resumed.save_continuation(record.clone(), next!(&unsaid)));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        !record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a later turn kept an answer its map no longer held"
+    );
+    assert!(resumed.save_continuation(record.clone(), next!(&said)));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a later turn did not write the answer its map held"
+    );
+}

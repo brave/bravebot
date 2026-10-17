@@ -1721,10 +1721,11 @@ account installed, rustup's `cargo` and a Homebrew `git` among them. Under bypas
 therefore still write a file the account owns, name it `curl`, and have a later stage keep the
 network by running it.
 
-A person's trust of a directory lets a line run there without asking only where the session's network is
-closed and no stage of the line keeps it for one of the three reasons above ([RUN-5](tools/run.md#RUN-5)).
-Under `open` no line qualifies. Running one line with the network closed while the session's is open is not
-specified.
+A person's trust of a directory lets a line run there without asking only where no stage of the line keeps the
+network for one of the three reasons above ([RUN-5](tools/run.md#RUN-5)). The line is then started with the
+network closed for that line alone: under `open` its stages are built as `closed` builds them, which is the
+decision above read for one line with no reason carried, and the session's setting is not changed. A line that was
+asked about and approved, or answered by another road, has the setting it was approved under.
 
 The setting is read from `--run-network <open|closed>`, from `run.network` in a settings file, and
 from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and

@@ -486,6 +486,29 @@ impl TrustStore {
     pub fn allows_confined_lines(&self) -> bool {
         self.confined_lines_in.as_deref() == Some(self.root.as_str())
     }
+
+    /// The directory the person's yes said confined lines run without asking in, as the map names
+    /// it, for a record that keeps the answer beside the rules ([RUN-5]). `None` where no yes said
+    /// so, or where the map has moved to another directory, which says nothing about this one.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    pub fn confined_lines_root(&self) -> Option<&str> {
+        self.allows_confined_lines().then_some(self.root.as_str())
+    }
+
+    /// Take back the answer a record kept ([`TrustStore::confined_lines_root`]), where it was given
+    /// for the directory this map works in and for no other.
+    ///
+    /// Compared byte for byte with the root this map was made for: a record resumed in a directory
+    /// renamed or moved since, or in another spelling of it, gets no answer and asks, since the
+    /// person said it about the first. The rules do not behave so, and that is the safe direction
+    /// for this one. A record that kept none, or one written before the question said so, restores
+    /// nothing.
+    pub fn restore_confined_lines(&mut self, kept: Option<&str>) {
+        if kept == Some(self.root.as_str()) {
+            self.allow_confined_lines();
+        }
+    }
 }
 
 /// Whether a name is a full path rather than one read under a working directory.
