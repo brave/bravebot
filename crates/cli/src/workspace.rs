@@ -97,7 +97,7 @@ pub(crate) fn unattended_trust_with(
     }
     match bravebot_agent::trusted::honoured(home, profile, root) {
         Some(bravebot_agent::trusted::Honoured { store, kept }) => (
-            bravebot_tui::trust_prompt::trusting_the_workspace(root),
+            bravebot_tui::trust_prompt::trusting_as_kept(root, &kept),
             Some(t!(
                 cli_trusting_kept,
                 directory = kept.root.display().to_string(),

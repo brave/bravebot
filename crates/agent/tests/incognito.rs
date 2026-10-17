@@ -395,7 +395,7 @@ fn no_trusted_directory_is_written_down() {
         return;
     };
 
-    assert!(!store.keep(&identity, "a-private-session", 1));
+    assert!(!store.keep(&identity, "a-private-session", 1, false));
     assert!(
         !store.path().exists(),
         "an incognito session kept an answer in the record"
@@ -425,7 +425,7 @@ fn a_yes_is_offered_no_record_to_be_kept_in() {
         "a private session was offered a record to keep its yes in"
     );
     assert_eq!(
-        bravebot_agent::trusted::keep_a_yes(Some(&found), true, "a-private-session"),
+        bravebot_agent::trusted::keep_a_yes(Some(&found), true, "a-private-session", false),
         Some(false)
     );
     assert!(

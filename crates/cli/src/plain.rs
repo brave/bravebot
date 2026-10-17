@@ -958,7 +958,7 @@ fn opening_trust<R: BufRead, W: Write>(
                 path = path
             )
         });
-        return Some(bravebot_tui::trust_prompt::trusting_the_workspace(root));
+        return Some(bravebot_tui::trust_prompt::trusting_as_kept(root, &kept));
     }
 
     // What is being asked about first and the question last, as every question here is put: a
@@ -969,6 +969,7 @@ fn opening_trust<R: BufRead, W: Write>(
         root.display().to_string(),
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
+        t!(trust_directory_confined_lines).to_string(),
     ];
     match &keeping {
         Some((store, _)) => lines.extend([
@@ -987,7 +988,7 @@ fn opening_trust<R: BufRead, W: Write>(
     let trust = bravebot_tui::trust_prompt::trust_for(answer, root)?;
 
     let yes = answer == bravebot_tui::trust_prompt::Answer::Trust;
-    if let Some(kept) = bravebot_agent::trusted::keep_a_yes(keeping.as_ref(), yes, session) {
+    if let Some(kept) = bravebot_agent::trusted::keep_a_yes(keeping.as_ref(), yes, session, true) {
         let directory = root.display().to_string();
         let path = keeping.as_ref().map_or(String::new(), |(store, _)| {
             store.path().display().to_string()
@@ -2000,6 +2001,35 @@ mod tests {
         );
     }
 
+    /// RUN-5. The question in lines says that confined lines run without asking before it takes the
+    /// answer, and only a yes records that it did.
+    #[test]
+    fn the_question_in_lines_says_what_a_yes_grants_about_confined_lines() {
+        let asked = |answer: &str| {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            let trust = opening_trust(
+                &mut asking,
+                PermissionMode::Ask,
+                std::path::Path::new("/work"),
+                |_| None,
+                |_| None,
+                "",
+            );
+            (trust, String::from_utf8(asking.output).expect("text"))
+        };
+        let (yes, shown) = asked("y\n");
+        assert!(
+            shown.contains("without asking"),
+            "the line did not say so: {shown}"
+        );
+        assert!(yes.expect("a session").allows_confined_lines());
+        let (no, _) = asked("n\n");
+        assert!(!no.expect("a session").allows_confined_lines());
+    }
+
     /// The mode that asks about nothing answers this question along with the rest, and answers it
     /// yes, so the question is not put at all. The decision is the interface's; what is pinned here
     /// is that a session in lines consults it rather than asking anyway, and before any remembered
@@ -2118,7 +2148,10 @@ mod tests {
             return;
         };
         let store = bravebot_agent::trusted::Store::new(home, root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let (trust, said) = opening_with_a_record("", home, root);
 
@@ -2160,7 +2193,10 @@ mod tests {
         let package = root.join("packages/api");
         std::fs::create_dir_all(&package).expect("a package");
         let store = bravebot_agent::trusted::Store::new(home, root);
-        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
 
         let (trust, said) = opening_with_a_record("", home, &package);
 

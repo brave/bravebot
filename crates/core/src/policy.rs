@@ -329,6 +329,24 @@ pub enum StyleOrigin {
     Project,
 }
 
+/// Whether the agent holds every stage of a line to a sandbox that leaves it nothing the person
+/// would be asked about: confined, with the network closed, and unable to write a repository's
+/// `.git` ([RUN-5]).
+///
+/// Said by the caller that builds the sandbox, because the plan holds programs and arguments and
+/// never how they will be started. Read from the compiled steps and the session's own settings,
+/// never from what a program printed.
+///
+/// [RUN-5]: ../../../docs/specs/tools/run.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Containment {
+    /// Nothing is said, or something is said against it. The line is not covered by a person's
+    /// trust of the directory.
+    Unknown,
+    /// Every stage is held as above.
+    Held,
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
@@ -5964,6 +5982,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             })
     }
 
+    /// Whether the person's trust of the workspace root said that lines held to a closed sandbox
+    /// run without asking, and this plan starts in that root ([RUN-5]).
+    ///
+    /// Three things, each from a person's answer or the session's own record of where it works: the
+    /// map says the yes that wrote it said so ([`TrustStore::allows_confined_lines`]), the root is
+    /// still trusted, and the line starts in the root and not a directory below it or beside it.
+    /// Nothing a program printed or wrote is read. False when no root is known, for the reason
+    /// [`Policy::runs_at_the_root`] is.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    fn confined_lines_were_allowed(&self, plan: &crate::command::Plan) -> bool {
+        self.runs_at_the_root(plan)
+            && self.trust.snapshot().allows_confined_lines()
+            && self.trust.integrity_of("") == Some(Integrity::Trusted)
+    }
+
     /// Whether the plan runs where the person's standing answers were given.
     ///
     /// The workspace root, and only it. Everything a person settled in advance is spelled against
@@ -6179,6 +6213,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         plan: &crate::command::Plan,
         requested: &[&str],
     ) -> bool {
+        self.plan_needs_approval_held(plan, requested, Containment::Unknown)
+    }
+
+    /// [`Policy::plan_needs_approval_requesting`] for a line the caller says how it will be held
+    /// ([`Containment`]).
+    ///
+    /// The fifth thing that may answer the question, and the last one asked: a person's trust of
+    /// the directory the line starts in, for a line that is held and asks for nothing the earlier
+    /// questions put to a person ([RUN-5]). It stops the asking and nothing else. The output stays
+    /// `(U,pub)`, since [`Policy::before_plan`] labels the line without having been told how the
+    /// question was answered.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    pub fn plan_needs_approval_held(
+        &mut self,
+        plan: &crate::command::Plan,
+        requested: &[&str],
+        containment: Containment,
+    ) -> bool {
         if plan.releases_private() {
             self.allow(
                 "approval",
@@ -6288,6 +6341,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     .to_string(),
             );
             return true;
+        }
+
+        // Past every question above, which is what keeps this answer to the line it was given
+        // for: private input, a scope, an unconfined start, a write, another tree, an assignment, a
+        // rule and a fed reference all asked before it was reached. What remains is a plain line.
+        if containment == Containment::Held && self.confined_lines_were_allowed(plan) {
+            self.allow(
+                "approval",
+                "the line is held to a closed sandbox in the directory the person trusted, and \
+                 their yes said such lines run without asking, no prompt"
+                    .to_string(),
+            );
+            return false;
         }
 
         if self.every_step_vouched(plan) {
@@ -10813,6 +10879,178 @@ five
             "the bare line was not covered, so the requesting one below proves nothing"
         );
         assert!(policy.plan_needs_approval_requesting(&plan, &["aws"]));
+    }
+
+    /// A project trusted by a yes that said confined lines run without asking, which is the map
+    /// the startup question writes once it says so (RUN-5).
+    fn trusting_and_allowing_confined_lines(distrusting: &[&str]) -> TrustStore {
+        let mut trust = trusting("/work", &["."], distrusting);
+        trust.allow_confined_lines();
+        trust
+    }
+
+    fn held_line_policy<'s>(
+        sink: &'s mut RecordingSink,
+        trust: TrustStore,
+    ) -> Policy<'s, RecordingSink> {
+        open_policy(sink)
+            .with_trust(trust)
+            .with_root(std::path::Path::new("/work"))
+    }
+
+    fn a_plain_line() -> crate::command::Plan {
+        plan_of(vec![step_named("make", &["test"])])
+    }
+
+    /// RUN-5: the person's trust of the directory answers a plain line that is held to a closed
+    /// sandbox. The two controls make the answer attributable: the same line with nothing said
+    /// about how it is held asks, and so does the same held line where the yes did not say so, so
+    /// neither the line nor the trust alone is what stopped the question.
+    #[test]
+    fn a_held_line_in_a_directory_whose_yes_said_so_does_not_ask() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        assert!(
+            !policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
+            "a held line in a directory whose yes said so was asked about"
+        );
+        assert!(
+            policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Unknown),
+            "a line nobody said was held ran unasked"
+        );
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting("/work", &["."], &[]));
+        assert!(
+            policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
+            "a yes that did not say so answered for a held line"
+        );
+    }
+
+    /// RUN-5: the answer stops the asking and raises no label, as every rule that answers a prompt
+    /// does. What the line prints is `(U,pub)`, so the planner reads a reference and not the bytes.
+    #[test]
+    fn a_line_run_on_the_trust_of_its_directory_prints_untrusted_output() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        let line = a_plain_line();
+        assert!(!policy.plan_needs_approval_held(&line, &[], Containment::Held));
+        policy.endorse_plan(&line);
+        let label = policy.before_plan(&line).expect("the line was endorsed");
+        assert!(
+            !label.is_trusted(),
+            "the trust of the directory labelled output trusted"
+        );
+        assert_eq!(label, Label::untrusted_private());
+    }
+
+    /// RUN-5: each thing the earlier questions put to a person is still put to one, with the
+    /// directory trusted and the line held. Every line below differs from the plain one in a single
+    /// way, so a failure names the question that stopped being asked.
+    #[test]
+    fn a_held_line_that_asks_for_more_than_a_plain_line_still_asks() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        let held = |policy: &mut Policy<'_, RecordingSink>, line: &crate::command::Plan| {
+            policy.plan_needs_approval_held(line, &[], Containment::Held)
+        };
+        assert!(
+            !held(&mut policy, &a_plain_line()),
+            "the control line asked"
+        );
+
+        assert!(
+            policy.plan_needs_approval_held(&a_plain_line(), &["aws"], Containment::Held),
+            "a scope was lent unasked"
+        );
+
+        let mut writing = a_plain_line();
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(held(&mut policy, &writing), "a write ran unasked");
+
+        let mut reading = step_named("make", &["test"]);
+        reading.routes = vec![crate::command::Route::Stdin {
+            path: std::path::PathBuf::from("/work/secret"),
+        }];
+        let mut fed = plan_of(vec![reading]);
+        fed.reads = vec![std::path::PathBuf::from("/work/secret")];
+        assert!(held(&mut policy, &fed), "private input ran unasked");
+
+        let mut assigned = step_named("make", &["test"]);
+        assigned.environment = vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())];
+        assert!(
+            held(&mut policy, &plan_of(vec![assigned])),
+            "an assignment ran unasked"
+        );
+
+        let mut referenced = a_plain_line();
+        referenced.stdin = Some(Label::untrusted_public());
+        assert!(
+            held(&mut policy, &referenced),
+            "a fed reference ran unasked"
+        );
+
+        let mut elsewhere = a_plain_line();
+        elsewhere.directory = std::path::PathBuf::from("/work/vendor");
+        assert!(
+            held(&mut policy, &elsewhere),
+            "the trust of the root covered a directory beneath it"
+        );
+    }
+
+    /// RUN-5 and PERM-2: a rule the person wrote says ask, and a matching ask rule prompts whatever
+    /// else would answer. The control is the same line without the rule.
+    #[test]
+    fn an_ask_rule_still_asks_about_a_held_line() {
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]))
+            .with_permissions(permissions(&[], &["Bash(*)"], &[]));
+        assert!(
+            policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
+            "an ask rule written to restore asking did not"
+        );
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, trusting_and_allowing_confined_lines(&[]));
+        assert!(!policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held));
+    }
+
+    /// RUN-5: the answer was about the directory the person trusted. A map that moved to another
+    /// directory leaves it behind, and a root the person has since distrusted is not one a held
+    /// line starts in unasked.
+    #[test]
+    fn the_answer_does_not_follow_a_move_and_does_not_outlive_the_trust() {
+        let mut moved = trusting_and_allowing_confined_lines(&[])
+            .rebased(std::path::Path::new("/other"), false);
+        // Trusted there by a rule of its own, so that only the answer about confined lines is
+        // what the move leaves behind.
+        moved.trust("/other");
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(moved)
+            .with_root(std::path::Path::new("/other"));
+        let mut line = a_plain_line();
+        line.directory = std::path::PathBuf::from("/other");
+        assert!(
+            policy.plan_needs_approval_held(&line, &[], Containment::Held),
+            "an answer about /work covered /other"
+        );
+
+        let mut withdrawn = trusting_and_allowing_confined_lines(&[]);
+        withdrawn.distrust(".");
+        let mut sink = RecordingSink::new();
+        let mut policy = held_line_policy(&mut sink, withdrawn);
+        assert!(
+            policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
+            "a root distrusted afterwards still answered"
+        );
+    }
+
+    /// RUN-5: no root known is no directory to check the answer against.
+    #[test]
+    fn a_held_line_asks_when_no_root_is_known() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_trust(trusting_and_allowing_confined_lines(&[]));
+        assert!(policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held));
     }
 
     /// SANDBOX-26: the same for a line remembered past the session. The record holds the line and

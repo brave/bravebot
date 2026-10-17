@@ -6994,7 +6994,10 @@ fn doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted() {
         return;
     };
     let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
-    assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+    assert!(
+        store.keep(&identity, "1-2", 7, false),
+        "the answer was not kept"
+    );
 
     let after = bravebot_started_in(&scratch.path, &cwd, CONFIGURED, &["doctor"]);
     let (stdout, stderr) = said(&after);
@@ -7271,7 +7274,10 @@ fn a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trus
         return;
     };
     let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
-    assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+    assert!(
+        store.keep(&identity, "1-2", 7, false),
+        "the answer was not kept"
+    );
 
     let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "read the notes"]);
 

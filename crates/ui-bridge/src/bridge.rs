@@ -1691,7 +1691,9 @@ impl Bridge {
         // The question is answered, so what it offered is spent. Offered only where the answer may
         // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
-        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named);
+        // The window's question does not say that confined lines run without asking, so its yes does
+        // not either, kept or not (RUN-5).
+        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, false);
 
         Ok(json!({ "trusted": trusted, "kept": kept }))
     }

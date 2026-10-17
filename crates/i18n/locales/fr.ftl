@@ -1262,6 +1262,10 @@ trust-directory-explained =
 trust-directory-regardless =
     Dans tous les cas, tout ce qui vient du web ou d'un fichier non fiable vous est encore
     montré avant d'être écrit.
+trust-directory-confined-lines =
+    Un oui permet aussi d'exécuter ici une commande sans la demander quand le bac à sable la
+    confine et que le réseau est fermé, ce qui n'est le cas que sur macOS pour l'instant. Tout ce
+    qui demande davantage est toujours demandé.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir
