@@ -395,8 +395,8 @@ fn a_skill_in_a_foreign_project_directory_is_offered() {
         );
         assert_eq!(body_of(&catalogue, name).trim(), "ported body");
         assert!(
-            catalogue.describe_for_prompt().contains(name),
-            "a skill in {dir}/skills was not advertised"
+            catalogue.search(name).0.iter().any(|s| s.name == name),
+            "a skill in {dir}/skills was not findable by search_skills"
         );
     }
 }
@@ -1218,8 +1218,23 @@ fn what_the_prompt_advertises_holds_no_bodies() {
         skills::discover(&mut policy, &workspace, Some(&home))
     };
 
-    let advertised = catalogue.describe_for_prompt();
-    assert!(advertised.contains("commit-style") && advertised.contains("how to commit"));
+    let (found, _) = catalogue.search("commit-style");
+    let skill = found
+        .first()
+        .expect("the skill was not found by search_skills");
+    assert_eq!(skill.name, "commit-style");
+    assert_eq!(skill.description, "how to commit");
+
+    // A definition naming the skill curates the catalogue, which lists it in full rather than
+    // leaving it for search_skills (SKILL-17), so the actual rendering a request carries is
+    // exercised here too: a body leaking into it would pass the search-based check above, which
+    // never touches `describe_for_prompt` at all.
+    let curated = catalogue.only(&["commit-style".to_string()]);
+    let advertised = curated.describe_for_prompt();
+    assert!(
+        advertised.contains("commit-style") && advertised.contains("how to commit"),
+        "the curated listing did not advertise the skill: {advertised}"
+    );
     assert!(
         !advertised.contains("THE-BODY-TEXT"),
         "the body was advertised: {advertised}"
@@ -1257,7 +1272,21 @@ fn an_argument_hint_reaches_the_interface_and_not_the_planner() {
         Some("<zebra-marker>")
     );
     assert_eq!(catalogue.get("plain").expect("offered").argument_hint, None);
-    let advertised = catalogue.describe_for_prompt();
+    let (found, _) = catalogue.search("hinted");
+    let skill = found
+        .first()
+        .expect("the skill was not found by search_skills");
+    assert_eq!(skill.name, "hinted");
+    assert!(
+        !skill.description.contains("zebra-marker"),
+        "the hint reached the description: {}",
+        skill.description
+    );
+
+    // Curated the way a definition naming the skill would (SKILL-17), so the actual rendering a
+    // request carries is exercised, not only the fields a search result is built from.
+    let curated = catalogue.only(&["hinted".to_string()]);
+    let advertised = curated.describe_for_prompt();
     assert!(advertised.contains("hinted"), "{advertised}");
     assert!(
         !advertised.contains("zebra-marker"),
@@ -1841,5 +1870,211 @@ fn a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name() {
     assert!(
         notices.is_empty(),
         "an entry the nested skill covered was counted: {notices:?}"
+    );
+}
+
+/// A skill of the user's own is never in the default listing, however many there are: only a
+/// built-in is (SKILL-17).
+///
+/// A directory of many skills is exactly what crowded the prompt before this clause existed,
+/// and that cost is removed by never putting the project's own skills in `describe_for_prompt`
+/// at all, not by bounding how many of them fit. Each one stays loadable by name: nothing here
+/// is dropped from the catalogue, only left off the default listing.
+#[test]
+fn describe_for_prompt_lists_only_built_in_skills() {
+    let scratch = Scratch::new("built-ins-only-by-default");
+    let project = scratch.workspace();
+    for n in 0..60 {
+        let name = format!("skill-{n:02}");
+        write_skill(
+            &project.join(".bravebot"),
+            &name,
+            &name,
+            "when the task calls for it",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    let advertised = catalogue.describe_for_prompt();
+    assert!(
+        advertised.contains("- loop: "),
+        "the built-in was not in the default listing: {advertised}"
+    );
+    for n in 0..60 {
+        let name = format!("skill-{n:02}");
+        assert!(
+            !advertised.contains(&name),
+            "a project skill was in the default listing: {name}"
+        );
+        assert!(
+            catalogue.get(&name).is_some(),
+            "a project skill left off the default listing stopped being loadable: {name}"
+        );
+    }
+}
+
+/// A description past the warn figure reaches the planner in full, wherever it is read from, and
+/// is only ever counted, never cut (SKILL-17).
+///
+/// A built-in's own listing and a `search_skills` result are the two places a description
+/// reaches the planner outside `load_skill`, so both are checked here against the same long
+/// text. The regression this guards is a cut reappearing on either path: the clause used to cut
+/// a description at a limit, and that is exactly what a maintainer asked removed in favour of a
+/// count.
+#[test]
+fn a_long_description_is_never_cut_and_is_counted() {
+    let scratch = Scratch::new("long-description-warned");
+    let project = scratch.workspace();
+    let tail = "ZEBRA-TAIL";
+    let long = format!("when the task is {} {tail}", "y".repeat(1_100));
+    write_skill(
+        &project.join(".bravebot"),
+        "verbose",
+        "verbose",
+        &long,
+        "THE-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    assert_eq!(
+        catalogue.long_descriptions(),
+        1,
+        "the long description was not counted"
+    );
+
+    let (found, more) = catalogue.search("verbose");
+    assert_eq!(more, 0);
+    let result = found
+        .first()
+        .expect("the long-description skill did not match its own name");
+    assert_eq!(
+        result.description, long,
+        "search_skills would have cut or changed the description"
+    );
+
+    assert_eq!(body_of(&catalogue, "verbose").trim(), "THE-BODY");
+
+    // Curated the way a definition naming the skill would (SKILL-17), so the actual rendering a
+    // request carries is exercised too, not only the fields a search result is built from.
+    let curated = catalogue.only(&["verbose".to_string()]);
+    let advertised = curated.describe_for_prompt();
+    assert!(
+        advertised.ends_with(&format!("{long}\n")),
+        "the curated listing cut or changed the description: {advertised}"
+    );
+}
+
+/// `Catalogue::search` matches a query word by word, case-insensitively, against a skill's name
+/// and its description, in SKILL-2 order, and caps how many it returns in one call (SKILL-17).
+#[test]
+fn search_matches_every_word_case_insensitively_and_caps_the_result() {
+    let scratch = Scratch::new("search-skills");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "commit-style",
+        "commit-style",
+        "How Commit messages are written here",
+        "body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "How a changelog entry is worded",
+        "body",
+    );
+    for n in 0..30 {
+        write_skill(
+            &project.join(".bravebot"),
+            &format!("broad-{n:02}"),
+            &format!("broad-{n:02}"),
+            "matches a broad query on its own name",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    // Case-insensitive, and every word of the query has to match.
+    let (found, more) = catalogue.search("COMMIT messages");
+    assert_eq!(more, 0);
+    assert_eq!(
+        found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["commit-style"]
+    );
+
+    // A word that is not in either the name or the description matches nothing.
+    let (none, _) = catalogue.search("commit nonexistentword");
+    assert!(none.is_empty(), "an unmatched word still matched: {none:?}");
+
+    // A blank query is not a search.
+    let (blank, _) = catalogue.search("   ");
+    assert!(blank.is_empty(), "a blank query matched something");
+
+    // A broad query returns exactly the cap, and says how many more there were past it.
+    let (broad, more) = catalogue.search("broad");
+    assert_eq!(broad.len(), 25, "the result was not held to the cap");
+    assert_eq!(
+        more, 5,
+        "the overflow count does not account for the rest of the matches"
+    );
+}
+
+/// A curated catalogue's search runs over the names a definition kept, not the ones it dropped
+/// (SKILL-17, DELEGATE-23): without this, a delegate denied a skill by name could still reach it
+/// by searching for it, which would make the curation a label rather than a boundary.
+#[test]
+fn a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list() {
+    let scratch = Scratch::new("curated-search-excludes");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "named",
+        "named",
+        "when to use named",
+        "body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "excluded",
+        "excluded",
+        "when to use excluded",
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    let curated = catalogue.only(&["named".to_string()]);
+    let (found, _) = curated.search("excluded");
+    assert!(
+        found.is_empty(),
+        "a curated catalogue's search still reached a skill its definition did not name"
+    );
+
+    let (still_found, _) = curated.search("named");
+    assert_eq!(
+        still_found.len(),
+        1,
+        "curation excluded the one skill it was supposed to keep"
     );
 }

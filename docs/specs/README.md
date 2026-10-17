@@ -33,7 +33,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [dropping.md](dropping.md) | `DROP` | 11 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 6 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
-| [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
+| [skills.md](skills.md) | `SKILL` | 15 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 15 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 32 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
@@ -99,6 +99,7 @@ the routing-versus-content split they share.
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
+| [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 3 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |

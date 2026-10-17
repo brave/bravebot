@@ -801,16 +801,40 @@ fn table(
         ),
         Tool::function(
             "load_skill",
-            "Read one of the skills listed for you. A skill is instructions the user wrote for a              kind of task. Load one before doing that kind of work, and follow what it says.              Only the names you were listed exist; there is no path to give and nothing else to              browse.",
+            "Read one of the skills listed for you, or one search_skills found. A skill is \
+             instructions the user wrote for a kind of task. Load one before doing that kind of \
+             work, and follow what it says. Only a name you were listed or that search_skills \
+             returned exists; there is no path to give.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "The name of a skill exactly as it was listed for you,                                         e.g. commit-style."
+                        "description": "The name of a skill exactly as it was listed for you \
+                                        or as search_skills returned it, e.g. commit-style."
                     }
                 },
                 "required": ["name"]
+            }),
+        ),
+        Tool::function(
+            "search_skills",
+            "Find a skill by a word or phrase, among skills of the user's own and the \
+             project's own that are not listed for you up front. Matches a skill whose name or \
+             description holds every word of the query, and returns each match's name and \
+             description in full. Load a match with load_skill before doing the kind of work it \
+             names.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "One or more words. A skill matches only where every \
+                                        word is in its name or its description, so a longer \
+                                        query narrows the search rather than widening it."
+                    }
+                },
+                "required": ["query"]
             }),
         ),
         Tool::function(

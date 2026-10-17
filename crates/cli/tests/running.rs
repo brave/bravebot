@@ -3286,6 +3286,34 @@ fn streamed(reply: &str) -> String {
     )
 }
 
+/// One streamed tool call, framed the way `streamed` frames a plain reply.
+#[cfg(unix)]
+fn streamed_tool_call(tool: &str, arguments: &str) -> String {
+    let frame = serde_json::json!({
+        "id": "one",
+        "object": "chat.completion.chunk",
+        "model": "reasons-only",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": tool, "arguments": arguments}
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
 /// One JSON response, framed.
 fn http(status: u16, body: &str) -> String {
     format!(
@@ -10568,11 +10596,11 @@ fn a_safe_run_loads_none_of_the_customizations_a_plain_one_loads() {
         )
     };
     let (asked, stderr, fired) = ordinary;
-    for word in [
-        "zebra-skill-words",
-        "zebra-definition-words",
-        "zebra-instruction-words",
-    ] {
+    // Not zebra-skill-words: a skill is never in the first request by default now (SKILL-17),
+    // loaded or not. Its exclusion from discovery is covered in bravebot_agent::tests::safe, and
+    // that --safe keeps it unreachable even through search_skills is covered end to end by
+    // a_safe_or_locked_run_finds_no_project_skill_with_search_skills below.
+    for word in ["zebra-definition-words", "zebra-instruction-words"] {
         assert!(
             asked.contains(word),
             "the control run never loaded {word}, so the safe run proves nothing: {asked}"
@@ -10596,11 +10624,7 @@ fn a_safe_run_loads_none_of_the_customizations_a_plain_one_loads() {
         .recv_timeout(Duration::from_secs(60))
         .expect("a safe run still reaches the model the settings named");
     let stderr = said(&output).1;
-    for word in [
-        "zebra-skill-words",
-        "zebra-definition-words",
-        "zebra-instruction-words",
-    ] {
+    for word in ["zebra-definition-words", "zebra-instruction-words"] {
         assert!(
             !asked.contains(word),
             "a safe run sent {word} to the planner: {asked}"
@@ -10740,15 +10764,65 @@ fn a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out() {
         .asked
         .recv_timeout(Duration::from_secs(60))
         .expect("a locked run still reaches the model the settings named");
-    for word in [
-        "zebra-skill-words",
-        "zebra-definition-words",
-        "zebra-instruction-words",
-    ] {
+    for word in ["zebra-definition-words", "zebra-instruction-words"] {
         assert!(!asked.contains(word), "a locked run sent {word}: {asked}");
     }
     assert!(!scratch.path.join("hook-fired").exists());
     assert!(said(&output).1.contains("Safe mode"));
+}
+
+/// The companion to the two tests above for the one customization they no longer drive to a
+/// word on the wire: a project skill is not in the default listing in any of the three runs
+/// (SKILL-17), so the only way left to show --safe and --locked still keep it out is to have the
+/// planner call search_skills and see what comes back.
+///
+/// The mock model always calls search_skills first and sends a plain reply once the result is in
+/// the conversation (detected by the request already carrying a `tool_calls` message), so every
+/// run makes exactly two requests whether or not the search finds anything.
+#[cfg(unix)]
+#[test]
+fn a_safe_or_locked_run_finds_no_project_skill_with_search_skills() {
+    let found_the_skill_by_searching = |name: &str, flag: Option<&str>| -> bool {
+        let gateway = a_gateway(r#"["tools"]"#, |body| {
+            match body.contains("\"tool_calls\"") {
+                false => streamed_tool_call("search_skills", r#"{"query":"zebra"}"#),
+                true => streamed("done"),
+            }
+        });
+        let scratch = a_home_full_of_customizations(name, &gateway);
+        let mut arguments = vec!["-p", "say something"];
+        if let Some(flag) = flag {
+            arguments.insert(0, flag);
+        }
+        bravebot(&scratch.path, AT_A_GATEWAY, &arguments);
+
+        let first = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the first request, asking the planner what to do");
+        assert!(
+            !first.contains("zebra-skill-words"),
+            "a project skill was advertised in the default listing: {first}"
+        );
+        let second = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the second request, carrying search_skills's result");
+        second.contains("zebra-skill-words")
+    };
+
+    assert!(
+        found_the_skill_by_searching("cli-running-search-ordinary", None),
+        "an ordinary run's search_skills did not find a project skill search_skills exists to find"
+    );
+    assert!(
+        !found_the_skill_by_searching("cli-running-search-safe", Some("--safe")),
+        "a safe run's search_skills found a skill from a directory --safe never reads"
+    );
+    assert!(
+        !found_the_skill_by_searching("cli-running-search-locked", Some("--locked")),
+        "a locked run's search_skills found a skill from a directory --locked never reads"
+    );
 }
 
 /// A session in lines started in `cwd` with `flag` among its arguments, which answers the trust

@@ -1411,6 +1411,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "repo_map" => Some("directory"),
         "lsp" => Some("path"),
         "load_skill" | "load_tool" => Some("name"),
+        "search_skills" => Some("query"),
         "fetch_url" => Some("url"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
@@ -2123,6 +2124,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         // that holds whatever the list said, and the trail then says why.
         "spawn_agent" => spawn_agent(policy, tools, reporter, &arguments),
         "load_skill" => load_skill(policy, tools.skills, &arguments),
+        "search_skills" => search_skills(policy, tools.skills, &arguments),
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
@@ -9528,11 +9530,12 @@ fn load_skill<S: Sink>(
     };
 
     let Some(skill) = skills.get(&name) else {
-        // The names are listed in the system prompt, so this is a mistake worth naming rather
-        // than a refusal worth explaining.
+        // A built-in is listed in the system prompt; the rest are found with search_skills
+        // (SKILL-17). Either way the name has to come from one of those two, so this is a
+        // mistake worth naming rather than a refusal worth explaining.
         return Produced::problem(format!(
-            "error: no skill named '{name}'. The skills available to you are listed for you; \
-             there are no others."
+            "error: no skill named '{name}'. Call search_skills to find one, or use a name you \
+             were listed or that search_skills already returned."
         ));
     };
 
@@ -9566,6 +9569,57 @@ fn load_skill<S: Sink>(
         produced.loaded = Some((skill.name.clone(), skill.runs_as.clone()));
     }
     produced
+}
+
+/// Find a skill by a word or phrase, among the ones a built-in's listing left out (SKILL-17).
+///
+/// `query` is routing, promoted the way `search`'s own `pattern` is: it only selects what to
+/// return out of a catalogue every entry of which already passed the trust gate at discovery,
+/// so nothing here reads untrusted content and nothing a directory wrote decides what matches.
+///
+/// A name and description a match returns are the words [`Catalogue::describe_for_prompt`]
+/// would have shown had the skill been a built-in, never cut, so this and the default listing
+/// read the planner the same way (SKILL-17).
+fn search_skills<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    skills: &crate::skills::Catalogue,
+    arguments: &Value,
+) -> Produced {
+    let Some(proposed) = argument(arguments, "query") else {
+        return Produced::problem("error: 'query' is required and must be a string");
+    };
+    let query = match policy.promote_confined_read("search_skills", "query", &proposed) {
+        Ok(query) => query,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    // Safe to read: promotion just proved this is (T,pub), and matching trusted text against
+    // trusted names and descriptions decides nothing an attacker steers.
+    let Ok(query) = query.into_trusted() else {
+        return Produced::problem("error: the query was not usable");
+    };
+    if query.trim().is_empty() {
+        return Produced::problem("error: 'query' must not be blank");
+    }
+
+    let (matches, more) = skills.search(&query);
+    if matches.is_empty() {
+        return Produced::new(
+            Labelled::trusted("No skill matched that search.".to_string()),
+            String::new(),
+            "no match".to_string(),
+        );
+    }
+    let mut text = String::new();
+    for skill in &matches {
+        text.push_str(&crate::skills::prompt_line(&skill.name, &skill.description));
+    }
+    let note = tally(matches.len(), "skill", "skills");
+    if more > 0 {
+        text.push_str(&format!(
+            "...and {more} more matched; a narrower query would show them.\n"
+        ));
+    }
+    Produced::new(Labelled::trusted(text), String::new(), note)
 }
 
 /// What follows a skill's body when it keeps other files beside its `SKILL.md`.
@@ -11234,6 +11288,7 @@ mod tests {
                 "lsp",
                 "spawn_processor",
                 "load_skill",
+                "search_skills",
                 "ask_user",
                 "run",
                 "job_output",
@@ -18926,6 +18981,92 @@ mod tests {
         assert!(
             failed && !other.contains(SKILL_FILE_MARKER),
             "a skill nobody loaded was reached: {other}"
+        );
+    }
+
+    /// `search_skills` refuses a missing or blank query, matches by name, and never cuts a
+    /// description, mirroring `load_skill`'s own argument handling (SKILL-17).
+    #[cfg(unix)]
+    #[test]
+    fn search_skills_matches_by_name_and_refuses_a_blank_query() {
+        let fixture = SkillFixture::new("skill-search");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        let produced = search_skills(&mut policy, &catalogue, &json!({}));
+        assert!(produced.failed, "a missing query was not refused");
+        assert_eq!(
+            told(&mut policy, &produced.text),
+            "error: 'query' is required and must be a string"
+        );
+
+        let produced = search_skills(&mut policy, &catalogue, &json!({ "query": "   " }));
+        assert!(produced.failed, "a blank query was not refused");
+        assert_eq!(
+            told(&mut policy, &produced.text),
+            "error: 'query' must not be blank"
+        );
+
+        let produced = search_skills(&mut policy, &catalogue, &json!({ "query": "notes" }));
+        assert!(!produced.failed, "a matching query was refused");
+        let said = told(&mut policy, &produced.text);
+        assert!(
+            said.contains("- notes: d") && !said.contains("- other: "),
+            "the query matched something other than the skill named notes: {said}"
+        );
+
+        let produced = search_skills(&mut policy, &catalogue, &json!({ "query": "no-such-word" }));
+        assert!(
+            !produced.failed,
+            "a search with no match was treated as an error"
+        );
+        assert_eq!(
+            told(&mut policy, &produced.text),
+            "No skill matched that search."
+        );
+    }
+
+    /// `search_skills` says how many further matches there were past the cap (FINDSKILL-4),
+    /// through the tool call itself rather than only through `Catalogue::search`, which this
+    /// line reads but does not render.
+    #[cfg(unix)]
+    #[test]
+    fn search_skills_says_how_many_more_matched_past_the_cap() {
+        let scratch = ArgumentsScratch::new("skill-search-cap");
+        let home = scratch.path.join("h");
+        for n in 0..30 {
+            let at = home.join(".bravebot/skills").join(format!("broad-{n:02}"));
+            std::fs::create_dir_all(&at).unwrap();
+            std::fs::write(
+                at.join("SKILL.md"),
+                "---\nname: broad\ndescription: matches a broad query\n---\nbody\n"
+                    .replace("broad\ndescription", &format!("broad-{n:02}\ndescription")),
+            )
+            .unwrap();
+        }
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            Some(&home.join(".bravebot")),
+            TrustStore::new("/work"),
+            bravebot_core::permissions::Permissions::default(),
+            &mut RecordingSink::new(),
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let produced = search_skills(&mut policy, &catalogue, &json!({ "query": "broad" }));
+        assert!(!produced.failed, "a broad query was refused");
+        let said = told(&mut policy, &produced.text);
+        assert!(
+            said.contains("...and 5 more matched"),
+            "the overflow line is missing or wrong: {said}"
         );
     }
 

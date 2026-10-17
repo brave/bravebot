@@ -17024,22 +17024,33 @@ fn a_missing_agents_file_is_not_an_error() {
     );
 }
 
-/// Only the name and description are advertised. A directory of long skills would otherwise fill
-/// a context that has room for the task instead, which is the whole point of load_skill.
+/// A skill of the user's own, unlike a built-in, is not in the system prompt by default (SKILL-17).
+/// It is found with `search_skills`, which advertises its name and description and not its body
+/// (LOAD-3), and only then loaded by name like any other skill (LOAD-1): nothing a directory
+/// holds is unreachable just because the catalogue did not advertise it up front, and a query
+/// matches the skill wired into a real turn rather than only `Catalogue::search` called directly.
+///
+/// The skill's name avoids the words a tool's own description already uses as an example (such
+/// as "commit-style" in `load_skill`'s), so a match in the request body is the skill and not the
+/// tool definition sent with every request.
 #[test]
-fn a_skill_body_stays_out_of_the_context_until_it_is_asked_for() {
-    let scratch = Scratch::new("skills-listed");
+fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked() {
+    let scratch = Scratch::new("skills-search-then-load");
     write_project_skill(
         &scratch.path,
-        "commit-style",
-        "commit-style",
+        "wombat-polish",
+        "wombat-polish",
         "THE-BODY-NOBODY-ASKED-FOR",
     );
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-
-    let (endpoint, received) = serve(&reply_with("the answer"));
-    let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("search_skills", r#"{"query":"wombat-polish"}"#),
+        tool_request("load_skill", r#"{"name":"wombat-polish"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
 
     turns::run_with_trust(
@@ -17053,14 +17064,83 @@ fn a_skill_body_stays_out_of_the_context_until_it_is_asked_for() {
     )
     .expect("turn runs");
 
-    let body = received.recv().expect("request body");
+    let first = received.recv().expect("first request");
     assert!(
-        body.contains("commit-style") && body.contains("when to use it"),
-        "the skill was not advertised at all"
+        !first.contains("wombat-polish"),
+        "a project skill was advertised in the system prompt by default: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("wombat-polish") && second.contains("when to use it"),
+        "search_skills did not return the project skill a query matched: {second}"
     );
     assert!(
-        !body.contains("THE-BODY-NOBODY-ASKED-FOR"),
-        "the body was sent without being asked for: {body}"
+        !second.contains("THE-BODY-NOBODY-ASKED-FOR"),
+        "search_skills sent the body without being asked to load it: {second}"
+    );
+
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("THE-BODY-NOBODY-ASKED-FOR"),
+        "load_skill did not return the body of a skill search_skills found: {third}"
+    );
+}
+
+/// SKILL-17: a skill with a description long enough to warn about is said, as a count, and the
+/// person is still shown the skill's name nowhere in that notice (SKILL-6).
+#[test]
+fn a_long_description_is_said_as_a_count_and_never_cut() {
+    let scratch = Scratch::new("skills-long-description-notice");
+    let tail = "ZEBRA-TAIL";
+    let long = format!("when the task is {} {tail}", "y".repeat(1_100));
+    let dir = scratch.path.join(".bravebot/skills/verbose");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: verbose\ndescription: {long}\n---\n\nTHE-BODY\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("search_skills", r#"{"query":"verbose"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&long),
+        "search_skills cut a description instead of returning it whole: {second}"
+    );
+
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|notice| notice.contains("1 skill") && notice.contains("not shortened")),
+        "the person was not told a description was long: {:?}",
+        outcome.notices
+    );
+    assert!(
+        !outcome.notices.iter().any(|notice| notice.contains(tail)),
+        "the notice repeated the description back: {:?}",
+        outcome.notices
     );
 }
 
@@ -32173,10 +32253,13 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
     );
 }
 
-/// A definition naming skills gives its delegate those and no others: the rest of what the turn
-/// found is neither listed for it nor loadable by it, where a definition naming none is offered
-/// the whole of it and one whose line is empty is offered nothing. A name nothing found selects
-/// nothing and is said, so a misspelt one does not read to its author as a skill the delegate has.
+/// A definition naming skills gives its delegate those and no others, listed directly: the rest
+/// of what the turn found is neither listed for it nor loadable by it, not even through
+/// search_skills. A definition naming none leaves its delegate the default any turn gets
+/// (SKILL-17): a built-in listed, every other skill the turn found reachable with search_skills
+/// and loadable by name. One whose line is empty is offered nothing, built-in included. A name
+/// nothing found selects nothing and is said, so a misspelt one does not read to its author as a
+/// skill the delegate has.
 #[test]
 fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     let scratch = Scratch::new("delegate-definition-skills");
@@ -32241,7 +32324,13 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
                 reply_with("reviewed"),
             ],
         ),
-        ("REVIEW-WITH-EVERY-SKILL", vec![reply_with("reviewed")]),
+        (
+            "REVIEW-WITH-EVERY-SKILL",
+            vec![
+                tool_request("load_skill", r#"{"name":"commit-style"}"#),
+                reply_with("reviewed"),
+            ],
+        ),
         ("REVIEW-WITH-NO-SKILLS", vec![reply_with("reviewed")]),
     ]);
     let config = config_for(&endpoint);
@@ -32300,13 +32389,18 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     );
 
     let plain = delegate("REVIEW-WITH-EVERY-SKILL");
-    let plain = plain
+    let first_plain = plain
         .first()
         .expect("the delegate whose definition names none never ran");
     assert_eq!(
-        listed(plain),
-        ["review-style", "commit-style", "loop"],
-        "a definition naming no skills was not offered every skill the turn found"
+        listed(first_plain),
+        ["loop"],
+        "a definition naming no skills was listed something beyond the built-in by default"
+    );
+    let last_plain = plain.last().expect("asked at least once");
+    assert!(
+        last_plain.contains("COMMIT-STYLE-BODY"),
+        "a definition naming no skills still could not load a skill it never excluded: {last_plain}"
     );
 
     let bare = delegate("REVIEW-WITH-NO-SKILLS");
@@ -32516,9 +32610,10 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     }
 }
 
-/// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it does
-/// to a delegate. The turn is listed those and no others and cannot load another, where a definition
-/// naming none is offered every skill the turn found and one whose line is empty is offered nothing.
+/// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it
+/// does to a delegate. The turn is listed those and no others, and cannot load another, not even
+/// through search_skills. A definition naming none leaves the turn the default any turn gets
+/// (SKILL-17), and one whose line is empty is offered nothing, built-in included.
 #[test]
 fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
     let home = Scratch::new("address-skills-home");
@@ -32595,12 +32690,22 @@ fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
     let plain = run(
         "plain",
         "ADDRESSED-EVERY-SKILL",
-        vec![reply_with("reviewed")],
+        vec![
+            tool_request("load_skill", r#"{"name":"commit-style"}"#),
+            reply_with("reviewed"),
+        ],
     );
     assert_eq!(
         listed(&plain[0]),
-        ["review-style", "commit-style", "loop"],
-        "a definition naming no skills was not offered every skill the turn found"
+        ["loop"],
+        "a definition naming no skills was listed something beyond the built-in by default"
+    );
+    assert!(
+        plain
+            .last()
+            .expect("asked at least once")
+            .contains("COMMIT-STYLE-BODY"),
+        "a definition naming no skills still could not load a skill it never excluded"
     );
 
     let bare = run("bare", "ADDRESSED-NO-SKILLS", vec![reply_with("reviewed")]);

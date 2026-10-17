@@ -2339,6 +2339,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             None => catalogue,
         };
 
+        // Said once, before the preamble is built, rather than per call to `load_skill` or
+        // `search_skills`: a count of how many descriptions are long is one fact about the turn,
+        // not one about each later call (SKILL-17).
+        let long_descriptions = catalogue.long_descriptions();
+        if long_descriptions > 0 {
+            notices.push(crate::skills::Notice::descriptions_are_long(
+                long_descriptions,
+            ));
+        }
+
         // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
         // LSP-5 asks the person before it does, so a session that never asks about a symbol never
         // prompts about a server.
