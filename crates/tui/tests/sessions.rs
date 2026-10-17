@@ -5623,6 +5623,36 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
         "the answer followed the record into another directory"
     );
 
+    // A rewind point holds the answer of the turn before it, in its own directory only.
+    let mut point_before = a_point_before_turn_two(&conversation);
+    point_before.trust = trusting(true);
+    let point = bravebot_session::sessions::RewindPoint {
+        coverage: Default::default(),
+        snapshot: point_before,
+        backups: Vec::new(),
+        prompt: "second".to_string(),
+    };
+    let mut pointed = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    pointed.save(
+        "first",
+        Standing {
+            rewind: &[point],
+            ..standing!(&said)
+        },
+    );
+    let record = sessions::load(&scratch.project, pointed.id()).expect("the session loads");
+    let back = record.rewind_points(&scratch.project);
+    assert_eq!(back.len(), 1, "the point was not written down");
+    assert!(
+        back[0].snapshot.trust.allows_confined_lines(),
+        "a rewind lost the answer its own turn started with"
+    );
+    let moved = record.rewind_points(scratch.project.join("moved"));
+    assert!(
+        !moved[0].snapshot.trust.allows_confined_lines(),
+        "the answer followed a rewind point into another directory"
+    );
+
     let unsaid = trusting(false);
     let mut other = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
     other.save("first", standing!(&unsaid));

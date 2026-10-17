@@ -280,9 +280,8 @@ was told, and none can be decided by anything a stage did.
 
 **What it costs.** A plain line that needs the network and is none of the three kinds that keep it
 ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), such as a one-off `python3 -c` that fetches a page, fails in a trusted
-directory where it asked and succeeded before, and the planner has to run it with `unconfined` to get the network
-back, which asks. A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with
-`-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
+directory whose yes said so, and getting the network back means running it with `unconfined`, which asks.
+A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with `-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
 list does not name does the same for a file that is not executable.
 
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
