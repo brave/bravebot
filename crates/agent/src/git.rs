@@ -913,6 +913,16 @@ enum Spec<'a> {
     Range(&'a str, &'a str),
 }
 
+/// The one revision a query takes: a range or a pair is declined, as the query it was given to
+/// says.
+fn single(query: Query, text: &str) -> Result<&str, Declined> {
+    match spec(text)? {
+        Spec::One(one) => Ok(one),
+        Spec::Range(..) => Err(Declined::TakesOne(query, text.trim().to_owned())),
+        Spec::Pair(..) => Err(Declined::PairIsForDiff(text.trim().to_owned())),
+    }
+}
+
 /// Everything after the first `:` is a path, read as a name whatever it holds, so only the
 /// revision before it is read for git's syntax.
 fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
@@ -1313,15 +1323,25 @@ impl Repository {
         }
     }
 
-    fn info(&self, id: &oid) -> Result<Info, Declined> {
-        let data = self.object(id, Kind::Commit)?;
-        let commit =
-            CommitRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
-        let parents = if self.shallow.contains(id) {
+    /// A commit read from the bytes `object` returned for it. It borrows them, so the caller keeps
+    /// both.
+    fn parse_commit(data: &[u8]) -> Result<CommitRef<'_>, Declined> {
+        CommitRef::from_bytes(data, HashKind::Sha1).map_err(|_| Declined::Unreadable)
+    }
+
+    /// A commit's parents, none for a shallow one: it is read as a root, as git reads it.
+    fn parents_of(&self, id: &oid, commit: &CommitRef<'_>) -> Vec<ObjectId> {
+        if self.shallow.contains(id) {
             Vec::new()
         } else {
             commit.parents().collect()
-        };
+        }
+    }
+
+    fn info(&self, id: &oid) -> Result<Info, Declined> {
+        let data = self.object(id, Kind::Commit)?;
+        let commit = Self::parse_commit(&data)?;
+        let parents = self.parents_of(id, &commit);
         let time = commit.committer().map(|c| c.seconds()).unwrap_or(0);
         Ok(Info {
             tree: commit.tree(),
@@ -1705,10 +1725,7 @@ impl Repository {
             }
         }
         if page.shown == 0 && !out.timed_out {
-            out.text.line(&match request.skip {
-                0 => "(no commits match)".to_owned(),
-                skip => format!("(no commits match past the first {skip})"),
-            });
+            nothing_past(out, request.skip, "commits match");
         }
         Ok(None)
     }
@@ -1750,8 +1767,7 @@ impl Repository {
     /// show` indents it.
     fn log_entry(&self, id: &oid, messages: bool) -> Result<Vec<String>, Declined> {
         let data = self.object(id, Kind::Commit)?;
-        let commit =
-            CommitRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
+        let commit = Self::parse_commit(&data)?;
         let (name, day) = match commit.author() {
             Ok(author) => {
                 let (seconds, offset) = when(author.time().ok(), author.seconds());
@@ -1778,13 +1794,7 @@ impl Repository {
     fn tags(&self, out: &mut Out<'_>, request: &Request<'_>) -> Result<Option<usize>, Declined> {
         let tip = match request.revision {
             None => None,
-            Some(text) => match spec(text)? {
-                Spec::One(one) => Some(self.commit_of(one, out)?),
-                Spec::Range(..) => {
-                    return Err(Declined::TakesOne(Query::Tags, text.trim().to_owned()));
-                }
-                Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
-            },
+            Some(text) => Some(self.commit_of(single(Query::Tags, text)?, out)?),
         };
         let mut tags = Vec::new();
         for name in self.tag_names(out.deadline)? {
@@ -1827,10 +1837,7 @@ impl Repository {
             out.text.line(&line);
         }
         if start == end {
-            out.text.line(&match request.skip {
-                0 => "(no tags match)".to_owned(),
-                skip => format!("(no tags match past the first {skip})"),
-            });
+            nothing_past(out, request.skip, "tags match");
         }
         Ok((end < total).then_some(end))
     }
@@ -1912,13 +1919,7 @@ impl Repository {
             return Err(Declined::SearchNeedsPattern);
         };
         let text = request.revision.unwrap_or("HEAD");
-        let one = match spec(text)? {
-            Spec::One(one) => one,
-            Spec::Range(..) => {
-                return Err(Declined::TakesOne(Query::Search, text.trim().to_owned()));
-            }
-            Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
-        };
+        let one = single(Query::Search, text)?;
         let commit = self.commit_of(one, out)?;
         let tree = self.info(&commit)?.tree;
         let mut search = Search {
@@ -1928,10 +1929,7 @@ impl Repository {
         };
         let next = self.search_tree(out, request, &mut search, tree, "", 0)?;
         if search.page.shown == 0 && next.is_none() && !out.timed_out {
-            out.text.line(&match request.skip {
-                0 => "(no matches)".to_owned(),
-                skip => format!("(no matches past the first {skip})"),
-            });
+            nothing_past(out, request.skip, "matches");
         }
         Ok(next)
     }
@@ -1971,12 +1969,7 @@ impl Repository {
                 // A link's target and a submodule's commit are not a file's lines, and `git grep`
                 // over a tree searches neither.
                 EntryKind::Blob | EntryKind::BlobExecutable
-                    if search.filter.is_none_or(|filter| {
-                        path == filter
-                            || path
-                                .strip_prefix(filter)
-                                .is_some_and(|rest| rest.starts_with('/'))
-                    }) =>
+                    if search.filter.is_none_or(|filter| inside(&path, filter)) =>
                 {
                     self.search_blob(out, request, search, entry.id, &path)?
                 }
@@ -2058,13 +2051,7 @@ impl Repository {
         filter: Option<&str>,
     ) -> Result<(), Declined> {
         let text = request.revision.unwrap_or("HEAD");
-        let one = match spec(text)? {
-            Spec::One(one) => one,
-            Spec::Range(..) => {
-                return Err(Declined::TakesOne(Query::Show, text.trim().to_owned()));
-            }
-            Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
-        };
+        let one = single(Query::Show, text)?;
         let resolved = self.resolve(one, out.deadline, out.withheld)?;
         if resolved.gitlink {
             let path = resolved.path.unwrap_or_default();
@@ -2097,13 +2084,8 @@ impl Repository {
         filter: Option<&str>,
     ) -> Result<(), Declined> {
         let data = self.object(&id, Kind::Commit)?;
-        let commit =
-            CommitRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
-        let parents: Vec<ObjectId> = if self.shallow.contains(&id) {
-            Vec::new()
-        } else {
-            commit.parents().collect()
-        };
+        let commit = Self::parse_commit(&data)?;
+        let parents = self.parents_of(&id, &commit);
         out.text.line(&format!("commit {}", id.to_hex()));
         if parents.len() > 1 {
             let ids: Vec<String> = parents
@@ -2904,6 +2886,14 @@ fn escaped(bytes: &[u8]) -> Cow<'_, str> {
     }
 }
 
+/// The line for a page with nothing on it: `what` is the end of "(no ...)", as in "commits match".
+fn nothing_past(out: &mut Out<'_>, skip: usize, what: &str) {
+    out.text.line(&match skip {
+        0 => format!("(no {what})"),
+        skip => format!("(no {what} past the first {skip})"),
+    });
+}
+
 fn message(out: &mut Out<'_>, message: &[u8]) {
     let text = String::from_utf8_lossy(message);
     for line in text.trim_end().lines() {
@@ -2918,12 +2908,14 @@ fn in_scope(path: &str, filter: Option<&str>) -> bool {
     let Some(filter) = filter else {
         return true;
     };
+    inside(path, filter) || inside(filter, path)
+}
+
+/// Whether `path` is the filter or below it.
+fn inside(path: &str, filter: &str) -> bool {
     path == filter
         || path
             .strip_prefix(filter)
-            .is_some_and(|rest| rest.starts_with('/'))
-        || filter
-            .strip_prefix(path)
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
@@ -4538,6 +4530,18 @@ mod tests {
         assert_eq!(
             repository.answer(&asked, &|_| false).map(|a| a.text),
             Ok("(no tags match past the first 5)\n".to_owned())
+        );
+    }
+
+    /// A revision whose history holds no tag says so, without the "past the first" a skip adds.
+    #[test]
+    fn a_revision_whose_history_holds_no_tag_lists_none() {
+        let (h, _, _, _) = branchy("tags-none");
+        assert_eq!(
+            h.repo
+                .ask(Query::Tags, Some(&h.first.to_hex().to_string()), None)
+                .map(|a| a.text),
+            Ok("(no tags match)\n".to_owned())
         );
     }
 
