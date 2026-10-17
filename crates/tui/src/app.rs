@@ -2161,6 +2161,9 @@ fn adopt_settings(
     session.adopt_panel();
     session.adopt_caffeinate();
     session.away.adopt(settings.away_summary_enabled());
+    session
+        .away
+        .adopt_idle(settings.away_summary_idle_seconds());
     // A background job belongs to the session here and ends with it, except where nothing may
     // outlive the process that wrote it (RUN-15).
     if !bravebot_core::incognito::engaged() {

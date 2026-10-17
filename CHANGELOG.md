@@ -1,5 +1,6 @@
 ## [0.16.0](https://github.com/brave/bravebot/releases/tag/v0.16.0)
 
+ - Added the `awaySummaryIdleSeconds` setting, which changes how long the terminal has to be unfocused after a turn before the automatic recap. ([#1580](https://github.com/brave/bravebot/issues/1580))
  - Added `/hunks`, which lists the hunks the last turn wrote and puts one back as it was before the turn, leaving the rest of the file alone. ([#1568](https://github.com/brave/bravebot/issues/1568))
  - Added `/note`, which saves a note in the session record without sending it to the model. The resume search and `bravebot sessions search` look in notes too. ([#2468](https://github.com/brave/bravebot/issues/2468))
  - Added a list of background sessions grouped by state when `bravebot sessions` runs in a terminal, where Enter attaches to the session under the cursor. Piped output and `--json` print lines as before. ([#1545](https://github.com/brave/bravebot/issues/1545))
