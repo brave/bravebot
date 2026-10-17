@@ -364,7 +364,7 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
 
 // The events the agent sends, folded by the window's own reducer, read by the word both places draw.
 function liveSession() {
-  const { apply } = load('src/renderer/App.tsx')
+  const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
     live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
