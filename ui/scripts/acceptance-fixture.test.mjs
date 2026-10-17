@@ -10,12 +10,15 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import {
+  agentInfo,
   eventsFor,
   idA,
   idB,
   installAcceptanceBridge,
   installBridge,
   makeProfile,
+  oneModelList,
+  threeModelList,
 } from './acceptance-fixture.mjs'
 
 const plain = (value) => JSON.parse(JSON.stringify(value))
@@ -229,4 +232,14 @@ test('done finishes the turn of the session it names, with the reply it is given
   assert.equal(emitted[1].session, 's-bbbb')
   assert.equal(emitted[1].data.id, 'bbbb')
   assert.equal(emitted[1].data.reply, 'Another reply.')
+})
+
+test('the shared answers survive being sent to Electron and name a default model they list', () => {
+  for (const value of [agentInfo, threeModelList, oneModelList]) assert.deepEqual(plain(value), value)
+  for (const list of [threeModelList, oneModelList]) {
+    assert.ok(list.models.some((model) => model.id === list.defaultModel), 'the default model is one of the models')
+  }
+  assert.equal(threeModelList.models.filter((model) => model.premium).length, 1)
+  assert.ok(threeModelList.models.some((model) => !model.capabilities.includes('tools')), 'one model offers no tools')
+  assert.equal(oneModelList.models.length, 1)
 })

@@ -109,6 +109,8 @@ matter:
   files written by redirections. `drive-ux-acceptance`, `drive-bot-history` and
   `drive-conversation-workflow` build their profile and install their bridge replies through
   `scripts/acceptance-fixture.mjs`, so a method the bridge gains is added to the fixture once.
+  The same module holds the `agent.info` and `models.list` answers that `drive-visual`,
+  `drive-perf`, `drive-shown` and `drive-session-list` send.
 - `node scripts/drive-secure-files.mjs`: real preview and memory IPC, symlink rejection,
   edit conflicts, history deletion and bot recreation, without model calls. To verify packaging,
   build with `node scripts/package.mjs`, then set `SECURE_FILES_APP` to the packaged executable

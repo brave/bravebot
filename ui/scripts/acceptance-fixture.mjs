@@ -3,6 +3,11 @@
 //
 // `makeProfile` writes into fresh temporary directories, and the drivers launch with
 // `--user-data-dir=<profile>`, so the app's own state is not the person's.
+//
+// The values at the bottom are test data the other mocked-bridge drivers (`drive-visual`,
+// `drive-perf`, `drive-shown` and `drive-session-list`) repeat. A driver passes them to its own
+// `app.evaluate` as an argument, because Playwright serialises that function and its body cannot
+// refer to anything exported here.
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -221,4 +226,25 @@ export function eventsFor(app) {
       session,
     )
   return { emit, done }
+}
+
+/** The `agent.info` answer of `drive-visual`, `drive-perf` and `drive-shown`. */
+export const agentInfo = { configured: true, build: '0.9.0 (abc1234)', version: '1' }
+
+/** The `models.list` answer of `drive-visual` and `drive-perf`: a premium model and a text-only one. */
+export const threeModelList = {
+  defaultModel: 'sample/fast',
+  warnings: [],
+  models: [
+    { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] },
+    { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1000000, capabilities: ['text', 'tools'] },
+    { id: 'other/small', name: 'Small model', provider: 'Other', premium: false, contextWindow: 32000, capabilities: ['text'] },
+  ],
+}
+
+/** The `models.list` answer of `drive-shown` and `drive-session-list`. */
+export const oneModelList = {
+  defaultModel: 'sample/fast',
+  warnings: [],
+  models: [{ id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] }],
 }
