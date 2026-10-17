@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
 
 const output = process.env.VISUAL_OUTPUT || join(tmpdir(), 'bravebot-visual')
 mkdirSync(output, { recursive: true })
@@ -32,7 +33,7 @@ try {
   page.setDefaultTimeout(6000)
   page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
 
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC, info, models }) => {
     const now = Math.floor(Date.now() / 1000)
     const rows = [
       { id: idA, title: 'Refactor the session store and add migration tests', updated: now - 60 * 4 },
@@ -51,13 +52,9 @@ try {
       { kind: 'assistant', text: 'The store keeps one lock for both halves, so a slow read holds up every write.\n\n## Plan\n\n1. Split the lock into a **read** side and a **write** side.\n2. Move the migration into `migrate.ts` and cover it with tests.\n\n```ts\nexport function open(path: string): Store {\n  const store = new Store(path)\n  store.migrate()\n  return store\n}\n```\n\n| Step | Risk |\n| --- | --- |\n| Split lock | Low |\n| Migration | Medium |\n\n> Reads stay consistent because each one takes a snapshot.\n\nSee [store.ts](src/store.ts) and the [design notes](https://example.com/notes).' },
     ]
     replace('bravebot:request', async (_, method, p = {}) => {
-      if (method === 'agent.info') return { ok: { configured: true, build: '0.9.0 (abc1234)', version: '1' } }
+      if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: globalThis.visual.rows ?? rows } }
-      if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [
-        { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] },
-        { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1000000, capabilities: ['text', 'tools'] },
-        { id: 'other/small', name: 'Small model', provider: 'Other', premium: false, contextWindow: 32000, capabilities: ['text'] },
-      ] } }
+      if (method === 'models.list') return { ok: models }
       if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
       if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows.find((r) => r.id === p.id), started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: p.id === idA ? said : [], todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') { emit('turn.started', { turn: 2 }, p.session); return { ok: { turn: 2 } } }
@@ -74,7 +71,7 @@ try {
     replace('bravebot:files:choose-attachments', () => ['src/store.ts', 'src/migrate.ts', 'tests/store.test.ts', 'docs/a-deliberately-long-file-name-that-has-to-truncate.md', 'package.json'].map((path, i) => ({ id: 'att-' + i, path, bytes: 100 + i })))
     replace('bravebot:files:search', () => ({ paths: ['src/store.ts'], incomplete: false }))
     replace('bravebot:files:preview', (_, session, path) => ({ path, text: 'export const store = 1\n', truncated: false }))
-  }, { directory, idA, idB, idC })
+  }, { directory, idA, idB, idC, info: agentInfo, models: threeModelList })
 
   const emit = (event, data, session = 's-' + idA) => app.evaluate((_, v) => globalThis.visual.emit(v.event, v.data, v.session), { event, data, session })
   const settle = () => page.waitForTimeout(450)
