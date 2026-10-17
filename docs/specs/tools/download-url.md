@@ -46,6 +46,8 @@ the end means a failed download cannot destroy a file a person approved replacin
 `verified-by: bravebot_agent::turn::a_download_saves_every_byte_exactly`
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
 `verified-by: bravebot_agent::turn::a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved`
+`verified-by: bravebot_agent::turn::a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file`
+`verified-by: bravebot_agent::turn::a_download_the_person_stops_leaves_the_destination_alone_and_no_staging_file`
 
 <a id="DOWNLOAD-2"></a>
 ### DOWNLOAD-2: the host is asked about as a fetch's is, and the destination every time
@@ -66,6 +68,9 @@ is shown as an overwrite. Nothing is sent before it is answered, and a decline s
 `verified-by: bravebot_agent::turn::a_declined_destination_sends_no_request_and_leaves_the_file`
 `verified-by: bravebot_agent::turn::a_download_from_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_download_redirected_to_another_host_saves_nothing`
+`verified-by: bravebot_agent::turn::a_download_sends_no_accept_preference_of_its_own`
+`verified-by: bravebot_agent::turn::an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked`
+`verified-by: bravebot_agent::turn::a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_it`
 
 <a id="DOWNLOAD-3"></a>
 ### DOWNLOAD-3: the file is recorded as not vouched for, and the server's words go to the person only
@@ -81,6 +86,7 @@ and given to the planner it is the one channel [FETCH-6](fetch-url.md#FETCH-6) c
 
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
 `verified-by: bravebot_agent::tools::a_content_type_is_shown_without_anything_a_terminal_would_obey`
+`verified-by: bravebot_agent::turn::a_download_tells_the_planner_its_status_and_size_and_the_person_a_cleaned_content_type`
 
 <a id="DOWNLOAD-4"></a>
 ### DOWNLOAD-4: the size cap is a settings value, and a body over it saves nothing

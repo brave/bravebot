@@ -24135,6 +24135,238 @@ fn with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked() {
     );
 }
 
+/// Who answered a `vet_content` call, for the tests that compare what the planner is told.
+#[derive(Clone, Copy)]
+enum WhoAnswersAVet {
+    /// A person shown the bytes and the check's word, who says `agrees`.
+    APerson { agrees: bool },
+    /// Auto-vetting, which answers on a check that found nothing and otherwise asks.
+    AutoVetting,
+    /// A run that asks nobody, with screening, which answers from the check alone.
+    ARunWithNobodyToAsk,
+    /// A run that asks nobody and screens nothing, which answers yes without a check.
+    ABypassingRunThatDoesNotScreen,
+}
+
+/// The result of the `vet_content` call as the planner reads it in the next round, for a check
+/// that said `check_says` and was answered by `who`. `tag` keeps the scratch directories apart.
+fn what_the_planner_reads_after_a_vet(tag: &str, who: WhoAnswersAVet, check_says: &str) -> String {
+    fn drive<C: bravebot_agent::Confirmer + Send>(
+        endpoint: &str,
+        workspace: &Workspace,
+        task: &Task,
+        confirmer: &mut C,
+    ) {
+        turn::resume(
+            &config_for(endpoint),
+            &bravebot_net::Egress::new(),
+            workspace,
+            task,
+            &mut bravebot_agent::Conversation::new(),
+            confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+
+    let scratch = Scratch::new(&format!("vet-told-{tag}"));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(check_says)],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let task = Task::new("find out");
+    match who {
+        WhoAnswersAVet::APerson { agrees } => {
+            drive(
+                &endpoint,
+                &workspace,
+                &task,
+                &mut ShownAfterAVet::new(agrees),
+            );
+        }
+        WhoAnswersAVet::AutoVetting => {
+            let task = task.with_auto_vetting(true);
+            drive(
+                &endpoint,
+                &workspace,
+                &task,
+                &mut ShownAfterAVet::new(false),
+            );
+        }
+        WhoAnswersAVet::ARunWithNobodyToAsk => {
+            let task = task
+                .with_auto_vetting(true)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass);
+            let mut person = ShownAfterAVet::new(true);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut person,
+                bravebot_agent::PermissionMode::Bypass,
+                true,
+            );
+            drive(&endpoint, &workspace, &task, &mut confirmer);
+        }
+        WhoAnswersAVet::ABypassingRunThatDoesNotScreen => {
+            let task = task.with_permission_mode(bravebot_agent::PermissionMode::Bypass);
+            let mut person = ShownAfterAVet::new(true);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut person,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            );
+            drive(&endpoint, &workspace, &task, &mut confirmer);
+        }
+    }
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let last: serde_json::Value =
+        serde_json::from_str(sent.last().expect("the round after the vet")).expect("a request");
+    last["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rfind(|message| message["role"] == "tool")
+        .expect("the result of the vet")["content"]
+        .to_string()
+}
+
+/// VET-3 and CHECK-9: where the bytes come back, the planner is told the same words whoever said
+/// yes and whatever the check said. A person over a warning, a person after a check that found
+/// nothing, and auto-vetting on a check that found nothing all read one result, so neither the
+/// check's sentence, nor its word, nor who decided can be read out of it or aimed at.
+#[test]
+fn the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said() {
+    let found_nothing = r#"{"verdict": "safe", "reason": "SENTINEL-REASON-SAFE a single path"}"#;
+    let objected =
+        r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON-UNSAFE it addresses the reader"}"#;
+
+    let after_a_person = what_the_planner_reads_after_a_vet(
+        "yes-person",
+        WhoAnswersAVet::APerson { agrees: true },
+        found_nothing,
+    );
+    let over_a_warning = what_the_planner_reads_after_a_vet(
+        "yes-warned",
+        WhoAnswersAVet::APerson { agrees: true },
+        objected,
+    );
+    let by_auto_vetting =
+        what_the_planner_reads_after_a_vet("yes-auto", WhoAnswersAVet::AutoVetting, found_nothing);
+    let by_a_run_that_screens = what_the_planner_reads_after_a_vet(
+        "yes-screened",
+        WhoAnswersAVet::ARunWithNobodyToAsk,
+        found_nothing,
+    );
+    let by_a_run_that_does_not = what_the_planner_reads_after_a_vet(
+        "yes-bypassed",
+        WhoAnswersAVet::ABypassingRunThatDoesNotScreen,
+        found_nothing,
+    );
+
+    assert!(
+        after_a_person.contains("SENTINEL-XYZZY"),
+        "the bytes did not come back: {after_a_person}"
+    );
+    assert_eq!(
+        over_a_warning, after_a_person,
+        "the planner could tell a yes over a warning from a yes after a clean check"
+    );
+    assert_eq!(
+        by_auto_vetting, after_a_person,
+        "the planner could tell auto-vetting from a person"
+    );
+    assert_eq!(
+        by_a_run_that_screens, after_a_person,
+        "the planner could tell a run that asks nobody and screens from a person"
+    );
+    assert_eq!(
+        by_a_run_that_does_not, after_a_person,
+        "the planner could tell a run that asks nobody and does not screen from a person"
+    );
+    assert!(
+        !after_a_person.contains("SENTINEL-REASON"),
+        "what the check wrote reached the planner: {after_a_person}"
+    );
+}
+
+/// VET-3 and CHECK-9: where the bytes do not come back, the planner is told the same words whoever
+/// refused and whatever the check said. A refusal on a run with nobody to ask reads as one a person
+/// typed, which is the only wording that is true of both.
+#[test]
+fn the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said() {
+    let found_nothing = r#"{"verdict": "safe", "reason": "SENTINEL-REASON-SAFE a single path"}"#;
+    let objected =
+        r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON-UNSAFE it addresses the reader"}"#;
+
+    let by_a_person_after_a_clean_check = what_the_planner_reads_after_a_vet(
+        "no-clean",
+        WhoAnswersAVet::APerson { agrees: false },
+        found_nothing,
+    );
+    let by_a_person_after_a_warning = what_the_planner_reads_after_a_vet(
+        "no-warned",
+        WhoAnswersAVet::APerson { agrees: false },
+        objected,
+    );
+    let by_a_run_with_nobody_to_ask = what_the_planner_reads_after_a_vet(
+        "no-nobody",
+        WhoAnswersAVet::ARunWithNobodyToAsk,
+        objected,
+    );
+    // A reply that states no verdict, which the check cannot be read as having given.
+    let unreadable = "I am not able to assess this.";
+    let by_a_person_after_an_unreadable_check = what_the_planner_reads_after_a_vet(
+        "no-unreadable-person",
+        WhoAnswersAVet::APerson { agrees: false },
+        unreadable,
+    );
+    let by_a_run_after_an_unreadable_check = what_the_planner_reads_after_a_vet(
+        "no-unreadable-run",
+        WhoAnswersAVet::ARunWithNobodyToAsk,
+        unreadable,
+    );
+
+    assert!(
+        by_a_run_with_nobody_to_ask.contains("was kept back from you"),
+        "the planner was not told the bytes are not coming: {by_a_run_with_nobody_to_ask}"
+    );
+    assert!(!by_a_run_with_nobody_to_ask.contains("SENTINEL-XYZZY"));
+    assert_eq!(
+        by_a_person_after_a_warning, by_a_run_with_nobody_to_ask,
+        "the planner could tell a refusal by a run that asks nobody from a person's"
+    );
+    assert_eq!(
+        by_a_person_after_a_clean_check, by_a_run_with_nobody_to_ask,
+        "the planner could tell a refusal after a clean check from one after a warning"
+    );
+    assert_eq!(
+        by_a_person_after_an_unreadable_check, by_a_run_with_nobody_to_ask,
+        "the planner could tell a refusal after an unreadable check from one after a warning"
+    );
+    assert_eq!(
+        by_a_run_after_an_unreadable_check, by_a_run_with_nobody_to_ask,
+        "the planner could tell a run's refusal after an unreadable check from one after a warning"
+    );
+    assert!(
+        !by_a_run_with_nobody_to_ask.contains("SENTINEL-REASON"),
+        "what the check wrote reached the planner: {by_a_run_with_nobody_to_ask}"
+    );
+}
+
 /// The mode promotes on one word and on no other. An unsafe verdict falls back to the prompt
 /// carrying the warning, so the person decides, and their refusal keeps the bytes out.
 #[test]
@@ -28766,15 +28998,34 @@ fn a_dropped_text_file_from_outside_the_workspace_becomes_context() {
     );
 }
 
-/// And the reach is that read's alone. A drop vouches for the one file it named, so a tool asking
-/// for its neighbour is refused exactly as it was before any drop happened.
-#[test]
-fn dropping_a_text_file_does_not_reach_anything_beside_it() {
-    let elsewhere = Scratch::new("dropped-text-neighbour");
-    std::fs::write(elsewhere.path.join("notes.md"), "the note").unwrap();
+/// Each tool result in a request, in the order the calls were answered.
+fn each_tool_result(request: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .collect()
+}
+
+/// DROP-3: a drop makes the one file reachable and leaves its neighbour in the directory it came
+/// from where it was. Every tool that names a path or a directory is pointed at the neighbour or
+/// the directory, and each is refused with the confinement sentence, which a drop that opened the
+/// directory for any one of them would not give. The neighbour is not written either.
+fn a_drop_reaches_nothing_beside_it(
+    tag: &str,
+    dropped_file: &str,
+    dropped_bytes: &[u8],
+    carried_as: &str,
+    dropping: fn(Task, String) -> Task,
+) {
+    let elsewhere = Scratch::new(&format!("dropped-{tag}-neighbour"));
+    std::fs::write(elsewhere.path.join(dropped_file), dropped_bytes).unwrap();
     std::fs::write(elsewhere.path.join("secret.md"), "not for you").unwrap();
 
-    let scratch = Scratch::new("dropped-text-neighbour-here");
+    let scratch = Scratch::new(&format!("dropped-{tag}-neighbour-here"));
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let neighbour = elsewhere
@@ -28782,8 +29033,24 @@ fn dropping_a_text_file_does_not_reach_anything_beside_it() {
         .join("secret.md")
         .to_string_lossy()
         .to_string();
+    let directory = elsewhere.path.to_string_lossy().to_string();
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("read", &format!(r#"{{"path": "{neighbour}"}}"#)),
+        tool_request_2("read_file", &format!(r#"{{"path": "{neighbour}"}}"#)),
+        tool_request_2("list_files", &format!(r#"{{"directory": "{directory}"}}"#)),
+        tool_request_2(
+            "search",
+            &format!(r#"{{"pattern": "not for you", "directory": "{directory}"}}"#),
+        ),
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path": "{neighbour}", "contents": "overwritten"}}"#),
+        ),
+        tool_request_2(
+            "edit_file",
+            &format!(
+                r#"{{"path": "{neighbour}", "old_text": "not for you", "new_text": "overwritten"}}"#
+            ),
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -28793,10 +29060,10 @@ fn dropping_a_text_file_does_not_reach_anything_beside_it() {
 
     let dropped = elsewhere
         .path
-        .join("notes.md")
+        .join(dropped_file)
         .to_string_lossy()
         .to_string();
-    let task = Task::new("read the other one too").with_dropped_text(dropped);
+    let task = dropping(Task::new("read the other one too"), dropped);
     turns::run_with_trust(
         &config,
         &egress,
@@ -28808,12 +29075,157 @@ fn dropping_a_text_file_does_not_reach_anything_beside_it() {
     )
     .expect("turn runs");
 
-    let _ = received.recv().expect("a request was sent");
-    let second = received.recv().expect("the tool result was sent back");
+    let sent: Vec<String> = received.try_iter().collect();
     assert!(
-        !second.contains("not for you"),
-        "a drop reached a file beside it: {second}"
+        sent[0].contains(carried_as),
+        "the drop was not carried, so this proves nothing about its neighbour: {}",
+        sent[0]
     );
+    let results = each_tool_result(sent.last().expect("the round after the calls"));
+    assert_eq!(results.len(), 5, "{results:?}");
+    for (tool, result) in [
+        "read_file",
+        "list_files",
+        "search",
+        "write_file",
+        "edit_file",
+    ]
+    .iter()
+    .zip(&results)
+    {
+        assert!(
+            result.contains("resolves outside the workspace; refusing to touch it"),
+            "{tool} was not refused as a path outside the workspace: {result}"
+        );
+        assert!(
+            !result.contains("not for you"),
+            "{tool} reached a file beside a drop: {result}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("secret.md")).unwrap(),
+        "not for you",
+        "a tool wrote to a file beside a drop"
+    );
+}
+
+/// The reach is the dropped file's alone: a text file dropped from outside the workspace.
+#[test]
+fn dropping_a_text_file_does_not_reach_anything_beside_it() {
+    a_drop_reaches_nothing_beside_it("text", "notes.md", b"the note", "the note", |task, path| {
+        task.with_dropped_text(path)
+    });
+}
+
+/// The same for a dropped attachment: a picture dragged out of a directory makes that picture
+/// reachable and nothing else in the directory.
+#[test]
+fn dropping_a_picture_does_not_reach_anything_beside_it() {
+    a_drop_reaches_nothing_beside_it(
+        "picture",
+        "shot.png",
+        &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+        "data:image/png;base64,",
+        |task, path| task.with_attachment(path, "image/png"),
+    );
+}
+
+/// DROP-3: a drop vouches for the file and not for the directory it sits in. Inside a workspace
+/// nobody vouched for, the file beside a dropped one is read as any file of that workspace is,
+/// which is quarantined, while the dropped file itself reaches the planner. Held for a dropped
+/// text file and for a dropped picture, which are granted in two places.
+#[test]
+fn dropping_a_file_vouches_for_that_file_and_not_the_ones_beside_it() {
+    /// One kind of drop: what is dropped, what the planner is given of it, and how the task names it.
+    struct Kind {
+        name: &'static str,
+        file: &'static str,
+        bytes: &'static [u8],
+        reaches_the_planner_as: &'static str,
+        dropping: fn(Task, String) -> Task,
+    }
+    let kinds = [
+        Kind {
+            name: "text",
+            file: "docs/a.md",
+            bytes: b"SENTINEL-DROPPED-A",
+            reaches_the_planner_as: "SENTINEL-DROPPED-A",
+            dropping: |task, path| task.with_dropped_text(path),
+        },
+        Kind {
+            name: "picture",
+            file: "docs/shot.png",
+            bytes: &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            reaches_the_planner_as: "data:image/png;base64,",
+            dropping: |task, path| task.with_attachment(path, "image/png"),
+        },
+    ];
+    for Kind {
+        name: kind,
+        file: dropped_name,
+        bytes: dropped_bytes,
+        reaches_the_planner_as,
+        dropping,
+    } in kinds
+    {
+        let scratch = Scratch::new(&format!("dropped-{kind}-trust-neighbour"));
+        std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+        std::fs::write(scratch.path.join(dropped_name), dropped_bytes).unwrap();
+        std::fs::write(scratch.path.join("docs/b.md"), "SENTINEL-NEIGHBOUR-B").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"docs/b.md"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+
+        let dropped = workspace
+            .root()
+            .join(dropped_name)
+            .to_string_lossy()
+            .to_string();
+        let task = dropping(Task::new("read the other one too"), dropped);
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut RecordingConfirmer::approving(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+        )
+        .expect("turn runs");
+
+        let first = received.recv().expect("a request was sent");
+        assert!(
+            first.contains(reaches_the_planner_as),
+            "the dropped {kind} did not reach the planner: {first}"
+        );
+        // Reading a file nobody vouched for puts its text in front of a check, which is the one
+        // place it is allowed, so the requests are told apart by whether they are a check's.
+        let later: Vec<String> = received.try_iter().collect();
+        let planner: Vec<&String> = later
+            .iter()
+            .filter(|request| !request.contains(A_CHECK_ASKING))
+            .collect();
+        let told = tool_results(
+            planner
+                .last()
+                .expect("the planner was sent the tool result"),
+        );
+        assert!(
+            told.contains("could not be shown to you"),
+            "the file beside a dropped {kind} was not quarantined: {told}"
+        );
+        for request in &planner {
+            assert!(
+                !request.contains("SENTINEL-NEIGHBOUR-B"),
+                "the file beside a dropped {kind} reached the planner: {request}"
+            );
+        }
+    }
 }
 
 /// A turn with nothing attached must send the words and nothing beside them, or every
@@ -58238,6 +58650,26 @@ mod repeated_call {
 /// A server answering every request with `reply`, bytes and all, and counting the requests it was
 /// sent. `serve_pages` carries a reply as a `String`, which a body of arbitrary bytes is not.
 fn serve_raw(reply: Vec<u8>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    serve_raw_reporting(reply, None)
+}
+
+/// As [`serve_raw`], also reporting each request's line and headers as the server read them.
+fn serve_raw_noting_heads(
+    reply: Vec<u8>,
+) -> (
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    mpsc::Receiver<String>,
+) {
+    let (heads, received) = mpsc::channel();
+    let (site, count) = serve_raw_reporting(reply, Some(heads));
+    (site, count, received)
+}
+
+fn serve_raw_reporting(
+    reply: Vec<u8>,
+    heads: Option<mpsc::Sender<String>>,
+) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -58245,13 +58677,17 @@ fn serve_raw(reply: Vec<u8>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-            let mut line = String::new();
-            let _ = reader.read_line(&mut line);
+            let mut head = String::new();
+            let _ = reader.read_line(&mut head);
             loop {
                 let mut header = String::new();
                 if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
                     break;
                 }
+                head.push_str(&header);
+            }
+            if let Some(heads) = &heads {
+                let _ = heads.send(head);
             }
             counting.fetch_add(1, Ordering::SeqCst);
             let _ = stream.write_all(&reply);
@@ -58751,6 +59187,359 @@ fn a_download_redirected_to_another_host_saves_nothing() {
     assert!(
         !second.contains("sentinel-redirect"),
         "the host the server chose reached the planner's context: {second}"
+    );
+}
+
+/// DOWNLOAD-1: a body that ends before the length the server promised is not a whole file. A
+/// download that took the end of the connection for the end of the body would replace a file the
+/// person approved replacing with the part that arrived.
+#[test]
+fn a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file() {
+    let scratch = Scratch::new("download-half-way");
+    std::fs::write(scratch.path.join("existing.bin"), b"original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The head promises 100 000 bytes and the connection closes after 40 000.
+    let mut reply = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n".to_vec();
+    reply.extend_from_slice(&[7u8; 40_000]);
+    let (site, _count) = serve_raw(reply);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/big","path":"existing.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch the big file"),
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(confirmer.writes.len(), 1, "the person was not asked");
+    assert_eq!(
+        std::fs::read(scratch.path.join("existing.bin")).unwrap(),
+        b"original",
+        "a body that stopped half-way replaced the file"
+    );
+    assert_eq!(
+        names_in(&scratch.path),
+        ["existing.bin"],
+        "a partial file was left behind"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("failed part-way") && second.contains("Nothing was saved"),
+        "the planner was not told the download did not finish: {second}"
+    );
+}
+
+/// DOWNLOAD-1: a person's stop ends a download that is under way and leaves what was at the
+/// destination. The server finishes the body once the stop has been pressed, so a download that
+/// went on writing would end with the whole file in place of the old one.
+#[test]
+fn a_download_the_person_stops_leaves_the_destination_alone_and_no_staging_file() {
+    let scratch = Scratch::new("download-stopped");
+    std::fs::write(scratch.path.join("existing.bin"), b"original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (first_part_sent, first_part) = mpsc::channel::<()>();
+    let (finish, held) = mpsc::channel::<()>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let site = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the download connected");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                break;
+            }
+        }
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&[7u8; 40_000]);
+        let _ = stream.flush();
+        let _ = first_part_sent.send(());
+        let _ = held.recv_timeout(std::time::Duration::from_secs(30));
+        let _ = stream.write_all(&[7u8; 60_000]);
+        let _ = stream.flush();
+    });
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/big","path":"existing.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            first_part
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the download never began");
+            cancel.cancel();
+            let _ = finish.send(());
+        })
+    };
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("fetch the big file"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &cancel,
+    );
+    stopper.join().expect("the stopping thread");
+    server.join().expect("the server thread");
+
+    assert!(outcome.is_err(), "a stopped turn reported success");
+    assert_eq!(
+        std::fs::read(scratch.path.join("existing.bin")).unwrap(),
+        b"original",
+        "a download the person stopped replaced the file"
+    );
+    assert_eq!(
+        names_in(&scratch.path),
+        ["existing.bin"],
+        "a partial file was left behind"
+    );
+}
+
+/// DOWNLOAD-2: the request states no preference for a type of its own. `fetch_url` ranks Markdown
+/// first for a page a processor reads, and a file is wanted as the server holds it, so a PDF or a
+/// picture must not be negotiated away.
+#[test]
+fn a_download_sends_no_accept_preference_of_its_own() {
+    let scratch = Scratch::new("download-accept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, _count, heads) = serve_raw_noting_heads(raw_reply("application/pdf", b"%PDF-1.4"));
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/paper.pdf","path":"paper.pdf"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the paper"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let head = heads
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the request went out")
+        .to_lowercase();
+    assert!(head.starts_with("get /paper.pdf "), "{head:?}");
+    // Whatever the HTTP client adds on its own is the wildcard and ranks nothing, and no header
+    // at all passes. Written in two pieces because the spec check reads a slash and a star
+    // together in this file as the start of a comment.
+    let wildcard = format!("{}/{}", "*", "*");
+    let accepted: Vec<&str> = head
+        .lines()
+        .filter_map(|line| line.strip_prefix("accept:"))
+        .map(str::trim)
+        .collect();
+    assert!(
+        accepted.iter().all(|value| *value == wildcard),
+        "the download ranked a type of its own: {accepted:?}"
+    );
+}
+
+/// DOWNLOAD-2: an `allow` rule for the host answers the host question, as it does for a fetch. The
+/// destination is still put to the person, because no rule about a host says anything about a path.
+#[test]
+fn an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked() {
+    let scratch = Scratch::new("download-allowed-host");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"allowed"));
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task =
+        Task::new("save it").with_permissions(rules(&[], &[], &["WebFetch(domain:127.0.0.1)"]));
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        confirmer.asked.is_empty(),
+        "a host an allow rule covers was put to the person: {:?}",
+        confirmer.asked
+    );
+    assert_eq!(
+        confirmer.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        std::fs::read(scratch.path.join("data.bin")).unwrap(),
+        b"allowed"
+    );
+}
+
+/// DOWNLOAD-2: a name that resolves to this machine is not downloaded from, as it is not fetched
+/// (FETCH-8). The person approved a name, and a name resolves to whatever its server says. The
+/// planner is told which download failed and nothing of the address.
+#[test]
+fn a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_it() {
+    let scratch = Scratch::new("download-resolves-locally");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply(
+        "application/octet-stream",
+        b"SENTINEL-LOCAL-BYTES",
+    ));
+    let url = format!("{}/data", site.replace("127.0.0.1", "localhost"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{url}","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save it"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a request reached the machine the name resolved to"
+    );
+    assert!(!scratch.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!("error: downloading {url} failed")),
+        "the planner was not told which download failed: {second}"
+    );
+    assert!(
+        !second.contains("127.0.0.1"),
+        "an address reached the planner's context: {second}"
+    );
+}
+
+/// DOWNLOAD-3: the planner is told the path, the byte count and the HTTP status the server
+/// answered with, and the person is shown the status, the count and the content type with
+/// everything but printable ASCII removed and cut to a hundred characters. The type reaches the
+/// transcript through the finished call and no model.
+#[test]
+fn a_download_tells_the_planner_its_status_and_size_and_the_person_a_cleaned_content_type() {
+    let scratch = Scratch::new("download-reported");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let body = [9u8; 3000];
+    // A tab sits inside the type, and the type runs past a hundred characters.
+    let content_type = format!("text/x-sentinel\tsplit-{}", "a".repeat(200));
+    let mut reply = format!(
+        "HTTP/1.1 203 Non-Authoritative Information\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    reply.extend_from_slice(&body);
+    let (site, _count) = serve_raw(reply);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/blob","path":"blob.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the blob"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let finished = reporter
+        .finished
+        .iter()
+        .find(|call| call.tool == "download_url")
+        .expect("the download was reported as finished");
+    let cleaned: String = format!("text/x-sentinelsplit-{}", "a".repeat(200))
+        .chars()
+        .take(100)
+        .collect();
+    assert_eq!(
+        finished.note.as_deref(),
+        Some(format!("203, 3000 bytes, {cleaned}").as_str()),
+        "the person was not shown the status, the size and the cleaned type"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("blob.bin with 3000 bytes") && second.contains("(HTTP 203)"),
+        "the planner was not told the size and the status: {second}"
+    );
+    assert!(
+        !second.contains("sentinel"),
+        "the server's content type reached the planner: {second}"
     );
 }
 

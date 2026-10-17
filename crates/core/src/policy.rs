@@ -12416,6 +12416,57 @@ five
         );
     }
 
+    /// CHECK-7: what comes back is private whatever the slot was. A public page promoted through a
+    /// vet comes back `(T,priv)` as well, so a check or a reading is no way to a routing field or
+    /// out of the machine. What the slot was decides only what the context holds afterwards.
+    #[test]
+    fn a_public_slot_promotes_to_private_as_well() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+        slots
+            .writer_for(slot.clone(), Label::untrusted_public())
+            .unwrap()
+            .write("a page off the web")
+            .unwrap();
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+
+        let given = policy
+            .promote_vetted(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+        assert_eq!(
+            given.label(),
+            Label::trusted_private(),
+            "a public slot came back at the slot's confidentiality"
+        );
+    }
+
+    /// CHECK-7 on the picture road: a public picture is attached at `(T,priv)` too.
+    #[test]
+    fn a_public_picture_is_attached_as_private_as_well() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+        slots
+            .writer_for(slot.clone(), Label::untrusted_public())
+            .unwrap()
+            .write("data:image/png;base64,iVBORw0KGgo=")
+            .unwrap();
+        slots.mark_picture(&slot, "image/png");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+
+        let attached = policy
+            .promote_vetted_picture(&slot, &slots, crate::vetting::Endorsed::ByAPerson)
+            .expect("approved");
+        assert_eq!(
+            attached.data.label(),
+            Label::trusted_private(),
+            "a public picture was attached at the slot's confidentiality"
+        );
+    }
+
     /// LABEL-8: what the planner writes is labelled from what its context holds. Public until
     /// private content is let out of quarantine for it, and private from then on.
     #[test]
