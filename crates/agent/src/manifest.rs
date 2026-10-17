@@ -1592,12 +1592,18 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let proof = policy
                 .declassify(&slot, content.label())
                 .map_err(|d| d.to_string())?;
-            let text = content.clone().declassify(&proof);
-            Ok(Done {
-                note: format!(
+            // Counted inside the kernel on the still-labelled answer, as the process step does,
+            // so the text released below is carried to the screen and not read on the way.
+            let note = policy.render_in_place("answer", &content, |text| {
+                format!(
                     "{} shown",
                     crate::tools::tally(text.lines().count(), "line", "lines")
-                ),
+                )
+            });
+            let note = release_note(policy, note);
+            let text = content.clone().declassify(&proof);
+            Ok(Done {
+                note,
                 answer: Some(Answered {
                     shown: text,
                     value: content,

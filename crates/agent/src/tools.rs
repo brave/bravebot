@@ -8284,17 +8284,15 @@ fn fetch_url<S: Sink, C: Confirmer>(
             // Decoded lossily rather than refused for not being text. What a server sends is
             // untrusted either way, and a page with one bad byte is still the page that was asked
             // for: nothing here reads it, so there is nothing for a decoding failure to protect.
-            let label = response.body.label();
-            let (bytes, body_label) = policy
-                .decode_transport("fetch_url", label)
-                .decode(response.body);
-            let text = String::from_utf8_lossy(&bytes).into_owned();
-
-            let note = format!(
-                "{}, {}",
-                response.status,
-                tally(text.lines().count(), "line", "lines")
-            );
+            // Reshaped inside the kernel, so the page never becomes a bare String here: it
+            // comes back still labelled, and the count is taken where the bytes are released.
+            let text = policy.render_in_place("fetch_url", &response.body, |bytes| {
+                String::from_utf8_lossy(&bytes).into_owned()
+            });
+            let status = response.status;
+            let note = note_for(policy, "fetch_url", &text, |text| {
+                format!("{status}, {}", tally(text.lines().count(), "line", "lines"))
+            });
 
             // The host as it was requested, and not the URL: this origin is written into the trail,
             // which holds no userinfo, path, query or fragment (TRACE-2). A redirect chain ends
@@ -8302,13 +8300,9 @@ fn fetch_url<S: Sink, C: Confirmer>(
             // nobody agreed to as though they had, in the planner's context, the trace and the
             // transcript alike. Nothing here can name it in any case: where a chain went does not
             // leave the crate that followed it.
-            let mut produced = Produced::new(
-                Labelled::new(text, body_label),
-                format!("what {host} returned"),
-                note,
-            )
-            .of_content()
-            .capped(response.truncated);
+            let mut produced = Produced::new(text, format!("what {host} returned"), note)
+                .of_content()
+                .capped(response.truncated);
             // Always. A fetched body is never trusted, so the block a person is shown is always
             // marked as content nobody vouched for.
             produced.untrusted = true;
@@ -8487,7 +8481,6 @@ fn download_url<S: Sink, C: Confirmer>(
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
     let cancel = tools.cancel;
-    let mut written = 0usize;
     let mut stopped = None;
     let outcome = workspace.write_streamed_endorsed(
         policy,
@@ -8505,7 +8498,6 @@ fn download_url<S: Sink, C: Confirmer>(
                     Ok(Some(piece)) => {
                         let bytes = piece.declassify(proof);
                         file.write_all(&bytes)?;
-                        written += bytes.len();
                     }
                     Ok(None) => break,
                     Err(error) => {
@@ -8525,6 +8517,8 @@ fn download_url<S: Sink, C: Confirmer>(
     match (outcome, stopped) {
         (Ok(_), _) => {
             workspace.record_write(Some(&shown_path));
+            // The stream's own count of what it moved: nothing here measured the released chunks.
+            let written = stream.handed_back();
             let verb = if replaces { "replaced" } else { "created" };
             confirmed(
                 format!(

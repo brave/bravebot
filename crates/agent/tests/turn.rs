@@ -40103,11 +40103,12 @@ fn a_markdown_body_is_labelled_exactly_as_an_html_body_is() {
         )
         .expect("turn runs");
 
-        // Untrusted and public, which is the label the transport gate names as the body arrives.
+        // Untrusted and public, which is the label the render gate names while the body is
+        // reshaped into text without being released.
         assert!(
             sink.events().iter().any(|event| matches!(
                 event,
-                Event::GatePassed { gate: "transport", detail }
+                Event::GatePassed { gate: "render", detail }
                     if detail.contains("fetch_url") && detail.contains("(U,pub)")
             )),
             "{content_type}: the body did not arrive untrusted and public: {:?}",
@@ -58897,4 +58898,142 @@ fn a_prompt_to_read_output_carries_the_label_the_slot_was_released_under() {
         request.label,
         bravebot_core::label::Label::untrusted_private().to_string()
     );
+}
+
+/// The count a fetched page's note states is taken inside the kernel, on the page still labelled.
+///
+/// The note says how many lines came back, and counting them from the decoded bytes is the read
+/// LABEL-6 refuses: a transport decode is a witness for carrying an envelope, and a driver that
+/// then counts what it was handed is inspecting attacker-written bytes. The trail tells the two
+/// apart: the page is reshaped at the page's own label and the transport gate is never
+/// consulted for this tool.
+#[test]
+fn a_fetched_pages_lines_are_counted_inside_the_kernel() {
+    let scratch = Scratch::new("label6-fetch-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, _requests) = serve_pages(vec![page("one\ntwo\nthree\n")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the docs page"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let reshaped = gate_at(
+        &sink,
+        "render",
+        "fetch_url: content reshaped without being read, still (U,pub)",
+    );
+    let released = gate_at(&sink, "display", "what a tool produced");
+    assert!(
+        reshaped < released,
+        "the page was released before it was measured: {:?}",
+        sink.events()
+    );
+    let decoded = sink.events().iter().any(|event| {
+        matches!(
+            event,
+            Event::GatePassed { gate, detail }
+                if *gate == "transport" && detail.contains("fetch_url")
+        )
+    });
+    assert!(
+        !decoded,
+        "the page was taken out of its transport label for the driver to hold: {:?}",
+        sink.events()
+    );
+}
+
+/// A download reports the size the stream counted, and the planner is told the same figure.
+///
+/// The size used to be summed from the chunks as they were released to the file, which is the
+/// driver measuring bytes it was handed to carry. The number has to be the same either way, so
+/// this pins it exactly against the body served.
+#[test]
+fn a_downloads_size_is_the_streams_own_count() {
+    let scratch = Scratch::new("label6-download-size");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let body: Vec<u8> = (0..70_001u32).map(|n| (n % 251) as u8).collect();
+    let (site, _count) = serve_raw(raw_reply("application/octet-stream", &body));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/blob.bin","path":"blob.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the blob"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("with 70001 bytes downloaded"),
+        "the size told to the planner is not the body's: {second}"
+    );
+}
+
+/// The cut an aside's answer is given is made inside the kernel, on the answer still labelled.
+///
+/// A recap trims to a limit by counting characters, and doing that to the text after it was
+/// released for the screen is the driver branching on what the model wrote under a witness minted
+/// to carry it. The trail is the evidence: the answer is reshaped by the btw gate and the display
+/// release follows.
+#[test]
+fn an_asides_cut_is_made_inside_the_kernel() {
+    let long = "the parser is being ported. ".repeat(40);
+    let (endpoint, _received) = serve_sequence(vec![reply_with(&long)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::recap(&conversation),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a recap must not be refused");
+
+    gate_at(&sink, "render", "btw: content reshaped without being read");
 }
