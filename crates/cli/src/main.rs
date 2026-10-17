@@ -2066,8 +2066,8 @@ struct TurnRun<'a> {
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
-/// and the id of the record it wrote (CLI-25). The continued record and its conversation are taken
-/// by move, as the arm took them, and no condition is added on either.
+/// and the id of the record it wrote (CLI-25). `continued` is taken by value so the record can be
+/// `take()`n and handed to `continued::keep`.
 fn run_turn<C: bravebot_agent::Confirmer + Send>(
     run: TurnRun<'_>,
     mut continued: Option<bravebot_session::sessions::Record>,
