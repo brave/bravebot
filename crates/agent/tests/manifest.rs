@@ -2995,3 +2995,47 @@ fn a_plan_writing_untrusted_bytes_into_a_memory_records_it() {
         "a plan left a memory untrusted and nothing recorded it"
     );
 }
+
+/// The answer step counts the lines it reports inside the kernel, before the text is released.
+///
+/// The note says how many lines were shown. Taking that count from the text after it was
+/// released for the screen is the driver counting bytes a witness was minted to carry, so the
+/// trail has to show the answer reshaped by the gate, and before the display release.
+#[test]
+fn the_answer_steps_line_count_is_taken_inside_the_kernel() {
+    let scratch = Scratch::new("answer-count");
+    std::fs::write(scratch.path.join("a.md"), "one\ntwo\nthree\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "one"}},
+            {"capability": "ANSWER", "args": {"from_slot": "one"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "say what a.md holds", &mut sink).expect("runs");
+    assert_eq!(outcome.reply_for_display(), "one\ntwo\nthree\n");
+
+    let position = |gate: &str, detail: &str| {
+        sink.events().iter().position(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate: passed, detail: said }
+                    if *passed == gate && said.contains(detail)
+            )
+        })
+    };
+    let counted = position("render", "answer: content reshaped without being read")
+        .unwrap_or_else(|| panic!("the answer was never reshaped: {:?}", sink.events()));
+    let released = position("display", "what a step produced")
+        .unwrap_or_else(|| panic!("no display release: {:?}", sink.events()));
+    assert!(
+        counted < released,
+        "the answer was counted after it was released: {:?}",
+        sink.events()
+    );
+}

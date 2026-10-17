@@ -348,6 +348,15 @@ impl Streamed<'_> {
         }
     }
 
+    /// How many bytes [`Streamed::next_chunk`] has handed back so far.
+    ///
+    /// The stream's own count of what it moved, so a caller reporting a size reads a number and
+    /// not the released bytes. The one byte past the cap that is read to learn the body was cut is
+    /// never handed back and so is not counted.
+    pub fn handed_back(&self) -> usize {
+        self.read.min(self.cap)
+    }
+
     /// Whether the cap stopped the read before the body ended.
     pub fn truncated(&self) -> bool {
         self.truncated
@@ -1578,6 +1587,12 @@ mod tests {
     /// bytes inside one. Nothing about the gate is under test here; it is how the caller under
     /// test reads a chunk too.
     fn drain(mut stream: Streamed<'_>) -> (usize, bool) {
+        let total = drain_by_ref(&mut stream);
+        (total, stream.truncated())
+    }
+
+    /// The same, leaving the stream for the caller to ask about afterwards.
+    fn drain_by_ref(stream: &mut Streamed<'_>) -> usize {
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "read a stream");
         let mut sink = bravebot_core::event::NullSink;
@@ -1594,7 +1609,24 @@ mod tests {
         while let Some(chunk) = stream.next_chunk().expect("the read succeeds") {
             total += decoding.decode(chunk).0.len();
         }
-        (total, stream.truncated())
+        total
+    }
+
+    /// The size a download reports is the stream's own count, so it has to be the bytes handed
+    /// back: all of a body that ended at the cap, the cap's worth of one that was cut, and not
+    /// the one extra byte read to learn it was cut.
+    #[test]
+    fn a_stream_counts_the_bytes_it_handed_back_and_not_the_one_it_read_to_find_the_cut() {
+        for (body, cap) in [(5000, 3000), (3000, 3000), (2000, 3000)] {
+            let mut stream = streamed(vec![b'x'; body]).capped_at(cap);
+            let released = drain_by_ref(&mut stream);
+            assert_eq!(released, body.min(cap));
+            assert_eq!(
+                stream.handed_back(),
+                released,
+                "a {body}-byte body under a cap of {cap}"
+            );
+        }
     }
 
     fn streamed(body: Vec<u8>) -> Streamed<'static> {
