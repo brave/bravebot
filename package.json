@@ -17,7 +17,6 @@
   },
   "files": [
     "npm/bin",
-    "npm/scripts",
     "README.md",
     "docs/*.md",
     "docs/best-practices",
@@ -26,11 +25,16 @@
     "docs/specs",
     "LICENSE"
   ],
-  "scripts": {
-    "postinstall": "node npm/scripts/postinstall.js"
-  },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@brave/bravebot-darwin-arm64": "0.16.0",
+    "@brave/bravebot-darwin-x64": "0.16.0",
+    "@brave/bravebot-linux-arm64": "0.16.0",
+    "@brave/bravebot-linux-x64": "0.16.0",
+    "@brave/bravebot-win32-arm64": "0.16.0",
+    "@brave/bravebot-win32-x64": "0.16.0"
   },
   "publishConfig": {
     "access": "public"

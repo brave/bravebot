@@ -1,14 +1,15 @@
-//! What each installer does with the signature published beside a Linux checksum, and with the
-//! code signature a macOS or Windows binary carries, observed by running the installer itself
-//! against a release served from a directory.
+//! What `install.sh` and the script that builds the npm platform packages do with the signature
+//! published beside a Linux checksum, and with the code signature a macOS or Windows binary
+//! carries, observed by running each against a release served from a directory. `install.sh`
+//! checks at install; the script checks at publish, and what it accepts is what npm installs.
 //!
-//! [RELEASE-14] is the clause for Linux and [RELEASE-15] the one for macOS and Windows. Both installers are shell and JavaScript, so nothing in this
-//! workspace calls them, and running them is the only way a Rust test can hold them to it. Nothing
-//! is fetched from the network: `install.sh` finds a `curl` made here first on its `PATH`, and the
-//! npm installer's requests are answered from the same directory. The release key, and the key of
-//! somebody replacing the release, are both made here; each installer is handed the first as the
-//! key it carries and pointed at it by fingerprint, as the published installers carry and name
-//! Brave's.
+//! [RELEASE-14] is the clause for Linux and [RELEASE-15] the one for macOS and Windows. Both are
+//! shell and JavaScript, so nothing in this workspace calls them, and running them is the only way
+//! a Rust test can hold them to it. Nothing is fetched from the network: `install.sh` finds a
+//! `curl` made here first on its `PATH`, and the package script's requests are answered from the
+//! same directory. The release key, and the key of somebody replacing the release, are both made
+//! here; each is handed the first as the key it carries and pointed at it by fingerprint, as the
+//! published ones carry and name Brave's.
 //!
 //! `codesign`, `spctl` and `powershell.exe` are made here too, and stand in for the real ones in
 //! the way a real one answers for a binary: `codesign` reads the team a binary says it is signed by
@@ -122,10 +123,10 @@ const FAKE_POWERSHELL: &str = r#"#!/bin/sh
 printf '%s\r\n%s\r\n' "$FAKE_AUTH_STATUS" "$FAKE_AUTH_SIGNER"
 "#;
 
-/// Answers the npm installer's requests from the served directory, then installs.
+/// Answers the package script's requests from the served directory, then downloads and verifies.
 ///
-/// The installer reads `https.get` off the shared module each time it fetches, so replacing it
-/// before the installer is loaded is enough to keep every request on this machine.
+/// The script reads `https.get` off the shared module each time it fetches, so replacing it
+/// before the script is loaded is enough to keep every request on this machine.
 const NODE_HARNESS: &str = r#"
 const fs = require("node:fs");
 const path = require("node:path");
@@ -143,8 +144,8 @@ https.get = (url, options, callback) => {
   return new EventEmitter();
 };
 require(script)
-  .install({
-    target: { asset, platform, binaryName: "bravebot-bin" },
+  .download({
+    target: { asset, platform },
     tag: "v0.0.0",
     destination,
     fingerprint,
@@ -400,12 +401,15 @@ struct Outcome {
     output: String,
     /// The bytes written where the executable goes, if anything was.
     installed: Option<Vec<u8>>,
+    /// Its permission bits. npm unpacks a file with the mode the package holds, so a binary that
+    /// is not executable here is one nobody can run after installing.
+    installed_mode: Option<u32>,
     /// Anything left in the temporary directory the installer was given, where its keyring is made.
     left_in_temporary: Vec<PathBuf>,
     /// Anything written to the keyring the environment names as the person's own.
     left_in_own_keyring: Vec<PathBuf>,
-    /// Anything in the directory the executable goes to besides the executable, where the npm
-    /// installer stages a download before it has been checked.
+    /// Anything in the directory the executable goes to besides the executable, where the package
+    /// script stages a download before it has been checked.
     left_beside_destination: Vec<PathBuf>,
     /// Every URL the script asked `curl` for, in order.
     requests: Vec<String>,
@@ -559,7 +563,7 @@ impl<'a> Install<'a> {
                     .arg("-e")
                     .arg(NODE_HARNESS)
                     .arg(&served)
-                    .arg(workspace().join("npm/scripts/postinstall.js"))
+                    .arg(workspace().join("npm/scripts/stage-platform-package.js"))
                     .arg(self.asset())
                     .arg(self.node_platform())
                     .arg(&destination)
@@ -593,6 +597,9 @@ impl<'a> Install<'a> {
                 String::from_utf8_lossy(&output.stderr)
             ),
             installed: std::fs::read(&destination).ok(),
+            installed_mode: std::fs::metadata(&destination)
+                .ok()
+                .map(|metadata| metadata.permissions().mode()),
             left_in_temporary: entries(&temporary),
             left_in_own_keyring: entries(&own_keyring),
             left_beside_destination: entries(&bin)
@@ -663,6 +670,10 @@ fn assert_installed(installer: Installer, outcome: &Outcome, binary: &[u8]) {
         Some(binary),
         "{installer:?} installed something other than the release"
     );
+    assert!(
+        outcome.installed_mode.is_some_and(|mode| mode & 0o111 != 0),
+        "{installer:?} installed a binary that cannot be run"
+    );
     assert_eq!(
         outcome.left_in_temporary,
         Vec::<PathBuf>::new(),
@@ -687,7 +698,7 @@ fn both_installers_embed_the_release_key_they_name() {
     let source =
         |path: &str| std::fs::read_to_string(workspace().join(path)).expect("read an installer");
     let install_sh = source("install.sh");
-    let postinstall = source("npm/scripts/postinstall.js");
+    let package_script = source("npm/scripts/stage-platform-package.js");
 
     let key_in = |text: &str| {
         let begin = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
@@ -711,13 +722,13 @@ fn both_installers_embed_the_release_key_they_name() {
     let key = key_in(&install_sh);
     assert_eq!(
         key,
-        key_in(&postinstall),
+        key_in(&package_script),
         "the installers carry different keys"
     );
     let named = name_in(&install_sh);
     assert_eq!(
         named,
-        name_in(&postinstall),
+        name_in(&package_script),
         "the installers name different fingerprints"
     );
 
@@ -940,26 +951,47 @@ fn a_linux_checksum_with_no_signature_installs_nothing() {
 }
 
 /// Whether `gpg` is installed is a property of the machine, which nobody changing a release
-/// controls, so its absence is no reason to refuse. It is said, since the install is then on the
-/// checksum alone. Nothing but the binary and its checksum is served, so an installer that fetched
-/// the signature anyway would fail here.
+/// controls, so its absence is no reason for the install script to refuse. It is said, since the
+/// install is then on the checksum alone. Nothing but the binary and its checksum is served, so a
+/// script that fetched the signature anyway would fail here.
 #[test]
 fn without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs() {
     let Some((tools, release)) = setup() else {
         return;
     };
     let install = Install::new(tools, release, "no-gpg").without_gpg();
-    for (installer, outcome) in install.each(&[
-        ("bravebot-linux-arm64", &release.binary),
-        ("bravebot-linux-arm64.sha256", &release.checksum),
-    ]) {
-        assert_installed(installer, &outcome, &release.binary);
-        assert!(
-            outcome.output.contains("skipping signature verification"),
-            "{installer:?} did not say it skipped the check: {}",
-            outcome.output
-        );
-    }
+    let outcome = install.run(
+        Installer::Script,
+        &[
+            ("bravebot-linux-arm64", &release.binary),
+            ("bravebot-linux-arm64.sha256", &release.checksum),
+        ],
+    );
+    assert_installed(Installer::Script, &outcome, &release.binary);
+    assert!(
+        outcome.output.contains("skipping signature verification"),
+        "the script did not say it skipped the check: {}",
+        outcome.output
+    );
+}
+
+/// The package script runs on a runner the workflow chose, which has `gpg`, so a machine without
+/// it is not one to package a binary on unchecked: skipping would let a missing tool turn the
+/// check off for a build whose release somebody replaced.
+#[test]
+fn a_linux_package_is_not_built_without_gpg() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let install = Install::new(tools, release, "no-gpg-package").without_gpg();
+    let outcome = install.run(
+        Installer::Npm,
+        &[
+            ("bravebot-linux-arm64", &release.binary),
+            ("bravebot-linux-arm64.sha256", &release.checksum),
+        ],
+    );
+    assert_refused(Installer::Npm, &outcome, "gpg could not be run");
 }
 
 /// A macOS binary as the stand-in tools read one: signed by `team` and notarized, or neither.

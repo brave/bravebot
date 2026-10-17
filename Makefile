@@ -66,7 +66,7 @@ help:
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
-	@echo "  make check-npm             The installer test, the pnpm lockfiles in sync with their manifests, and their lint"
+	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
@@ -273,13 +273,13 @@ check-reviewdog-full: check-reviewdog-selftest
 # package.json and fetches nothing. contrib/check-pnpm-lockfiles.py then holds each lockfile's
 # sources to the registry and the one git dependency its manifest names.
 #
-# The installer test is the download's half, and the only thing in this tree that runs any
-# of docs/specs/releases.md as code: it calls the origin the installer composes with an
-# environment set against it, so a release repository something outside the installer can
-# choose fails here rather than at somebody's install. It needs no dependency, so it runs
-# before the install rather than after it. `ls` precedes the run because `node --test` given
-# a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
-# a passing gate.
+# The npm tests are the only thing in this tree that runs any of docs/specs/releases.md as
+# code: they call the origin the package script composes with an environment set against it,
+# so a release repository something outside the script can choose fails here rather than at a
+# publish, and they run the real launcher against a package that script builds. They need no
+# dependency, so they run before the install rather than after it. `ls` precedes the run
+# because `node --test` given a pattern matching nothing exits 0 having run nothing, which
+# would make a renamed-away pin a passing gate.
 .PHONY: check-npm
 check-npm:
 	ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
