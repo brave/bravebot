@@ -12,8 +12,9 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::theme;
 
+use super::chrome::{centred, indented, panel, scroll_hint};
 use super::pinned::{Pinned, rows_in};
-use super::{Next, centred, indented, next_press, panel, scroll_hint};
+use super::{Next, next_press};
 
 /// What the user did with a run question.
 ///
