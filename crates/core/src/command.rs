@@ -184,7 +184,7 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
 /// backslash and a quote escaped inside the wrapping, which is what makes the rendering reversible
 /// and therefore safe to bind an approval to. An argument holding `>` is wrapped too, so an
 /// argument list cannot draw as the arrow [`started_through`] puts between a link and its file.
-pub(crate) fn quoted(arg: &str) -> String {
+pub fn quoted(arg: &str) -> String {
     let plain = !arg.is_empty()
         && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '\\' || c == '>');
     if plain {
@@ -519,6 +519,50 @@ impl Steps {
             }
             Self::Group(inner) => format!("( {} )", inner.display()),
         }
+    }
+
+    /// The shape as [`Steps::display`] draws it, with each step's operands taken from `written`
+    /// instead of from the step: one list per step, in the order [`Steps::steps`] gives them.
+    ///
+    /// For a caller that holds the operands as the line spelled them. The operands of a compiled
+    /// step are what a pattern matched, which is a listing of a directory, and a sentence the
+    /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
+    /// [`Step::display_args`].
+    /// `None` where `written` does not hold exactly one list per step.
+    pub fn display_with_operands(&self, written: &[Vec<String>]) -> Option<String> {
+        let mut rest = written.iter();
+        let shown = self.draw_with_operands(&mut rest)?;
+        rest.next().is_none().then_some(shown)
+    }
+
+    fn draw_with_operands(
+        &self,
+        written: &mut std::slice::Iter<'_, Vec<String>>,
+    ) -> Option<String> {
+        Some(match self {
+            Self::Pipeline(steps) => {
+                let mut drawn = Vec::with_capacity(steps.len());
+                for step in steps {
+                    drawn.push(step.display_args(written.next()?.clone()));
+                }
+                drawn.join(" | ")
+            }
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => {
+                let joiner = match joiner {
+                    Joiner::And => "&&",
+                    Joiner::Or => "||",
+                    Joiner::Then => ";",
+                };
+                let left = left.draw_with_operands(written)?;
+                let right = right.draw_with_operands(written)?;
+                format!("{left} {joiner} {right}")
+            }
+            Self::Group(inner) => format!("( {} )", inner.draw_with_operands(written)?),
+        })
     }
 }
 

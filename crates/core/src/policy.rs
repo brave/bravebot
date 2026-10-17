@@ -5960,7 +5960,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
         let words = rule_words(program, args);
         let decision = self.permissions.for_command(&words);
-        self.refuse_if_denied("run", decision, &words.join(" "))
+        self.refuse_if_denied("run", decision, &named_in_a_refusal(program))
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -5980,7 +5980,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for words in Self::plan_words(plan) {
             let decision = self.permissions.for_command(&words);
-            self.refuse_if_denied("run", decision, &words.join(" "))?;
+            self.refuse_if_denied("run", decision, &named_in_a_refusal(words[0]))?;
         }
         for path in &plan.writes {
             self.refuse_denied_write(&path.to_string_lossy())?;
@@ -7429,6 +7429,18 @@ fn rule_words<'a>(program: &'a str, args: &'a [String]) -> Vec<&'a str> {
     std::iter::once(program)
         .chain(args.iter().map(String::as_str))
         .collect()
+}
+
+/// How a refused step is named to the planner: by the program word the line wrote.
+///
+/// Not by the argv. The compiler has expanded a glob into the names it matched by the time a rule
+/// is asked, so an operand may be a file name out of a directory nobody vouched for, and the
+/// refusal is addressed to the planner ([CMDLINE-4]). The program is never a pattern, so it is
+/// always a word the planner typed.
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+fn named_in_a_refusal(program: &str) -> String {
+    format!("a `{program}` command line")
 }
 
 /// Whether a program was written as a path rather than as a name to look up.

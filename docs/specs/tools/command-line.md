@@ -242,6 +242,13 @@ pattern ahead of the `=`, and a dash with no `=` are still patterns.
 Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
 thousand paths in front of a reader who will approve them unread.
 
+**The names a pattern matched are for the person, not the planner.** What is said to the planner
+about a line is said in the words the planner wrote: the result of a run, the account of a job that
+started, moved or ended, an error that the line did not start or run, and a refusal by a deny rule,
+which names the program and not its operands. The expanded plan is what the person is shown and
+endorses, so a file name read out of a directory nobody vouched for is never spelled into a
+sentence the driver writes to the planner.
+
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
 
@@ -273,6 +280,10 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_word_with_no_pattern_names_a_file_that_need_not_exist`
 `verified-by: bravebot_agent::cmdline::a_quoted_pattern_is_not_expanded`
 `verified-by: bravebot_agent::cmdline::braces_multiply_a_word`
+`verified-by: bravebot_agent::cmdline::a_plan_is_told_to_the_planner_with_each_pattern_as_it_was_written`
+`verified-by: bravebot_agent::turn::a_run_result_does_not_spell_the_names_a_glob_matched_to_the_planner`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planner`
+`verified-by: bravebot_agent::turn::a_deny_rule_refusal_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`

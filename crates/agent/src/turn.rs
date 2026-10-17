@@ -1734,7 +1734,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
         });
     }
     for ended in finished {
-        let origin = format!("what `{}` printed", ended.line);
+        let origin = format!("what `{}` printed", ended.said);
         // Whichever way the label went: it is their directory, and a person who let a program run
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
         // quarantined" says neither.
