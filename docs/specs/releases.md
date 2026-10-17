@@ -381,12 +381,12 @@ been published, is skipped and the install still succeeds.
 
 **Why.** A script runs on a machine before the person has run anything of ours, and the npm
 settings that ask for scripts to be allowed, or skip them, make an install that depends on one
-fail or leave no binary: the documented install warned, failed under `--strict-allow-scripts`, and
-left nothing under `--ignore-scripts`. Putting the binary in a package makes the install npm's own,
-which works under all three. The script derived the tag it downloaded from the package's own
-version, so an install of a checkout at a bumped but unreleased version failed with an HTTP 404 for
-assets that did not exist yet. A platform package that does not exist is skipped instead, and the
-launcher says what is missing ([RELEASE-17](#RELEASE-17)).
+fail or leave no binary: an install that depends on a script is refused under
+`--strict-allow-scripts` and leaves nothing under `--ignore-scripts`. A binary in a package is
+installed by npm itself, which works under both. A download keyed to the package's own version
+fails for a version with no release, such as a checkout at a bumped but unreleased version, because
+the assets it asks for do not exist yet. A platform package that does not exist is skipped instead,
+and the launcher says what is missing ([RELEASE-17](#RELEASE-17)).
 
 `verified-by: by-construction (package.json declares no preinstall, install, postinstall or prepare script and no dependency but the six platform packages at its own version, which npm/tests/package.test.mjs holds and the lint job of publish-npm.yml refuses at publish; make check-versions holds each pin to the workspace version; npm/tests/stage-platform-package.test.mjs holds each package's os and cpu to the asset it holds)`
 
@@ -504,7 +504,7 @@ variable itself.
 
 - **Under Rosetta the x64 package is the one installed.** npm matches `cpu` against the node that
   runs it, which reports x64 on an arm64 Mac when it is an Intel build, so that machine gets the
-  x64 binary and runs it translated. The earlier install step chose the native arm64 binary there.
+  x64 binary and runs it translated.
 
 - **A version with no platform packages installs without a binary.** npm skips an optional
   dependency it cannot find, so an install from a checkout or a git ref at a version that has not
