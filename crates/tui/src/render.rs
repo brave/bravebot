@@ -6602,6 +6602,27 @@ mod tests {
         );
     }
 
+    /// The parts below the accent count draw as one accented span and the rest as one dim span, with
+    /// the line's own two spaces before the first drawn part and `  ·  ` between. The faults it
+    /// rejects are an accent on a part past the boundary and a dim span opening on a separator
+    /// with nothing before it.
+    #[test]
+    fn the_hint_spans_split_at_the_accent_count_and_join_with_separators() {
+        let parts: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
+        let text = |spans: &[ratatui::text::Span<'_>]| -> Vec<String> {
+            spans.iter().map(|span| span.content.to_string()).collect()
+        };
+
+        let both = hint::hint_spans(&parts, &[0, 1, 3], 2);
+        assert_eq!(text(&both), ["  one  ·  two", "  ·  four"]);
+        assert_eq!(both[0].style.fg, Some(theme::accent()));
+        assert_ne!(both[1].style.fg, Some(theme::accent()));
+
+        let rest_only = hint::hint_spans(&parts, &[2, 3], 2);
+        assert_eq!(text(&rest_only), ["  three  ·  four"]);
+        assert!(hint::hint_spans(&parts, &[], 2).is_empty());
+    }
+
     /// After compaction the line reports that the context was compacted.
     #[test]
     fn the_hint_line_reports_a_compacted_context() {

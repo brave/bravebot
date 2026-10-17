@@ -333,28 +333,42 @@ pub fn programs_write_unasked(
     })
 }
 
+/// The files that wrote a list's entries, each once, in the order they are first seen. An entry no
+/// file wrote is named `unnamed`.
+fn sources<'a>(
+    by: impl Iterator<Item = &'a Option<std::path::PathBuf>>,
+    unnamed: &str,
+) -> Vec<String> {
+    let mut sources: Vec<String> = Vec::new();
+    for by in by {
+        let source = match by {
+            Some(path) => path.display().to_string(),
+            None => unnamed.to_string(),
+        };
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
 /// The line for the person's own filesystem lists, where any has an entry: how many each holds and
 /// the files that wrote them, never an entry, since a path is for `doctor` and a glob's matches are
 /// the machine's.
 fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line> {
     let lists = &settled.filter(|settled| !settled.lists.is_empty())?.lists;
-    let mut sources: Vec<String> = Vec::new();
-    for list in [
-        &lists.allow_read,
-        &lists.deny_read,
-        &lists.allow_write,
-        &lists.deny_write,
-    ] {
-        for entry in list {
-            let source = match &entry.by {
-                Some(path) => path.display().to_string(),
-                None => t!(status_sandbox_filesystem_flags).to_string(),
-            };
-            if !sources.contains(&source) {
-                sources.push(source);
-            }
-        }
-    }
+    let sources = sources(
+        [
+            &lists.allow_read,
+            &lists.deny_read,
+            &lists.allow_write,
+            &lists.deny_write,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|entry| &entry.by),
+        t!(status_sandbox_filesystem_flags),
+    );
     Some(
         Line::new(
             t!(status_sandbox_filesystem),
@@ -386,16 +400,10 @@ fn hosts_line(
     if mode == bravebot_sandbox::SandboxMode::Off {
         return None;
     }
-    let mut sources: Vec<String> = Vec::new();
-    for entry in allowed.iter().chain(&hosts.denied) {
-        let source = match &entry.by {
-            Some(path) => path.display().to_string(),
-            None => t!(status_hosts_managed).to_string(),
-        };
-        if !sources.contains(&source) {
-            sources.push(source);
-        }
-    }
+    let sources = sources(
+        allowed.iter().chain(&hosts.denied).map(|entry| &entry.by),
+        t!(status_hosts_managed),
+    );
     let counts = t!(
         status_hosts_counts,
         allowed = allowed.len(),
@@ -2710,6 +2718,75 @@ mod tests {
         assert!(!line.value.contains("very-secret") && !line.note.contains("very-secret"));
         assert!(line.note.contains("/home/a/.bravebot/settings.json"));
         assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
+    }
+
+    /// The files that wrote a list are named once each, in the order they are first met, and an
+    /// entry no file wrote is named by the caller's own words. The faults it rejects are a file
+    /// named once per entry, a sort, and a nameless entry dropped or named for the wrong line.
+    #[test]
+    fn sources_are_listed_once_each_in_first_seen_order() {
+        let by = |path: Option<&str>| path.map(std::path::PathBuf::from);
+        let entries = [
+            by(Some("/b.json")),
+            by(None),
+            by(Some("/a.json")),
+            by(Some("/b.json")),
+            by(None),
+        ];
+
+        assert_eq!(
+            sources(entries.iter(), "managed"),
+            ["/b.json", "managed", "/a.json"]
+        );
+        assert!(sources([].iter(), "managed").is_empty());
+    }
+
+    /// Two paths that differ only in a byte no UTF-8 name holds print the same, so the note names
+    /// them once: a list of what the person sees has no use for two identical words. The fault it
+    /// rejects is a dedup keyed on the path, which would print the same file twice.
+    #[cfg(unix)]
+    #[test]
+    fn sources_that_print_alike_are_named_once() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            b"/tool-\xff",
+        )));
+        let lossy = Some(std::path::PathBuf::from("/tool-\u{FFFD}"));
+        assert_ne!(raw, lossy);
+
+        assert_eq!(sources([raw, lossy].iter(), "managed"), ["/tool-\u{FFFD}"]);
+    }
+
+    /// The four filesystem lists are read in the order `allow_read`, `deny_read`, `allow_write`,
+    /// `deny_write`, so the files in the note come in that order, not sorted and not by list size.
+    #[test]
+    fn filesystem_files_are_named_in_list_order() {
+        use bravebot_sandbox::rules::{Entry, Lists};
+        let entry = |by: &str| Entry {
+            path: "~/p".into(),
+            by: Some(by.into()),
+            pinned: false,
+        };
+        let line = filesystem_line(Some(&bravebot_config::Filesystem {
+            lists: Lists {
+                allow_read: vec![entry("/4.json")],
+                deny_read: vec![entry("/3.json")],
+                allow_write: vec![entry("/2.json"), entry("/4.json")],
+                deny_write: vec![entry("/1.json")],
+            },
+            ..Default::default()
+        }))
+        .expect("a line");
+
+        let at = |file: &str| line.note.find(file).expect(file);
+        assert!(
+            at("/4.json") < at("/3.json")
+                && at("/3.json") < at("/2.json")
+                && at("/2.json") < at("/1.json"),
+            "{}",
+            line.note
+        );
+        assert_eq!(line.note.matches("/4.json").count(), 1, "{}", line.note);
     }
 
     /// The host list is on the report with how many entries each list holds and the files that

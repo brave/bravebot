@@ -126,8 +126,47 @@ pub(crate) fn context_reading(session: &Session) -> String {
     }
 }
 
-/// The shortcut line. Keeps the bindings discoverable without a help command.
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+/// The six parts both lines draw, read before either branch is taken.
+struct HintFacts {
+    looping: String,
+    trail: String,
+    jobs: String,
+    held: String,
+    movable: String,
+    watchable: String,
+}
+
+/// Where each part of the shell line sits in the array `shell_parts` builds.
+mod shell {
+    pub const NAME: usize = 0;
+    pub const CANCEL: usize = 1;
+    pub const OUTPUT: usize = 2;
+    pub const MOVABLE: usize = 3;
+    pub const LOOP: usize = 4;
+    pub const JOBS: usize = 5;
+    pub const WATCHABLE: usize = 6;
+    pub const HELD: usize = 7;
+}
+
+/// Where each part of the ordinary line sits in the array `ordinary_parts` builds.
+mod ordinary {
+    // 0 is the permission mode and 1 the vi mode, which `MODES` covers.
+    pub const TRAIL: usize = 2;
+    pub const CONTEXT: usize = 3;
+    pub const CACHE: usize = 4;
+    pub const LOOP: usize = 5;
+    pub const JOBS: usize = 6;
+    pub const WATCHABLE: usize = 7;
+    pub const MOVABLE: usize = 8;
+    pub const SHORTCUTS: usize = 9;
+    pub const INFO: usize = 10;
+    pub const HELD: usize = 11;
+    /// How many parts lead the line in the accent colour: the permission mode and the vi mode.
+    pub const MODES: usize = 2;
+}
+
+/// The parts of the hint line that do not depend on which mode the box is in.
+fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
     let looping = session.looping().map_or_else(String::new, |running| {
@@ -190,60 +229,58 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             count = count
         ),
     };
-
-    // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
-    // user needs to know is which shell and how to get back out again.
-    if session.shell {
-        // Fitted like the ordinary line, so a narrow terminal drops a part whole rather than
-        // cutting one at the last column. The shell is the mode and goes last; what it says about
-        // the line goes before the things that are spending something unwatched. The way into the
-        // view is a thing learned once, so it is given up right after the sentences about the line.
-        let parts = [
-            format!(
-                "{} {}",
-                if session.shell_private() { "!!" } else { "!" },
-                bravebot_agent::shell::shell()
-            ),
-            "esc to cancel".to_string(),
-            match session.shell_private() {
-                true => "output stays here, not sent to the model",
-                false => "output goes to the model",
-            }
-            .to_string(),
-            movable,
-            looping,
-            jobs,
-            watchable,
-            held,
-        ];
-        let kept = fitted(&parts, &[2, 1, 6, 3, 7, 5, 4], area.width);
-        let mut spans = Vec::new();
-        for (position, index) in kept.iter().enumerate() {
-            let part = parts[*index].clone();
-            if position == 0 && *index == 0 {
-                spans.push(Span::styled(
-                    format!("  {part}"),
-                    Style::default().fg(theme::accent()),
-                ));
-            } else {
-                let separator = if position == 0 { "  " } else { "  ·  " };
-                spans.push(Span::styled(format!("{separator}{part}"), dim()));
-            }
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
+    HintFacts {
+        looping,
+        trail,
+        jobs,
+        held,
+        movable,
+        watchable,
     }
+}
 
+/// The parts of the shell line, indexed by `shell`.
+fn shell_parts(session: &Session, facts: HintFacts) -> [String; 8] {
+    // Fitted like the ordinary line, so a narrow terminal drops a part whole rather than
+    // cutting one at the last column. The shell is the mode and goes last; what it says about
+    // the line goes before the things that are spending something unwatched. The way into the
+    // view is a thing learned once, so it is given up right after the sentences about the line.
+    [
+        format!(
+            "{} {}",
+            if session.shell_private() { "!!" } else { "!" },
+            bravebot_agent::shell::shell()
+        ),
+        "esc to cancel".to_string(),
+        match session.shell_private() {
+            true => "output stays here, not sent to the model",
+            false => "output goes to the model",
+        }
+        .to_string(),
+        facts.movable,
+        facts.looping,
+        facts.jobs,
+        facts.watchable,
+        facts.held,
+    ]
+}
+
+/// The parts of the ordinary line, indexed by `ordinary`.
+fn ordinary_parts(
+    session: &Session,
+    area: Rect,
+    screen_height: u16,
+    facts: HintFacts,
+) -> [String; 12] {
     // The panel shows the context and the cache while it has the rows for them, so the line drops
     // both rather than saying them twice (PANEL-8). Offered while it is closed and there is room to
     // draw it.
-    let panel_shows_context = crate::panel::shows_context(session, area.width, frame.area().height);
+    let panel_shows_context = crate::panel::shows_context(session, area.width, screen_height);
     let context = if panel_shows_context {
         String::new()
     } else {
         context_reading(session)
     };
-    let context_is_unmeasured = context == UNMEASURED_CONTEXT;
     let info = if !session.panel_open() && crate::panel::fits(area.width) {
         t!(panel_hint, chord = session.bindings().panel_name()).to_string()
     } else {
@@ -294,20 +331,82 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // is a transcript of things that have already happened, so a loop that is quietly spending a
     // turn every five minutes is the one fact about the session nothing on it reports: the note
     // that said it started has scrolled away, and the next tick is the first sign of life since.
-    let parts = [
+    [
         mode.unwrap_or_default().to_string(),
         editing,
-        trail.to_string(),
+        facts.trail,
         context,
         cache,
-        looping,
-        jobs,
-        watchable,
-        movable,
+        facts.looping,
+        facts.jobs,
+        facts.watchable,
+        facts.movable,
         SHORTCUTS_HINT.to_string(),
         info,
-        held,
-    ];
+        facts.held,
+    ]
+}
+
+/// The spans for the parts `fitted` kept: those below `accented_count` joined into one accented
+/// span, the rest into one dim span, so what is marked is exactly what changes the meaning of a
+/// keystroke. Drawn from `kept` like everything else, so a terminal with no room for a part drops
+/// it whole rather than showing the front half of it.
+pub(super) fn hint_spans(
+    parts: &[String],
+    kept: &[usize],
+    accented_count: usize,
+) -> Vec<Span<'static>> {
+    let joined = |indices: &[usize]| -> Vec<&str> {
+        indices.iter().map(|index| parts[*index].as_str()).collect()
+    };
+    let (accented, rest): (Vec<usize>, Vec<usize>) =
+        kept.iter().partition(|index| **index < accented_count);
+
+    let mut spans = Vec::new();
+    if !accented.is_empty() {
+        spans.push(Span::styled(
+            format!("  {}", joined(&accented).join("  ·  ")),
+            Style::default().fg(theme::accent()),
+        ));
+    }
+    if !rest.is_empty() {
+        let separator = if accented.is_empty() { "  " } else { "  ·  " };
+        spans.push(Span::styled(
+            format!("{separator}{}", joined(&rest).join("  ·  ")),
+            dim(),
+        ));
+    }
+    spans
+}
+
+/// The shortcut line. Keeps the bindings discoverable without a help command.
+pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+    let facts = hint_facts(session);
+
+    // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
+    // user needs to know is which shell and how to get back out again.
+    if session.shell {
+        let parts = shell_parts(session, facts);
+        let kept = fitted(
+            &parts,
+            &[
+                shell::OUTPUT,
+                shell::CANCEL,
+                shell::WATCHABLE,
+                shell::MOVABLE,
+                shell::HELD,
+                shell::JOBS,
+                shell::LOOP,
+            ],
+            area.width,
+        );
+        let spans = hint_spans(&parts, &kept, shell::NAME + 1);
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
+    let parts = ordinary_parts(session, area, frame.area().height, facts);
+    let context_is_unmeasured = parts[ordinary::CONTEXT] == UNMEASURED_CONTEXT;
     // Indices into `parts`, in the order they are given up: the way to the panel before anything,
     // since the panel is a press away whether or not the line names it (PANEL-7), then the way to
     // the bindings, then the trail toggle, both being things somebody learns once. Then the
@@ -328,10 +427,15 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // offer is up only while somebody is waiting on that command, which is the moment they are
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
+    use ordinary::{CACHE, CONTEXT, HELD, INFO, JOBS, LOOP, MOVABLE, SHORTCUTS, TRAIL, WATCHABLE};
     let expendable: &[usize] = if context_is_unmeasured {
-        &[10, 3, 9, 2, 4, 7, 8, 11, 6, 5]
+        &[
+            INFO, CONTEXT, SHORTCUTS, TRAIL, CACHE, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
+        ]
     } else {
-        &[10, 9, 2, 3, 4, 7, 8, 11, 6, 5]
+        &[
+            INFO, SHORTCUTS, TRAIL, CONTEXT, CACHE, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
+        ]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -343,30 +447,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     });
     let kept = fitted(&parts, expendable, area.width.saturating_sub(reserved));
 
-    // The modes lead the line and are the only coloured part of it, so what is marked is exactly what
-    // changes the meaning of a keystroke. Drawn from `kept` like everything else, so a terminal with
-    // no room for a part drops it whole rather than showing the front half of it.
-    const AFTER_THE_MODES: usize = 2;
-    let joined = |indices: &[usize]| -> Vec<&str> {
-        indices.iter().map(|index| parts[*index].as_str()).collect()
-    };
-    let (modes, rest): (Vec<usize>, Vec<usize>) =
-        kept.iter().partition(|index| **index < AFTER_THE_MODES);
-
-    let mut spans = Vec::new();
-    if !modes.is_empty() {
-        spans.push(Span::styled(
-            format!("  {}", joined(&modes).join("  ·  ")),
-            Style::default().fg(theme::accent()),
-        ));
-    }
-    if !rest.is_empty() {
-        let separator = if modes.is_empty() { "  " } else { "  ·  " };
-        spans.push(Span::styled(
-            format!("{separator}{}", joined(&rest).join("  ·  ")),
-            dim(),
-        ));
-    }
+    let spans = hint_spans(&parts, &kept, ordinary::MODES);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
     if let Some(note) = note {
