@@ -916,6 +916,55 @@ fn installing_with_no_id_records_the_extension_in_this_repository() {
     );
 }
 
+/// With no `--manifest-dir`, installing writes into the per-user location the platform and
+/// environment pick: Chrome's directory on macOS, Brave's own under `XDG_CONFIG_HOME` or `~/.config`
+/// elsewhere.
+#[test]
+fn installing_with_no_manifest_directory_uses_the_location_brave_reads() {
+    let macos = cfg!(target_os = "macos");
+    let install_with = |config: Option<&Path>| {
+        let home = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new(PROGRAM);
+        command
+            .args(["install", OURS])
+            .env("HOME", home.path())
+            .env("BRAVEBOT_BROWSER_DIR", directory.path())
+            .env_remove("XDG_CONFIG_HOME")
+            .stdout(Stdio::null());
+        if let Some(config) = config {
+            command.env("XDG_CONFIG_HOME", config);
+        }
+        assert!(spawn(&mut command).wait().unwrap().success());
+        home
+    };
+
+    let home = install_with(None);
+    let expected = if macos {
+        "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+    } else {
+        ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+    };
+    assert!(
+        home.path()
+            .join(expected)
+            .join("com.brave.bravebot.json")
+            .is_file()
+    );
+
+    if !macos {
+        let config = tempfile::tempdir().unwrap();
+        let home = install_with(Some(config.path()));
+        assert!(
+            config
+                .path()
+                .join("BraveSoftware/Brave-Browser/NativeMessagingHosts/com.brave.bravebot.json")
+                .is_file()
+        );
+        assert!(!home.path().join(".config").exists());
+    }
+}
+
 /// An id that is not an extension's is refused before anything is written, so a mistyped one
 /// cannot leave a manifest naming nobody.
 #[test]
