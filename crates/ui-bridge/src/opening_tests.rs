@@ -12,6 +12,7 @@ use super::*;
 /// keep asking in a directory the person answered about in the terminal.
 #[test]
 fn an_answer_allows_confined_lines_only_for_a_yes_to_a_question_that_said_so() {
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let project = std::env::temp_dir();
     for (trusted, said, allowed) in [
         (true, true, true),
@@ -27,6 +28,7 @@ fn an_answer_allows_confined_lines_only_for_a_yes_to_a_question_that_said_so() {
 
 #[test]
 fn a_kept_answer_settles_a_window_with_what_its_entry_says() {
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let project = std::env::temp_dir();
     let kept = |confined_lines| trusted::Kept {
         root: project.clone(),
