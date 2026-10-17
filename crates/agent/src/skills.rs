@@ -12,9 +12,10 @@
 //! the body
 //! ```
 //!
-//! Only the name and the description reach the planner up front. The body is read when the
-//! planner asks for it by name, which keeps a directory of long skills from filling a context
-//! that has room for the task instead.
+//! Only a built-in's name and description reach the planner up front; the rest are found with
+//! `search_skills` rather than listed, so a directory of many skills does not fill a context
+//! that has room for the task instead. The body of any skill, however it was found, is read when
+//! the planner asks for it by name.
 //!
 //! A file may also name the model its rounds are asked of and the effort they carry. Neither is
 //! required, and neither is a reason to drop a skill: a value that cannot be used is reported and
@@ -456,6 +457,25 @@ impl Notice {
         })
     }
 
+    /// That some skills have a description long enough to be worth saying so (SKILL-17).
+    ///
+    /// A count, never a name, as [SKILL-6](SKILL-6) counts what it skips: naming one would put a
+    /// name read out of a directory on a screen as though the planner had asked for it. Nothing
+    /// is cut: `load_skill` and `search_skills` both return the description in full regardless.
+    pub(crate) fn descriptions_are_long(n: usize) -> Self {
+        if n == 1 {
+            Self::new(format!(
+                "1 skill has a description past {DESCRIPTION_WARN_CHARS} characters: it is not \
+                 shortened, and reaches you in full"
+            ))
+        } else {
+            Self::new(format!(
+                "{n} skills have a description past {DESCRIPTION_WARN_CHARS} characters: none \
+                 is shortened, and each reaches you in full"
+            ))
+        }
+    }
+
     /// That an `@path` import in an instructions file was left as written, and why (INSTR-11).
     pub(crate) fn import_refused(import: &str, why: ImportRefusal) -> Self {
         Self::new(match why {
@@ -491,6 +511,12 @@ impl Notice {
 #[derive(Debug, Clone, Default)]
 pub struct Catalogue {
     entries: Vec<Skill>,
+    /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
+    ///
+    /// A definition that named skills already made a short, deliberate list, which is not the
+    /// crowding [SKILL-17](SKILL-17) exists for, so the whole of a curated catalogue is listed
+    /// directly rather than held back to built-ins and left for `search_skills` to find.
+    curated: bool,
 }
 
 impl Catalogue {
@@ -500,6 +526,11 @@ impl Catalogue {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
+    pub fn is_curated(&self) -> bool {
+        self.curated
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Skill> {
@@ -521,6 +552,7 @@ impl Catalogue {
     /// what this can leave a planner with is a shorter list of the same skills.
     pub fn only(mut self, names: &[String]) -> Self {
         self.entries.retain(|skill| names.contains(&skill.name));
+        self.curated = true;
         self
     }
 
@@ -535,18 +567,90 @@ impl Catalogue {
         }
     }
 
-    /// The lines that go in the system prompt: one per skill, name and when to use it.
+    /// The lines that go in the system prompt: name and when to use it, one per skill.
     ///
-    /// Never the body. A directory of long skills would otherwise fill a context that has room
-    /// for the task instead, which is the whole reason the body waits to be asked for.
+    /// Never the body. By default only a built-in is listed: a skill of the user's own or the
+    /// project's can number enough to fill a context that has room for the task instead, so
+    /// those are found with [`Catalogue::search`] rather than listed. Past [`Catalogue::only`]
+    /// narrowing this to a definition's own `skills:` line, every entry is listed, curated: a
+    /// definition that named a handful of skills already made the short, deliberate list
+    /// [SKILL-17](SKILL-17) exists to get to, and holding it back to built-ins would make a
+    /// person wait on `search_skills` to find what their own definition already named.
+    ///
+    /// A description is never cut; [SKILL-17](SKILL-17) says what happens where one is long.
     pub fn describe_for_prompt(&self) -> String {
         let mut out = String::new();
-        for skill in &self.entries {
-            out.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+        for skill in self
+            .entries
+            .iter()
+            .filter(|skill| self.curated || skill.source == Source::BuiltIn)
+        {
+            out.push_str(&prompt_line(&skill.name, &skill.description));
         }
         out
     }
+
+    /// How many skills, of any source, have a description past [`DESCRIPTION_WARN_CHARS`]
+    /// (SKILL-17).
+    ///
+    /// A count only: the driver compares a length, never a byte of what a description says, so
+    /// it learns how many are long and not which ones.
+    pub fn long_descriptions(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|skill| skill.description.chars().count() > DESCRIPTION_WARN_CHARS)
+            .count()
+    }
+
+    /// The skills whose name or description holds every word of `query`, in [SKILL-2] order.
+    ///
+    /// Matched case-insensitively and word by word: a query of several words asks for all of
+    /// them, in whatever order they appear, which is looser than the exact name `load_skill`
+    /// takes ([LOAD-2](tools/load-skill.md#LOAD-2)) and lets an approximate query still find
+    /// something. A blank query matches nothing, since asking for nothing in particular is not a
+    /// search.
+    ///
+    /// Bounded to [`SEARCH_RESULT_CAP`] so a broad query cannot return the whole catalogue in one
+    /// call. The second member of the pair is how many further skills matched past the cap.
+    pub fn search(&self, query: &str) -> (Vec<&Skill>, usize) {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if words.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let matched: Vec<&Skill> = self
+            .entries
+            .iter()
+            .filter(|skill| {
+                let haystack = format!("{} {}", skill.name, skill.description).to_lowercase();
+                words.iter().all(|word| haystack.contains(word.as_str()))
+            })
+            .collect();
+        let more = matched.len().saturating_sub(SEARCH_RESULT_CAP);
+        (matched.into_iter().take(SEARCH_RESULT_CAP).collect(), more)
+    }
 }
+
+/// One skill's line in the system prompt, or in a `search_skills` result.
+pub(crate) fn prompt_line(name: &str, description: &str) -> String {
+    format!("- {name}: {description}\n")
+}
+
+/// Past how many characters a description is long enough to be worth saying so, rather than
+/// cutting it (SKILL-17).
+///
+/// A description says when to use a skill, and [SKILL-10] lets one wrap over as many lines as the
+/// author writes. What is past this is the author explaining the skill rather than saying when to
+/// load it, and the body is where that belongs, but a skill nobody vouched for the length of is
+/// still carried in full: half an instruction a person meant to write is worse than paying for the
+/// whole of it. Other agents warn in the same range: Cline at 1,024 characters for a description.
+const DESCRIPTION_WARN_CHARS: usize = 1_024;
+
+/// How many skills one `search_skills` call returns before the rest are left for a narrower
+/// query (SKILL-17).
+///
+/// A broad query over a large directory could otherwise return the whole catalogue in one call,
+/// which is the cost `search_skills` exists to avoid paying by default.
+const SEARCH_RESULT_CAP: usize = 25;
 
 /// A skill written into this program rather than found on a disk.
 ///

@@ -2799,6 +2799,7 @@ verb-apply-checkout = Appliquer
 verb-todo-write = Planifier
 verb-spawn-processor = Processeur isolé
 verb-load-skill = Compétence
+verb-search-skills = Chercher une compétence
 verb-load-tool = Charger
 verb-ask-user = Demander
 verb-request-path = Accéder

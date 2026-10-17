@@ -1213,6 +1213,64 @@ fn a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one() {
     );
 }
 
+/// SKILL-17: the default listing's sentence points the planner at `search_skills` for a skill it
+/// does not list, and a curated catalogue's says there is nothing further to find, since a
+/// definition naming skills already made the whole of the list. Either wording left in place of
+/// the other would send the planner looking for a tool that is not the answer in that case, or
+/// leave it thinking a built-in is all there is.
+#[test]
+fn the_skills_section_points_at_search_skills_only_where_more_could_be_found() {
+    let scratch = Scratch::new("skills-section-wording");
+    let workspace = Workspace::new(scratch.directory("project")).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, default_text) = {
+        let mut policy = policy(&mut sink, &["."]);
+        let (catalogue, _) = bravebot_agent::skills::discover(&mut policy, &workspace, None);
+        let preamble = preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &catalogue,
+            None,
+            None,
+            &Attribution::default(),
+        );
+        (catalogue, preamble.text)
+    };
+    assert!(
+        default_text.contains("search_skills"),
+        "the default listing did not point the planner at search_skills: {default_text}"
+    );
+    assert!(
+        !default_text.contains("there are no others to find"),
+        "the default listing claimed to be the whole set: {default_text}"
+    );
+
+    let curated = catalogue.only(&["loop".to_string()]);
+    let curated_text = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &curated,
+            None,
+            None,
+            &Attribution::default(),
+        )
+        .text
+    };
+    assert!(
+        curated_text.contains("there are no others to find"),
+        "a curated listing did not say it was the whole set: {curated_text}"
+    );
+    assert!(
+        !curated_text.contains("search_skills"),
+        "a curated listing pointed the planner at search_skills for nothing more to find: {curated_text}"
+    );
+}
+
 /// Empty is the value the block exists to carry, so a planner that is told nothing when a person
 /// wrote `""` has had the one thing they configured discarded on the way to the only context it
 /// could have acted in. The other half matters as much: `pr` was left unwritten, and saying

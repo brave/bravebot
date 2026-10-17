@@ -233,12 +233,20 @@ pub fn compose_in<S: Sink>(
     }
 
     if !skills.is_empty() {
+        let find_more = if skills.is_curated() {
+            "This is the whole set a definition named for this turn; there are no others to find."
+        } else {
+            "These are the ones built into this program; call search_skills with a word or \
+             phrase to find one of the user's own or the project's."
+        };
         preamble.add(
             Provenance::Driver,
-            "\n\nSkills. Each is a set of instructions for a kind of task, most of them written \
-             by the user. When a task matches one, call load_skill with its name before starting \
-             that work and follow what it says. A prompt naming one as /name is the user asking \
-             for it. These names are the only ones that exist.\n\n",
+            format!(
+                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
+                 written by the user. When a task matches one, call load_skill with its name \
+                 before starting that work and follow what it says. A prompt naming one as \
+                 /name is the user asking for it. {find_more}\n\n"
+            ),
         );
         preamble.add(
             Provenance::Trusted("skill list"),

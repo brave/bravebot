@@ -30,6 +30,7 @@ that is merely carried.
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
+| [`search_skills`](#search_skills) | `query` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
@@ -1002,11 +1003,11 @@ approving a change whose reason is one of the tasks you did not read.
 
 ## `load_skill`
 
-Reads one of the skills the planner was listed.
+Reads one of the skills the planner was listed, or one `search_skills` found.
 
 | Parameter | |
 |---|---|
-| `name` | the name exactly as it was listed, e.g. `commit-style` |
+| `name` | the name exactly as it was listed or as `search_skills` returned it, e.g. `commit-style` |
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
@@ -1016,6 +1017,20 @@ Where the skill keeps other files beside its `SKILL.md`, the result ends with th
 and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
 for the rest of the turn; a project's skill is read through the trust map like any other file in the
 project.
+
+## `search_skills`
+
+Finds a skill of your own or the project's by a word or phrase. Only a skill built into bravebot
+itself is listed for the planner by default; the rest are found this way.
+
+| Parameter | |
+|---|---|
+| `query` | one or more words; a skill matches only where every word is in its name or its description |
+
+A match's name and description are returned in full, never cut, with the same words
+[`load_skill`](#load_skill) then loads the body of. A query that matches more than 25 skills
+returns the first 25, in the order they would be listed, and says how many more matched: narrow
+the query rather than widening it. See [Skills](../customize/skills.md).
 
 ## `ask_user`
 
