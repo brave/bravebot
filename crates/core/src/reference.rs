@@ -187,25 +187,25 @@ impl Reference {
             Kind::File if self.processors_closed => format!(
                 "Quarantined: you will not be shown what this file holds, and read_file has \
                  nothing to add: {} already is the file. Where you have to read it yourself, \
-                 vet_content asks the user to show it to you.",
+                 vet_content is how to ask for it.",
                 self.slot
             ),
             Kind::File => format!(
                 "Quarantined: you will not be shown what this file holds, and read_file has \
                  nothing to add: {} already is the file. Give it to spawn_processor to work on, \
                  and name it as write_file's path_ref to put the result back. Where you have to \
-                 read it yourself, vet_content asks the user to show it to you.",
+                 read it yourself, vet_content is how to ask for it.",
                 self.slot
             ),
             Kind::Content if self.processors_closed => format!(
                 "Quarantined: you will not be shown it. Write {} into a file as contents_ref. \
-                 Where you have to read it yourself, vet_content asks the user to show it to you.",
+                 Where you have to read it yourself, vet_content is how to ask for it.",
                 self.slot
             ),
             Kind::Content => format!(
                 "Quarantined: you will not be shown it. Give {} to spawn_processor to work on, \
                  or write it into a file as contents_ref. Where you have to read it yourself, \
-                 vet_content asks the user to show it to you.",
+                 vet_content is how to ask for it.",
                 self.slot
             ),
             // The one move that works, because a directory name is quarantined like any other and
@@ -385,6 +385,19 @@ mod tests {
             described.contains("contents_ref"),
             "the planner was not told how to write it out: {described}"
         );
+    }
+
+    /// The description goes out with every result in every mode, so it does not say a person is
+    /// asked: where permissions are bypassed nobody is, and the planner gave up on what it read.
+    #[test]
+    fn a_description_does_not_say_the_user_is_asked_to_show_it() {
+        for described in [
+            reference().describe(),
+            reference().closed_to_processors().describe(),
+        ] {
+            assert!(described.contains("vet_content"), "{described}");
+            assert!(!described.contains("the user"), "{described}");
+        }
     }
 
     /// Every `spawn_processor` call is refused once the planner's context holds private content,
