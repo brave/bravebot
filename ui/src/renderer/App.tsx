@@ -1,6 +1,5 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
-import type { BotFormValue } from './components/Bots'
 import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
@@ -42,11 +41,11 @@ import * as t from './transcript'
 import { useAudit } from './use-audit'
 import { useExport } from './use-export'
 import { useRewind } from './use-rewind'
+import { useBots } from './use-bots'
+import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
-import { applyAppearance } from './theme'
-import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
 import { planRewind } from './rewind'
 import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
@@ -116,15 +115,8 @@ export function App(): React.JSX.Element {
     if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
   }, [live?.summary.id, live?.summary.directory, live?.model])
   const [forks, setForks] = useState<Fork[]>([])
-  const [bots, setBots] = useState<Bot[]>([])
-
-  /**
-   * Appearance (System / Light / Dark) and whether the picker is open.
-   *
-   * Remembered in `bravebot-ui.json` like the columns; arrives asynchronously, so it cannot
-   * seed `useState`.
-   */
-  const [chosen, setChosen] = useState<Appearance>(SYSTEM)
+  const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
+  const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
   // main process; this is the copy on screen, refreshed when it can have changed.
@@ -139,44 +131,6 @@ export function App(): React.JSX.Element {
   const readForks = useCallback(async () => {
     setForks(await window.bravebot.readForks().catch(() => []))
   }, [])
-
-  /**
-   * Read the bot list again.
-   *
-   * The main process owns it, and writes to it that this window did not make: a bot's session id
-   * and its compaction watermark are taken off what the agent answered. So this is asked for after
-   * a turn as well as after an edit — the copy on screen is a copy.
-   */
-  const readBots = useCallback(async () => {
-    setBots(await window.bravebot.readBots().catch(() => []))
-  }, [])
-
-  // Read inside the event listener and inside `send`, both installed once and neither able to
-  // close over a list that changes under them.
-  const botsRef = useRef<Bot[]>(bots)
-  botsRef.current = bots
-
-  /**
-   * Paint the window from the remembered appearance at startup, and follow writes
-   * that arrive through the main process (another window, a driver, the picker).
-   */
-  useEffect(() => {
-    const take = (state: { chosen: Appearance }): void => {
-      const appearance = parseAppearance(state.chosen)
-      setChosen(appearance)
-      applyAppearance(appearance)
-    }
-    void window.bravebot
-      .readTheme()
-      .then(take)
-      .catch(() => undefined)
-    return window.bravebot.onThemeChanged(take)
-  }, [])
-
-  useEffect(() => window.bravebot.onWindowActive((active) => {
-    if (active) delete document.documentElement.dataset.windowInactive
-    else document.documentElement.dataset.windowInactive = ''
-  }), [])
 
   const refresh = useCallback(async () => {
     try {
@@ -598,17 +552,6 @@ export function App(): React.JSX.Element {
   ownSessionsRef.current = ownSessions
   const sessionInfo = useStableValue(unstableInfo)
 
-  useEffect(() => {
-    const edited = (event: Event) => {
-      const slug = (event as CustomEvent<string>).detail
-      for (const session of openedLives.current.values()) {
-        if (session.bot?.slug === slug) updateSession(session.handle, (old) => old?.bot ? { ...old, bot: { ...old.bot, grounded: false } } : old)
-      }
-    }
-    document.addEventListener('bravebot:memory-edited', edited)
-    return () => document.removeEventListener('bravebot:memory-edited', edited)
-  }, [])
-
   /** The bot whose session is on screen, if one is — for the header, which names it. */
   const openBotRecord = useMemo(
     () => (live?.bot ? (bots.find((each) => each.slug === live.bot?.slug) ?? null) : null),
@@ -626,20 +569,6 @@ export function App(): React.JSX.Element {
     : live?.entries.at(-1)?.kind === 'error'
       ? 'failed'
       : 'open'
-
-  const saveBot = useCallback(
-    async (bot: BotFormValue) => {
-      try {
-        const saved = await window.bravebot.writeBot(bot)
-        if (!saved) throw new Error('Could not save bot.')
-        setLive((old) => old?.bot?.slug === saved.slug && !old.running
-          ? { ...old, model: saved.model ?? old.model } : old)
-        await readBots()
-        return true
-      } catch (error) { setProblem(String(error)); return false }
-    },
-    [readBots],
-  )
 
   const chooseModel = useCallback(async (model: string) => {
     const current = liveRef.current
@@ -673,24 +602,6 @@ export function App(): React.JSX.Element {
       updateSession(handle, (old) => (old ? { ...old, sandboxMode } : old))
     } catch (error) { setProblem(String(error)) }
   }, [updateSession])
-
-  /**
-   * Take a bot away for good.
-   *
-   * No session to let go of, unlike `retireBot` below. This is only ever reached from a row in
-   * the archive, and archiving is what put it there — which closed its session on the way past.
-   * A bot that is deletable is therefore a bot that is not on screen, by construction rather than
-   * by a check here.
-   */
-  const removeBot = useCallback(
-    async (slug: string) => {
-      try {
-        await window.bravebot.removeBot(slug)
-        await readBots()
-      } catch (error) { setProblem(String(error)) }
-    },
-    [readBots],
-  )
 
   /**
    * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
@@ -1047,12 +958,6 @@ export function App(): React.JSX.Element {
     if (text) setDraft(text)
     refreshLives((n) => n + 1)
   }, [create, setDraft])
-
-  const writeAppearance = useCallback((appearance: Appearance) => {
-    applyAppearance(appearance)
-    window.bravebot.writeTheme(appearance)
-    setChosen(appearance)
-  }, [])
 
   const openSettingsPage = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
