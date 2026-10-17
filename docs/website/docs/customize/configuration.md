@@ -470,6 +470,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
@@ -768,11 +769,23 @@ default. It lasts a turn, so a later turn loads again.
 { "awaySummaryEnabled": false }
 ```
 
-After the terminal has been unfocused for five minutes since the last turn finished, a session of at
-least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
+After the terminal has been unfocused for five minutes (or the
+[`awaySummaryIdleSeconds`](#awaysummaryidleseconds) you set) since the last turn finished, a session
+of at least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
 It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
+
+### `awaySummaryIdleSeconds`
+
+```json
+{ "awaySummaryIdleSeconds": 120 }
+```
+
+How many seconds the terminal has to have been unfocused since the last turn finished before
+[`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
+A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
+300. It changes nothing else about the recap, and `/recap` is not delayed by it.
 
 ### `suggestions`
 

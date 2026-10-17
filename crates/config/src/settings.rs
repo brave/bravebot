@@ -139,6 +139,7 @@ const READ_KEYS: &[&str] = &[
     "agent",
     "attribution",
     "awaySummaryEnabled",
+    "awaySummaryIdleSeconds",
     "deferMcpToolsAbove",
     "download",
     "editorMode",
@@ -295,6 +296,11 @@ pub struct Settings {
     update_check: Option<bool>,
     /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
     away_summary_enabled: Option<bool>,
+    /// What the top-level `awaySummaryIdleSeconds` key said, if it said a whole positive count.
+    ///
+    /// `None` is the built-in idle time, which belongs to the interface that decides when a recap
+    /// is owed, for the reason [`Settings::wheel_rows`] gives about its own count.
+    away_summary_idle_seconds: Option<u64>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -1156,6 +1162,10 @@ impl Settings {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            away_summary_idle_seconds: root
+                .get("awaySummaryIdleSeconds")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|seconds| *seconds > 0),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1387,6 +1397,17 @@ impl Settings {
     /// to turn the recap off, so a quoted `"false"` is absence and the recap stays on.
     pub fn away_summary_enabled(&self) -> Option<bool> {
         self.away_summary_enabled
+    }
+
+    /// How many seconds after the last completed turn the settings in force owe a returning person
+    /// a recap, if they said.
+    ///
+    /// `None` where nobody named a usable count, which is the built-in idle time: that belongs to
+    /// the interface that decides when a recap is owed, and answering with it here would put a
+    /// second copy in this crate. Zero would owe a recap the moment the terminal is left, so it is
+    /// absence, and so is anything that is not a whole count.
+    pub fn away_summary_idle_seconds(&self) -> Option<u64> {
+        self.away_summary_idle_seconds
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1764,6 +1785,7 @@ impl Settings {
             && self.suggestions.is_none()
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
+            && self.away_summary_idle_seconds.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1951,6 +1973,11 @@ impl Settings {
                 self.away_summary_enabled
                     .is_some()
                     .then_some("awaySummaryEnabled"),
+            )
+            .chain(
+                self.away_summary_idle_seconds
+                    .is_some()
+                    .then_some("awaySummaryIdleSeconds"),
             )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
@@ -6244,6 +6271,49 @@ mod tests {
             .global(r#"{"awaySummaryEnabled": false}"#)
             .read();
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// CMD-20: the idle time is a whole positive count of seconds. Zero would owe a recap the moment
+    /// the terminal is left, so it and anything that is not a whole count leave the built-in idle
+    /// time in force, and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_how_long_before_the_away_recap() {
+        let settings = Settings::parse(r#"{"awaySummaryIdleSeconds": 90}"#);
+        assert_eq!(settings.away_summary_idle_seconds(), Some(90));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["awaySummaryIdleSeconds"]
+        );
+
+        for text in [
+            r#"{"awaySummaryIdleSeconds": 0}"#,
+            r#"{"awaySummaryIdleSeconds": -5}"#,
+            r#"{"awaySummaryIdleSeconds": 1.5}"#,
+            r#"{"awaySummaryIdleSeconds": "90"}"#,
+            r#"{"awaySummaryIdleSeconds": null}"#,
+            r#"{"tui": {"awaySummaryIdleSeconds": 90}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).away_summary_idle_seconds(),
+                None,
+                "{text:?} named an idle time"
+            );
+        }
+
+        let layered = Layers::new("away-idle-layers")
+            .global(r#"{"awaySummaryIdleSeconds": 90}"#)
+            .project(r#"{"awaySummaryIdleSeconds": 600}"#)
+            .read();
+        assert_eq!(layered.away_summary_idle_seconds(), Some(600));
+        assert_eq!(layered.unread_keys().count(), 0);
+
+        let only_global = Layers::new("away-idle-global")
+            .global(r#"{"awaySummaryIdleSeconds": 90}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(only_global.away_summary_idle_seconds(), Some(90));
     }
 
     /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
