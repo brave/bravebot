@@ -1476,7 +1476,10 @@ stay behind because they were given for work that the brief describes only in wo
   the trust map and the vouched commands under whatever stands at that path now. A person who
   removes a checkout, puts a different one at the same path and resumes an old session there is not
   asked the startup trust question, and a command vouched for in that session runs without asking,
-  its output labelled trusted ([RUN-7](tools/run.md#RUN-7)). A fresh session at that path asks both
+  its output labelled trusted ([RUN-7](tools/run.md#RUN-7)). The same goes for the yes that lets a
+  confined line run without asking ([RUN-5](tools/run.md#RUN-5)): it is kept as the root's path, so
+  it comes back for the checkout at that path now, and such a line there runs unasked with the
+  network closed for it. A fresh session at that path asks both
   ([TRUST-6](trust-map.md#TRUST-6), [RUN-9](tools/run.md#RUN-9)). A resume continues the session as
   it was left, and the permissions it holds were given for the path, so this is accepted.
 
