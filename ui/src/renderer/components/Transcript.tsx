@@ -3,6 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
+import type { Effort } from '../../shared/effort'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
@@ -37,6 +38,7 @@ import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../
 
 interface Live {
   model: string | null
+  effort: Effort | null
   handle: string
   summary: { title: string; project: string; branch: string | null; directory: string }
   entries: t.Entry[]
@@ -115,6 +117,7 @@ interface Props {
   draft: string
   onDraft: (draft: string) => void
   onModel: (model: string) => void
+  onEffort: (effort: Effort | null) => void
   onMode: (mode: PermissionMode) => void
   onSandbox: (mode: SandboxMode) => void
   onSubmit: () => void
@@ -286,6 +289,7 @@ export function Transcript({
   draft,
   onDraft,
   onModel,
+  onEffort,
   onMode,
   onSandbox,
   onSubmit,
@@ -435,6 +439,7 @@ export function Transcript({
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
+  const chooseEffort = useEvent(onEffort)
   const chooseMode = useEvent(onMode)
   const chooseSandbox = useEvent(onSandbox)
   const attach = useEvent(onAttach)
@@ -759,6 +764,8 @@ export function Transcript({
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
+          effort={live.effort}
+          onEffort={chooseEffort}
           permissionMode={live.permissionMode}
           onMode={chooseMode}
           sandboxMode={live.sandboxMode}

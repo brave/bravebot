@@ -24,6 +24,7 @@ import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../sh
 import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
 import type { Bot } from '../shared/bots'
+import type { Effort } from '../shared/effort'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
@@ -214,6 +215,7 @@ const api = {
     prompt: string
     grounded: boolean
     model?: string | null
+    effort?: Effort | null
     attachments?: string[]
   }): Promise<Answer<{ turn: number }>> {
     return ipcRenderer.invoke('bravebot:bots:send', request) as Promise<Answer<{ turn: number }>>

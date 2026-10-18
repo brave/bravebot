@@ -1,4 +1,5 @@
 import type { FileAttachment } from '../shared/files'
+import type { Effort } from '../shared/effort'
 import type {
   Checking,
   Hook,
@@ -21,6 +22,8 @@ import { conversationPreferences, setConversation } from './experience'
 /** What the app is doing, which decides most of what the interface offers. */
 export interface Live {
   model: string | null
+  /** `null` leaves the level to settings and the service. */
+  effort: Effort | null
   handle: string
   /**
    * The record's own id, or `null` for a session made in this window and not yet listed.

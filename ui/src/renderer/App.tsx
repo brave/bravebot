@@ -30,7 +30,9 @@ import { Notice } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
-import { conversationModel, rememberModel } from './models'
+import { conversationEffort, conversationModel, rememberEffort, rememberModel } from './models'
+import type { Effort } from '../shared/effort'
+import { effortToSend } from './context-window'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
@@ -114,6 +116,9 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
   }, [live?.summary.id, live?.summary.directory, live?.model])
+  useEffect(() => {
+    if (live?.summary.id) rememberEffort(live.summary.directory, live.summary.id, live.effort)
+  }, [live?.summary.id, live?.summary.directory, live?.effort])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
   const { chosen, writeAppearance } = useAppearance()
@@ -238,6 +243,7 @@ export function App(): React.JSX.Element {
       setLive(newLive({
         handle: opened.session,
         model: bot?.model ?? conversationModel(summary.directory, summary.id, opened.model),
+        effort: conversationEffort(summary.directory, summary.id),
         summary: {
           id: summary.id,
           title: opened.record.title,
@@ -309,6 +315,7 @@ export function App(): React.JSX.Element {
         handle: made.session,
         draftId,
         model: bot?.model ?? made.model,
+        effort: null,
         summary: {
           id: null,
           title: NEW_CHAT,
@@ -378,6 +385,7 @@ export function App(): React.JSX.Element {
     const sending = openedLives.current.get(handle)
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
+    const effort = effortToSend(handle, model, sending?.effort ?? null)
     const attachments = selectedFiles ?? sending?.attachments ?? []
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
@@ -425,9 +433,9 @@ export function App(): React.JSX.Element {
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id) })
+        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, effort, attachments: attachments.map((file) => file.id) })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id) })
+        await call('turn.send', { session: handle, prompt, model, effort, attachments: attachments.map((file) => file.id) })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -590,6 +598,12 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
+  const chooseEffort = useCallback((effort: Effort | null) => {
+    const current = liveRef.current
+    if (!current || current.running) return
+    setLive((old) => old?.handle === current.handle && !old.running ? { ...old, effort } : old)
+  }, [])
+
   // Allowed while a turn runs: the running turn follows the mode chosen last (MODE-8). What the bridge answered is what is drawn.
   const chooseMode = useCallback(async (mode: PermissionMode) => {
     const handle = handleRef.current
@@ -620,9 +634,10 @@ export function App(): React.JSX.Element {
     const handle = handleRef.current
     if (!handle) return
     const model = openedLives.current.get(handle)?.model ?? null
+    const effort = effortToSend(handle, model, openedLives.current.get(handle)?.effort ?? null)
     updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
     try {
-      await call('manifest.run', { session: handle, task, model })
+      await call('manifest.run', { session: handle, task, model, effort })
     } catch (error) {
       if (error instanceof Unconfigurable) setUnconfigured(error.message)
       updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
@@ -815,6 +830,7 @@ export function App(): React.JSX.Element {
         setLive(newLive({
           handle: forked.session,
           model: live.model,
+          effort: live.effort,
           summary: {
             id: forked.id,
             // What a fork is called is decided by the agent from the history it kept, and it
@@ -1148,6 +1164,7 @@ export function App(): React.JSX.Element {
         draft={draft}
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
+        onEffort={chooseEffort}
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
         onSubmit={submit}

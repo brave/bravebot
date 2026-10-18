@@ -54,6 +54,8 @@ struct Open {
     /// The turn in flight, if there is one.
     running: Option<Running>,
     model: Option<String>,
+    /// The level the window last picked, kept for a watch's turn, which no request carries.
+    effort: Option<bravebot_aichat::protocol::Effort>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
@@ -95,6 +97,7 @@ impl Open {
             keeping,
             running: None,
             model: None,
+            effort: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting,
             definition: None,
@@ -1077,6 +1080,7 @@ impl Bridge {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
+        let requested_effort = crate::wire::effort(request.params.get("effort"))?;
         let files: Vec<String> = request
             .params
             .get("files")
@@ -1146,6 +1150,9 @@ impl Bridge {
         }
 
         let model = requested_model.or_else(|| open.model.clone());
+        let picked_effort = requested_effort.unwrap_or(open.effort);
+        // Ranked against the settings as the terminal ranks its `/effort` pick (BACKEND-43).
+        let effort = bravebot_session::store::effort(picked_effort, &settings);
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
         // A model the machine-level layer refuses is not requested, whichever service would have
         // answered for it and whoever asked. The roster this window draws leaves such a model out,
@@ -1211,11 +1218,13 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model;
+            open.effort = picked_effort;
             open.definition = addressing.clone();
         }
         self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
+                effort,
                 addressing,
                 watches,
                 emitter,
@@ -1285,6 +1294,7 @@ impl Bridge {
             }
         }
         let requested_model = crate::models::selection(request.params.get("model"))?;
+        let requested_effort = crate::wire::effort(request.params.get("effort"))?;
 
         self.reap(&handle);
 
@@ -1295,6 +1305,7 @@ impl Bridge {
         open.ready_for_work()?;
 
         let model = requested_model.or_else(|| open.model.clone());
+        let picked_effort = requested_effort.unwrap_or(open.effort);
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
         // A model the machine-level layer refuses is not requested, whichever service would have
         // answered for it and whoever asked. The roster this window draws leaves such a model out,
@@ -1303,6 +1314,7 @@ impl Bridge {
             return Err(Failure::bad_request(refused));
         }
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let effort = bravebot_session::store::effort(picked_effort, &settings);
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
@@ -1350,6 +1362,7 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model.clone();
+            open.effort = picked_effort;
         }
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -1366,6 +1379,7 @@ impl Bridge {
                 deadlines,
                 sandbox,
                 model,
+                effort,
                 permission_mode,
                 workspace,
                 task,
@@ -2171,6 +2185,7 @@ struct Work {
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
     model: Option<String>,
+    effort: Option<bravebot_aichat::protocol::Effort>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
     addressing: Option<String>,
@@ -2283,6 +2298,7 @@ fn work(work: Work) {
         mcp_requested,
         watches,
         model,
+        effort,
         addressing,
         workspace,
         prompt,
@@ -2351,6 +2367,7 @@ fn work(work: Work) {
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
         .with_model(model)
+        .with_effort(effort)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_download_cap(download_cap)

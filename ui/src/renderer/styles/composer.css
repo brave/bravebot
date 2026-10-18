@@ -150,6 +150,15 @@
   --leo-icon-color: var(--status-success);
   background: var(--status-success-bg);
 }
+.composer-toolbar .effort-menu { flex: none; }
+.composer .effort-trigger {
+  --leo-button-color: var(--ink-tertiary);
+  --leo-icon-color: currentColor;
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+.effort-option { width: min(320px, calc(100vw - 24px)); }
+.effort-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
 /* The icon is 20px in a 28px target. */
 .composer .attach-files {
   --leo-button-color: var(--ink-secondary);

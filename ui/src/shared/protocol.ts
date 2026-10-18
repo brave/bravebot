@@ -304,6 +304,8 @@ export interface ModelOption {
   contextWindow: number | null
   /** Provider-reported capabilities; absent when the backend does not report them. */
   capabilities?: string[]
+  /** False where the model reads no level, or its service has refused one. */
+  readsEffort?: boolean
 }
 
 export interface ModelCatalogue {

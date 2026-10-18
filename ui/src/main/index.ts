@@ -44,6 +44,7 @@ import {
   AFTER_COMPACTION,
 } from './bots'
 import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { isEffort, type Effort } from '../shared/effort'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
@@ -184,6 +185,7 @@ async function sendBotTurn(
   model?: string | null,
   attachments?: unknown,
   composed?: 'consolidation',
+  effort?: Effort | null,
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
@@ -215,6 +217,8 @@ async function sendBotTurn(
   if (composed) params.composed = composed
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
+  // Absent on a turn this process composes, which keeps the level the window last picked.
+  if (effort !== undefined) params.effort = effort
   if (held.definition !== null) {
     // Every turn in this bot's conversation is addressed to its definition (MEMORY-10), the ones
     // this process composes included. The name is the row's, judged a slug when it was stored, and
@@ -813,12 +817,15 @@ app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments } = value as Record<string, unknown>
+      const { session, slug, prompt, grounded, model, effort, attachments } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
       if (model !== undefined && model !== null && typeof model !== 'string') {
         return { error: { code: 'bad_request', message: 'invalid model' } }
+      }
+      if (effort !== undefined && effort !== null && !isEffort(effort)) {
+        return { error: { code: 'bad_request', message: 'invalid effort' } }
       }
       const held = bot(slug)
       if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
@@ -835,7 +842,7 @@ app.whenReady().then(() => {
       // question about *its* session, which this process cannot see, so that answer stands.
       const nudge = grounded !== true && nudgeDue(held)
       if (nudge) noteBotNudged(held.slug)
-      return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments)
+      return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments, undefined, effort)
     },
   )
 
