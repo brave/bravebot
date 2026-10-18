@@ -111,10 +111,13 @@ impl Scope {
     /// is not named here: an argv that signs carries it and a `run` call may request it
     /// ([`Requested::named`]), and neither is remembered.
     pub fn named(word: &str) -> Option<Self> {
-        [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
+        Self::REACHABLE
             .into_iter()
             .find(|scope| scope.name() == word)
     }
+
+    /// The scopes `/reach` and a remembered grant can name, in the order they are listed.
+    pub const REACHABLE: [Self; 4] = [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker];
 
     /// The scope a stage carries, from the file its program resolved to, its argument vector, and
     /// the `NAME=value` assignments written in front of it.

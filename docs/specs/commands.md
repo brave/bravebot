@@ -966,6 +966,34 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
+<a id="CMD-22"></a>
+### CMD-22: `/sandbox`, `/limit`, `/review` and `/reach` spell out what they take after the word
+
+Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
+`workspace-write` and `off`, after the caret in place of `[<mode>]`. The earlier word `standard`
+is still read and is not listed. Tab after `/sandbox ` and the start of a mode, with the caret at
+the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sandbox w` becomes
+`/sandbox workspace-write`.
+
+`/limit` draws `[<n>[k|m] | <n> credits | off]`, the figures it takes, and not the words `tokens`
+and `credits` as choices. `/review` draws `[staged | since <ref> | commit <ref> | pr <n>] [focus]`,
+the targets its parser reads. `/reach` draws the credential scopes, the `write` and `always`
+words, `remove <n>` and `keys`. In each, the words are the ones the parser compares against, taken
+from the type or constant it reads, so a mode, scope or target added there appears in the hint.
+The completion list and the table keep the short form, so the description column does not move,
+and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
+because a name there may come from a file a person wrote.
+
+Nothing from the conversation reaches any of them. They read the typed line and fixed sets.
+
+**Why.** A person cannot guess these words from `[<mode>]` or `[target]`, and a hint written
+apart from the parser drifts from it.
+
+`verified-by: bravebot_tui::render::the_sandbox_command_offers_its_modes_after_its_word`
+`verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
+`verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
+`verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the

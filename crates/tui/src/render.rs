@@ -6386,6 +6386,16 @@ mod tests {
         );
     }
 
+    /// `/sandbox` spells out the modes it takes once the word is typed.
+    #[test]
+    fn the_sandbox_command_offers_its_modes_after_its_word() {
+        let row = input_row(&typed("/sandbox "), 90);
+        assert!(
+            row.ends_with("/sandbox  [strict | read-only | workspace-write | off]"),
+            "{row}"
+        );
+    }
+
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
     /// ellipsis, and a file's own escape in it is drawn as a glyph.
     #[test]

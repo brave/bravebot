@@ -23,7 +23,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/rename` | `<name>` | Call this conversation something else |
 | `/note` | `<note>` | Note something on this session's record, without putting it in the conversation |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
-| `/limit` | `[tokens \| credits \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
+| `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
@@ -203,7 +203,7 @@ advisor's tokens and is counted in the turn's.
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
 
-## `/limit [tokens | credits | off]`
+## `/limit [<amount> | off]`
 
 Sets the most tokens, or Leo Premium credits, this session may spend. `/limit 500k` or `/limit 2m`
 sets it in tokens, with `k` for thousands and `m` for millions, `/limit 200 credits` sets it in
@@ -387,7 +387,7 @@ same file and decides later `git` commands that reach that owner.
 /reach keys remove 1                        # forget the first, so the next prompt asks again
 ```
 
-## `/sandbox [<mode>]`
+## `/sandbox [strict | read-only | workspace-write | off]`
 
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
@@ -395,6 +395,8 @@ for the rest of the session, starting with the next turn. Typed while a turn run
 turn to end, so one turn's `run` description, refusals and profile all come from one mode. The mode is
 not written to the session, so a resumed session takes the mode the process started with, and `/resume`
 inside a session keeps the one you set.
+
+Once `/sandbox ` is typed the box lists the four modes after it, and Tab finishes a started one, so `/sandbox w` becomes `/sandbox workspace-write`.
 
 Moving to `off` asks first, because programs then start with no profile at all; answering no keeps the
 mode. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
