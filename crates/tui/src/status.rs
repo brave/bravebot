@@ -290,12 +290,21 @@ fn network_line(
 ) -> Option<Line> {
     // Not under `off`: nothing confines a program then, so a closed network would be a claim about
     // a boundary that is not there. The confinement line says the programs are unconfined.
-    let settled = settled.filter(|settled| {
-        settled.network.is_closed() && mode != bravebot_sandbox::SandboxMode::Off
-    })?;
+    if mode == bravebot_sandbox::SandboxMode::Off {
+        return None;
+    }
+    // `read-only` closes it whatever the setting says (SANDBOX-22); the confinement line names the
+    // mode that did.
+    let setting = settled.map_or(bravebot_sandbox::network::Network::Open, |s| s.network);
+    if !mode.network_in_force(setting).is_closed() {
+        return None;
+    }
+    let line = Line::new(t!(status_network), t!(status_network_closed));
     Some(
-        Line::new(t!(status_network), t!(status_network_closed))
-            .with_note(run_network_source(&settled.decided)),
+        match settled.filter(|settled| settled.network.is_closed()) {
+            Some(settled) => line.with_note(run_network_source(&settled.decided)),
+            None => line,
+        },
     )
 }
 
@@ -2665,6 +2674,12 @@ mod tests {
             .is_none(),
             "a closed network was claimed for programs nothing confines"
         );
+        // `read-only` closes it whatever the session settled, or did not settle (SANDBOX-22).
+        for open in [None, Some(settled(Network::Open, Decided::Flag))] {
+            let closed = network_line(open.as_ref(), SandboxMode::ReadOnly)
+                .expect("read-only closes the network");
+            assert_eq!(closed.value, t!(status_network_closed));
+        }
         assert_eq!(flag.label.trim(), t!(status_network));
         assert!(flag.note.contains("--run-network"));
         let pinned = network_line(

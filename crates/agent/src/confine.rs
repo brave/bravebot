@@ -354,10 +354,7 @@ impl Confinement {
     /// closes it for every stage and gives none a reason to keep it, so that what the mode holds
     /// back is not reachable through a remote (SANDBOX-22).
     fn network(&self) -> Network {
-        match self.mode {
-            SandboxMode::ReadOnly => Network::Closed,
-            _ => self.network,
-        }
+        self.mode.network_in_force(self.network)
     }
 
     /// Whether `scope` is lent to a stage. The remote scope is not under `read-only`: it is how a
