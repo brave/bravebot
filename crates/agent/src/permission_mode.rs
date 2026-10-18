@@ -206,19 +206,34 @@ impl PermissionMode {
 /// Cloning gives another handle on the same mode, so the key that sets it, the confirmer that
 /// answers under it, the tools that refuse under it and a delegate's turn all read what the person
 /// chose last (MODE-8). A value made from a [`PermissionMode`] is a handle nobody else holds.
+///
+/// It also says whether anybody is there to ask. That is a fact about the run and not a choice the
+/// person makes while it goes, so it is fixed when the handle is made and no key reaches it.
 #[derive(Debug, Clone)]
-pub struct LiveMode(std::sync::Arc<std::sync::atomic::AtomicU8>);
+pub struct LiveMode {
+    mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    nobody_to_ask: bool,
+}
 
 impl LiveMode {
     pub fn new(mode: PermissionMode) -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
-            mode as u8,
-        )))
+        Self {
+            mode: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(mode as u8)),
+            nobody_to_ask: false,
+        }
+    }
+
+    /// A mode for a run nobody is watching, a one-shot command or a pipeline (CLI-1).
+    pub fn unattended(mode: PermissionMode) -> Self {
+        Self {
+            nobody_to_ask: true,
+            ..Self::new(mode)
+        }
     }
 
     /// The mode in force now. Read once per decision: two reads in one decision can disagree.
     pub fn get(&self) -> PermissionMode {
-        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+        match self.mode.load(std::sync::atomic::Ordering::Acquire) {
             x if x == PermissionMode::AcceptEdits as u8 => PermissionMode::AcceptEdits,
             x if x == PermissionMode::Plan as u8 => PermissionMode::Plan,
             x if x == PermissionMode::Bypass as u8 => PermissionMode::Bypass,
@@ -227,8 +242,18 @@ impl LiveMode {
     }
 
     pub fn set(&self, mode: PermissionMode) {
-        self.0
+        self.mode
             .store(mode as u8, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether every write is put to the confirmer, whatever the trust map says about its path.
+    ///
+    /// A run with nobody to ask holds a trust map its own command line wrote, and what that vouches
+    /// for is what the tree's files say, never a write the planner composed: trusting a directory
+    /// opens reads, and the one thing that may lift the refusal of a write is the flag that selects
+    /// the bypass mode, where the confirmer answers for the person who typed it (CLI-1).
+    pub fn writes_are_always_asked(&self) -> bool {
+        self.nobody_to_ask && self.get() != PermissionMode::Bypass
     }
 }
 

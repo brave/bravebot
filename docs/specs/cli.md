@@ -81,6 +81,7 @@ answer. Writing stays refused without the flag above.
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
 `verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
 `verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
+`verified-by: bravebot_cli::running::a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`
 
 <a id="CLI-2"></a>
 ### CLI-2: unprompted, stdin is read only when it is not a terminal
