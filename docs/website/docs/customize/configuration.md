@@ -404,10 +404,10 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -1253,8 +1253,8 @@ whoever writes the commit. Anything that is not a string reads as absence.
 
 What you set here is stated to the model in front of every round of every turn, and a destination you
 did not name is not mentioned to it at all. A value is quoted as text to copy rather than written in
-as a sentence addressed to it, since the block resolves through a file in the checkout as well as your
-own.
+as a sentence addressed to it. The block is read from your own file and the file `--settings` names
+only; a project or local file that sets it is ignored and reported by `bravebot doctor`.
 
 ### `keybindings`
 

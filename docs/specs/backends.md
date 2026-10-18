@@ -839,9 +839,9 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -867,9 +867,11 @@ local layer naming one is dropped whole and reported, so the destination of ever
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
 
-The two names under `attribution` combine per name for the same reason `env` does: they are
-unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+`attribution` is the exception for the reason [BACKEND-30](#BACKEND-30) gives: its free text reaches
+the planner on every round, so a project or local layer carrying one is dropped whole and reported.
+Between the two files that may write it, the two names under it combine per name for the same
+reason `env` does: they are unrelated destinations that happen to share a block, and a file
+answering for one must not answer for the other by omission. The chords under `keybindings` and the two caps under `search` are the
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
