@@ -89,6 +89,9 @@ pub struct State {
     pub spend: BTreeMap<usize, u64>,
     /// The agent's per-turn timing, preserved when a terminal session resumes here.
     pub timing: BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// What the last turn read out of the cache and wrote into it, or `None` before one has run
+    /// here. Live only: the record keeps no cache split, so a reopened session starts without one.
+    pub cached: Option<bravebot_aichat::protocol::Cached>,
     /// The model the server reported answering with, as of the last turn.
     ///
     /// What answered rather than what was asked for: an endpoint may serve something other than
@@ -187,6 +190,7 @@ impl State {
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
+            cached: None,
             model: None,
             todos: BTreeMap::new(),
             asides: Vec::new(),
@@ -228,6 +232,7 @@ impl State {
             tokens: record.tokens,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
+            cached: None,
             model: record.model.clone(),
             todos: record.todo_rows(),
             asides: bravebot_session::sessions::recall(project, record).asides,
@@ -289,6 +294,7 @@ impl State {
             tokens: 0,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
+            cached: None,
             model: None,
             todos,
             asides: Vec::new(),

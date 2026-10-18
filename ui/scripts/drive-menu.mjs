@@ -146,8 +146,8 @@ check(
 // `session.compact` summarises the conversation and touches nothing on disk but its record.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 47,
-  'the main-process allow-list is 47 methods including model discovery, rewind and compaction, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 48,
+  'the main-process allow-list is 48 methods including model discovery, rewind, compaction and usage, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------

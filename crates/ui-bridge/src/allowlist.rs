@@ -155,6 +155,8 @@ pub const DENIED: &[&str] = &[
     "manifest.reply",
     // Shorten a session's conversation outside a turn, which no client of the host needs yet.
     "session.compact",
+    // Report what a session has spent, which no client of the host asks for yet.
+    "session.usage",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",

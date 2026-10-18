@@ -46,6 +46,7 @@ pub mod running;
 pub mod settings;
 pub mod store;
 pub mod turn;
+mod usage;
 pub mod view;
 pub mod wire;
 pub mod workers;

@@ -267,6 +267,13 @@
 .context-popover p { margin: 0; }
 .context-said { font: var(--type-body); color: var(--ink-primary); }
 .context-detail { font: var(--type-caption); color: var(--ink-tertiary); }
+.context-session { display: grid; gap: var(--leo-spacing-xs); padding-top: var(--leo-spacing-m); }
+.context-heading { font: var(--type-caption-strong); color: var(--ink-secondary); }
+.context-turns summary { cursor: pointer; }
+.context-turns-list { max-height: 160px; overflow-y: auto; margin-top: var(--leo-spacing-s); }
+.context-turns table { width: 100%; border-collapse: collapse; font: var(--type-caption); color: var(--ink-secondary); }
+.context-turns th { text-align: start; font-weight: normal; }
+.context-turns td.num { text-align: end; font-variant-numeric: tabular-nums; padding-inline-start: var(--leo-spacing-m); }
 .context-actions { display: grid; gap: var(--leo-spacing-s); justify-items: start; padding-top: var(--leo-spacing-s); }
 
 /* ---- attachments */

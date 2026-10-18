@@ -3,6 +3,8 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
+import type { SessionUsage } from '../../shared/protocol'
+import { cacheLine, spentLine, timeLine, turnRows } from '../usage'
 import type { Staged } from '../staging'
 import { Button, ButtonMenu, Hr, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
@@ -572,6 +574,7 @@ function ContextMeter({ session, model, tokens, archived, compacting, canCompact
         {share && <p className="context-detail">{share} context tokens</p>}
         {!!archived && <p className="context-detail">Earlier context summarised</p>}
         <p className="context-detail">The size of the model’s last request, not the tokens used so far.</p>
+        <SessionSpend session={session} />
         {onCompact && (
           <>
             <Hr />
@@ -583,5 +586,65 @@ function ContextMeter({ session, model, tokens, archived, compacting, canCompact
         )}
       </div>}
     </ButtonMenu>
+  )
+}
+
+/**
+ * What the session has spent, as `/cost` reports it, read each time the popover opens.
+ *
+ * Nothing while it is being read or if it cannot be, except while a turn holds the session, which
+ * is said: the totals are read between turns.
+ */
+function SessionSpend({ session }: { session: string }): React.JSX.Element | null {
+  const [usage, setUsage] = useState<SessionUsage | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let live = true
+    window.bravebot.request<SessionUsage>('session.usage', { session })
+      .then((answer) => {
+        if (!live) return
+        if (answer.ok) setUsage(answer.ok)
+        else if (answer.error?.code === 'turn_in_flight') setBusy(true)
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [session])
+  if (busy) {
+    return (
+      <div className="context-session" data-test="context-session">
+        <p className="context-heading">This session</p>
+        <p className="context-detail">Totals are shown between turns.</p>
+      </div>
+    )
+  }
+  if (!usage) return null
+  const time = timeLine(usage)
+  const cache = cacheLine(usage)
+  const rows = turnRows(usage)
+  return (
+    <div className="context-session" data-test="context-session">
+      <p className="context-heading">This session</p>
+      <p className="context-said">{spentLine(usage)}</p>
+      {time && <p className="context-detail">{time}</p>}
+      {cache && <p className="context-detail">{cache}</p>}
+      {rows.length > 0 && (
+        <details className="context-turns">
+          <summary className="context-detail">Per turn</summary>
+          <div className="context-turns-list">
+            <table>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.label}>
+                    <th scope="row">{row.label}</th>
+                    <td className="num">{row.tokens}</td>
+                    <td className="num">{row.share === null ? '' : `${row.share}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </div>
   )
 }

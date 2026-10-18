@@ -586,6 +586,32 @@ summary, so `rewind` is always empty after one.
 `compact.error` leaves the conversation as it was. `category` is a failure category as
 `turn.error` names one (§8.3), or `cancelled` with `stopped: true` after `turn.cancel`.
 
+#### `session.usage`
+
+```json
+{ "id": 7, "method": "session.usage", "params": { "session": "s1" } }
+```
+
+What the session has spent, in tokens and time, as the terminal's `/cost` and `/status` report
+it. Read-only. Refused with `turn_in_flight` while a turn or a compaction holds the session.
+Returns:
+
+```json
+{ "turns": 2, "tokens": 18430,
+  "byTurn": [ { "turn": 1, "tokens": 6200 }, { "turn": 2, "tokens": 12230 } ],
+  "unattributed": 0,
+  "timing": { "wallMs": 41200, "inferenceMs": 30100, "toolsMs": 9800, "stalledMs": 0, "overheadMs": 1300 },
+  "cached": { "read": 5400, "written": 0 } }
+```
+
+`byTurn` is each turn's charge, by turn number. Turn `0` is what was spent before the first
+turn. `unattributed` is what `tokens` holds that no row accounts for, as with a record written
+before turns were charged separately, so the rows and it add up to `tokens`. `timing` is every
+turn's added together. `inferenceMs`, `toolsMs` and `stalledMs` are parts of `wallMs`, and
+`overheadMs` is the rest. `cached` is the last turn's cache read and write, absent when the
+service reported neither. The record keeps no cache split, so a reopened session has none until
+its next turn. There is no figure in money: nothing here knows what a token is charged at.
+
 ### 7.2 Turns
 
 #### `turn.send`

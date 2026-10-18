@@ -919,6 +919,19 @@ export interface CompactDone {
   consolidating?: boolean
 }
 
+/** `session.usage`: what the session has spent, in tokens and time. No money: nothing knows a price. */
+export interface SessionUsage {
+  turns: number
+  tokens: number
+  /** Each turn's charge; turn 0 is what was spent before the first turn. */
+  byTurn: { turn: number; tokens: number }[]
+  /** What `tokens` holds that no row accounts for. */
+  unattributed: number
+  timing: { wallMs: number; inferenceMs: number; toolsMs: number; stalledMs: number; overheadMs: number }
+  /** The last turn's cache read and write; absent when the service reported neither. */
+  cached?: { read: number; written: number }
+}
+
 export type EventName = keyof EventMap
 
 /**
