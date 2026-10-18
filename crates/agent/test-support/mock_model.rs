@@ -62,9 +62,20 @@ pub fn a_turn_asking_for(
     decision: RunDecision,
     trust: impl FnOnce(&Workspace) -> TrustStore,
 ) -> Vec<bravebot_agent::RunRequest> {
+    a_turn_with_result_of(work, command, decision, trust).0
+}
+
+/// [`a_turn_asking_for`], and the request the model got back after the line: the body that
+/// carries the tool's result, so a test can tell a line that ran from one that never did.
+pub fn a_turn_with_result_of(
+    work: &Path,
+    command: &str,
+    decision: RunDecision,
+    trust: impl FnOnce(&Workspace) -> TrustStore,
+) -> (Vec<bravebot_agent::RunRequest>, String) {
     let workspace = Workspace::new(work).expect("workspace");
     let arguments = json!({ "command": command }).to_string();
-    let (endpoint, _received) =
+    let (endpoint, received) =
         serve_sequence(vec![tool_request("run", &arguments), reply_with("done")]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -91,7 +102,9 @@ pub fn a_turn_asking_for(
     )
     .outcome
     .expect("the turn runs");
-    asked.runs
+    // The first body is the task, the second carries the tool's result.
+    let after_the_line = received.try_iter().nth(1).unwrap_or_default();
+    (asked.runs, after_the_line)
 }
 
 pub fn config_for(endpoint: &str) -> Config {

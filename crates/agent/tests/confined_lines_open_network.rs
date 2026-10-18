@@ -23,7 +23,7 @@ use std::thread;
 
 #[path = "../test-support/mock_model.rs"]
 mod mock_model;
-use mock_model::{Scratch, a_turn_asking_for, trust_of};
+use mock_model::{Scratch, a_turn_with_result_of, trust_of};
 
 /// A listener that counts what connects to it, and the port it is on.
 fn a_listener() -> (u16, Arc<AtomicUsize>) {
@@ -60,7 +60,7 @@ fn a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_app
 
     // The control: the same line, asked about and approved, has the session's open network. If this
     // never connected, the rows below would pass for a reason that has nothing to do with them.
-    let asked = a_turn_asking_for(&work, &line, RunDecision::approve(), |workspace| {
+    let (asked, _) = a_turn_with_result_of(&work, &line, RunDecision::approve(), |workspace| {
         trust_of(workspace, false)
     });
     assert_eq!(asked.len(), 1, "the control line was not asked about");
@@ -71,7 +71,7 @@ fn a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_app
     );
 
     // Let through by the trust of the directory: not asked, and no connection reached the listener.
-    let asked = a_turn_asking_for(&work, &line, RunDecision::reject(), |workspace| {
+    let (asked, result) = a_turn_with_result_of(&work, &line, RunDecision::reject(), |workspace| {
         trust_of(workspace, true)
     });
     assert!(
@@ -82,5 +82,13 @@ fn a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_app
         connections.load(Ordering::SeqCst),
         1,
         "a line the trust of the directory let through kept the network"
+    );
+    // Not asked and not connected is also what a line that never ran looks like. The result the
+    // model got back says the line ran, and that the sandbox is what refused its connection.
+    let what_the_line_gave = result.rsplit("Result of run:").next().unwrap_or_default();
+    assert!(
+        what_the_line_gave.contains("step 1 exited 1")
+            && what_the_line_gave.contains("Network: closed"),
+        "the line was not run confined with the network closed: {what_the_line_gave}"
     );
 }
