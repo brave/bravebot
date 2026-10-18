@@ -479,18 +479,24 @@ fn a_program_answering_lines_on_its_streams_starts_under_the_base_and_ends_with_
         )
         .expect("the server starts");
     let mut input = child.take_stdin().expect("a stdin that was piped");
-    let mut output = std::io::BufReader::new(child.take_stdout().expect("a stdout that was piped"));
+    let mut output = child.take_stdout().expect("a stdout that was piped");
 
-    for line in ["first", "second"] {
-        input
-            .write_all(format!("{line}\r\n").as_bytes())
-            .expect("the server is handed a line");
-        let mut answered = String::new();
-        std::io::BufRead::read_line(&mut output, &mut answered).expect("the server answers");
-        assert_eq!(answered.trim(), line, "the server did not answer the line");
-    }
-
+    // `findstr` holds its output back while it is a pipe, so the answers are read once the input
+    // ends rather than line by line.
+    input
+        .write_all(b"first\r\nsecond\r\n")
+        .expect("the server is handed its lines");
     drop(input);
+    let mut answered = String::new();
+    output
+        .read_to_string(&mut answered)
+        .expect("the server answers");
+    assert_eq!(
+        answered.lines().collect::<Vec<_>>(),
+        ["first", "second"],
+        "the server did not answer each line with itself"
+    );
+
     let status = child.wait().expect("the server ends");
     assert_eq!(
         status.code(),
