@@ -1327,7 +1327,10 @@ would otherwise receive several lines it never expected.
 A one-shot run in the default turn mode writes a session record when its turn ends, as an ordinary
 session does ([SESSION-1](sessions.md#SESSION-1)), unless `--incognito` is given
 ([INCOG-3](incognito.md#INCOG-3)). A run that failed writes none. The result object of CLI-12
-carries the record's id in `session`, and carries `null` where the run wrote none.
+carries the record's id in `session`, and carries `null` where the run wrote none. Where it wrote
+a record it appends the turn's trail to the session's trail file beside it, as an ordinary session
+does ([TRACE-5](trace.md#TRACE-5)), so the gates' decisions are readable after the run ends and
+not only under `--trace`.
 
 `--resume <id>` and `--continue` given with a task, in either order (`-p "task" --resume <id>` and
 `--resume <id> -p "task"`), run the task as one more turn over that record's conversation and write
@@ -1378,6 +1381,7 @@ later write wins. An interactive resume has the same property, and
 process that holds the record is known.
 
 `verified-by: bravebot_cli::running::a_one_shot_run_is_written_down_and_names_its_session`
+`verified-by: bravebot_cli::running::a_one_shot_run_keeps_its_audit_trail_beside_the_record`
 `verified-by: bravebot_cli::running::a_task_carries_on_the_session_it_names_and_not_the_newest`
 `verified-by: bravebot_cli::running::a_task_continuing_the_latest_session_adds_a_turn_to_its_record`
 `verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
