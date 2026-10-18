@@ -1313,6 +1313,75 @@ impl Workspace {
         Some(Vec::new())
     }
 
+    /// The names `named` has under the other open directories that are the same directory, found by
+    /// device and inode (PERM-7). A macOS firmlink and a Linux bind mount give a tree a second
+    /// absolute name, and a file in it a second spelling no rule written about the first one
+    /// matches, so [`Workspace::landing`] cannot reach it: the second name canonicalizes to itself.
+    ///
+    /// Every ancestor of where the name lands is compared with every open directory, so a tree
+    /// opened by one name inside another's is found as well. Always empty off Unix, where the file
+    /// index is not in the standard library.
+    #[cfg(unix)]
+    pub(crate) fn same_tree_names(&self, named: &str) -> Vec<String> {
+        use std::os::unix::fs::MetadataExt;
+
+        if self.added_directories().is_empty() {
+            return Vec::new();
+        }
+        let Ok(resolved) = self.resolve(named) else {
+            return Vec::new();
+        };
+        let roots: Vec<PathBuf> = std::iter::once(self.root.clone())
+            .chain(self.added_directories())
+            .collect();
+        let identity = |directory: &Path| {
+            std::fs::metadata(directory)
+                .ok()
+                .filter(|found| found.is_dir())
+                .map(|found| (found.dev(), found.ino()))
+        };
+        let opened: Vec<_> = roots
+            .iter()
+            .filter_map(|root| Some((root, identity(root)?)))
+            .collect();
+        Self::names_in_the_same_directories(&resolved, &opened, identity)
+            .iter()
+            .map(|path| self.relative_display(path))
+            .collect()
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn same_tree_names(&self, _named: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// `resolved` re-rooted at each open directory that is the same directory as one of its
+    /// ancestors, other than as it is already spelled. `identity` is what makes two directories
+    /// one, so the rule is testable where the host has no second path to a tree.
+    #[cfg(unix)]
+    fn names_in_the_same_directories<I: Copy + PartialEq>(
+        resolved: &Path,
+        opened: &[(&PathBuf, I)],
+        identity: impl Fn(&Path) -> Option<I>,
+    ) -> Vec<PathBuf> {
+        let mut names = Vec::new();
+        for ancestor in resolved.ancestors().skip(1) {
+            let Some(held) = identity(ancestor) else {
+                continue;
+            };
+            let Ok(rest) = resolved.strip_prefix(ancestor) else {
+                continue;
+            };
+            for (root, root_identity) in opened {
+                let name = root.join(rest);
+                if *root_identity == held && name != resolved && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
     /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
     /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
     ///
@@ -6143,6 +6212,68 @@ mod tests {
         assert_eq!(workspace.hard_links("not-yet.txt"), Some(Vec::new()));
         let capped = workspace.clone().with_search_caps(Some(1), None);
         assert_eq!(capped.hard_links(".env"), None);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A second path to an open tree is another spelling of every file in it (PERM-7), and which
+    /// directories are one is the file system's answer, so the rule is driven with a made one.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_is_respelled_under_each_open_directory_that_is_the_same_directory() {
+        let root = PathBuf::from("/work");
+        let mirror = PathBuf::from("/mnt/mirror/work");
+        let other = PathBuf::from("/elsewhere");
+        let opened = [(&root, 1), (&mirror, 1), (&other, 2)];
+        let identity = |directory: &Path| match directory.to_str()? {
+            "/work" | "/mnt/mirror/work" => Some(1),
+            "/elsewhere" => Some(2),
+            _ => None,
+        };
+
+        let names = Workspace::names_in_the_same_directories(
+            Path::new("/mnt/mirror/work/src/a.md"),
+            &opened,
+            identity,
+        );
+        assert_eq!(names, [PathBuf::from("/work/src/a.md")]);
+        let names = Workspace::names_in_the_same_directories(
+            Path::new("/work/src/a.md"),
+            &opened,
+            identity,
+        );
+        assert_eq!(names, [PathBuf::from("/mnt/mirror/work/src/a.md")]);
+        assert!(
+            Workspace::names_in_the_same_directories(
+                Path::new("/elsewhere/src/a.md"),
+                &opened,
+                identity
+            )
+            .is_empty(),
+            "a directory that is not the same one gives the file no other name"
+        );
+    }
+
+    /// The macOS firmlink is the second path the issue reproduces with: the name under it
+    /// canonicalizes to itself, so the rule written about the working directory never sees it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_firmlink_path_to_the_working_directory_is_found_as_the_same_tree() {
+        let (path, mut workspace) = tree("firmlink");
+        std::fs::create_dir(path.join("src")).unwrap();
+        std::fs::write(path.join("src/a.md"), "a").unwrap();
+        let second =
+            Path::new("/System/Volumes/Data").join(workspace.root().strip_prefix("/").unwrap());
+        let second = second.to_str().unwrap().to_string();
+        workspace
+            .add_directory(&second)
+            .expect("the firmlink path opens");
+
+        let typed = format!("{second}/src/a.md");
+        assert_eq!(workspace.same_tree_names(&typed), ["src/a.md"]);
+        assert_eq!(workspace.same_tree_names("src/a.md"), [typed]);
+        let created = format!("{second}/not-yet.md");
+        assert_eq!(workspace.same_tree_names(&created), ["not-yet.md"]);
+        assert_eq!(workspace.same_tree_names("not-yet.md"), [created]);
         let _ = std::fs::remove_dir_all(path);
     }
 

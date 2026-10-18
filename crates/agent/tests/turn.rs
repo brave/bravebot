@@ -3865,6 +3865,46 @@ fn a_denied_file_is_not_read_through_a_link_to_it() {
     }
 }
 
+/// A second path to an open tree is another spelling of the file a rule is about (PERM-7). On macOS
+/// `/System/Volumes/Data<root>` opens the working directory's files, and once a person has opened it
+/// with `/add-dir` a read through it must meet the rule written about the relative name.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_denied_file_is_not_read_through_a_second_path_to_the_tree() {
+    let scratch = Scratch::new("permissions-read-denied-through-a-firmlink");
+    std::fs::create_dir(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
+    std::fs::write(scratch.path.join("src/b.md"), "PUBLIC_NOTE=daylight").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = format!(
+        "/System/Volumes/Data{}",
+        workspace.root().to_str().expect("utf-8 root")
+    );
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+    let call = format!(r#"{{"path":"{second}/src/a.md"}}"#);
+    let control = format!(r#"{{"path":"{second}/src/b.md"}}"#);
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&["Read(src/a.md)"], &[], &[]),
+        trusting_the_workspace(),
+        &[("read_file", &control), ("read_file", &call)],
+    );
+
+    assert!(!bodies.is_empty(), "the planner was never sent a request");
+    assert!(
+        bodies.iter().any(|body| body.contains("daylight")),
+        "a file no rule covers is read through the second path, so the refusal below is the rule's"
+    );
+    for body in bodies {
+        assert!(
+            !body.contains("hunter2"),
+            "a denied file reached the planner through a second path: {body}"
+        );
+    }
+}
+
 /// A deny rule is about the file (PERM-7), so every name the volume opens it by is refused with the
 /// name the rule spells, in a read and in a write. The planner is sent nothing from the file and
 /// the file keeps its bytes. The rules are read for the volume the file is on, as a session reads
