@@ -2922,6 +2922,10 @@ none to add to.
   terminal interface and a session in lines can, and the desktop and a run with nobody to ask
   cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
   an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
+  The `run` description of the argument says the planner may ask whenever a line needs it, that the
+  person is asked every time, and that a session which does not accept it refuses the call with a
+  sentence saying so. On macOS the sentence after a failed step that says only git writes a `.git`
+  adds that a script which runs git itself can be started with the argument, in the same sessions.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
 - The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
@@ -2942,6 +2946,7 @@ refuse the path.
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::confine::a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
