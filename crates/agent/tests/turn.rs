@@ -15309,12 +15309,13 @@ fn a_line_stopped_with_the_turn_counts_as_run() {
         notes: Vec::new(),
     };
 
+    let mut conversation = bravebot_agent::Conversation::new();
     let error = turn::resume(
         &config,
         &egress,
         &workspace,
         &Task::new("add a toggle"),
-        &mut bravebot_agent::Conversation::new(),
+        &mut conversation,
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut reporter,
         &mut sink,
@@ -15337,6 +15338,20 @@ fn a_line_stopped_with_the_turn_counts_as_run() {
             .any(|note| note.contains("stopped because the turn was cancelled")),
         "the line was not stopped part way, so this is not the case under test: {:?}",
         reporter.notes
+    );
+    let told_the_model: Vec<String> = conversation
+        .messages()
+        .iter()
+        .map(|stored| stored.message.content.text())
+        .filter(|text| text.contains("sleep 30"))
+        .collect();
+    assert!(
+        told_the_model
+            .iter()
+            .any(|text| text.contains("was started")
+                && text.contains("may have run in part")
+                && !text.contains("did not run")),
+        "the model was not told the stopped line had been started: {told_the_model:?}"
     );
     assert!(
         !reporter

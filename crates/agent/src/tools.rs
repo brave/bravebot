@@ -8210,7 +8210,21 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // stopped only once its stages have been spawned, so one the turn stopped has run (TURN-4).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
-            let produced = Produced::problem(format!("error: `{said}` did not run: {error}"));
+            // Only a line that was never spawned did not run. A stopped line was started and
+            // killed part way, and a plumbing failure can land after an earlier stage started, so
+            // the planner is told to check the effects before repeating either.
+            let text = match &error {
+                crate::exec::ExecError::Cancelled => format!(
+                    "error: `{said}` was started and then {error}; it may have run in part, so \
+                     check what it did before running it again"
+                ),
+                crate::exec::ExecError::Io(_) => format!(
+                    "error: `{said}` may have run in part: {error}; check what it did before \
+                     running it again"
+                ),
+                _ => format!("error: `{said}` did not run: {error}"),
+            };
+            let produced = Produced::problem(text);
             match stopped {
                 true => produced.having_run_a_program(),
                 false => produced.having_started_a_program(),
