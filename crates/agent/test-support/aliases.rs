@@ -69,7 +69,6 @@ const HARD_LINK: &[(Consumer, &str)] = &[
     (Consumer::TrustRead, "#2328"),
     (Consumer::TrustWrite, "#2328"),
     (Consumer::WriterReservation, "#2328"),
-    (Consumer::DenyRule, "#2327"),
 ];
 
 pub const ALIASES: &[Alias] = &[

@@ -680,6 +680,13 @@ impl Permissions {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
     }
 
+    /// Whether any `deny` rule is about reading or writing a path.
+    pub fn denies_any_path(&self) -> bool {
+        self.deny
+            .iter()
+            .any(|rule| matches!(rule.subject, Subject::Read | Subject::Edit))
+    }
+
     /// Whether any `deny` rule is about reading a path.
     pub fn denies_any_read(&self) -> bool {
         self.deny.iter().any(|rule| rule.subject == Subject::Read)

@@ -1253,6 +1253,61 @@ impl Workspace {
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
+    /// The other names of the file `named` opens, where it has a hard link, by device and inode
+    /// (PERM-7). A hard link canonicalizes to its own name, so [`Workspace::landing`] cannot reach
+    /// the name a rule is written about.
+    ///
+    /// Found by walking the open directories for a file with the same identity, which is asked
+    /// only of a file whose link count is above one. `None` where the walk stopped at the search
+    /// cap or could not list a directory, so the caller does not read it as "no other name". A
+    /// symbolic link is not followed, and every directory is walked, an ignored one included,
+    /// because a link can be made anywhere a stage may write. Always empty off Unix, where the
+    /// file index is not in the standard library.
+    #[cfg(unix)]
+    pub(crate) fn hard_links(&self, named: &str) -> Option<Vec<String>> {
+        use std::os::unix::fs::MetadataExt;
+
+        let Ok(resolved) = self.resolve(named) else {
+            return Some(Vec::new());
+        };
+        let Ok(found) = std::fs::metadata(&resolved) else {
+            return Some(Vec::new());
+        };
+        if !found.is_file() || found.nlink() < 2 {
+            return Some(Vec::new());
+        }
+        let mut names = Vec::new();
+        let mut budget = self.search_files;
+        let roots = std::iter::once(self.root.clone()).chain(self.added_directories());
+        for root in roots {
+            let mut pending = vec![root];
+            while let Some(directory) = pending.pop() {
+                let entries = std::fs::read_dir(&directory).ok()?;
+                for entry in entries.flatten() {
+                    budget = budget.checked_sub(1)?;
+                    let Ok(kind) = entry.file_type() else {
+                        continue;
+                    };
+                    if kind.is_dir() {
+                        pending.push(entry.path());
+                    } else if kind.is_file()
+                        && entry.metadata().is_ok_and(|other| {
+                            other.dev() == found.dev() && other.ino() == found.ino()
+                        })
+                    {
+                        names.push(self.relative_display(&entry.path()));
+                    }
+                }
+            }
+        }
+        Some(names)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn hard_links(&self, _named: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
     /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
     /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
     ///
@@ -6063,6 +6118,26 @@ mod tests {
         let (path, workspace) = tree("file");
         assert_eq!(workspace.landing("alias.txt").as_deref(), Some(".env"));
         assert_eq!(workspace.landing("./alias.txt").as_deref(), Some(".env"));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A hard link is another name for the file a rule is about, and nothing in its name says so
+    /// (PERM-7). A file with one name has no other, and a walk that cannot finish says so instead
+    /// of answering "none".
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_link_is_found_by_device_and_inode_and_the_walk_gives_up_at_its_cap() {
+        let (path, workspace) = tree("hard-link");
+        std::fs::create_dir(path.join("sub")).unwrap();
+        std::fs::hard_link(path.join(".env"), path.join("sub/copy.txt")).unwrap();
+
+        let mut found = workspace.hard_links("sub/copy.txt").unwrap();
+        found.sort();
+        assert_eq!(found, [".env", "sub/copy.txt"]);
+        assert_eq!(workspace.hard_links("plain.txt"), Some(Vec::new()));
+        assert_eq!(workspace.hard_links("not-yet.txt"), Some(Vec::new()));
+        let capped = workspace.clone().with_search_caps(Some(1), None);
+        assert_eq!(capped.hard_links(".env"), None);
         let _ = std::fs::remove_dir_all(path);
     }
 

@@ -1622,6 +1622,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny)
     }
 
+    /// Whether any `deny` rule about reading or writing a path is in force.
+    pub fn any_path_is_denied(&self) -> bool {
+        self.permissions.denies_any_path()
+    }
+
     /// Whether any `deny` rule about reading a path is in force.
     ///
     /// For an answer that quotes text without saying which file it came from: with no file to ask

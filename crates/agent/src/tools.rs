@@ -3338,6 +3338,18 @@ fn refuse_denied_path_as<S: Sink>(
     if let Some(landed) = &landing {
         ask(policy, landed)?;
     }
+    // A hard link opens the file under a name no rule spells, and nothing in the name says which.
+    // Where the walk for the file's other names gave up, a rule about a path may be about
+    // this file, so it is refused rather than passed.
+    match workspace.hard_links(path) {
+        Some(names) => {
+            for name in &names {
+                ask(policy, name)?;
+            }
+        }
+        None if policy.any_path_is_denied() => return Err(denied_by_rule(shown, None)),
+        None => {}
+    }
     // A definition's limit is written about workspace-relative names, so it is judged on the name
     // given in that spelling (`/work/docs/a.md` is `docs/a.md`) and on the file the name lands on
     // (`docs/link` is wherever the link goes). Both have to be inside: a link outside the limit
@@ -16819,6 +16831,50 @@ mod tests {
                 refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
                     .expect_err("the rule covers the file");
             assert_eq!(refusal, denied_by_rule("~/secret.txt", None));
+        }
+
+        /// PERM-7: a hard link has no name a rule spells, so where the walk for the file's other
+        /// names cannot finish, a call is refused while any rule about a path is in force. The
+        /// rule here is an `Edit` rule, which the refusal of a write has to honour as well as a
+        /// `Read` one, and a file with no hard link is not caught by the same fallback.
+        #[cfg(unix)]
+        #[test]
+        fn a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule() {
+            let scratch = Scratch::new("deny-hard-link-cap");
+            std::fs::write(scratch.path.join(".env"), "hunter2\n").unwrap();
+            std::fs::write(scratch.path.join("plain.txt"), "plain\n").unwrap();
+            std::fs::hard_link(scratch.path.join(".env"), scratch.path.join("alias.txt")).unwrap();
+            let workspace = Workspace::new(&scratch.path)
+                .expect("workspace")
+                .with_search_caps(Some(1), None);
+            let ask = |rules: &[&str], named: &str| {
+                let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                    &rules
+                        .iter()
+                        .map(|rule| rule.to_string())
+                        .collect::<Vec<_>>(),
+                    &[],
+                    &[],
+                    &bravebot_core::permissions::Anchors::none(),
+                );
+                assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write a file");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_permissions(permissions);
+                refuse_denied_path(&mut policy, &workspace, Purpose::Effect, named)
+            };
+
+            assert!(ask(&["Edit(.env)"], "alias.txt").is_err());
+            assert!(ask(&[], "alias.txt").is_ok());
+            assert!(ask(&["Edit(.env)"], "plain.txt").is_ok());
         }
 
         /// PERM-1, PERM-7: the reason the person wrote beside a deny rule is in the refusal the
