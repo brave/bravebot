@@ -2483,13 +2483,13 @@ fn work(work: Work) {
     let event = match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
-                for path in &outcome.watches {
-                    if !watches.live().iter().any(|w| w.path() == path) {
+                for armed in &outcome.watches {
+                    if !watches.live().iter().any(|w| w.path() == armed.path) {
                         let _ = watches.arm(
-                            path.clone(),
+                            armed.path.clone(),
                             workspace.root().to_path_buf(),
                             turn,
-                            workspace.look(path, workspace.root()),
+                            armed.looked.clone(),
                             std::time::Instant::now(),
                         );
                     }

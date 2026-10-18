@@ -13756,8 +13756,12 @@ fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
     .expect("turn runs");
 
     assert_eq!(
-        outcome.watches,
-        vec!["notes.txt".to_string()],
+        outcome
+            .watches
+            .iter()
+            .map(|a| a.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notes.txt"],
         "the blank reference stopped the watch from arming, or the real one armed another"
     );
     let bodies: Vec<String> = received.try_iter().collect();
@@ -13804,12 +13808,12 @@ fn a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name() {
         let bodies: Vec<String> = received.try_iter().collect();
         let told = newest_tool_result(bodies.last().expect("a last round").clone());
         assert_eq!(
-            outcome.watches,
-            if armed {
-                vec!["notes.txt".to_string()]
-            } else {
-                Vec::new()
-            },
+            outcome
+                .watches
+                .iter()
+                .map(|a| a.path.as_str())
+                .collect::<Vec<_>>(),
+            if armed { vec!["notes.txt"] } else { Vec::new() },
             "armed {armed}: {told}"
         );
         assert_eq!(

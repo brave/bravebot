@@ -6424,12 +6424,13 @@ fn fold_outcome(
             // for both meant the watch. Each has been through the gate a read of that path goes
             // through; what is left is the session's own question, which is whether it has room
             // and whether the first look sees anything.
-            for path in &outcome.watches {
+            for armed in &outcome.watches {
                 // The working directory the look was taken in travels with the watch, because a
                 // relative path is the file it was armed on only while that is still the working
                 // directory: after a `/cd` the same string names a file in the new one.
-                let under = workspace.root();
-                session.arm_watch(path, under, workspace.look(path, under));
+                // The first look is the one the tool call took, not a fresh one: the rest of the
+                // turn may have rewritten the file, and that change is what the watch is for.
+                session.arm_watch(&armed.path, workspace.root(), armed.looked.clone());
             }
 
             if session.looping().is_some() {

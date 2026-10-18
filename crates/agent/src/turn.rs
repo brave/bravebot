@@ -594,7 +594,7 @@ pub struct Outcome {
     /// Travels back for the reason a wakeup does: a watch outlives the turn, so the session is
     /// what holds one. Each has been through the gate a read of that path goes through, and the
     /// session applies the bound on how many may be live.
-    pub watches: Vec<String>,
+    pub watches: Vec<crate::watch::Armed>,
     /// Where the turn's wall clock went.
     ///
     /// Beside the token figures because it answers the other half of the same question. Tokens say
@@ -2292,7 +2292,7 @@ struct State<'s> {
     retries: round_steps::Retries,
     repeats: crate::repeated_call::Repeats,
     wakeup: Option<Wakeup>,
-    watches: Vec<String>,
+    watches: Vec<crate::watch::Armed>,
     armed: usize,
     advice_asked: usize,
     // What the planner has put to other sessions this turn, which the bound on them and a
@@ -3007,7 +3007,7 @@ where
     // Every watch the turn armed, in the order it asked for them, for whoever holds the session
     // to arm. A list rather than one, because the bound is the session's and a turn may ask
     // about several files.
-    let watches: Vec<String> = Vec::new();
+    let watches: Vec<crate::watch::Armed> = Vec::new();
     let armed = 0usize;
     // How many questions the planner has put to its advisor this turn, which the bound on them
     // is read against.
@@ -3966,8 +3966,8 @@ where
             // Kept rather than overwritten, unlike a wakeup: two calls naming two paths are
             // two watches, and a session that armed only the last of them would have told
             // the planner about one that does not exist.
-            if let Some(path) = output.watch.clone() {
-                state.watches.push(path);
+            if let Some(armed) = output.watch.clone() {
+                state.watches.push(armed);
             }
             // A tool the planner loaded is offered from the next request on (SERVERS-16).
             if let Some(wire) = output.tool_loaded.take()

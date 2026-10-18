@@ -236,7 +236,7 @@ pub struct Output {
     /// Travels back for the reason a wakeup does: a watch outlives the turn, so the thing that
     /// holds it is the session rather than anything here. Already past the gate a read of the
     /// path goes through, so what arrives is a path this session may look at.
-    pub watch: Option<String>,
+    pub watch: Option<crate::watch::Armed>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -1106,8 +1106,8 @@ struct Produced {
     read_asked: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
-    /// The path the planner asked to have a standing watch armed on.
-    watch: Option<String>,
+    /// The path the planner asked to have a standing watch armed on, with the look taken at the call.
+    watch: Option<crate::watch::Armed>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1377,8 +1377,11 @@ impl Produced {
     }
 
     /// Say which path the planner asked to have a standing watch armed on.
-    fn watching(mut self, path: impl Into<String>) -> Self {
-        self.watch = Some(path.into());
+    fn watching(mut self, path: impl Into<String>, looked: crate::watch::Looked) -> Self {
+        self.watch = Some(crate::watch::Armed {
+            path: path.into(),
+            looked,
+        });
         self
     }
 }
@@ -5527,6 +5530,10 @@ fn watch_file<S: Sink>(
         ));
     }
 
+    // The first look, taken here and travelling back with the path: the watch measures a change
+    // from the moment somebody asked about the file (FSWATCH-1), and the rest of this turn may
+    // rewrite it before anything else would look.
+    let looked = workspace.look(&path, workspace.root());
     *armed += 1;
     let shown = found.shown;
     Produced::new(
@@ -5539,7 +5546,7 @@ fn watch_file<S: Sink>(
         "",
         format!("watching {shown}"),
     )
-    .watching(path)
+    .watching(path, looked)
 }
 
 /// Show a command's output to the user, and give it to the planner if they agree.
@@ -15771,7 +15778,10 @@ mod tests {
                 json!({"path": "a.txt"}),
             );
 
-            assert_eq!(produced.watch.as_deref(), Some("a.txt"));
+            assert_eq!(
+                produced.watch.as_ref().map(|a| a.path.as_str()),
+                Some("a.txt")
+            );
             assert_eq!(count, 1);
             assert!(told.starts_with("watching: a.txt"), "{told}");
         }
@@ -15804,7 +15814,10 @@ mod tests {
             );
 
             let expected = home.join("todo.txt").to_string_lossy().into_owned();
-            assert_eq!(produced.watch.as_deref(), Some(expected.as_str()));
+            assert_eq!(
+                produced.watch.as_ref().map(|a| a.path.as_str()),
+                Some(expected.as_str())
+            );
             assert!(
                 crate::watch::names_the_same_file(&expected, &project, &home),
                 "the watch would end when the working directory moved"
@@ -15829,7 +15842,7 @@ mod tests {
                     armed(&workspace, arming, &mut count, json!({"path": "a.txt"}));
                 assert!(told.starts_with("refused:"), "{arming:?}: {told}");
                 assert!(told.contains(expected), "{arming:?}: {told}");
-                assert_eq!(produced.watch, None, "{arming:?}");
+                assert!(produced.watch.is_none(), "{arming:?}");
                 assert_eq!(count, 0, "{arming:?}");
             }
         }
@@ -15851,7 +15864,7 @@ mod tests {
                 &mut count,
                 json!({"path": "a.txt"}),
             );
-            assert_eq!(first.watch.as_deref(), Some("a.txt"));
+            assert_eq!(first.watch.as_ref().map(|a| a.path.as_str()), Some("a.txt"));
 
             let (second, told) = armed(
                 &workspace,
@@ -15859,7 +15872,7 @@ mod tests {
                 &mut count,
                 json!({"path": "b.txt"}),
             );
-            assert_eq!(second.watch, None);
+            assert!(second.watch.is_none());
             assert!(told.contains("as many watches as it keeps"), "{told}");
         }
 
@@ -15882,7 +15895,39 @@ mod tests {
 
             assert!(told.starts_with("refused:"), "{told}");
             assert!(told.contains("directory cannot be watched"), "{told}");
-            assert_eq!(produced.watch, None);
+            assert!(produced.watch.is_none());
+        }
+
+        /// FSWATCH-1: the first look is the file as it was when the planner asked, so a rewrite
+        /// later in the same turn is a change the watch reports rather than its baseline.
+        #[test]
+        fn the_first_look_is_taken_at_the_call_and_not_after_the_turn() {
+            let scratch = Scratch::new("first-look");
+            let file = scratch.path.join("app.js");
+            std::fs::write(&file, "one\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let before = workspace.look("app.js", workspace.root());
+            let mut count = 0;
+            let (produced, _) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "app.js"}),
+            );
+            // The rest of the turn rewrites the file, to a different size.
+            std::fs::write(&file, "a much longer rewrite\n").unwrap();
+
+            let carried = produced.watch.expect("armed").looked;
+            assert_eq!(
+                carried, before,
+                "the look carried back was not the file as it was at the call"
+            );
+            assert_ne!(
+                carried,
+                workspace.look("app.js", workspace.root()),
+                "the look carried back was taken after the rewrite"
+            );
         }
 
         /// A path with nothing at it is armed, the first look recording that nothing was there.
@@ -15900,7 +15945,10 @@ mod tests {
             );
 
             assert!(told.starts_with("watching:"), "{told}");
-            assert_eq!(produced.watch.as_deref(), Some("gone.txt"));
+            assert_eq!(
+                produced.watch.as_ref().map(|a| a.path.as_str()),
+                Some("gone.txt")
+            );
         }
 
         /// A path the read gate refuses is a path nobody vouched for, and a watch on one is a
@@ -15923,7 +15971,7 @@ mod tests {
             );
 
             assert!(told.starts_with("refused:"), "{told}");
-            assert_eq!(produced.watch, None);
+            assert!(produced.watch.is_none());
             assert_eq!(count, 0, "a watch the gate refused was counted as armed");
         }
 
@@ -15963,7 +16011,7 @@ mod tests {
                 told.contains("open the directory it is in"),
                 "the planner was not told the remedy the trail records: {told}"
             );
-            assert_eq!(produced.watch, None);
+            assert!(produced.watch.is_none());
             assert_eq!(
                 refused,
                 [
@@ -16043,7 +16091,7 @@ mod tests {
             );
 
             assert!(told.starts_with("refused:"), "{told}");
-            assert_eq!(produced.watch, None);
+            assert!(produced.watch.is_none());
             assert_eq!(count, 0, "a watch the gate refused was counted as armed");
         }
 
@@ -16134,7 +16182,7 @@ mod tests {
 
             assert!(told.starts_with("refused:"), "{told}");
             assert!(told.contains("and no reference"), "{told}");
-            assert_eq!(produced.watch, None);
+            assert!(produced.watch.is_none());
             assert_eq!(count, 0);
         }
 
