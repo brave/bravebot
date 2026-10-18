@@ -1221,8 +1221,8 @@ key. So is `/export`, which adds a file under the working directory and replaces
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
-waiting `/clear` names the new session. What they say is drawn under the turn and joins the
-transcript once the turn has ended. `/model`, `/theme`, `/effort` and `/config` alone open their list
+waiting `/clear` names the new session. What they say goes into the history as you type them,
+so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn
 ends stays open. A model picked this way is the next turn's, and the turn running keeps its own.

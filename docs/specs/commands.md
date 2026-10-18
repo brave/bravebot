@@ -297,8 +297,8 @@ were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
-rest. What it says is drawn under the turn as notes are, and joins the transcript after the turn's
-own entries once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
+rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
+entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
 A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
@@ -399,12 +399,12 @@ turn reads at its own next step ([RUN-27](tools/run.md#RUN-27)), as the turn rea
 job lives only as long as its turn, so a stop that waited for the turn to end would find nothing to
 stop.
 
-**Nothing enters the transcript while the turn runs.** What a keystroke wrote into the transcript
-would count as the turn having done something, which is what decides whether a stopped prompt comes
-back to be edited, so a command recorded there would cost a person the prompt they stopped. A
-waiting command is held in the queue, and taking back what is waiting gives it back to the box like
-any other line. What a command carried out mid-turn says is held under the turn until the turn has
-been folded in.
+**What a command says mid-turn is not the turn's doing.** What a keystroke wrote into the
+transcript would count as the turn having done something, which is what decides whether a stopped
+prompt comes back to be edited, so the entries a command carried out mid-turn adds are not counted:
+a stop after one still gives the prompt back where the turn recorded nothing. A waiting command is
+held in the queue, and taking back what is waiting gives it back to the box like any other line.
+What a command carried out mid-turn says is in the transcript from the moment it is said.
 
 While work runs the commands are offered as at rest ([INPUT-9](terminal-input.md#INPUT-9)), each row
 marked with the column above: `now` for a command that is carried out as it is typed, `queued` for

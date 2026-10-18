@@ -19727,8 +19727,8 @@ mod tests {
             );
             assert_eq!(
                 session.transcript.len(),
-                transcript,
-                "{line} wrote into the transcript of the turn in flight"
+                transcript + session.said_while_working().len(),
+                "{line} wrote more than what it said into the transcript"
             );
             let waiting: Vec<&str> = session
                 .queued
@@ -20033,8 +20033,8 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript,
-            "/rename wrote into the transcript of the turn in flight"
+            transcript + session.said_while_working().len(),
+            "/rename wrote more than what it said into the transcript"
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
@@ -20110,8 +20110,8 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript,
-            "/export wrote into the transcript of the turn in flight"
+            transcript + session.said_while_working().len(),
+            "/export wrote more than what it said into the transcript"
         );
         assert_eq!(waiting_prompts(&session), vec!["second"], "/export waited");
         assert_eq!(session.input(), "", "/export was left in the box");
@@ -20748,7 +20748,11 @@ mod tests {
                 "the report stated {stated:?}: {said}"
             );
         }
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(
+            session.transcript.len(),
+            transcript + session.said_while_working().len(),
+            "wrote more than what it said into the transcript"
+        );
         assert!(session.queued.is_empty(), "/status waited");
         assert_eq!(session.input(), "", "/status was left in the box");
     }
@@ -20928,7 +20932,11 @@ mod tests {
             said_under_the_turn(&session).first().copied(),
             Some(said_of(Some(Effort::Medium)).as_str())
         );
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(
+            session.transcript.len(),
+            transcript + session.said_while_working().len(),
+            "wrote more than what it said into the transcript"
+        );
         assert!(!cancel.is_cancelled());
     }
 
@@ -21178,7 +21186,11 @@ mod tests {
             "the reply would be compared with a model the turn never asked for"
         );
         assert!(!said_under_the_turn(&session).is_empty());
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(
+            session.transcript.len(),
+            transcript + session.said_while_working().len(),
+            "wrote more than what it said into the transcript"
+        );
         assert_eq!(session.input(), "", "a letter reached the box");
         assert!(session.picking().is_none());
 
