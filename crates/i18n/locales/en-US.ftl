@@ -1068,6 +1068,12 @@ auth-status-import = bravebot auth login import writes settings and keeps no sig
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
 auth-status-bedrock-good = the AWS session gives credentials to sign a request with
+# The next four are fixed sentences because a line of `auth status` carries no text the AWS CLI
+# chose: its error text names accounts and roles, and its profile list can embed an account id.
+auth-status-bedrock-lapsed = the AWS session has lapsed: run `bravebot auth login bedrock`
+auth-status-bedrock-no-profile = the AWS CLI has no profile by this name: name one it has in settings
+auth-status-bedrock-no-cli = the AWS CLI is not installed, and Bedrock credentials come from it
+auth-status-bedrock-undecodable = the AWS CLI answered with something that is not a credential
 
 
 ## Declaring an MCP server, and approving one
