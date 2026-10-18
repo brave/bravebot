@@ -839,9 +839,9 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -867,9 +867,11 @@ local layer naming one is dropped whole and reported, so the destination of ever
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
 
-The two names under `attribution` combine per name for the same reason `env` does: they are
-unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+`attribution` is the exception for the reason [BACKEND-30](#BACKEND-30) gives: its free text reaches
+the planner on every round, so a project or local layer carrying one is dropped whole and reported.
+Between the two files that may write it, the two names under it combine per name for the same
+reason `env` does: they are unrelated destinations that happen to share a block, and a file
+answering for one must not answer for the other by omission. The chords under `keybindings` and the two caps under `search` are the
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
@@ -1162,15 +1164,21 @@ Absence is kept distinct from empty because they ask for different things. Empty
 nothing is carried; unset leaves the decision with whoever writes the commit, and collapsing the two
 would make a file that mentions the block at all speak for names it never named.
 
+**Only the person's own files may write the block.** It is read from the home file and from the
+file `--settings` names, and removed from the project and local layers before the merge, each file
+that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
+never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
+it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
+named file that resolves inside the workspace is a checkout's file under another name.
+
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
-planner.** The block resolves over the three layers of [BACKEND-24](#BACKEND-24) and the middle of
-them is a file in the tree being worked on, so the string is whatever that checkout says. It is
-configuration rather than content, on the footing `env` and the permission rules are read on, but
-it is free text where those are structured, so it is quoted and the planner is told in the same
-breath that nothing inside it is addressed to it.
+planner.** The string is the person's own, so this is presentation rather than a defence: it is
+quoted and the planner is told in the same breath that nothing inside it is addressed to it.
 
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_attribution`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_set_attribution`
 `verified-by: bravebot_agent::preamble::an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit`
 `verified-by: bravebot_agent::preamble::an_attribution_no_file_named_is_not_stated_at_all`
 `verified-by: bravebot_agent::preamble::an_attribution_a_file_named_is_carried_word_for_word`
@@ -2483,16 +2491,9 @@ as the `model` key is, and the switch is decided by a category the driver derive
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
   The one field that is not a destination is `attribution`, whose value [BACKEND-30](#BACKEND-30)
-  states to the planner. A checkout can therefore put a string of its own choosing in front of every
-  round, which is a wider thing than naming a host, and it is the one place a settings layer reaches
-  the planner's context at all. What is quoted is fenced and said to be text to copy rather than
-  written in as a sentence addressed to the planner, and the fence is sized to the value so a value
-  holding one cannot close it. That is a presentation, not a guarantee, and it is the whole of the
-  mitigation: the standing instructions the same checkout carries go through a trust gate that can
-  refuse them and this does not, because it is configuration and the resolution being copied reads
-  configuration the same wherever it came from. Stating only the layer in the person's own directory
-  is the fix if that trade stops being worth it, and it would cost a checkout the ability to say what
-  its own history carries.
+  states to the planner. It is free text that reaches the planner's context on every round, so it is
+  refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
+  cannot say what its own history carries; the person says it once in their own file.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits

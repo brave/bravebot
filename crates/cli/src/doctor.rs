@@ -450,6 +450,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.references_ignored(), |path| {
         t!(doctor_settings_references_ignored, path = path).to_string()
     });
+    ignored(settings.attribution_ignored(), |path| {
+        t!(doctor_settings_attribution_ignored, path = path).to_string()
+    });
 
     each(
         t!(doctor_settings_ignored),
