@@ -2333,11 +2333,12 @@ pub fn held_to_the_session_network(
     )?;
     let proxy = crate::host_proxy::proxy_for(&list)
         .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
-    let mut held = policy.allow_network_egress_only_to(proxy.addr().port());
+    let held = policy.allow_network_egress_only_to(proxy.addr().port());
     #[cfg(target_os = "linux")]
-    if let Some(socket) = proxy.socket_path() {
-        held = held.with_egress_through(socket);
-    }
+    let held = match proxy.socket_path() {
+        Some(socket) => held.with_egress_through(socket),
+        None => held,
+    };
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
         None => Ok((held, proxy.environment())),
