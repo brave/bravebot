@@ -2144,6 +2144,9 @@ model under their pick is one the layer allows.
 **How it is built.** The keys are `"models": { "allow": [...], "deny": [...] }` in `managed.json`,
 the file [BACKEND-38](#BACKEND-38) reads. An entry is the model's name as a request carries it,
 compared exactly once trimmed: an inference-profile ARN, or a roster slug such as `z-ai/glm-4.6`.
+A gateway model has two spellings, `openrouter/z-ai/glm-4.6` and the `z-ai/glm-4.6` the gateway is
+sent, and an entry naming either one answers for the model however it was asked for: a deny entry
+refuses it and an allow entry permits it.
 
 Without an `allow` list, every model not denied is requested as before. With one, a model no entry
 names is refused, and `"allow": []` refuses every model. A deny entry wins over an allow entry naming
@@ -2160,6 +2163,7 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_config::managed::a_model_allow_entry_adds_nothing_to_any_roster`
 `verified-by: bravebot_config::lib::a_tier_word_is_checked_as_the_model_it_names`
 `verified-by: bravebot_config::lib::a_managed_layer_silent_on_models_refuses_none`
+`verified-by: bravebot_config::lib::a_gateway_model_is_matched_by_either_of_its_spellings`
 `verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`

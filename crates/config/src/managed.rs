@@ -191,13 +191,31 @@ impl Models {
     /// trimmed: an inference-profile ARN and a roster slug are both names a service either knows or
     /// does not, and a pattern language here would be a second place to get a near-match wrong.
     pub fn refuses(&self, model: &str) -> Option<(&Path, ModelRefusal)> {
-        let model = model.trim();
-        let refusal = match self.denied.iter().any(|denied| denied == model) {
+        self.refuses_any(&[model])
+    }
+
+    /// As [`Models::refuses`], for a model that is spelled more than one way.
+    ///
+    /// A gateway model is asked for as `openrouter/z-ai/glm-4.6` and sent to the gateway as
+    /// `z-ai/glm-4.6`, and an entry may be written either way. A deny entry naming any spelling
+    /// refuses it, and an allow entry naming any spelling permits it, so the one model gets one
+    /// answer whichever way the administrator wrote it down.
+    pub fn refuses_any(&self, spellings: &[&str]) -> Option<(&Path, ModelRefusal)> {
+        let names = || spellings.iter().map(|name| name.trim());
+        let refusal = match self
+            .denied
+            .iter()
+            .any(|denied| names().any(|name| denied == name))
+        {
             true => Some(ModelRefusal::Denied),
             false => self
                 .allowed
                 .as_ref()
-                .filter(|allowed| !allowed.iter().any(|allowed| allowed == model))
+                .filter(|allowed| {
+                    !allowed
+                        .iter()
+                        .any(|allowed| names().any(|name| allowed == name))
+                })
                 .map(|_| ModelRefusal::NotAllowed),
         };
         Some((self.path.as_deref()?, refusal?))
