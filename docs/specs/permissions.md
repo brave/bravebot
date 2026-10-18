@@ -373,6 +373,13 @@ reaches is covered at that place only, not wherever it appears as the written pa
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
 the spelling the person approved.
 
+A `deny` or `ask` path rule is also about the file whichever Unicode form of its name the rule or
+the call is spelled in. Both are compared in the one form every canonically equivalent spelling of a
+name shares, so `Read(caf\u{e9}.md)` refuses `cafe\u{301}.md` and the reverse, on a volume that
+opens a file under either form and on one that does not, where covering both costs a refusal and
+never grants one. Compatibility forms are not equivalents: a full-width letter is not the letter. An
+`allow` rule is matched as written.
+
 Nor is it about the directory a call happened to name, so it holds whichever way a walk arrives at
 the file. A listing or a search consults the rules for every entry its walk reaches as well as for
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
@@ -414,6 +421,9 @@ answer without declining the rest of it. It holds against a mode that answers ev
 same reason: the refusal comes before there is a prompt, so there is nothing for a mode to answer.
 
 `verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
+`verified-by: bravebot_core::permissions::a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume`
+`verified-by: bravebot_core::permissions::an_allow_rule_is_matched_in_the_spelling_it_was_written_in`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_left_out_of_the_turn`
 `verified-by: bravebot_agent::lsp::a_location_in_a_denied_file_is_left_out_of_an_answer`

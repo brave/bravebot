@@ -399,9 +399,35 @@ impl Rule {
     ///
     /// `path` arrives already folded where the volume folds case, and the pattern was stored folded
     /// the same way, so the comparison here is byte-exact either way.
-    fn covers_path(&self, path: &str, restricting: bool) -> bool {
+    ///
+    /// A rule that restricts is also matched by canonical equivalence (PERM-7): `canonical` is
+    /// `path` in the one form every equivalent spelling of it shares, and a pattern is brought to
+    /// that form too, so a rule spelled in one Unicode form of a name covers a file stored under
+    /// another. A rule that grants is left as written, since over-covering there would grant a
+    /// file nobody approved on a volume that keeps the two spellings apart.
+    fn covers_path(
+        &self,
+        path: &str,
+        canonical: &str,
+        folds_case: bool,
+        restricting: bool,
+    ) -> bool {
         let absolute = is_absolute_key(path);
         let segments = segments_of(path);
+        let canonical_segments = segments_of(canonical);
+        let covers = |pattern: &PathPattern, anchored: bool| {
+            if anchored != absolute {
+                return false;
+            }
+            if pattern.matches(&segments, restricting) {
+                return true;
+            }
+            restricting
+                && (!path.is_ascii() || !pattern.is_ascii())
+                && pattern
+                    .canonical(folds_case)
+                    .matches(&canonical_segments, restricting)
+        };
         std::iter::once(&self.pattern)
             .chain(&self.landed)
             .any(|pattern| match pattern {
@@ -410,8 +436,8 @@ impl Rule {
                 | Pattern::Domain(_)
                 | Pattern::Server(_)
                 | Pattern::Tool(..) => false,
-                Pattern::Relative(pattern) => !absolute && pattern.matches(&segments, restricting),
-                Pattern::Absolute(pattern) => absolute && pattern.matches(&segments, restricting),
+                Pattern::Relative(pattern) => covers(pattern, false),
+                Pattern::Absolute(pattern) => covers(pattern, true),
             })
     }
 
@@ -749,8 +775,10 @@ impl Permissions {
     /// The rule that decides [`Permissions::for_path`], and which list it is in.
     pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
         let path = key_of(path, self.backslash_separates, self.folds_case);
+        let canonical = crate::trust::canonical_form(&path, self.folds_case);
         self.deciding(|rule, restricting| {
-            rule.subject == subject && rule.covers_path(&path, restricting)
+            rule.subject == subject
+                && rule.covers_path(&path, &canonical, self.folds_case, restricting)
         })
     }
 
@@ -1014,6 +1042,24 @@ impl PathPattern {
             } else {
                 segments
             },
+        }
+    }
+
+    fn is_ascii(&self) -> bool {
+        self.segments.iter().all(|segment| segment.is_ascii())
+    }
+
+    /// This pattern with each segment in the form every canonically equivalent spelling shares,
+    /// reached the way [`crate::trust::canonical_form`] reaches it for the path it is matched
+    /// against. A `*` composes with nothing, so the segments keep their wildcards.
+    fn canonical(&self, folds_case: bool) -> Self {
+        Self {
+            segments: self
+                .segments
+                .iter()
+                .map(|segment| crate::trust::canonical_form(segment, folds_case).into_owned())
+                .collect(),
+            floats_when_restricting: self.floats_when_restricting,
         }
     }
 
@@ -1679,6 +1725,86 @@ mod tests {
             rules(&["Bash(npm run *)"], &[], &[]).for_command(&["npm run"]),
             Decision::Ruled(Ruling::Deny),
             "the bare command a deny rule names was not covered when it came as one word"
+        );
+    }
+
+    /// PERM-7. A rule typed from a keyboard is usually precomposed and a file may be stored
+    /// decomposed, or the other way round; the rule is about the file, so either spelling of
+    /// either side is covered, in a name, a tree, and a name under a directory.
+    #[test]
+    fn a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name() {
+        let (nfc, nfd) = ("caf\u{e9}.md", "cafe\u{301}.md");
+        for (written, asked) in [(nfc, nfd), (nfd, nfc), (nfc, nfc)] {
+            let denied = rules(&[&format!("Read({written})")], &[], &[]);
+            let asking = rules(&[], &[&format!("Edit({written})")], &[]);
+            let tree = rules(
+                &[&format!("Read({}/**)", written.trim_end_matches(".md"))],
+                &[],
+                &[],
+            );
+            assert_eq!(
+                denied.for_path(Subject::Read, asked),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule {written:?} missed {asked:?}"
+            );
+            assert_eq!(
+                denied.for_path(Subject::Read, &format!("docs/{asked}")),
+                Decision::Ruled(Ruling::Deny)
+            );
+            assert_eq!(
+                asking.for_path(Subject::Edit, asked),
+                Decision::Ruled(Ruling::Ask),
+                "an ask rule {written:?} missed {asked:?}"
+            );
+            assert_eq!(
+                tree.for_path(
+                    Subject::Read,
+                    &format!("{}/a", asked.trim_end_matches(".md"))
+                ),
+                Decision::Ruled(Ruling::Deny)
+            );
+        }
+        // Compatibility forms are not canonical equivalents.
+        assert_eq!(
+            rules(&["Read(\u{ff53}rc)"], &[], &[]).for_path(Subject::Read, "src"),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            rules(&["Read(caf\u{e9}.md)"], &[], &[]).for_path(Subject::Read, "cafe.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// A volume that folds case compares the two forms and the two cases together.
+    #[test]
+    fn a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume() {
+        let permissions =
+            rules_on_a_volume_that_folds_case(true, &["Read(Caf\u{c9}/**)"], &[], &[]);
+        for path in [
+            "cafe\u{301}/a",
+            "CAFE\u{301}/a",
+            "caf\u{e9}/a",
+            "CAF\u{c9}/a",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Ruled(Ruling::Deny),
+                "the rule missed {path:?}"
+            );
+        }
+    }
+
+    /// A grant stays as written, so it never reaches a file under a spelling nobody approved.
+    #[test]
+    fn an_allow_rule_is_matched_in_the_spelling_it_was_written_in() {
+        let permissions = rules(&[], &[], &["Read(caf\u{e9}.md)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "caf\u{e9}.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "cafe\u{301}.md"),
+            Decision::Unmatched
         );
     }
 
