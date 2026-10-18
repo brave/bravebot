@@ -2178,6 +2178,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
         .unwrap_or_default();
     let begins = conversation.recounted().len();
+    let started = bravebot_session::sessions::now();
     let mut rewind = continued.as_ref().map(|record| {
         continued::rewind_points(record, workspace, &conversation, &trust, &task.prompt)
     });
@@ -2216,6 +2217,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 begins,
                 prompt_at: reporter.prompt_at(),
                 agent,
+                started,
             },
         );
     }

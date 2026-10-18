@@ -5685,6 +5685,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
                 ends: 0,
                 prompt_at: None,
                 rewind: &[],
+                timing: Default::default(),
             }
         };
     }

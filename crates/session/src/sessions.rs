@@ -1649,6 +1649,8 @@ pub struct Continuation<'a> {
     /// The turns a rewind can go back to once this one is added, oldest first: the record's own
     /// and the one opened before this turn.
     pub rewind: &'a [RewindPoint],
+    /// Where this turn's time went, kept under the turn's number (SESSION-12).
+    pub timing: bravebot_agent::timing::Timing,
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -1751,6 +1753,15 @@ impl Handle {
     /// or the list fills with launches nobody meant.
     pub fn begin(project: &Path, front: Front, build: &str) -> Self {
         Self::begin_as(new_id(), project, front, build)
+    }
+
+    /// Say the session began at `started` rather than now.
+    ///
+    /// For a run whose record is only written once its turn has ended: the session began when the
+    /// turn did, and a record stamped at the end would give a start equal to its last update.
+    pub fn began_at(mut self, started: u64) -> Self {
+        self.started = started;
+        self
     }
 
     /// Begin a session under an id that was chosen before it, as a background session's is: the
@@ -2181,6 +2192,7 @@ impl Handle {
         record.turns = number;
         record.tokens += next.tokens;
         *record.spend.entry(number).or_insert(0) += next.tokens;
+        record.timing.insert(number, next.timing);
         record.model = Some(next.model.to_string());
         record.conversation = next.conversation.clone();
         record.trust = Some(stored_rules(next.trust));
@@ -2755,7 +2767,8 @@ fn size_of(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-pub(crate) fn now() -> u64 {
+/// Seconds since the epoch, for stamping a record.
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -4011,6 +4024,7 @@ mod tests {
             ends: 0,
             prompt_at: None,
             rewind: &[],
+            timing: Default::default(),
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
@@ -5676,6 +5690,10 @@ mod tests {
                 ends: 4,
                 prompt_at: Some(3),
                 rewind: &[],
+                timing: bravebot_agent::timing::Timing {
+                    wall_ms: 9,
+                    ..Default::default()
+                },
             },
         );
 
@@ -5687,7 +5705,14 @@ mod tests {
         assert_eq!((after.turns, after.tokens), (2, 15));
         assert_eq!(after.spend, BTreeMap::from([(1, 10), (2, 5)]));
         assert_eq!(after.model.as_deref(), Some("new-model"));
-        assert_eq!(after.timing.keys().collect::<Vec<_>>(), vec![&1]);
+        assert_eq!(
+            after
+                .timing
+                .iter()
+                .map(|(n, t)| (*n, t.wall_ms))
+                .collect::<Vec<_>>(),
+            vec![(1, 7), (2, 9)]
+        );
         assert_eq!(after.asides.len(), 1);
         let history = after
             .history
@@ -5729,6 +5754,7 @@ mod tests {
                 ends: 2,
                 prompt_at: Some(0),
                 rewind: &[],
+                timing: Default::default(),
             },
         ));
 
@@ -5778,6 +5804,7 @@ mod tests {
                 ends: 2,
                 prompt_at: Some(0),
                 rewind: &replacing,
+                timing: Default::default(),
             },
         ));
 
@@ -5833,6 +5860,7 @@ mod tests {
                 ends: 2,
                 prompt_at: Some(0),
                 rewind: &[],
+                timing: Default::default(),
             },
         )
     }

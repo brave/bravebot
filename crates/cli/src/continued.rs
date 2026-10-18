@@ -104,6 +104,9 @@ pub struct Finished<'a> {
     /// The definition this run was addressed to, which is what the record is to say the session
     /// works under from here (CLI-17).
     pub agent: Option<&'a str>,
+    /// When the run began, in seconds since the epoch: the session's start, since the record is
+    /// only written once the turn is over.
+    pub started: u64,
 }
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
@@ -138,12 +141,14 @@ pub fn keep(
                     ends,
                     prompt_at: turn.prompt_at,
                     rewind: rewind.points(),
+                    timing: turn.outcome.timing,
                 },
             );
             written.then(|| handle.id().to_string())
         }
         None => {
-            let mut handle = Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD);
+            let mut handle =
+                Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD).began_at(turn.started);
             handle.set_agent(turn.agent.map(str::to_string));
             let history = [bravebot_session::sessions::StoredTurn::completed(
                 1,
@@ -160,7 +165,7 @@ pub fn keep(
                     turns: 1,
                     tokens: turn.outcome.tokens,
                     spend: &BTreeMap::from([(1, turn.outcome.tokens)]),
-                    timing: &BTreeMap::new(),
+                    timing: &BTreeMap::from([(1, turn.outcome.timing)]),
                     model: Some(&turn.outcome.model),
                     todos: &BTreeMap::new(),
                     asides: &[],

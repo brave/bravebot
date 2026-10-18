@@ -8243,6 +8243,74 @@ fn failed_manifest_usage_survives_json_and_reload() {
     assert_eq!(report["tokens"]["output"], 14);
 }
 
+/// The saved record of one session, found by its id under the scratch project's sessions folder.
+fn saved_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+    fn find(path: &Path, name: &str) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(path).ok()? {
+            let path = entry.ok()?.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path, name) {
+                    return Some(found);
+                }
+            } else if path.file_name().is_some_and(|file| file == name) {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let file = find(
+        &scratch.path.join(".bravebot/sessions"),
+        &format!("{id}.json"),
+    )
+    .unwrap_or_else(|| panic!("no record for {id}"));
+    serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
+}
+
+/// A one-shot turn is timed like a turn in the full-screen interface (SESSION-12), the record's
+/// start is when the run began rather than when it ended, and a continued run adds its own entry
+/// beside the first.
+#[test]
+fn a_one_shot_run_records_its_timing_and_when_it_began() {
+    let gateway = a_gateway("[]", |_| {
+        std::thread::sleep(Duration::from_millis(1200));
+        usage_reply(None, "done", 12, 5)
+    });
+    let scratch = Scratch::new("one-shot-records-timing").with_settings(&settings_for(&gateway));
+    let first = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "answer"],
+    );
+    let (stdout, stderr) = said(&first);
+    assert!(first.status.success(), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let record = saved_record(&scratch, &id);
+    assert!(
+        record["timing"]["1"]["wall_ms"].as_u64().unwrap() >= 1200,
+        "{}",
+        record["timing"]
+    );
+    assert!(record["timing"]["1"]["inference_ms"].as_u64().unwrap() >= 1000);
+    assert!(
+        record["updated"].as_u64().unwrap() > record["started"].as_u64().unwrap(),
+        "the session's start was stamped when the run ended"
+    );
+
+    let second = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--resume", &id, "-p", "again"],
+    );
+    let (_, stderr) = said(&second);
+    assert!(second.status.success(), "{stderr}");
+    let continued = saved_record(&scratch, &id);
+    assert_eq!(continued["timing"]["1"], record["timing"]["1"]);
+    assert!(continued["timing"]["2"]["wall_ms"].as_u64().unwrap() >= 1200);
+    assert_eq!(continued["started"], record["started"]);
+}
+
 /// Success replaces progress, unusable completed replies still cost tokens, and zero stays zero.
 #[test]
 fn json_usage_controls_do_not_double_charge_or_guess() {
