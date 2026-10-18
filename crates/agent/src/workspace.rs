@@ -1295,7 +1295,12 @@ impl Workspace {
                             other.dev() == found.dev() && other.ino() == found.ino()
                         })
                     {
-                        names.push(self.relative_display(&entry.path()));
+                        // A name that is not UTF-8 has no spelling a rule can be written about, and
+                        // its lossy rendering would be matched as a different file's name, so the
+                        // walk gives up on it like any other it cannot finish.
+                        let path = entry.path();
+                        path.to_str()?;
+                        names.push(self.relative_display(&path));
                     }
                 }
             }
@@ -6138,6 +6143,29 @@ mod tests {
         assert_eq!(workspace.hard_links("not-yet.txt"), Some(Vec::new()));
         let capped = workspace.clone().with_search_caps(Some(1), None);
         assert_eq!(capped.hard_links(".env"), None);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A link whose name is not UTF-8 is not reported under its lossy lookalike (PATH-003): the
+    /// walk gives up, so a caller with a deny rule refuses, and a file that really is named with
+    /// the replacement character is still found under its own name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_hard_link_named_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("hard-link-bytes");
+        let invalid = path.join(OsStr::from_bytes(b"x-\xff"));
+        let lookalike = path.join("x-\u{FFFD}");
+        std::fs::hard_link(path.join(".env"), &invalid).unwrap();
+        assert_eq!(workspace.hard_links(".env"), None);
+
+        std::fs::remove_file(&invalid).unwrap();
+        std::fs::hard_link(path.join(".env"), &lookalike).unwrap();
+        let mut found = workspace.hard_links(".env").unwrap();
+        found.sort();
+        assert_eq!(found, [".env", "x-\u{FFFD}"]);
         let _ = std::fs::remove_dir_all(path);
     }
 
