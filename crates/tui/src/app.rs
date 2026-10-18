@@ -960,10 +960,11 @@ pub fn definition_named(
 /// What comes back is what [`act_while_working`] carries out, which is the clipboard read an empty
 /// paste asks for and nothing else.
 ///
-/// The steps are [`paste_into_box`]'s, the ones [`handle_paste`] takes after it drops a wiped
-/// handoff, which only a prompt at rest can hold. Mid-turn is when the delegate view is open, since
-/// a delegate only runs inside a turn, so a paste while watching reaches this handler.
+/// A wiped handoff is dropped first, as [`handle_paste`] does: a turn can begin with the brief
+/// still in the box. The rest is [`paste_into_box`]'s. Mid-turn is when the delegate view is open,
+/// since a delegate only runs inside a turn, so a paste while watching reaches this handler.
 pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
+    session.drop_a_wiped_handoff();
     paste_into_box(session, text)
 }
 
@@ -14878,6 +14879,79 @@ mod tests {
         assert!(session.input().is_empty());
 
         handle_paste(&mut session, "something else");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("something else".to_string())
+        );
+    }
+
+    /// A turn running with the brief `/handoff` wrote still in the box, as a loop tick or a queued
+    /// prompt leaves it: the brief arrives at rest and the turn begins without anyone pressing.
+    fn a_turn_running_over_a_brief(brief: &str) -> Session {
+        let mut session = a_turn_running_on("first");
+        session.status = Status::Idle;
+        session.propose_handoff(brief);
+        session.status = Status::Working;
+        assert!(session.handoff_pending() && session.a_turn_is_running());
+        session
+    }
+
+    /// CMD-1. Rejects: the working path reading the planner's first line as a command, which carried
+    /// out `/rename` at once and queued `/cd` to be dispatched when the turn ended.
+    #[test]
+    fn enter_on_a_brief_mid_turn_neither_runs_nor_queues_it_as_a_command() {
+        for brief in [
+            "/rename parser work",
+            "/cd /srv/app Handoff: port the parser",
+        ] {
+            let mut session = a_turn_running_over_a_brief(brief);
+
+            assert_eq!(
+                handle_key_while_working(&mut session, key(KeyCode::Enter)),
+                Action::None,
+                "{brief}"
+            );
+
+            assert_eq!(session.input(), brief, "the brief left the box");
+            assert!(session.queued.is_empty(), "{brief} was queued");
+            assert_eq!(session.commands_waiting().count(), 0, "{brief} waits");
+            assert!(session.handoff_pending(), "the brief was withdrawn");
+        }
+    }
+
+    /// INPUT-9. Rejects: the working path leaving the flag set after the box was emptied, so the
+    /// next prompt, pressed on once the turn ended, started a new session instead of being sent.
+    #[test]
+    fn a_prompt_typed_mid_turn_after_wiping_the_brief_is_sent_as_a_prompt() {
+        let mut session = a_turn_running_over_a_brief("the brief");
+        handle_key_while_working(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert!(session.input().is_empty());
+        for c in "something else".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        session.status = Status::Idle;
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("something else".to_string())
+        );
+    }
+
+    /// INPUT-9. Rejects: the working paste handler not ending a wiped brief, as the idle one does.
+    #[test]
+    fn a_prompt_pasted_mid_turn_after_wiping_the_brief_is_sent_as_a_prompt() {
+        let mut session = a_turn_running_over_a_brief("the brief");
+        handle_key_while_working(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert!(session.input().is_empty());
+        handle_paste_while_working(&mut session, "something else");
+        session.status = Status::Idle;
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
