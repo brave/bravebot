@@ -45,6 +45,11 @@ What to do when the session refuses an argument is in
 [When the session refuses an argument](../pr-fix/SKILL.md#when-the-session-refuses-an-argument) in
 the pr-fix skill.
 
+0. Do step 0 of [the pr-fix skill](../pr-fix/SKILL.md#fix-a-pull-request) first: where
+   `BRAVEBOT_PR_WORKTREES` puts worktrees outside the main clone, `request_path` with `write: true`
+   on the directory that holds the main clone, taken from the working directory and never from the
+   output of a failed run. `rebase.py` creates and rebases worktrees there. With the default
+   `.worktrees/`, skip it.
 1. `python3 agents/skills/rebase/rebase.py start <pr>`
 2. For each `path:start-end` it prints, Read only that range of the worktree's file and Edit it
    so both sides survive: the base's change and the pull request's. The commits it lists are the
