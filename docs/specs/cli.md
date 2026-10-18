@@ -20,6 +20,7 @@ governs:
   - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/sessions_list.rs
+  - crates/cli/src/session_delete.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
@@ -1722,3 +1723,42 @@ UTF-8, which nothing here does yet.
 `verified-by: bravebot_cli::sessions_list::a_title_reaches_a_row_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::sessions_list::json_is_one_object_per_line_and_nothing_else`
 `verified-by: bravebot_cli::sessions_list::a_typed_title_cannot_break_out_of_the_object_it_is_written_in`
+
+<a id="CLI-33"></a>
+### CLI-33: `sessions delete` and `sessions purge` remove what a session kept
+
+`bravebot sessions delete <id>` removes one session of this directory, and `bravebot sessions
+purge [--dry-run] [-y]` removes every one. Each removes what [SESSION-30](sessions.md#SESSION-30)
+removes, the record, the trail beside it and the index of what the session said, and nothing else:
+the prompt history is one file for every project and is left alone, as is any session of another
+directory. Neither reads a record's contents to decide what to delete.
+
+`delete` is keyed on the id and the state directory alone, as the desktop's `session.delete` is, so it needs no check of whose record the id names: an id is a random name no two directories share. An id that is not shaped
+like a session's name and an id that names no record here are refused with the status for an
+argument (CLI-6), and a failed removal ends failed. A session that a background session is running
+([BG-9](background-sessions.md#BG-9)) is refused, and the message says to stop it first.
+
+`purge` takes the records whose own path is this directory ([SESSION-28](sessions.md#SESSION-28)),
+never the ones that merely sit in the same store, which two directories can share. `--dry-run`
+prints a line for each record it would remove and removes nothing. Without `-y` it asks, naming the
+directory and how many, and only the word for yes deletes; with no terminal to ask on it is refused
+with the status for an argument, so a script has to say `-y`. A session a background session is
+running is left and named. A record that cannot be removed does not stop the rest, and the status
+is failed. A record that cannot be read is not listed and so is not purged.
+
+Both are allowed under `--incognito`. [INCOG-3](incognito.md#INCOG-3) keeps an incognito session
+from adding to what is on disk, and removing leaves less behind, which is the ground
+[INCOG-7](incognito.md#INCOG-7) allows forgetting a credential on.
+
+**Why.** The spec says a record can hold copies of files a turn overwrote, until the record is
+deleted, and the only way to delete one from a terminal was to find the file by hand.
+
+**Known cost.** A session another process has open in a terminal is not seen, and its next save
+writes its record back, as for the desktop ([SESSION-30](sessions.md#SESSION-30)). The `--resume`
+picker has no key to delete a row yet.
+
+`verified-by: bravebot_cli::session_delete::delete_takes_one_id_and_purge_takes_its_two_flags`
+`verified-by: bravebot_cli::session_delete::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::session_delete::only_the_word_for_yes_agrees_to_a_purge`
+`verified-by: bravebot_session::sessions::purging_a_project_removes_its_sessions_and_not_another_directorys`
+`verified-by: bravebot_session::sessions::purging_leaves_a_session_something_is_running`

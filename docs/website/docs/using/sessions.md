@@ -303,6 +303,17 @@ line break, an escape or a character outside ASCII in it included. Alone, each s
 one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
 a session with neither.
 
+## Deleting a session
+
+`bravebot sessions delete <id>` removes one session of this directory, taking the id from
+`bravebot sessions list`. `bravebot sessions purge` removes all of them; it asks first, naming the
+directory and how many, unless you pass `-y`, and `--dry-run` prints what it would remove and
+removes nothing. Each deletes the record, its trail and its search index, and nothing else: your
+prompt history is one file for every project and stays, and so do the sessions of other
+directories. A session running in the background is left until you stop it with
+`bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
+its record back, so close it first. Both work under `--incognito`.
+
 ## Importing sessions from Claude Code
 
 ```sh

@@ -169,6 +169,8 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
 `bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
 one with `bravebot auth logout gateway` is allowed.
+Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
+reason ([CLI-33](cli.md#CLI-33)).
 
 **Why.** An import is a write by definition: a credential that did not outlive the session would not
 be an import. Doing it and discarding the result would mint a batch on Brave's service that nothing

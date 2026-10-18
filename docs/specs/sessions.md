@@ -1188,6 +1188,9 @@ nothing else: a session another process has open is not seen, and that process's
 its record back. A link standing where the record or the trail should be is removed as a link and
 never followed, so the file it points at is untouched.
 
+The command line removes the same three files with `bravebot sessions delete <id>` and `sessions purge`
+([CLI-33](cli.md#CLI-33)).
+
 The bridge deletes any session it is given, whether or not it is archived. The desktop app offers
 the delete on archived conversations only, and its main process forwards `session.delete` only for
 a `directory` it offered, as it does for `session.new` and `session.open`.

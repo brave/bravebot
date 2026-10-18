@@ -53,6 +53,14 @@ pub(crate) fn print_help() {
             t!(cli_usage_sessions_list),
         ),
         (
+            "bravebot sessions delete <id>",
+            t!(cli_usage_sessions_delete),
+        ),
+        (
+            "bravebot sessions purge [--dry-run] [-y]",
+            t!(cli_usage_sessions_purge),
+        ),
+        (
             "bravebot sessions import <tool>",
             t!(cli_usage_sessions_import),
         ),
