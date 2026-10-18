@@ -20998,6 +20998,14 @@ fn strict_cannot_run_here() -> bool {
             .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
 }
 
+/// A `read-only` stage starts with the network closed (SANDBOX-22), so it is refused where the
+/// platform cannot deny it (SANDBOX-5), and a test that needs one to start has nothing to test there.
+fn read_only_cannot_run_here() -> bool {
+    cannot_confine_here()
+        || !bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().network_denial_enforced)
+}
+
 /// A planner that meets `Operation not permitted` with nothing said about confinement looks for a
 /// fault in the machine, which one session spent 780k tokens doing. A turn that confines says in the
 /// `run` description that its programs are, and a failed step carries the profile it ran under,
@@ -21464,7 +21472,7 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 #[test]
 fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
-    if cannot_confine_here() {
+    if read_only_cannot_run_here() {
         return;
     }
     let readable = outside_the_session("read-only-readable");
@@ -57905,7 +57913,7 @@ fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedA
 fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs() {
     use bravebot_agent::PermissionMode::{Ask, Bypass};
     use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
-    if cannot_confine_here() {
+    if read_only_cannot_run_here() {
         return;
     }
     const REFUSED: &str = "the sandbox mode is read-only, and this line redirects output";

@@ -1876,10 +1876,15 @@ test runners and shells write scratch files there. A toolchain a stage carries o
 its list and writes no cache, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
 refused before anyone is asked, so the mode that answers every question cannot hand the session's
 directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and the write
-grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` holds back writes on
-this machine and nothing else: the network follows [SANDBOX-20](#SANDBOX-20) as in every mode, and a
-stage whose argv carries the remote scope ([SANDBOX-16](#SANDBOX-16)), such as `git push` or
-`gh pr create`, still reaches the remote with the person's credentials. It holds back the programs
+grants they remembered ([SANDBOX-27](#SANDBOX-27)) still apply. `read-only` also holds back
+what a program changes elsewhere: every stage starts with the network closed whatever `run.network`
+says ([SANDBOX-20](#SANDBOX-20)), and none keeps it for a toolchain that fetches, a credential scope
+or a program that talks to a remote. The remote scope ([SANDBOX-16](#SANDBOX-16)) is lent to no stage,
+whether its argv, a `scopes` request or a remembered grant carries it, so `git push`,
+`gh pr create`, `gh issue comment` and `curl` fail the way they do under Codex's `read-only`, and
+`~/.ssh/known_hosts` is not written. Where the platform cannot deny the network ([SANDBOX-5](#SANDBOX-5)),
+a `read-only` stage is not started, as under a closed `run.network`. The `run` description says so,
+so the planner does not retry them. It holds back the programs
 `run` starts and the file tools below, and no process a person approved outside them: a language
 server runs with the person's own access in every mode ([LSP-5](tools/lsp.md#LSP-5)), so the build
 tooling it runs, a crate's `build.rs` among them, may write anywhere the person can, the session's
@@ -2031,6 +2036,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
 `verified-by: bravebot_sandbox::mode::a_looser_mode_reads_more_writes_more_or_both`
 `verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
+`verified-by: bravebot_agent::confine::read_only_lends_no_network_and_no_remote_scope`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`

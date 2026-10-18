@@ -174,7 +174,7 @@ impl Confinement {
 
     /// Whether the session's network is closed, as opposed to a line's.
     pub fn network_is_closed(&self) -> bool {
-        self.network.is_closed()
+        self.network().is_closed()
     }
 
     /// This confinement with the network closed, for one line that the person's trust of its
@@ -332,12 +332,33 @@ impl Confinement {
     /// Decided from the compiled step and the session's setting and from nothing a program printed,
     /// and apart from the home directory: a `cargo build` fetches whether or not a cache is named.
     pub fn egress(&self, step: &Step) -> bool {
-        !self.network.is_closed() || self.egress_reason(step).is_some()
+        !self.network().is_closed() || self.egress_reason(step).is_some()
+    }
+
+    /// The network the stages are held to: the session's decision, except under `read-only`, which
+    /// closes it for every stage and gives none a reason to keep it, so that what the mode holds
+    /// back is not reachable through a remote (SANDBOX-22).
+    fn network(&self) -> Network {
+        match self.mode {
+            SandboxMode::ReadOnly => Network::Closed,
+            _ => self.network,
+        }
+    }
+
+    /// Whether `scope` is lent to a stage. The remote scope is not under `read-only`: it is how a
+    /// stage pushes, and it writes `~/.ssh/known_hosts` (SANDBOX-22).
+    fn lends(&self, scope: Scope) -> bool {
+        !(self.mode == SandboxMode::ReadOnly && scope == Scope::Remote)
     }
 
     /// Why a stage keeps the network under a closed setting, in words fixed here so the line a
     /// person reads never carries a name the plan chose.
     fn egress_reason(&self, step: &Step) -> Option<&'static str> {
+        // `network()` already closes it, but `egress()` and `network_for_the_trail` would hand a
+        // read-only stage the network back through a reason (SANDBOX-22).
+        if self.mode == SandboxMode::ReadOnly {
+            return None;
+        }
         // Every reason below is read from the file name, so a file the plan could have written
         // under a directory it may write to must not earn the network by being named `curl`.
         if self.writable_by_the_plan(&step.resolved) {
@@ -499,7 +520,7 @@ impl Confinement {
     /// Each stage that keeps it is named by its place in the line and one of the fixed reasons,
     /// never by a program name or an argument the plan chose.
     pub fn network_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
-        if !self.network.is_closed() {
+        if !self.network().is_closed() {
             return None;
         }
         let kept: Vec<String> = steps
@@ -913,11 +934,12 @@ impl Confinement {
             return None;
         }
         Scope::of(&step.resolved, &step.args, &step.environment).filter(|scope| {
-            *scope != Scope::Signing
-                || self
-                    .home
-                    .as_deref()
-                    .is_some_and(|home| signing::read(home, &self.place).enabled)
+            self.lends(*scope)
+                && (*scope != Scope::Signing
+                    || self
+                        .home
+                        .as_deref()
+                        .is_some_and(|home| signing::read(home, &self.place).enabled))
         })
     }
 
@@ -937,7 +959,7 @@ impl Confinement {
                 .chain(self.scratch.iter())
                 .cloned()
                 .collect(),
-            network: self.network,
+            network: self.network(),
             filesystem: self.filesystem.counts(),
             requested: steps
                 .iter()
@@ -971,7 +993,7 @@ impl Confinement {
                 .filter_map(|step| {
                     let (toolchain, scope) = self.carries(step);
                     let reaches = self.stage_reaches(step, environment);
-                    let network = self.network.is_closed() && self.egress(step);
+                    let network = self.network().is_closed() && self.egress(step);
                     let remembered: Vec<Remembered> = self
                         .granted(step)
                         .filter(|grant| match (&grant.reached, self.home.as_deref()) {
@@ -1148,6 +1170,7 @@ impl Confinement {
             // wrapping `gh` is not `gh` and there is no program to key them on.
             for request in self.requested_for(step) {
                 policy = match *request {
+                    Requested::Scope(scope) if !self.lends(scope) => policy,
                     Requested::Loopback => policy.allow_loopback(),
                     // Lends nothing: it only has the prompt number the keys again.
                     Requested::SshKey => policy,
@@ -1175,6 +1198,7 @@ impl Confinement {
             }
             for grant in self.granted(step) {
                 policy = match &grant.reached {
+                    Reached::Scope(scope) if !self.lends(*scope) => policy,
                     Reached::Scope(scope) => scope.grant(policy, home, &place),
                     Reached::Directory(_) => match grant.directory(home) {
                         Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
@@ -1478,7 +1502,7 @@ impl Confinement {
             let (toolchain, scope) = self.carries(step);
             toolchains.extend(toolchain.map(Toolchain::name));
             scopes.extend(scope.map(Scope::name));
-            if self.network.is_closed() {
+            if self.network().is_closed() {
                 reaching.extend(self.egress_reason(step));
             }
             for grant in self.granted(step) {
@@ -1499,7 +1523,7 @@ impl Confinement {
             true => "none".to_string(),
             false => names.into_iter().collect::<Vec<_>>().join(", "),
         };
-        let network = match self.network {
+        let network = match self.network() {
             Network::Open => "open".to_string(),
             Network::Closed => format!("closed, kept only by steps with: {}", named(reaching),),
         };
@@ -2154,8 +2178,7 @@ fn stated(
             "Programs this tool starts are confined and cannot write the project. Each may reach \
              only the directories the session was opened on and the scratch directory, read, the \
              temporary directory, the paths the person's own `allowWrite` entries and remembered \
-             write grants name and `~/.ssh/known_hosts` where its command has the remote scope, \
-             read and written, the system and program directories and git's configuration files, \
+             write grants name, read and written, the system and program directories and git's configuration files, \
              read, and the credential scope its command names. A path outside those, and a write \
              anywhere else, the directories the session was opened on included, is refused by the \
              operating system as `Operation not permitted` or `Permission denied`, so a program \
@@ -2190,8 +2213,7 @@ fn stated(
              this machine except the places that hold a credential: ssh private keys, cloud and \
              container logins, keychains, browser profiles and password stores. It may write the \
              temporary directory, the paths the person's own `allowWrite` entries and remembered \
-             write grants name, and `~/.ssh/known_hosts` where its command has the remote scope, \
-             and reads a credential directory only where the command's scope names it. Any other \
+             write grants name, and reads a credential directory only where the command's scope names it. Any other \
              write, the directories the session was opened on and the toolchain caches included, \
              and a path outside those it may reach, is refused by the operating system as \
              `Operation not permitted` or `Permission denied`, so a program that reports either \
@@ -2226,7 +2248,18 @@ fn stated(
         said.push_str(MACOS_LISTENING_SENTENCE);
         said.push_str(macos_git_sentence(mode));
     }
-    if prelude.is_some() && network.is_closed() {
+    if prelude.is_some() && mode == SandboxMode::ReadOnly {
+        said.push_str(
+            " The network is closed in this mode whatever the settings say, and the remote \
+             credential scope is not lent: `git push`, `gh pr create`, `gh issue comment`, \
+             `curl` and `ssh` fail, and so does a package manager's fetch. A connection refused \
+             or a host that does not resolve was stopped by the sandbox, so do not retry it; \
+             choosing another sandbox mode lets a program reach a remote.",
+        );
+        if prelude == Some(Prelude::MacOs) {
+            said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);
+        }
+    } else if prelude.is_some() && network.is_closed() {
         said.push_str(
             " The network is closed: a program has no network access unless it is a package \
              manager's fetch, `git` or `gh` with a remote operation, `curl`, `ssh`, or a \
@@ -3647,6 +3680,8 @@ mod tests {
                 "by choosing another sandbox mode (",
                 any_path,
                 "may write only the temporary directory",
+                "`~/.ssh/known_hosts`",
+                "unless it is a package manager's fetch",
                 MACOS_GIT_SENTENCE,
             ] {
                 assert!(!said.contains(refused), "{prelude:?}: {refused} in {said}");
@@ -3664,7 +3699,8 @@ mod tests {
                 "`git commit` that writes the directories the session was opened on fails",
                 "git on its own included",
                 "the person's own `allowWrite` entries and remembered write grants",
-                "`~/.ssh/known_hosts` where its command has the remote scope",
+                "The network is closed in this mode whatever the settings say",
+                "`git push`, `gh pr create`, `gh issue comment`",
             ] {
                 assert!(
                     said.contains(told),
@@ -4886,6 +4922,62 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: under `read-only` a stage has no network and no remote scope however it came by
+    /// one (its argv, a request or a remembered grant), and under `workspace-write` the same stage
+    /// keeps both. The regressions it rejects: a mode that closes the network and leaves the scope,
+    /// whose `known_hosts` write is a change outside the session, and one that withholds the scope
+    /// from the argv alone and lends it to a request.
+    #[test]
+    fn read_only_lends_no_network_and_no_remote_scope() {
+        let known_hosts = format!("{HOME}/.ssh/known_hosts");
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let push = step("/usr/bin/git", &["push"]);
+        let make = step("/usr/bin/make", &["all"]);
+        for (mode, lent) in [
+            (SandboxMode::WorkspaceWrite, true),
+            (SandboxMode::ReadOnly, false),
+        ] {
+            let by_argv = reading_confinement(Prelude::Linux, &["/work/project"])
+                .with_network(Network::Open)
+                .with_mode(mode);
+            let by_request = by_argv
+                .clone()
+                .with_requested(&[Requested::Scope(Scope::Remote)]);
+            let by_grant = by_argv.clone().with_grants(vec![remembered(
+                "/usr/bin/make",
+                None,
+                a_scope("remote"),
+                false,
+            )]);
+            for (how, policy) in [
+                (
+                    "argv",
+                    by_argv.policy(&push, Path::new("/work"), &environment),
+                ),
+                (
+                    "request",
+                    by_request.policy(&make, Path::new("/work"), &environment),
+                ),
+                (
+                    "grant",
+                    by_grant.policy(&make, Path::new("/work"), &environment),
+                ),
+            ] {
+                assert_eq!(policy.allow_network, lent, "{mode}: {how}");
+                assert_eq!(
+                    writes(&policy, &known_hosts),
+                    lent && how != "grant",
+                    "{mode}: {how}"
+                );
+                assert_eq!(
+                    writes(&policy, "/run/agent.sock"),
+                    lent && how != "grant",
+                    "{mode}: {how}"
+                );
+            }
+        }
+    }
+
     /// The agent socket is written only by a step that carries the remote scope, and is the
     /// process's own value for it.
     #[test]
@@ -5896,7 +5988,8 @@ mod tests {
                 );
             }
             let installed = step("/usr/bin/curl", &["https://a.example"]);
-            assert!(closed.egress(&installed), "{what}");
+            // `read-only` keeps no reason for the network either (SANDBOX-22).
+            assert_eq!(closed.egress(&installed), what != "read-only", "{what}");
         }
     }
 
