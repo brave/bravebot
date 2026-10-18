@@ -91,6 +91,7 @@ to watch it.
 `verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
 `verified-by: bravebot_agent::watch::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
 `verified-by: bravebot_agent::watch::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
+`verified-by: bravebot_agent::tools::the_first_look_is_taken_at_the_call_and_not_after_the_turn`
 `verified-by: bravebot_tui::state::a_change_begins_a_turn_with_no_turn_running_to_notice_it`
 
 <a id="FSWATCH-2"></a>

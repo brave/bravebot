@@ -75,6 +75,16 @@ pub enum Looked {
     OutOfReach,
 }
 
+/// A watch a turn asked for: the path, and the look taken when the tool was called.
+///
+/// The look travels with the path because the session arms the watch only after the turn has
+/// ended, and a look taken then would see whatever the rest of the turn did to the file (FSWATCH-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Armed {
+    pub path: String,
+    pub looked: Looked,
+}
+
 /// What a fire reports about the path: one of three, chosen from whether the path was there at
 /// the look before the last fire and is there now.
 ///
