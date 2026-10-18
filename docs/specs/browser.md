@@ -307,6 +307,7 @@ JSON carries an unpaired surrogate as an escape the host refuses to parse, so an
 would leave the call waiting out its timeout.
 
 `verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
+`verified-by: bravebot_browser::extension::the_options_page_labels_every_tool_the_server_offers_and_no_other`
 `verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
 `verified-by: bravebot_browser::extension::the_extension_has_each_permission_its_tools_require`
 `verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
