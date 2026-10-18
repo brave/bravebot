@@ -123,7 +123,8 @@ of its commits unsigned than it has now.
    `git add`. Where the two sides can't both be kept, stop and ask. A conflict in code touching a
    label: read [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md)
    first. Then `... continue <pr>`, repeating until it prints `next: push` or
-   `nothing to push`.
+   `nothing to push`. A pick git could not sign stops with its changes staged; `continue` commits it
+   with its message and author, signing as the person's configuration says, and goes on.
 3. `... ci <pr>` prints how many checks passed, failed and are pending, and the last lines of each
    failing job's log. Fix what the log shows, in the worktree. To reproduce a failure, run the
    failing command with `direnv exec <worktree>` in front, since the build reads the worktree's
