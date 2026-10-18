@@ -26,6 +26,8 @@ fn an_answer_allows_confined_lines_only_for_a_yes_to_a_question_that_said_so() {
     }
 }
 
+/// RUN-5: a window settles from the entry's own answer about confined lines. An entry written before
+/// the question said so must not settle the window as if it had.
 #[test]
 fn a_kept_answer_settles_a_window_with_what_its_entry_says() {
     // nosemgrep: rust.lang.security.temp-dir.temp-dir
