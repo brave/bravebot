@@ -165,6 +165,22 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return fail(Ending::Argument, t!(bg_needs_a_terminal));
     }
+    // Asked here, in the process a person is looking at, because the host runs with nothing to say
+    // a refusal to: a session it opened on a machine with no service configured would send the
+    // prompt to Brave's endpoint and the answer would read as the agent being poor (BACKEND-39).
+    // What an import writes is read back by the host from disk.
+    let mut config = match bravebot_config::Config::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            return fail(
+                Ending::Configuration,
+                t!(cli_configuration_problem, problem = err),
+            );
+        }
+    };
+    if let Some(ended) = crate::import::before_the_session(&mut config) {
+        return ended;
+    }
     let Some(roster) = Roster::writable() else {
         return fail(Ending::Failed, t!(sessions_no_home));
     };

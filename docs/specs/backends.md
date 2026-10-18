@@ -1675,7 +1675,8 @@ subscription is in hand to spend on it, nothing is configured to serve the turn 
 A session does not open and a one-shot run asks nothing. What is said instead is the three ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, and importing a Leo Premium subscription. `doctor`
-says the same and fails, which is [CLI-7](cli.md#CLI-7).
+says the same and fails, which is [CLI-7](cli.md#CLI-7). `bravebot --bg <prompt>` is refused the same
+way, in the terminal that typed it, before the background process is started.
 
 The model decides, as it does everywhere here: a model a configured service serves is not this
 case, whatever the aichat fields hold. The model asked about is the one the run will actually
@@ -1745,6 +1746,7 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
+`verified-by: bravebot_cli::running::a_background_session_with_no_service_configured_says_how_to_configure_one`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable
