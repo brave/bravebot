@@ -1662,7 +1662,14 @@ impl Config {
     /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
     /// and an answer that differed per route would be an answer per route to get wrong.
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
-        self.models.refuses(&self.model_named(name))
+        let name = self.model_named(name);
+        // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
+        // an entry may name either whichever the model was asked for as.
+        let Some((provider, wire)) = self.provider_for(&name) else {
+            return self.models.refuses(&name);
+        };
+        let qualified = format!("{}/{wire}", provider.id);
+        self.models.refuses_any(&[&name, wire, &qualified])
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -3232,6 +3239,55 @@ mod tests {
         let config =
             resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
         assert!(config.providers.is_empty());
+    }
+
+    /// BACKEND-48: a gateway model is asked for as `openrouter/z-ai/glm-4.6` and sent as
+    /// `z-ai/glm-4.6`, and a list entry written either way answers for the one model.
+    ///
+    /// Each list in each spelling, and a model of the same gateway that no entry names, because a
+    /// build that matched only the asked-for name lets the denied model through and one that
+    /// matched only the wire name refuses what an allow entry in the qualified form permits.
+    #[test]
+    fn a_gateway_model_is_matched_by_either_of_its_spellings() {
+        let settings = Settings::parse(
+            r#"{"model": "openrouter/z-ai/glm-4.6",
+                "provider": {"openrouter": {"options": {"apiKey": "test-token"},
+                    "models": {"z-ai/glm-4.6": {}, "z-ai/other": {}}}}}"#,
+        );
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config =
+                resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+            (config, managed)
+        };
+        for entry in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+            let (config, _) = resolved("gateway-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {asked}"
+                );
+            }
+            let (config, _) = resolved(
+                "gateway-spelling-allow",
+                &format!(r#""allow": ["{entry}"]"#),
+            );
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked),
+                    None,
+                    "allow {entry}, asked {asked}"
+                );
+            }
+            assert_eq!(
+                config
+                    .model_refused("openrouter/z-ai/other")
+                    .map(|(_, why)| why),
+                Some(ModelRefusal::NotAllowed),
+                "allow {entry}"
+            );
+        }
     }
 
     /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a
