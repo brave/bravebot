@@ -745,7 +745,7 @@ stop, to go on without a limit or to go on under a new one. A whole number of to
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
 to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
 none of these, and zero, sets no limit. The nearest settings file that names it wins, and
-[`/limit`](../reference/commands.md#limit-tokens--credits--off) changes it for one session. Tokens are
+[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
 

@@ -220,14 +220,37 @@ impl Command {
     /// words it takes. The completion list keeps the short `argument` so its description column
     /// stays narrow.
     pub fn typed_hint(&self) -> String {
-        if self.name == EFFORT_COMMAND {
-            let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
-                .iter()
-                .map(|level| level.as_str())
-                .collect();
-            format!("[{}]", levels.join(" | "))
-        } else {
-            self.argument.to_string()
+        match self.name {
+            EFFORT_COMMAND => {
+                let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+                    .iter()
+                    .map(|level| level.as_str())
+                    .collect();
+                format!("[{}]", levels.join(" | "))
+            }
+            SANDBOX_COMMAND => {
+                let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
+                    .iter()
+                    .map(|mode| mode.name())
+                    .collect();
+                format!("[{}]", modes.join(" | "))
+            }
+            LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
+            REVIEW_COMMAND => {
+                use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
+                format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
+            }
+            REACH_COMMAND => {
+                let scopes: Vec<&str> = bravebot_sandbox::scope::Scope::REACHABLE
+                    .iter()
+                    .map(|scope| scope.name())
+                    .collect();
+                format!(
+                    "[<{} | dir> [write] [always] -- <command> | remove <n> | keys]",
+                    scopes.join(" | ")
+                )
+            }
+            _ => self.argument.to_string(),
         }
     }
 }
@@ -336,7 +359,7 @@ pub fn commands() -> [Command; 47] {
         },
         Command {
             name: LIMIT_COMMAND,
-            argument: "[tokens | credits | off]",
+            argument: "[<amount> | off]",
             description: t!(command_limit),
             mid_turn: MidTurn::Runs,
         },
@@ -564,34 +587,46 @@ pub fn completions(line: &str) -> Vec<Command> {
         .collect()
 }
 
-/// The line `/effort ` plus the start of a level becomes, or `None` where Tab has nothing to add.
+/// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
+/// Tab has nothing to add.
 ///
-/// The level words are this program's own, so completing one reads nothing a person did not type.
-/// A start that fits one level becomes that level, and a start that fits several is carried as far
-/// as they agree.
+/// The words are this program's own, so completing one reads nothing a person did not type. A
+/// start that fits one word becomes that word, and a start that fits several is carried as far as
+/// they agree.
 pub(crate) fn complete_argument(line: &str) -> Option<String> {
-    let typed = line
-        .trim_start()
-        .strip_prefix(EFFORT_COMMAND)?
-        .strip_prefix(' ')?;
+    let line = line.trim_start();
+    if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
+        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+            .iter()
+            .map(|level| level.as_str())
+            .collect();
+        return complete_word(EFFORT_COMMAND, typed, &levels);
+    }
+    let typed = line.strip_prefix(SANDBOX_COMMAND)?;
+    let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
+        .iter()
+        .map(|mode| mode.name())
+        .collect();
+    complete_word(SANDBOX_COMMAND, typed, &modes)
+}
+
+fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    let typed = after.strip_prefix(' ')?;
     if typed.is_empty() || typed.contains(char::is_whitespace) {
         return None;
     }
     let typed = typed.to_ascii_lowercase();
-    let mut fits = bravebot_aichat::protocol::Effort::ALL
-        .iter()
-        .map(|level| level.as_str())
-        .filter(|level| level.starts_with(&typed));
+    let mut fits = words.iter().filter(|word| word.starts_with(&typed));
     let mut shared = fits.next()?.to_string();
-    for level in fits {
+    for word in fits {
         let agreed = shared
             .bytes()
-            .zip(level.bytes())
+            .zip(word.bytes())
             .take_while(|(a, b)| a == b)
             .count();
         shared.truncate(agreed);
     }
-    (shared != typed).then(|| format!("{EFFORT_COMMAND} {shared}"))
+    (shared != typed).then(|| format!("{command} {shared}"))
 }
 
 /// The argument given to `command`, if that is what the line is.

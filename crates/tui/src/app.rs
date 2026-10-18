@@ -13027,6 +13027,101 @@ mod tests {
         assert_eq!(command.argument, "[level]");
     }
 
+    /// The hint after `/sandbox ` names every mode the program accepts, built from the type the
+    /// parser reads, and never the legacy word it still reads.
+    #[test]
+    fn the_sandbox_hint_lists_every_mode_and_the_list_stays_short() {
+        let all = commands();
+        let command = all
+            .iter()
+            .find(|command| command.name == SANDBOX_COMMAND)
+            .unwrap();
+
+        assert_eq!(
+            command.typed_hint(),
+            "[strict | read-only | workspace-write | off]"
+        );
+        assert_eq!(command.argument, "[<mode>]");
+        for mode in bravebot_sandbox::SandboxMode::ALL {
+            assert!(command.typed_hint().contains(mode.name()));
+            assert_eq!(
+                bravebot_sandbox::SandboxMode::parse(mode.name()),
+                Some(mode)
+            );
+        }
+        assert!(!command.typed_hint().contains("standard"));
+    }
+
+    /// The `/limit`, `/review` and `/reach` hints are made of what their parsers read, so a form
+    /// the hint shows is one the parser takes.
+    #[test]
+    fn the_limit_review_and_reach_hints_show_forms_their_parsers_take() {
+        let all = commands();
+        let hint = |name: &str| {
+            all.iter()
+                .find(|command| command.name == name)
+                .unwrap()
+                .typed_hint()
+        };
+
+        assert_eq!(hint(LIMIT_COMMAND), "[<n>[k|m] | <n> credits | off]");
+        assert!(
+            bravebot_config::limit::parse("500k", bravebot_config::limit::Unit::Tokens).is_some()
+        );
+        assert!(
+            bravebot_config::limit::parse("2m", bravebot_config::limit::Unit::Tokens).is_some()
+        );
+        assert!(
+            bravebot_config::limit::parse("200 credits", bravebot_config::limit::Unit::Tokens)
+                .is_some()
+        );
+
+        assert_eq!(
+            hint(REVIEW_COMMAND),
+            "[staged | since <ref> | commit <ref> | pr <n>] [focus]"
+        );
+        for typed in ["staged", "since main", "commit abc123", "pr 12"] {
+            let asked = crate::review_command::parse(typed).unwrap();
+            assert_ne!(
+                asked.target,
+                crate::review_command::Target::Uncommitted,
+                "{typed}"
+            );
+        }
+
+        let reach = hint(REACH_COMMAND);
+        for scope in bravebot_sandbox::scope::Scope::REACHABLE {
+            assert!(reach.contains(scope.name()), "{reach}");
+        }
+        assert!(!reach.contains("signing"), "{reach}");
+        assert!(
+            reach.contains("remove <n>") && reach.contains("keys"),
+            "{reach}"
+        );
+    }
+
+    /// Tab on a started mode finishes it, and leaves a start that fits none, or several.
+    #[test]
+    fn tab_finishes_a_mode_started_after_the_sandbox_command() {
+        for (typed, finished) in [
+            ("/sandbox w", "/sandbox workspace-write"),
+            ("/sandbox r", "/sandbox read-only"),
+            ("/sandbox s", "/sandbox strict"),
+            ("/sandbox O", "/sandbox off"),
+            ("/sandbox ", "/sandbox "),
+            ("/sandbox x", "/sandbox x"),
+            ("/sandbox off", "/sandbox off"),
+            ("/sandbox strict ", "/sandbox strict "),
+        ] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), finished, "{typed:?}");
+        }
+    }
+
     /// Tab on a started level finishes it, so `/effort h` becomes `/effort high`.
     #[test]
     fn tab_finishes_a_level_started_after_the_effort_command() {
