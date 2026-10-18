@@ -1327,6 +1327,9 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 /// therefore watched their words go nowhere, with nothing on the screen to say why, which is
 /// indistinguishable from an interface that has stopped responding.
 pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action {
+    // Where the idle path asks, and for the reason it does: a turn can begin with the brief `/handoff`
+    // wrote still in the box, and an edit that empties it mid-turn must end it as it does at rest.
+    session.drop_a_wiped_handoff();
     // None of the modes sends anything, and sending is the whole of what a running turn refuses.
     // Mid-turn is also when a delegate is there to watch, since one does not outlive the turn that
     // spawned it, and when the prompt somebody wants back is most likely one they can no longer
@@ -1407,6 +1410,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if key.code == KeyCode::Enter && !session.key_arrived_alone {
         session.note(t!(return_not_pressed));
         return Action::Redraw;
+    }
+
+    // The brief `/handoff` wrote is a line the planner wrote, so no arm below may carry it out as a
+    // command or queue it (CMD-1). It starts a new session, which a running turn cannot, so Enter
+    // leaves it in the box for the press that follows the turn, as the idle ladder answers it.
+    if key.code == KeyCode::Enter && !session.shell && session.handoff_pending() {
+        return Action::None;
     }
 
     // Before every arm that queues anything else, because in shell mode the line is a command line
