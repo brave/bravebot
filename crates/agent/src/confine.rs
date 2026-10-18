@@ -83,6 +83,8 @@ pub struct Confinement {
     /// The paths the person let programs reach for this session (SANDBOX-28). Applied before
     /// `filesystem`, so a denial of the person's still removes them.
     path_reach: Rules,
+    /// The same paths all as reads, which is all of them that `read-only` keeps (SANDBOX-22).
+    path_reach_read_only: Rules,
     /// Whether the session gives the stages it starts every path a `request_path` for writing would
     /// be granted, without the planner asking (SANDBOX-28). Set only for the lead session in bypass.
     unasked_writes: bool,
@@ -155,6 +157,7 @@ impl Confinement {
             grants: Vec::new(),
             filesystem: Rules::none(),
             path_reach: Rules::none(),
+            path_reach_read_only: Rules::none(),
             unasked_writes: false,
             host_grants: Vec::new(),
             requested: Vec::new(),
@@ -293,7 +296,19 @@ impl Confinement {
             .map(|row| row.path.clone())
             .collect();
         self.path_reach = Rules::granted(&read, &write);
+        self.path_reach_read_only =
+            Rules::granted(&[read.as_slice(), write.as_slice()].concat(), &[]);
         self
+    }
+
+    /// The paths the person let programs reach, as the mode holds them: under `read-only` a grant
+    /// for writing gives its read and not its write, as a new request for it would (SANDBOX-22,
+    /// SANDBOX-28). The grant is still held, so a move back gives the write again.
+    fn reach_in_force(&self) -> &Rules {
+        match self.mode {
+            SandboxMode::ReadOnly => &self.path_reach_read_only,
+            _ => &self.path_reach,
+        }
     }
 
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
@@ -1241,7 +1256,7 @@ impl Confinement {
                 policy = policy.allow_write(scratch);
             }
         }
-        let mut policy = self.path_reach.apply(policy);
+        let mut policy = self.reach_in_force().apply(policy);
         let unasked: Vec<PathBuf> = match (self.writes_without_a_request(), self.home.as_deref()) {
             (true, Some(home)) => writable_without_a_request(home),
             _ => Vec::new(),
@@ -4668,6 +4683,57 @@ mod tests {
         assert!(said.contains("3 path"), "{said}");
         assert!(!said.contains("/data/out"), "{said}");
         assert!(!plain.profile(&[&cat]).contains("also let programs reach"));
+    }
+
+    /// SANDBOX-22, SANDBOX-28: a grant for writing held before a move to `read-only` gives its read
+    /// and not its write, and gives the write again after a move back, since it is still held.
+    #[test]
+    fn a_write_grant_held_before_read_only_writes_nothing_until_the_mode_returns() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/out"),
+            write: true,
+            why: "the build needs it".to_string(),
+        }];
+        let writing =
+            reading_confinement(Prelude::Linux, &["/work/project"]).with_path_reach(&granted);
+        let cat = step("/bin/cat", &["file"]);
+        let policy_in = |mode| {
+            writing
+                .clone()
+                .with_mode(mode)
+                .policy(&cat, Path::new("/work/project"), &[])
+        };
+
+        let before = policy_in(SandboxMode::WorkspaceWrite);
+        let read_only = policy_in(SandboxMode::ReadOnly);
+        let after = policy_in(SandboxMode::WorkspaceWrite);
+
+        assert!(writes(&before, "/data/out"), "the fixture grants no write");
+        assert!(
+            !writes(&read_only, "/data/out"),
+            "read-only still wrote a held grant"
+        );
+        assert!(reads(&read_only, "/data/out"));
+        assert!(
+            writes(&after, "/data/out"),
+            "the grant was dropped, not held"
+        );
+    }
+
+    /// SANDBOX-22, SANDBOX-20: a file under a held write grant is one the plan could have written
+    /// in every mode, since a file written before a move to `read-only` outlives it.
+    #[test]
+    fn a_held_write_grant_still_marks_its_files_as_the_plans_under_read_only() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/out"),
+            write: true,
+            why: "the build needs it".to_string(),
+        }];
+        let read_only = reading_confinement(Prelude::Linux, &["/work/project"])
+            .with_path_reach(&granted)
+            .with_mode(SandboxMode::ReadOnly);
+
+        assert!(read_only.writable_by_the_plan(Path::new("/data/out/tool")));
     }
 
     /// SANDBOX-28: a yes to a path puts that path in the profile and no other. Its parent, a

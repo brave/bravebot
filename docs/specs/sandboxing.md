@@ -2787,7 +2787,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 - **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
   is not trusted ([TRUST-7](trust-map.md#TRUST-7)). A request to write is not accepted under
   `read-only` ([SANDBOX-22](#SANDBOX-22)), whatever the permission mode, and a request to read is.
-  The result says so and nothing is asked. No
+  The result says so and nothing is asked. A grant for writing held when the mode becomes `read-only` gives its read and not its
+  write for as long as the mode lasts, and gives the write again when the mode returns to
+  `workspace-write`, since it is still held. No
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
@@ -2853,6 +2855,7 @@ the whole of what is held back.
 `verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
 `verified-by: bravebot_agent::workspace::a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it`
 `verified-by: bravebot_agent::confine::a_path_let_reach_does_not_reach_its_parent_or_a_sibling`
+`verified-by: bravebot_agent::confine::a_write_grant_held_before_read_only_writes_nothing_until_the_mode_returns`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
