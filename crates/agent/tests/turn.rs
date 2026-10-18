@@ -36175,7 +36175,7 @@ fn a_fan_out_with_fewer_tokens_left_than_delegates_starts_none() {
     let scratch = Scratch::new("delegate-budget-fan-out-short");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
+    let (endpoint, received) = serve_by_marker(vec![
         (
             "DELEGATE-THE-WORK",
             vec![
@@ -36227,8 +36227,23 @@ fn a_fan_out_with_fewer_tokens_left_than_delegates_starts_none() {
         })
         .collect();
     assert!(
+        approved
+            .iter()
+            .any(|d| d.starts_with("d1 ") && d.contains("rounds and 5000 tokens")),
+        "the parent did not start on the call's figure: {approved:?}"
+    );
+    assert!(
         !approved.iter().any(|d| d.starts_with("d1.")),
         "a delegate started on a share of nothing: {approved:?}"
+    );
+    let parent_requests: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
+        .collect();
+    assert!(
+        parent_requests.last().is_some_and(|body| body
+            .contains("this run has spent its token budget, so it may not start a delegate")),
+        "the parent was not told the budget refused its fan-out: {parent_requests:?}"
     );
 }
 
