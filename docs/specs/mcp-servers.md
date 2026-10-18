@@ -949,7 +949,13 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
 - The sandbox's base rows for this platform, which allow egress and children, with no home
   directory given, so the git configuration in it is not among them either, and no developer
   directory, so on macOS a server whose program is a `/usr/bin` shim such as `python3` does not
-  start. Egress is to IP
+  start. The session's network decision then applies to the server as it does to a stage
+  ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-24](sandboxing.md#SANDBOX-24)): a closed
+  session gives it no egress, a runner's fetch included, since a server carries none of the
+  reasons a stage keeps the network for, and a session with `allowedHosts` holds it to the proxy
+  that applies the list, with the registry hosts of the toolchain its program is. A platform that
+  cannot apply the decision does not start the server, and the note names the setting. Egress
+  otherwise is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
   `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a
@@ -1054,6 +1060,9 @@ not started either, and the line says why.
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+`verified-by: bravebot_agent::servers::a_closed_session_takes_the_network_from_a_local_server_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied`
 `verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
