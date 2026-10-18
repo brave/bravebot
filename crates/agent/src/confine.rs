@@ -1971,9 +1971,9 @@ const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` ca
 /// Said after a failed step on macOS where the session accepts an `unconfined` request
 /// (SANDBOX-29), for the script the sentence above cannot help: one whose own child process runs
 /// git. Never said where the session would refuse the request.
-const MACOS_GIT_UNCONFINED_SENTENCE: &str = " A script that has to run git itself can be started \
-     with `'unconfined': true`: the person is asked to approve that one line, which runs with no \
-     sandbox.";
+const MACOS_GIT_UNCONFINED_SENTENCE: &str = " A script that has to run git itself, and was refused \
+     that write, can be run again with 'unconfined': true, saying in 'why' what the sandbox \
+     refused: the person is asked to approve that one line, which runs with no sandbox.";
 
 /// [`MACOS_GIT_SENTENCE`] under `read-only`, where a git step cannot write the session's `.git`
 /// either, so running git on its own helps only in a place the mode writes.
@@ -2041,8 +2041,10 @@ const SIGNING_AGENT_SENTENCE: &str = " A step that signs never reads a private k
 
 /// The way through [`SIGNING_AGENT_SENTENCE`] names where the session accepts a request for a line
 /// with no sandbox, ending without a full stop so the caller can end the sentence.
-const SIGNING_UNCONFINED_WAY_OUT: &str = ", or by running that one commit line with \
-     'unconfined': true, which the person is asked to approve and which runs with no sandbox";
+const SIGNING_UNCONFINED_WAY_OUT: &str = ", or, once a confined run of that one commit line \
+     failed because the sandbox refused it access, by running it again with 'unconfined': true, \
+     saying in 'why' what was refused, which the person is asked to approve and which runs with \
+     no sandbox";
 
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
@@ -2151,9 +2153,9 @@ const IDENTITY_NO_PROMPT_TAIL: &str = " No run prompt will list keys for this st
      rather than retrying.";
 
 /// Said of a push over ssh where the session would accept an `unconfined` request.
-const IDENTITY_UNCONFINED_WAY_OUT: &str = " A push refused for permission can also be run as \
-     its own line with 'unconfined': true, which the person is asked to approve and which runs \
-     with no sandbox.";
+const IDENTITY_UNCONFINED_WAY_OUT: &str = " A push refused for permission can also be run again \
+     as its own line with 'unconfined': true, saying in 'why' what the sandbox refused, which the \
+     person is asked to approve and which runs with no sandbox.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence(mode: SandboxMode) -> String {
@@ -4275,6 +4277,24 @@ mod tests {
         for elsewhere in [Prelude::Linux, Prelude::Windows] {
             let said = failed(elsewhere, true);
             assert!(!said.contains("unconfined"), "{elsewhere:?}: {said}");
+        }
+    }
+
+    /// SANDBOX-29: every sentence after a failed step that names `'unconfined': true` presents it as
+    /// a second attempt, after a run the sandbox refused, with the refusal given in `why`. The
+    /// fault it rejects is a sentence that offers the argument as a first choice or leaves the
+    /// planner without the words that tell a sandbox refusal from an ordinary failure.
+    #[test]
+    fn each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt() {
+        for (name, said) in [
+            ("macos git", MACOS_GIT_UNCONFINED_SENTENCE),
+            ("signing", SIGNING_UNCONFINED_WAY_OUT),
+            ("push", IDENTITY_UNCONFINED_WAY_OUT),
+        ] {
+            assert!(said.contains("'unconfined': true"), "{name}: {said}");
+            assert!(said.contains("again"), "{name}: {said}");
+            assert!(said.contains("why"), "{name}: {said}");
+            assert!(said.contains("refused"), "{name}: {said}");
         }
     }
 

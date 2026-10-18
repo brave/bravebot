@@ -2941,10 +2941,14 @@ none to add to.
   terminal interface and a session in lines can, and the desktop and a run with nobody to ask
   cannot. So a mode that keeps the profile, or a window that refuses the line, is never pointed at
   an argument it would turn down. A `request_path` refusal also says why the path cannot be lent.
-  The `run` description of the argument says the planner may ask whenever a line needs it, that the
-  person is asked every time, and that a session which does not accept it refuses the call with a
-  sentence saying so. On macOS the sentence after a failed step that says only git writes a `.git`
-  adds that a script which runs git itself can be started with the argument, in the same sessions.
+  The `run` description of the argument makes it a second attempt: every line starts without it, and
+  the planner asks for it only after the same line failed because the sandbox refused it access, not
+  after a failure of another kind, saying in `why` what was refused. It also says that the person is
+  asked every time, and that a session which does not accept it refuses the call with a sentence
+  saying so. Each sentence after a failed step that names the argument says the same: it is the way to
+  run the line again, with the refusal given in `why`. On macOS that is the sentence after a failed
+  step that says only git writes a `.git`, which adds that a script which runs git itself can be run
+  again with the argument, in the same sessions.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
 - The desktop draws no card for it and refuses, since a window reads `off` as `workspace-write` and has
@@ -2973,6 +2977,8 @@ refuse the path.
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::confine::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
+`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
