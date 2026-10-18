@@ -2540,6 +2540,41 @@ mod tests {
         assert!(!mcp::projects_file(&home).exists());
     }
 
+    /// The regression it rejects: a yes whose record cannot be written being treated as a no, or
+    /// passing without a word, so the person is not told the answer will be asked again
+    /// (SERVERS-4). A directory where the file belongs makes the write fail on any platform.
+    #[test]
+    fn a_yes_whose_record_cannot_be_written_still_starts_the_server_and_says_which_record() {
+        for (typed, blocked, said) in [
+            ("1\n", "approvals", "its approval was not recorded"),
+            ("2\n", "projects", "was not recorded as a project"),
+        ] {
+            let (home, project, _) = declared("cli-servers-unwritable", &["weather-mcp"]);
+            let bin = home.parent().unwrap().join("bin");
+            installed(&bin, "weather-mcp");
+            let file = match blocked {
+                "approvals" => mcp::approvals_file(&home),
+                _ => mcp::projects_file(&home),
+            };
+            std::fs::create_dir_all(&file).unwrap();
+
+            let settled = settled(&home, &project, Asking::Person, true, true, typed, &bin);
+
+            assert_eq!(started(&settled), vec!["weather"], "{typed:?}");
+            assert_eq!(settled.notes.len(), 1, "{typed:?}: {:?}", settled.notes);
+            assert!(
+                settled.notes[0].contains(said),
+                "{typed:?}: {:?}",
+                settled.notes
+            );
+            assert!(
+                blocked == "projects" || settled.notes[0].contains("weather"),
+                "{typed:?}: {:?}",
+                settled.notes
+            );
+        }
+    }
+
     #[test]
     fn a_program_is_found_in_the_path_it_names_and_nowhere_else() {
         let root = scratch("cli-servers-resolve");

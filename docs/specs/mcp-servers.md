@@ -505,6 +505,7 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_agent::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
 `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 `verified-by: bravebot_agent::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
+`verified-by: bravebot_agent::servers::a_yes_whose_record_cannot_be_written_still_starts_the_server_and_says_which_record`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
