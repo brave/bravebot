@@ -905,7 +905,7 @@ fn send(
         Err(e) => {
             return Err(EgressError::Transport {
                 url: url.to_string(),
-                detail: e.to_string(),
+                detail: call_failure(&e).to_string(),
                 transient: is_transient_call(&e),
             });
         }
@@ -1046,8 +1046,45 @@ fn body_failure(url: &str, error: std::io::Error) -> EgressError {
     }
     EgressError::Transport {
         url: url.to_string(),
-        detail: error.to_string(),
+        detail: cause
+            .map_or_else(|| io_failure(&error), call_failure)
+            .to_string(),
         transient: is_transient_io(&error),
+    }
+}
+
+/// The sentence a failed call is reported as, chosen by which failure it was.
+///
+/// The transport's own text for a failure is never used: a TLS handshake that fails on the name
+/// prints every name the server's certificate presented, and ureq quotes back a URI it could not
+/// use, so that text is the server's, and a failure's text reaches the planner as the driver's own
+/// words. Matching on the variant reads nothing a server wrote.
+fn call_failure(error: &ureq::Error) -> &'static str {
+    match error {
+        ureq::Error::Timeout(_) => "the request timed out",
+        ureq::Error::HostNotFound => "the host could not be found",
+        ureq::Error::ConnectionFailed => "the connection could not be made",
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => {
+            "the TLS handshake failed"
+        }
+        ureq::Error::Io(e) => io_failure(e),
+        _ => "the request did not complete",
+    }
+}
+
+/// The same for a failure of the connection, by the kind of I/O error and never its message.
+///
+/// A rustls error that reaches the caller as an I/O error is `InvalidData`, which is also what a
+/// reply that could not be parsed is, so that kind says only that what came back was unusable.
+fn io_failure(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind::*;
+    match error.kind() {
+        TimedOut => "the request timed out",
+        ConnectionRefused => "the connection was refused",
+        ConnectionReset | ConnectionAborted | BrokenPipe => "the connection was reset",
+        UnexpectedEof => "the connection closed before the reply was complete",
+        InvalidData => "the reply could not be used, or the TLS handshake failed",
+        _ => "the connection failed",
     }
 }
 
@@ -1321,6 +1358,49 @@ mod tests {
         assert!(
             matches!(outcome, Err(EgressError::Transport { .. })),
             "the silence from the proxy was waited through: {outcome:?}"
+        );
+    }
+
+    /// A failure's text is the part of it a caller formats into a message the planner reads, so
+    /// it is chosen by which failure it was. A TLS handshake that fails on the name prints every
+    /// name the server's certificate presented, and the transport quotes back a URI it could
+    /// not use, so neither text may survive, and no kind of failure may fall back to the
+    /// transport's own words.
+    #[test]
+    fn a_call_failure_is_worded_by_its_kind_and_never_by_the_transport() {
+        let sentinel = "SENTINEL-CERTIFICATE-NAME";
+        let tls_as_io = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid peer certificate: only valid for {sentinel}"),
+            )
+        };
+        let failures = [
+            (ureq::Error::Io(tls_as_io()), "TLS handshake"),
+            (ureq::Error::BadUri(sentinel.into()), "did not complete"),
+            (
+                ureq::Error::Tls("SENTINEL-CERTIFICATE-NAME"),
+                "TLS handshake",
+            ),
+            (
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    sentinel,
+                )),
+                "refused",
+            ),
+            (ureq::Error::HostNotFound, "could not be found"),
+        ];
+        for (error, wording) in failures {
+            let said = call_failure(&error);
+            assert!(!said.contains(sentinel), "{error:?} was worded as {said}");
+            assert!(said.contains(wording), "{error:?} was worded as {said}");
+        }
+
+        let body = body_failure("https://example.com/", tls_as_io());
+        assert!(
+            !body.to_string().contains(sentinel),
+            "a body failure carried the I/O error's message: {body}"
         );
     }
 
