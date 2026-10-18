@@ -4047,7 +4047,7 @@ impl Workspace {
         // the entry the driver recorded, and the checkout's `.git` is never read (CHECKOUT-12).
         let routed = self.checkout.as_deref().filter(|_| root == self.root);
         let git_key = match routed {
-            Some(checkout) => checkout.source.trusted_git_dir(policy, ".")?,
+            Some(checkout) => checkout.source.trusted_git_dir_at(policy, ".", true)?,
             None => self.trusted_git_dir(policy, named)?,
         };
         // Status compares every file in the working tree, so all of it is its read set.
@@ -4157,7 +4157,27 @@ impl Workspace {
         policy: &Policy<'_, S>,
         named: &str,
     ) -> Result<String, crate::git::Declined> {
-        let git_key = self.git_dir_key(named);
+        self.trusted_git_dir_at(policy, named, false)
+    }
+
+    /// [`Workspace::trusted_git_dir`], with the key spelled as the full path to `.git` where
+    /// `absolute`, for a question asked through a delegate's policy that reads a relative name
+    /// under its checkout. This workspace is the person's, so a relative key would be asked
+    /// about `<checkout>/.git`, where the rules are a copy made when the checkout was, and the
+    /// person's `.git` as the live map holds it would never be consulted (CHECKOUT-12).
+    fn trusted_git_dir_at<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+        absolute: bool,
+    ) -> Result<String, crate::git::Declined> {
+        let git_key = match absolute {
+            true => {
+                let resolved = self.root.join(in_repository(named, ".git"));
+                to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
+            }
+            false => self.git_dir_key(named),
+        };
         if !policy.trusts_beneath(&git_key) {
             return Err(crate::git::Declined::Untrusted);
         }

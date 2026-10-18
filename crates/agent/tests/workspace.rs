@@ -10323,6 +10323,48 @@ fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
     assert!(log.contains("first"), "{log}");
 }
 
+/// CHECKOUT-12. A question asked through a delegate's policy, which reads a relative name under its
+/// checkout, holds the trust of the person's `.git` against the live map: a path under it
+/// distrusted after the checkout was made declines the question, as it does in the working
+/// directory.
+#[test]
+fn read_git_in_a_checkout_holds_the_live_trust_of_the_working_directorys_dot_git() {
+    use bravebot_agent::git::{Declined, Query};
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-live-git-trust", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let rooted = authority.rooted_at(made.checkout().expect("a checkout").key());
+    let mut delegate = policy.with_file_authority(rooted);
+    assert!(
+        asked_in(&made, &mut delegate, Query::Log)
+            .unwrap()
+            .contains("first"),
+        "the checkout was not read before the distrust"
+    );
+
+    let distrusted = format!("{}/.git/refs/heads/x", workspace.root().display());
+    assert!(authority.publish(&distrusted, Integrity::Untrusted));
+
+    for query in [Query::Log, Query::Status] {
+        let refused = asked_in(&made, &mut delegate, query);
+        assert!(
+            matches!(
+                refused,
+                Err(WorkspaceError::Git {
+                    declined: Declined::Untrusted,
+                    ..
+                })
+            ),
+            "{query:?}: {refused:?}"
+        );
+    }
+}
+
 /// GIT-7, GIT-8, CHECKOUT-12. A directory is one whose repository `read_git` opens as a question
 /// about its history would: a repository of its own below the root is, and so is a delegate's
 /// checkout, whose `.git` is a file; a linked worktree, whose `.git` is a file the driver has no
