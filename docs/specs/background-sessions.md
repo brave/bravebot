@@ -276,7 +276,11 @@ decision about a session someone is sitting in front of; read here, one line in 
 directory would let a session write unwatched, and that is what the bypass flag is named and
 warned about for.
 
-`verified-by: none`
+`verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
+`verified-by: bravebot_cli::running::a_background_session_says_its_mode_to_whoever_attaches`
+`verified-by: bravebot_cli::background::the_mode_line_names_each_mode_a_background_session_runs_in`
+`verified-by: bravebot_cli::plain::a_standing_vetting_answer_does_not_reach_a_hosted_session`
+`verified-by: bravebot_cli::running::an_allow_rule_does_not_answer_a_write_a_background_session_holds`
 
 <a id="BG-9"></a>
 ### BG-9: attaching draws the session as a foreground one, and detaching leaves it running

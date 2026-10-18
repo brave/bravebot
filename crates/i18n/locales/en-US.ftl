@@ -3618,7 +3618,9 @@ sessions-view-failed = Could not draw the list of background sessions: { $proble
 bg-needs-a-prompt = --bg takes the prompt to start with
 bg-needs-a-terminal = --bg starts a session from a terminal, and this is not one
 bg-takes-nothing-else = --bg takes a prompt and no other option, and { $flag } cannot reach the session it starts
-bg-bypass-refused = --dangerously-skip-permissions is refused for a background session, because nobody is there to notice what it does
+bg-bypass-refused = --dangerously-skip-permissions is refused for a background session, because a session nobody is watching does not run in a mode that answers every question. Use a one-shot run (-p) to ask for that.
+# Said to whoever is attached, the mode being fixed for as long as the process runs (BG-8).
+bg-mode = Mode: { $mode }. It stays this for as long as the session runs; attaching cannot change it.
 bg-not-started = The background session did not start.
 bg-started = Started { $id }. Join it with: bravebot attach { $id }
 bg-spawn-failed = Could not start the background session: { $problem }

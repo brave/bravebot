@@ -9070,7 +9070,7 @@ fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
     for (arguments, said_so) in [
         (
             &["--bg", "--dangerously-skip-permissions", "fix it"][..],
-            "refused for a background session",
+            "does not run in a mode that answers every question. Use a one-shot run (-p)",
         ),
         (&["--bg", "--agent", "reviewer", "fix it"][..], "--agent"),
         (
@@ -10493,6 +10493,30 @@ fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
         !home.0.join("work/out.txt").exists(),
         "the allow rule answered for a person who was not there"
     );
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
+/// BG-8: the opening lines of a background session, which an attach is replayed, say the mode the
+/// process runs in.
+#[cfg(unix)]
+#[test]
+fn a_background_session_says_its_mode_to_whoever_attaches() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(&home, &gateway, "{}");
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let shown = shown_until(&mut seen, "asking before it acts");
+    assert!(shown.contains("Mode: "), "{shown}");
 
     let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = host.wait();
