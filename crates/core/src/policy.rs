@@ -16866,8 +16866,7 @@ five
         }
 
         /// DELEGATE-29. A child is held to what its parent has left, so a parent cannot exceed its
-        /// budget by delegating, and a parent with nothing left still starts a child that may make
-        /// one request.
+        /// budget by delegating.
         #[test]
         fn a_child_is_never_given_more_than_its_parent_has_left() {
             let mut sink = RecordingSink::new();
