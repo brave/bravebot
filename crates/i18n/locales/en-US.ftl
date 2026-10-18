@@ -2937,6 +2937,13 @@ session-offered-tools =
 session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
 session-something-was-refused = a policy gate refused something during that turn
+# Said under a finished turn for refusals that no later call to the same tool got past. A refusal
+# a later call got past is left to the audit trail.
+session-refusals-left =
+    { $count ->
+        [one] the turn ended with a refused call left undone. Refused: { $first }
+       *[other] the turn ended with { $count } refused calls left undone. First refused: { $first }
+    }
 # The endpoint substitutes a model it will not serve rather than refusing, so without this a
 # session can ask for one model and be answered by another with nothing said.
 session-model-substituted =

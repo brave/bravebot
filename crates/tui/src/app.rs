@@ -6338,6 +6338,26 @@ fn progress_of_a_turn(
     session.progressed(spent);
 }
 
+/// What a finished turn says about refusals, or nothing.
+///
+/// A refusal a later call to the same tool got past stays in the audit trail and is not drawn
+/// here. One that stands is counted and the first is named. Where the turn was not clean and holds
+/// no list of what was refused, the general sentence is all that can be said.
+fn refusal_note(clean: bool, standing: &[String], worked_around: usize) -> Option<String> {
+    if clean {
+        return None;
+    }
+    match standing.first() {
+        Some(first) => Some(t!(
+            session_refusals_left,
+            count = standing.len(),
+            first = first.as_str()
+        )),
+        None if worked_around > 0 => None,
+        None => Some(t!(session_something_was_refused).to_string()),
+    }
+}
+
 /// Fold a finished turn into the session.
 #[allow(clippy::too_many_arguments)]
 fn fold_outcome(
@@ -6364,8 +6384,12 @@ fn fold_outcome(
                     .as_ref()
                     .map(|addressed| addressed.name().to_string()),
             );
-            if !outcome.clean {
-                session.note(t!(session_something_was_refused));
+            if let Some(note) = refusal_note(
+                outcome.clean,
+                &outcome.standing_refusals,
+                outcome.worked_around,
+            ) {
+                session.note(note);
             }
             // Where the wall clock went, beside what the turn cost. The wall figure is the
             // session's own, taken from the moment Enter was pressed; this fills in the parts, which
@@ -6477,6 +6501,24 @@ fn fold_outcome(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named() {
+        let refusals = |reasons: &[&str]| -> Vec<String> {
+            reasons.iter().map(|reason| reason.to_string()).collect()
+        };
+        assert_eq!(refusal_note(true, &[], 0), None);
+        assert_eq!(refusal_note(false, &[], 2), None);
+        let one = refusal_note(false, &refusals(&["run: no scope"]), 0).unwrap();
+        assert!(one.contains("run: no scope"), "{one}");
+        assert!(!one.contains("policy gate refused something"), "{one}");
+        let two = refusal_note(false, &refusals(&["run: first", "write: second"]), 1).unwrap();
+        assert!(two.contains('2') && two.contains("run: first"), "{two}");
+        assert!(!two.contains("write: second"), "{two}");
+        // Not clean and nothing known about what was refused: the general sentence.
+        let unknown = refusal_note(false, &[], 0).unwrap();
+        assert!(unknown.contains("refused something"), "{unknown}");
+    }
+
     use super::*;
     use crate::state::Status;
     use bravebot_config::limit::Limit;

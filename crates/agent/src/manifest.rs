@@ -1273,6 +1273,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         compared_the_model_itself: false,
         model,
         steps: plan.len(),
+        standing_refusals: policy.refusals().to_vec(),
+        worked_around: 0,
         clean: planning_was_clean && policy.finish(),
         trust,
         programs,
