@@ -168,6 +168,7 @@ const CARDS = {
   attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
+  'session-message': { entry: () => ({ kind: 'session-message', id: 'm1', direction: 'from', heading: 'message from session 11111111 (planner)', kept: null, session: '11111111-aaaa', name: 'planner', label: '(T,pub)', text: FORGED_CHROME }), marks: '<blockquote>' },
   'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME, why: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call and the planner’s reason for it, with no result in it' },
   tool: {
     // `Activity.changes` and `Activity.untrusted` are on the wire already and this card draws

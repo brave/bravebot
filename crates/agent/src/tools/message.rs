@@ -7,6 +7,7 @@
 
 use super::{Produced, Tools, named_argument};
 use crate::confirm::{Confirmer, MessageDecision, MessageRequest};
+use crate::conversation::Composed;
 use crate::messages::{Delivery, Found};
 use crate::report::{Reporter, SentMessage};
 use bravebot_core::event::Sink;
@@ -141,7 +142,7 @@ pub(super) fn message_session<S: Sink, C: Confirmer, R: Reporter>(
                 label: label.to_string(),
                 text: message.text().to_string(),
             });
-            Produced::new(
+            let mut produced = Produced::new(
                 Labelled::trusted(format!(
                     "the message is queued in the process of the session named '{asked_for}'. \
                      That does not say its planner has read it: it is read at the start of that \
@@ -149,7 +150,14 @@ pub(super) fn message_session<S: Sink, C: Confirmer, R: Reporter>(
                 )),
                 String::new(),
                 format!("message sent to {}", crate::messages::shown_name(&to.name)),
-            )
+            );
+            produced.message_sent = Some(Composed::MessageSent {
+                to: to.id.clone(),
+                name: crate::messages::shown_name(&to.name),
+                label: label.to_string(),
+                text: message.text().to_string(),
+            });
+            produced
         }
         Delivery::Full => Produced::problem(format!(
             "refused: the session named '{asked_for}' already holds as many messages as it will \

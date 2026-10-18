@@ -259,6 +259,11 @@ pub struct Output {
     /// Unlike `loaded` it is set for every skill, so the turn can tag the result and a compaction
     /// can send the skill again (COMPACT-17). The catalogue's own string, never the call's.
     pub skill: Option<String>,
+    /// The tag for the result of a `message_session` call whose message was delivered (MSG-11).
+    ///
+    /// Built from the roster's name and id and the label the policy layer gave the words, never from
+    /// anything the receiver answered.
+    pub message_sent: Option<crate::conversation::Composed>,
     /// The wire name of the MCP server tool the planner asked to have offered from the next round
     /// on (SERVERS-16). Carried back because the offer is the turn's to hold.
     pub tool_loaded: Option<String>,
@@ -1122,6 +1127,8 @@ struct Produced {
     loaded: Option<(String, crate::skills::RunsAs)>,
     /// The name of the skill this call loaded, as the catalogue spells it.
     skill: Option<String>,
+    /// The tag for a `message_session` result whose message was delivered (MSG-11).
+    message_sent: Option<crate::conversation::Composed>,
     /// The wire name of the server tool the planner loaded (SERVERS-16), for the turn to offer.
     tool_loaded: Option<String>,
 }
@@ -1165,6 +1172,7 @@ impl Produced {
             delegate: Vec::new(),
             loaded: None,
             skill: None,
+            message_sent: None,
             tool_loaded: None,
         }
     }
@@ -2274,6 +2282,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         delegate: produced.delegate,
         loaded: produced.loaded,
         skill: produced.skill,
+        message_sent: produced.message_sent,
         tool_loaded: produced.tool_loaded,
     }
 }

@@ -311,6 +311,17 @@ pub fn lines_of(record: &str) -> Vec<String> {
                 why: Composed::Written,
                 text,
             } => Some(text),
+            // The words of a message between sessions are what a resumed transcript draws
+            // under its heading, so they are found, and the frame the planner was shown around
+            // them is not (MSG-11).
+            Said::Composed {
+                why:
+                    Composed::SessionMessage {
+                        text: Some(words), ..
+                    },
+                ..
+            } => Some(words),
+            Said::Sent { text, .. } => Some(text),
             Said::Composed { .. } => None,
         })
         // Notes come last: a note is found, but a line of the conversation that holds the same
@@ -490,6 +501,25 @@ mod tests {
         };
         let lines = lines_of(&record(Some("terminal"), vec![said("build it"), ran]));
         assert!(found(&lines, "linker exploded"));
+    }
+
+    /// MSG-11: the words of a message from another session are found, as a resumed transcript
+    /// draws them, and the frame the planner was shown around them is not.
+    #[test]
+    fn the_words_of_a_message_between_sessions_are_searched_and_the_frame_is_not() {
+        let heard = Stored {
+            message: Message::user("FRAME-SENTENCE\n> advice about the linker"),
+            composed: Some(Composed::SessionMessage {
+                from: "11111111-1111-4111-8111-111111111111".into(),
+                name: "build".into(),
+                label: "(T,pub)".into(),
+                text: Some("advice about the linker".into()),
+            }),
+            source: None,
+        };
+        let lines = lines_of(&record(Some("terminal"), vec![said("wait"), heard]));
+        assert!(found(&lines, "linker"));
+        assert!(!found(&lines, "FRAME-SENTENCE"));
     }
 
     #[test]

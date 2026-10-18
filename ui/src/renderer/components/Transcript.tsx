@@ -1796,6 +1796,18 @@ function Card({
       // nothing anybody types earns this row.
       return <div className="attached consolidation"><Icon name="refresh" />Asked to bring its memory up to date</div>
 
+    case 'session-message':
+      // Drawn from the record's fields and never from a prompt's wording, so nothing anybody types
+      // earns this row. The words are quoted, and are the sender's where the message came in.
+      return (
+        <div className="session-message">
+          <strong>{entry.heading}</strong>
+          {entry.text === null
+            ? <span>{entry.kept}</span>
+            : <blockquote>{entry.text}</blockquote>}
+        </div>
+      )
+
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':

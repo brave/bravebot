@@ -191,6 +191,8 @@ export type Entry = (
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
+  /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
+  | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
   | { kind: 'replayed-tool'; id: string; text: string; why: string }
 ) & { interrupted?: boolean; turn?: number }
@@ -234,6 +236,18 @@ export function fromSaid(said: Said[]): Entry[] {
         return narrated(
           `The ${entry.media === 'application/pdf' ? 'PDF' : 'picture'} ${entry.reference} held was let through and attached for the model`,
         )
+      case 'session_message':
+        return {
+          kind: 'session-message',
+          id: nextId(),
+          direction: entry.direction,
+          heading: entry.heading,
+          kept: entry.kept,
+          session: entry.session,
+          name: entry.name,
+          label: entry.label,
+          text: entry.text,
+        } as const
       default: {
         // A tag from a newer agent than this window. Drawn as a plain message and never as one of
         // the interface's own rows: those rows assert something about the conversation that this
@@ -574,6 +588,7 @@ export function conversation(entries: Entry[], tools = false): ExportTurn[] {
 
 /** Search user-visible content, excluding protocol identifiers and internal metadata. */
 export function searchableText(entry: Entry): string {
+  if (entry.kind === 'session-message') return [entry.name, entry.text ?? ''].join(' ')
   if ('text' in entry) return entry.text
   switch (entry.kind) {
     case 'turn-start': return ''

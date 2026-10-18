@@ -340,6 +340,44 @@ fn said(said: &Said) -> Value {
             why: Composed::Vetted { reference, media },
             ..
         } => json!({ "kind": "vetted", "reference": reference, "media": media }),
+        // Both fields and words of a message between sessions are driver-written or the sender's
+        // own, and cross as fields so the window draws a block marked as a message and never a
+        // prompt (MSG-11). `text` is null where the planner was given a reference, and no content
+        // is held for it.
+        Said::Composed {
+            why:
+                Composed::SessionMessage {
+                    from,
+                    name,
+                    label,
+                    text,
+                },
+            ..
+        } => json!({
+            "kind": "session_message",
+            "direction": "from",
+            "heading": bravebot_agent::messages::heading(true, from, name, label),
+            "kept": text.is_none().then(bravebot_agent::messages::kept),
+            "session": from,
+            "name": name,
+            "label": label,
+            "text": text,
+        }),
+        Said::Sent {
+            to,
+            name,
+            label,
+            text,
+        } => json!({
+            "kind": "session_message",
+            "direction": "to",
+            "heading": bravebot_agent::messages::heading(false, to, name, label),
+            "kept": null,
+            "session": to,
+            "name": name,
+            "label": label,
+            "text": text,
+        }),
         // Written for the planner and left out of a projection by `Conversation::recounted`, so
         // none reaches here. A tag added without a row is drawn as its words, never dropped.
         Said::Composed {
@@ -351,6 +389,7 @@ fn said(said: &Said) -> Value {
                 | Composed::Skill { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
+                | Composed::MessageSent { .. }
                 | Composed::Written,
             text,
         } => json!({ "kind": "user", "text": text }),

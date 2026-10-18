@@ -102,6 +102,14 @@ export type Said =
    * agent's own: a reference name and a media type from its table of extensions.
    */
   | { kind: 'vetted'; reference: string; media: string }
+  /**
+   * A message between two background sessions, from this one's record (MSG-11). `direction` is
+   * `from` for one that reached this session's planner and `to` for one its planner sent. `text` is
+   * null where the planner was given a reference and not the words. `heading` and `kept` are the
+   * sentences the terminal draws for the same record, worded once in Rust; `kept` is null where
+   * `text` is not.
+   */
+  | { kind: 'session_message'; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
 
 export interface TodoRow {
   content: string

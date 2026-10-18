@@ -140,6 +140,42 @@ pub enum Composed {
     ///
     /// Drawn plainly, and not as a prompt: nobody typed it, so it is no place to fork from.
     Written,
+    /// A message another background session's planner sent, as the frame the driver wrote around it
+    /// (MSG-7, MSG-11).
+    ///
+    /// The fields are the driver's: the sender's id, its name as the roster held it when the message
+    /// arrived and the label the policy layer gave the words. The words ride beside them in `text`,
+    /// which is where a surface finds them without reading the frame back. `None` where the planner
+    /// was given a reference and not the words, so that no content is written here.
+    SessionMessage {
+        /// The sender's full id.
+        from: String,
+        /// The sender's name, cut and made printable.
+        name: String,
+        /// The label the words arrived under, in the policy layer's own form.
+        label: String,
+        /// What the sender wrote, where the planner was shown it.
+        text: Option<String>,
+    },
+    /// The result of a `message_session` call that put its message in the receiver's process
+    /// (MSG-11).
+    ///
+    /// In the API's own shape, as [`Composed::Skill`] is. The fields are the driver's, the
+    /// roster's and the policy layer's, and `text` is what the planner wrote and the policy layer
+    /// let through. Only a call that was delivered carries it, so a transcript draws a refused or
+    /// declined call as the call and nothing more.
+    ///
+    /// House-keeping for the planner: the call above it is drawn as the message.
+    MessageSent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
+        text: String,
+    },
 }
 
 impl Composed {
@@ -155,6 +191,7 @@ impl Composed {
                 | Self::Skill { .. }
                 | Self::SkillKept { .. }
                 | Self::Notice
+                | Self::MessageSent { .. }
         )
     }
 }
@@ -498,6 +535,13 @@ impl Conversation {
     /// (COMPACT-17) without reading anything that was said.
     pub fn push_skill_result(&mut self, message: Message, name: String, source: Provenance) {
         self.push_composed_from(message, Composed::Skill { name }, source);
+    }
+
+    /// Add the result of a `message_session` call whose message was delivered, tagged with who it
+    /// went to and what it said (MSG-11).
+    pub fn push_message_result(&mut self, message: Message, sent: Composed, source: Provenance) {
+        debug_assert!(matches!(sent, Composed::MessageSent { .. }));
+        self.push_composed_from(message, sent, source);
     }
 
     /// The same as [`Conversation::push`], for a message whose composer knows whose words it holds.
@@ -948,6 +992,20 @@ pub enum Said {
         /// The message as the planner was sent it.
         text: String,
     },
+    /// A message this session's planner put to another session, and which one (MSG-11).
+    ///
+    /// Only a message that was delivered. A call that was refused, declined or never answered is
+    /// the call, drawn as a [`Said::Tool`].
+    Sent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
+        text: String,
+    },
 }
 
 /// A conversation written down, for a session that outlives the process.
@@ -1138,7 +1196,8 @@ impl Conversation {
         let mut said = Vec::new();
         // The archive first: what compaction took out of the request is still the person's
         // session, and they are the one reading this.
-        for stored in self.archive.iter().chain(self.messages.iter()) {
+        let all: Vec<&Stored> = self.archive.iter().chain(self.messages.iter()).collect();
+        for (index, stored) in all.iter().copied().enumerate() {
             if let Some(why) = stored
                 .composed
                 .as_ref()
@@ -1169,6 +1228,13 @@ impl Conversation {
                         said.push(Said::Assistant(spoken));
                     }
                     for call in message.tool_calls.iter().flatten() {
+                        // A message the call put in another session's process is drawn as the
+                        // message, from the tag its result carries and never from the call's
+                        // arguments: a call that was refused or declined has the same arguments.
+                        if let Some(sent) = message_delivered(&all, index, &call.id) {
+                            said.push(sent);
+                            continue;
+                        }
                         said.push(Said::Tool {
                             line: crate::tools::describe_stored_call(
                                 &call.function.name,
@@ -1183,6 +1249,31 @@ impl Conversation {
         }
         said
     }
+}
+
+/// The message the call with this id put in another session's process, where its result says it did
+/// (MSG-11).
+///
+/// Looked up in the run of results immediately after the round, as [`answered`] does.
+fn message_delivered(exchange: &[&Stored], index: usize, id: &str) -> Option<Said> {
+    exchange[index + 1..]
+        .iter()
+        .take_while(|stored| stored.message.tool_call_id.is_some())
+        .filter(|stored| stored.message.tool_call_id.as_deref() == Some(id))
+        .find_map(|stored| match &stored.composed {
+            Some(Composed::MessageSent {
+                to,
+                name,
+                label,
+                text,
+            }) => Some(Said::Sent {
+                to: to.clone(),
+                name: name.clone(),
+                label: label.clone(),
+                text: text.clone(),
+            }),
+            _ => None,
+        })
 }
 
 /// Whether the round beginning at `index` answered the call with this id.

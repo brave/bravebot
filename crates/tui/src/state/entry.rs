@@ -24,6 +24,12 @@ pub enum Speaker {
     /// Drawn plainly rather than styled: it is a terminal's output and the user is reading it as
     /// one, so markdown would be a misreading and a marker on every line would be noise.
     Output,
+    /// A message another background session sent, or one this session sent to another (MSG-11).
+    ///
+    /// Drawn apart from the user's prompts: a heading, then the words quoted. Neither a prompt nor
+    /// the assistant's reply, since nobody at this keyboard typed it and no model of this session
+    /// said it.
+    Message,
     /// A delegate the turn started, with its own work drawn underneath it.
     Delegate,
 }
@@ -369,6 +375,26 @@ impl Entry {
     /// A command the user ran in shell mode, echoed as they typed it.
     pub fn shell(line: impl Into<String>) -> Self {
         Self::blank(Speaker::Shell, line.into())
+    }
+
+    /// A message from or to another session, from a record: the heading on the first line, then
+    /// one quoted row to each line of the words, or the sentence saying they were kept from the
+    /// planner where `words` is `None` (MSG-11).
+    pub fn session_message(heading: String, words: Option<&str>) -> Self {
+        let mut text = heading;
+        match words {
+            Some(words) => {
+                for row in words.replace(['\u{2028}', '\u{2029}'], "\n").split('\n') {
+                    text.push_str("\n> ");
+                    text.push_str(row);
+                }
+            }
+            None => {
+                text.push('\n');
+                text.push_str(&bravebot_agent::messages::kept());
+            }
+        }
+        Self::blank(Speaker::Message, text)
     }
 
     /// What such a command printed.

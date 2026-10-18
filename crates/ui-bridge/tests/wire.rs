@@ -411,6 +411,75 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
     }
 }
 
+/// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
+/// label and the words, so a window draws a marked block and never a prompt; the frame the planner
+/// was shown is not sent, and a message whose words the planner was not given sends none.
+#[test]
+fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
+    let said = wire::recounted(&[
+        Said::Composed {
+            why: Composed::SessionMessage {
+                from: "11111111-1111-4111-8111-111111111111".into(),
+                name: "fix the build".into(),
+                label: "(T,pub)".into(),
+                text: Some("go ahead".into()),
+            },
+            text: "A message from another bravebot session reached you. FRAME".into(),
+        },
+        Said::Composed {
+            why: Composed::SessionMessage {
+                from: "11111111-1111-4111-8111-111111111111".into(),
+                name: "fix the build".into(),
+                label: "(U,priv)".into(),
+                text: None,
+            },
+            text: "FRAME".into(),
+        },
+        Said::Sent {
+            to: "22222222-2222-4222-8222-222222222222".into(),
+            name: "build".into(),
+            label: "(T,priv)".into(),
+            text: "run it".into(),
+        },
+    ]);
+    assert_eq!(
+        said[0],
+        json!({
+            "kind": "session_message", "direction": "from",
+            "heading": "message from session 11111111 (fix the build) · (T,pub)", "kept": null,
+            "session": "11111111-1111-4111-8111-111111111111", "name": "fix the build",
+            "label": "(T,pub)", "text": "go ahead"
+        })
+    );
+    assert_eq!(said[1]["text"], json!(null));
+    assert_eq!(
+        said[1]["kept"],
+        json!("its words were kept from the planner and are not in this record")
+    );
+    assert_eq!(
+        said[2]["heading"],
+        json!("message to session 22222222 (build) · (T,priv)")
+    );
+    assert_eq!(said[2]["direction"], json!("to"));
+    assert_eq!(
+        said[2]["session"],
+        json!("22222222-2222-4222-8222-222222222222")
+    );
+    assert!(
+        said.iter()
+            .all(|entry| !entry.to_string().contains("FRAME")),
+        "the frame crossed: {said:?}"
+    );
+    assert!(
+        said.iter().all(|entry| entry.get("prompt").is_none()),
+        "a message was given a prompt ordinal to fork at: {said:?}"
+    );
+    assert!(
+        wire::composed(Some(&json!("session_message"))).is_err(),
+        "a front end may claim a message from another session"
+    );
+}
+
 #[test]
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {

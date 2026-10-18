@@ -233,6 +233,27 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
                 )));
             }
         }
+        // A message to or from another session, apart from the prompts: the heading in the accent
+        // colour and every word of the message quoted under it, wrapped and made printable so
+        // neither a name nor the words can move the cursor (MSG-11).
+        Speaker::Message => {
+            for (index, text) in entry.text.lines().enumerate() {
+                let style = if index == 0 {
+                    Style::default()
+                        .fg(theme::accent())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let width = (width as usize).saturating_sub(LEAD).max(8);
+                for row in wrap::wrap(&printable(text), width, 0).rows {
+                    lines.push(Line::from(Span::styled(
+                        format!("{:LEAD$}{row}", ""),
+                        style,
+                    )));
+                }
+            }
+        }
         // Plainly, and indented to sit under the command. No marker down the margin and no
         // markdown: this is a terminal's output, and the user is reading it as one.
         //
@@ -949,6 +970,39 @@ mod tests {
             assert_eq!(line.spans[0].style, Style::default().fg(theme::note()));
         }
         assert_eq!(answered, noted);
+    }
+
+    /// MSG-11: a message to or from another session is drawn as a heading and the words quoted,
+    /// neither behind the person's prompt marker nor as a reply, and nothing in a name or in the
+    /// words can move the cursor.
+    #[test]
+    fn a_message_between_sessions_is_drawn_under_its_heading_with_the_words_quoted() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::session_message(
+                "message from session 11111111 (x\u{1b}[2Jy) \u{b7} (T,pub)".to_string(),
+                Some("first\n\u{1b}[2Ksecond"),
+            ),
+            90,
+        )
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+        assert_eq!(
+            rows,
+            [
+                "  message from session 11111111 (x\u{241b}[2Jy) \u{b7} (T,pub)",
+                "  > first",
+                "  > \u{241b}[2Ksecond"
+            ]
+        );
     }
 
     /// Who an entry is from decides how it reads: the person's words behind the marker they were

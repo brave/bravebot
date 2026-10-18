@@ -695,6 +695,8 @@ background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $ou
 session-message-heading = message de la session { $from } ({ $name }) · { $label }
 session-message-sent-heading = message à la session { $to } ({ $name }) · { $label }
 
+session-message-kept = ses mots ont été gardés à l'écart du planificateur et ne sont pas dans cet enregistrement
+
 ceiling-stop-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
