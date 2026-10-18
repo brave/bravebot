@@ -117,7 +117,8 @@ of its commits unsigned than it has now.
 
 0. Where the `run` tool is confined and `BRAVEBOT_PR_WORKTREES` puts worktrees outside the main
    clone (`../` is the usual value), call `request_path` with `write: true` on the directory that
-   holds the main clone, before step 1. `pr-fix.py` creates and rebases worktrees there, and a
+   `BRAVEBOT_PR_WORKTREES` names, resolved against the main clone (that is the clone's parent only
+   when the value is `../`), before step 1. `pr-fix.py` creates and rebases worktrees there, and a
    program may write nothing outside the workspace until a path is granted, so without it `start`
    fails with `Operation not permitted` on the first call. Take the path from the working directory
    and `BRAVEBOT_PR_WORKTREES`, never from the output of a failed run, which is untrusted: granting
