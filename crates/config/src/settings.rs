@@ -2058,7 +2058,6 @@ impl Drop for Settings {
 /// the layers under it in force, because the alternative is a mistake in a checkout deciding that a
 /// person's own profile no longer applies.
 pub(crate) fn read(path: &Path) -> Option<Document> {
-    use std::io::Read;
     // Only a regular file is a settings file. A device or a pipe reports length 0, and a pipe
     // blocks the open, so this is asked before the open and again of the handle that was opened.
     if !std::fs::metadata(path).ok()?.is_file() {
@@ -2069,14 +2068,17 @@ pub(crate) fn read(path: &Path) -> Option<Document> {
     if !found.is_file() || found.len() > MAX_BYTES {
         return None;
     }
-    // The stat length is not the bound: a file can grow after it, so the read carries its own.
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return None;
-    }
-    let mut text = String::from_utf8(bytes).ok()?;
+    let mut text = String::from_utf8(read_bounded(file)?).ok()?;
     Document::parse(&mut text).ok()
+}
+
+/// The stat length is not the bound: a file can grow after it, so the read carries its own. One byte
+/// past [`MAX_BYTES`] is read, and that byte is what says the source was too long.
+fn read_bounded(source: impl std::io::Read) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    source.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_BYTES).then_some(bytes)
 }
 
 /// A parsed settings document, which clears itself when it goes.
@@ -5197,6 +5199,19 @@ mod tests {
         let settings = layers.read();
         assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
         assert!(read(&link).is_none());
+    }
+
+    /// A source that is longer than its stat said, or that never ends, is refused by the read itself
+    /// and not by the length asked of the file before it.
+    #[test]
+    fn a_read_stops_one_byte_past_the_bound() {
+        use std::io::Read;
+        assert_eq!(
+            read_bounded(std::io::repeat(b' ').take(MAX_BYTES)).map(|b| b.len() as u64),
+            Some(MAX_BYTES)
+        );
+        assert!(read_bounded(std::io::repeat(b' ').take(MAX_BYTES + 1)).is_none());
+        assert!(read_bounded(std::io::repeat(b' ')).is_none());
     }
 
     /// A layer that spelled a name at all is the layer that answered for it, so a value that is not
