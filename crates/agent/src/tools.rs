@@ -9230,11 +9230,12 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Err(refusal) => return Produced::problem(refusal),
     };
     // What the run has left is shared by the delegates of one call, so a fan-out divides it
-    // rather than giving each the whole of it (DELEGATE-29). Zero stays zero: the kernel refuses
-    // a run with nothing left.
+    // rather than giving each the whole of it (DELEGATE-29). Fewer tokens than delegates leaves a
+    // share of zero, which the kernel refuses like a run with nothing left, so the delegates
+    // never carry more between them than the parent had.
     let parent_left = tools
         .budget_left
-        .map(|left| (left / tasks.len().max(1) as u64).max(u64::from(left > 0)));
+        .map(|left| left / tasks.len().max(1) as u64);
 
     let mut produced = Produced::new(
         Labelled::trusted(String::new()),

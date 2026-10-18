@@ -1224,7 +1224,9 @@ impl DelegateSpec {
         self
     }
 
-    /// Lower the budget to this figure where it is below the one it carries. Only ever lowers.
+    /// Lower the budget to this figure where it is below the one it carries. A figure from the
+    /// call or the parent's remainder can only restrict what a vouched definition set
+    /// (DELEGATE-29), so it never raises it.
     pub(crate) fn budgeted_to(mut self, tokens: Option<u64>) -> Self {
         self.budget = match (self.budget, tokens) {
             (Some(held), Some(asked)) => Some(held.min(asked)),

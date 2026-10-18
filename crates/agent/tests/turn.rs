@@ -36166,6 +36166,72 @@ fn a_fan_out_divides_what_its_parent_has_left_between_its_delegates() {
     }
 }
 
+/// DELEGATE-29: a fan-out of more delegates than its parent has tokens left starts none, since
+/// each of them given a token would carry more between them than the parent had.
+///
+/// The parent carries 5000 and has reported 4999 when it asks for two, so a share is nothing.
+#[test]
+fn a_fan_out_with_fewer_tokens_left_than_delegates_starts_none() {
+    let scratch = Scratch::new("delegate-budget-fan-out-short");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":5000}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-DEEPER","each":["ONE","TWO"]}"#,
+                    3000,
+                    1999,
+                ),
+                reply_with("gave up"),
+            ],
+        ),
+        (
+            "READ-DEEPER",
+            vec![reply_with("FIRST-REPORT"), reply_with("SECOND-REPORT")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !approved.iter().any(|d| d.starts_with("d1.")),
+        "a delegate started on a share of nothing: {approved:?}"
+    );
+}
+
 /// Records every task list it is handed, so a test can assert it was handed none.
 #[derive(Default)]
 struct RecordsTaskLists {

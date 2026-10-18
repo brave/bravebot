@@ -4003,7 +4003,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         use crate::delegate::Finish;
         let out_of_tokens = spent.filter(|(budget, tokens)| tokens >= budget);
         let (took, rounds, cause) = match finish {
-            Finish::Answered { took, rounds } if let Some((budget, _)) = out_of_tokens => {
+            Finish::Answered { took, rounds } if out_of_tokens.is_some() => {
+                let budget = out_of_tokens.map_or(0, |(budget, _)| budget);
                 let also = match rounds >= bound {
                     true => " and its round limit",
                     false => "",
