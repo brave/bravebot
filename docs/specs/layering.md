@@ -60,6 +60,8 @@ this spec.
 `verified-by: bravebot_cli::layering::every_workspace_member_is_a_row_in_the_layering_table`
 `verified-by: bravebot_cli::layering::a_rows_dependency_list_is_what_the_manifest_asks_for`
 `verified-by: bravebot_cli::layering::a_crate_that_draws_nothing_reaches_no_terminal_library`
+`verified-by: bravebot_cli::layering::the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing`
+`verified-by: bravebot_cli::layering::the_io_scan_sees_a_grouped_import_a_macro_and_skips_tests_and_comments`
 
 <a id="LAYER-2"></a>
 ### LAYER-2: `bravebot-core` and `bravebot-agent` are both the driver
