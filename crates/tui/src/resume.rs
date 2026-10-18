@@ -280,13 +280,7 @@ fn held_note(id: &str, held: impl Fn(&str) -> bool) -> Option<String> {
     if !held(id) {
         return None;
     }
-    let name = bravebot_session::jobs::Roster::readable()
-        .and_then(|roster| roster.get(id))
-        .map(|seen| crate::render::printable(&seen.job.name).replace('\t', " "))
-        .map(|name| name.chars().take(NAME_SHOWN).collect::<String>())
-        .unwrap_or_default();
-    let id: String = id.chars().take(8).collect();
-    Some(t!(resume_held_by_background, name = name, id = id).to_string())
+    Some(bravebot_session::jobs::held_refusal(id, NAME_SHOWN))
 }
 
 /// Interpret one key press.

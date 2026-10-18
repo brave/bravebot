@@ -378,9 +378,9 @@ impl Bridge {
         // A running background session holds its record, and a second process writing it forks
         // the conversation (BG-9). The terminal refuses it the same way.
         if bravebot_session::jobs::is_running(&id) {
-            return Err(Failure::bad_request(format!(
-                "`{id}` is held by a running background session. Join it with: bravebot attach {}",
-                id.chars().take(8).collect::<String>()
+            return Err(Failure::bad_request(bravebot_session::jobs::held_refusal(
+                &id,
+                usize::MAX,
             )));
         }
 
