@@ -12,8 +12,6 @@
 //! which paths are withheld; this module reports which paths it showed, so the answer can carry
 //! their labels too.
 
-#[cfg(test)]
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -2679,6 +2677,7 @@ mod tests {
 
     #[cfg(unix)]
     mod status {
+        use std::collections::BTreeMap;
         use std::os::unix::fs::MetadataExt;
 
         use super::*;
