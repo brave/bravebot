@@ -319,8 +319,8 @@ content.
 `verified-by: bravebot_agent::turn::a_resumed_transcript_shows_what_the_planner_was_given_of_each_message`
 `verified-by: bravebot_agent::turn::a_resumed_transcript_draws_a_delivered_message_as_a_message_and_not_as_the_call`
 `verified-by: bravebot_agent::turn::a_resumed_transcript_draws_a_declined_message_as_the_call_only`
-`verified-by: bravebot_tui::state::tests::replay::a_replayed_session_message_is_drawn_as_a_message_and_not_as_a_prompt`
-`verified-by: bravebot_tui::render::transcript::tests::a_message_between_sessions_is_drawn_under_its_heading_with_the_words_quoted`
+`verified-by: bravebot_tui::state::a_replayed_session_message_is_drawn_as_a_message_and_not_as_a_prompt`
+`verified-by: bravebot_tui::render::transcript::a_message_between_sessions_is_drawn_under_its_heading_with_the_words_quoted`
 `verified-by: bravebot_ui_bridge::wire::a_message_between_sessions_crosses_as_its_own_kind_without_the_frame`
 
 <a id="MSG-12"></a>

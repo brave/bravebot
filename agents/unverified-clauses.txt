@@ -24,7 +24,6 @@ docs/specs/plugins.md:PLUGIN-8: a marketplace is an index naming sources and dig
 docs/specs/plugins.md:PLUGIN-9: update, remove and list work from the recorded source
 docs/specs/plugins.md:PLUGIN-10: a plugin's text reaches a turn only as the part it is
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
-docs/specs/session-messages.md:MSG-11: both transcripts show the message, and the trail records that it happened
 docs/specs/worktrees.md:WORKTREE-1: `--worktree` starts a fresh interactive session in a worktree made for it
 docs/specs/worktrees.md:WORKTREE-2: a name is a label of ASCII letters, digits, `.`, `_` and `-`, and decides no path
 docs/specs/worktrees.md:WORKTREE-3: `--worktree` is refused where a delegate's checkout would be, and where a checkout would not be kept
