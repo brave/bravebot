@@ -931,6 +931,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
+`verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
+`verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
 `verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
