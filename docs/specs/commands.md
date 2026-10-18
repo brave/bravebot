@@ -970,8 +970,8 @@ refusal for an unknown word in step.
 ### CMD-22: `/sandbox`, `/limit`, `/review` and `/reach` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
-`workspace-write` and `off`, after the caret in place of `[<mode>]`. The earlier word `standard`
-is still read and is not listed. Tab after `/sandbox ` and the start of a mode, with the caret at
+`workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
+as `workspace-write` and is not listed. Tab after `/sandbox ` and the start of a mode, with the caret at
 the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sandbox w` becomes
 `/sandbox workspace-write`.
 
