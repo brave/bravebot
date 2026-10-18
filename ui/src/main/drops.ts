@@ -68,7 +68,9 @@ export async function stageDrops(session: unknown, paths: unknown, classify: Cla
   if (typeof session !== 'string' || rootForSession(session) === undefined) return []
   if (!Array.isArray(paths) || paths.length > MOST_IN_ONE_DROP) return []
   const found = paths.map((path): Found | DropOutcome => {
-    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) {
+    // U+FFFD is what a name that is not UTF-8 arrives as, so it may stand for other bytes and
+    // resolve to a different file whose name really holds it (PATH-002).
+    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || path.includes('\uFFFD')) {
       return { kind: 'skipped', name: typeof path === 'string' ? basename(path) : '', why: 'unreadable' }
     }
     const name = basename(path)

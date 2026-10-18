@@ -326,7 +326,9 @@ isolated world, listens for the drop itself, takes only an event the browser mar
 Electron for each file's path, and sends the paths straight to the main process. A page cannot make
 an event the browser trusts, so the paths came from a person's drag: a page that dispatches its own
 drop event, even one carrying the very files an earlier drop handed it, has nothing taken. The main
-process resolves each path, refuses anything but a regular file, and mints an opaque grant bound
+process refuses a path holding U+FFFD before resolving it, because that is what a name that is not
+UTF-8 arrives as, and it may stand for other bytes and resolve to a file whose name really holds it.
+It resolves each other path, refuses anything but a regular file, and mints an opaque grant bound
 to the session it was dropped on. The page is told the grant, the file's name, its kind and its
 marker's noun, and for a picture a thumbnail the preload drew. It is never told the path.
 

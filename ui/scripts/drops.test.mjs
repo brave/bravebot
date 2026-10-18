@@ -129,6 +129,14 @@ test('a file is classified by the name it resolves to, not the name of a link to
   assert.deepEqual(asked.at(-1), [blob])
 })
 
+test('a path holding a replacement character is refused before it is resolved, even where a file has that name', async () => {
+  const lossy = at('shot\uFFFD.png')
+  asked.length = 0
+  const [outcome] = await main.stageDrops('s1', [lossy], classify)
+  assert.deepEqual(outcome, { kind: 'skipped', name: 'shot\uFFFD.png', why: 'unreadable' })
+  assert.deepEqual(asked, [], 'the bridge is not asked about it')
+})
+
 test('a bridge that cannot say what the files are stages none of them', async () => {
   const failing = async () => { throw new Error('the agent is not running') }
   assert.deepEqual((await main.stageDrops('s1', [png, md], failing)).map((outcome) => outcome.why), ['unreadable', 'unreadable'])
