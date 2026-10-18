@@ -1310,9 +1310,10 @@ mod tests {
         );
     }
 
-    /// A scope is reach a plan's stage is lent because its operation needs it, so a program
-    /// that merely sits beside one, or talks to a remote through `git` without being it, is lent
-    /// nothing.
+    /// A program the Windows `PATHEXT` search resolved to `git.exe` is the `git` scope, in any case,
+    /// and a file that only starts with a program's name is not. The regression it rejects: matching
+    /// the file's whole name, which loses every scope on Windows, or stripping any extension, which
+    /// lends `git.exe.bak` the remote.
     #[test]
     fn a_scope_is_keyed_on_the_file_without_a_windows_executable_extension() {
         for (resolved, line, scope) in [
@@ -1341,6 +1342,9 @@ mod tests {
         }
     }
 
+    /// A scope is reach a plan's stage is lent because its operation needs it, so a program
+    /// that merely sits beside one, or talks to a remote through `git` without being it, is lent
+    /// nothing.
     #[test]
     fn a_program_no_scope_knows_carries_none() {
         for resolved in [

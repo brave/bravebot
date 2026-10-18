@@ -369,6 +369,21 @@ mod tests {
 
     use super::*;
 
+    /// A name that is not text has no program name, and is not read as its lossy lookalike. The
+    /// regression it rejects: `to_string_lossy`, which makes `git\xff.exe` into `git\u{FFFD}` and
+    /// so gives a file that is not `git` a name some lookup could match.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_has_no_program_name() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = std::ffi::OsStr::from_bytes(b"/x/git\xff.exe");
+        assert_eq!(program_name(Path::new(not_text)), None);
+        assert_eq!(
+            program_name(Path::new("/x/git\u{FFFD}.exe")).as_deref(),
+            Some("git\u{FFFD}")
+        );
+    }
+
     /// A directory with nothing in it, so a file left by an earlier run is not found.
     fn scratch_dir(name: &str) -> PathBuf {
         let directory = crate::testutil::scratch_dir(name);
