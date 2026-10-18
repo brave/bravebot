@@ -357,7 +357,15 @@ pub struct Policy<'sink, S: Sink> {
     capabilities: CapabilitySet,
     grants: Vec<Grant>,
     sink: &'sink mut S,
-    denials: usize,
+    /// Every refusal this turn, in order, each as `gate: reason`.
+    refusals: Vec<String>,
+    /// How many refusals there were when the call now running began.
+    call_began_at: usize,
+    /// The refusals each tool's latest calls raised, by position in `refusals`, that no later call
+    /// to the same tool has got past yet.
+    unrecovered: std::collections::BTreeMap<String, Vec<usize>>,
+    /// Positions in `refusals` of refusals a later call to the same tool got past.
+    recovered: std::collections::BTreeSet<usize>,
     /// Whether the last line put to [`Policy::plan_needs_approval_held`] was answered by the
     /// person's trust of its directory and by nothing else ([RUN-5]).
     ///
@@ -517,7 +525,7 @@ impl<S: Sink> fmt::Debug for Policy<'_, S> {
         f.debug_struct("Policy")
             .field("routing_fields", &self.routing.keys().collect::<Vec<_>>())
             .field("pending_grants", &self.grants.len())
-            .field("denials", &self.denials)
+            .field("refusals", &self.refusals.len())
             .field("context", &self.context)
             .field("holds", &self.holds)
             .finish_non_exhaustive()
@@ -563,7 +571,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             capabilities,
             grants: Vec::new(),
             sink,
-            denials: 0,
+            refusals: Vec::new(),
+            call_began_at: 0,
+            unrecovered: std::collections::BTreeMap::new(),
+            recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
             path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
@@ -606,7 +617,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
-        self.denials += 1;
+        self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
             gate,
             detail: String::new(),
@@ -1227,7 +1238,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             capabilities: self.capabilities.clone(),
             grants: self.grants.clone(),
             sink: record,
-            denials: 0,
+            refusals: Vec::new(),
+            call_began_at: 0,
+            unrecovered: std::collections::BTreeMap::new(),
+            recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
             path_requests_unasked: self.path_requests_unasked,
             trust: self.trust.clone(),
@@ -1260,8 +1274,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// took them, and the refusals among them counted.
     pub fn rejoin(&mut self, record: RecordingSink) {
         for event in record.into_events() {
-            if matches!(event, Event::GateBlocked { .. }) {
-                self.denials += 1;
+            if let Event::GateBlocked { gate, reason, .. } = &event {
+                self.refusals.push(format!("{gate}: {reason}"));
             }
             self.sink.emit(event);
         }
@@ -7438,7 +7452,59 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// End the turn, consuming the policy. Returns whether it completed without a
     /// refusal.
     pub fn finish(self) -> bool {
-        self.denials == 0
+        self.refusals.is_empty()
+    }
+
+    /// Note where the refusals stand as a tool call begins, for [`Policy::call_ended`].
+    pub fn call_began(&mut self) {
+        self.call_began_at = self.refusals.len();
+    }
+
+    /// Settle the call that began at the last [`Policy::call_began`], made to `tool`.
+    ///
+    /// A call that raised a refusal leaves it standing. A call to the same tool that raised none
+    /// has got past what an earlier call to that tool was refused, so those refusals are
+    /// recovered. This is the one driver-side fact the decision rests on: which tool a call
+    /// named, and whether a gate refused it. Nothing a call read or returned is consulted. The
+    /// refusals stay in [`Policy::refusals`] and in the trail either way, and
+    /// [`Policy::finish`] still counts them.
+    ///
+    /// Same tool is not same purpose: a later `run` of something else clears an earlier refused
+    /// `run`. The result only decides what is shown first, so a wrong guess hides nothing the
+    /// trail does not hold.
+    pub fn call_ended(&mut self, tool: &str) {
+        let raised = self.call_began_at..self.refusals.len();
+        if raised.is_empty() {
+            for position in self.unrecovered.remove(tool).unwrap_or_default() {
+                self.recovered.insert(position);
+            }
+        } else {
+            self.unrecovered
+                .entry(tool.to_string())
+                .or_default()
+                .extend(raised);
+        }
+    }
+
+    /// The refusals no later call got past, in order, each as `gate: reason`.
+    ///
+    /// Includes every refusal [`Policy::call_ended`] was not told about, such as a branch's that
+    /// [`Policy::rejoin`] took back.
+    pub fn standing_refusals(&self) -> Vec<&str> {
+        self.refusals
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !self.recovered.contains(position))
+            .map(|(_, refusal)| refusal.as_str())
+            .collect()
+    }
+
+    /// Every refusal so far, in order, each as `gate: reason`.
+    ///
+    /// A caller that wants to say which of them were recovered from compares the length before
+    /// and after a call: the list only grows during a turn.
+    pub fn refusals(&self) -> &[String] {
+        &self.refusals
     }
 }
 
@@ -7522,6 +7588,61 @@ fn climbs_out(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn refused_call(policy: &mut Policy<'_, RecordingSink>, tool: &str) {
+        policy.call_began();
+        policy.deny("run", Principle::IntegrityGate, "refused".to_string());
+        policy.call_ended(tool);
+    }
+
+    fn allowed_call(policy: &mut Policy<'_, RecordingSink>, tool: &str) {
+        policy.call_began();
+        policy.call_ended(tool);
+    }
+
+    /// A refusal a later call to the same tool got past is recovered, and still counted.
+    #[test]
+    fn a_refusal_a_later_call_to_the_same_tool_got_past_is_not_standing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        refused_call(&mut policy, "run");
+        assert_eq!(policy.standing_refusals().len(), 1);
+        allowed_call(&mut policy, "run");
+        assert!(policy.standing_refusals().is_empty());
+        assert_eq!(policy.refusals().len(), 1, "the refusal left the record");
+        assert!(!policy.finish(), "the turn still counts it");
+    }
+
+    /// A call to another tool is not the same purpose, and a refusal after the recovery is new.
+    #[test]
+    fn a_refusal_stands_until_the_same_tool_runs_without_one() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        allowed_call(&mut policy, "run");
+        refused_call(&mut policy, "run");
+        allowed_call(&mut policy, "read_file");
+        assert_eq!(policy.standing_refusals().len(), 1);
+        allowed_call(&mut policy, "run");
+        refused_call(&mut policy, "run");
+        let standing = policy.standing_refusals();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(policy.refusals().len(), 2);
+    }
+
+    /// A branch's refusals come back unattributed, so none of them can be called recovered.
+    #[test]
+    fn a_rejoined_refusal_stands_whatever_runs_after_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        let mut record = RecordingSink::new();
+        {
+            let mut branch = policy.branch(&mut record);
+            branch.deny("run", Principle::IntegrityGate, "refused".to_string());
+        }
+        policy.rejoin(record);
+        allowed_call(&mut policy, "read_file");
+        assert_eq!(policy.standing_refusals().len(), 1);
+    }
+
     use super::*;
     use crate::event::RecordingSink;
     use crate::slot::SlotStore;

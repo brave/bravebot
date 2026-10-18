@@ -1718,6 +1718,80 @@ fn a_model_cannot_escape_the_workspace() {
     );
 }
 
+/// A refusal a later call to the same tool got past is counted as worked around and not left
+/// standing, so the end-of-turn note does not name it.
+#[test]
+fn a_refusal_a_later_call_to_the_same_tool_got_past_is_not_left_standing() {
+    let scratch = Scratch::new("refusal-worked-around");
+    std::fs::write(scratch.path.join("inside.txt"), "fine").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"../../../../etc/passwd"}"#),
+        tool_request("read_file", r#"{"path":"inside.txt"}"#),
+        reply_with("read the one inside"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a file"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        !outcome.clean,
+        "the refusal must still make the turn unclean"
+    );
+    assert!(
+        outcome.standing_refusals.is_empty(),
+        "{:?}",
+        outcome.standing_refusals
+    );
+    assert_eq!(outcome.worked_around, 1);
+}
+
+/// A refusal no later call to its tool got past stays standing, including when a call to a
+/// different tool succeeded after it.
+#[test]
+fn a_refusal_no_later_call_to_its_tool_got_past_stays_standing() {
+    let scratch = Scratch::new("refusal-standing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"../../../../etc/passwd"}"#),
+        tool_request("list_files", r#"{"directory":"."}"#),
+        reply_with("could not read it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the passwd file"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.standing_refusals.len(), 1);
+    assert!(
+        outcome.standing_refusals[0].contains("read_file"),
+        "{:?}",
+        outcome.standing_refusals
+    );
+    assert_eq!(outcome.worked_around, 0);
+}
+
 /// The same property for a picture, which leaves the tool by a different resolver. Confinement is
 /// a fact about who chose the path rather than about what the file holds, so an absolute path the
 /// planner proposed is refused whether the bytes come back as lines or as a `data:` URI.

@@ -27,7 +27,8 @@ without producing anything or ends without checking anything. What completed req
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
 into its output ceiling. What a session does when it has spent as many tokens as the person said
 it may. What a turn does when the planner asks for the same call three times running. How the reads of one
-round are run when the planner asks for several together.
+round are run when the planner asks for several together. What the note under a finished turn says
+about refusals.
 
 ## Clauses
 
@@ -510,3 +511,32 @@ and each call in it is shown as finishing at once.
 `verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`
 `verified-by: bravebot_core::policy::a_branch_reads_the_file_decisions_made_after_it_began`
 `verified-by: bravebot_core::policy::what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order`
+
+<a id="TURN-11"></a>
+### TURN-11: the note under a finished turn names only the refusals no later call got past
+
+A turn that ends with a gate having refused a call says so under the reply, as a note. A refusal
+is *standing* unless a later call to the same tool was refused by no gate, which recovers every
+refusal earlier calls to that tool left standing. A recovered refusal is not drawn. A turn whose
+refusals are all recovered shows no note, and the turn is still not clean: the refusals stay in
+the audit trail ([TRACE-1](trace.md#TRACE-1)) and are counted when the turn finishes.
+
+**One tool is one purpose, as far as this goes.** A later `run` of another line recovers an
+earlier refused `run`. The decision only picks what is drawn, so a wrong guess hides nothing the
+trail does not hold. A refusal a branch recorded and the turn took back at rejoin is never
+recovered, because no call to a tool settled it.
+
+**Counted, and the first named.** Where refusals stand the note gives how many and names the
+first, as `gate: reason`. It does not list the rest. The general sentence that a gate refused
+something is said only where the turn was not clean and holds no list of what was refused, as a
+manifest run's does not.
+
+**No result is read.** Which tool a call named and whether a gate refused it are the only facts
+used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](labels.md#LABEL-8)).
+
+`verified-by: bravebot_core::policy::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_standing`
+`verified-by: bravebot_core::policy::a_refusal_stands_until_the_same_tool_runs_without_one`
+`verified-by: bravebot_core::policy::a_rejoined_refusal_stands_whatever_runs_after_it`
+`verified-by: bravebot_agent::turn::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_left_standing`
+`verified-by: bravebot_agent::turn::a_refusal_no_later_call_to_its_tool_got_past_stays_standing`
+`verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`

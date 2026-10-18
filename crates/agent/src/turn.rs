@@ -527,6 +527,11 @@ pub struct Outcome {
     pub steps: usize,
     /// Whether no gate refused anything during the turn.
     pub clean: bool,
+    /// The refusals no later call to the same tool got past, each as `gate: reason`, in order.
+    /// Empty where `clean` is false means the turn cannot say which refusals those were.
+    pub standing_refusals: Vec<String>,
+    /// How many refusals a later call to the same tool got past.
+    pub worked_around: usize,
     /// The trust map after the turn, including any rule the turn recorded itself.
     pub trust: TrustStore,
     /// The programs vouched for after the turn, including any the user vouched for during it.
@@ -2440,6 +2445,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         outcome.programs = decisions.programs.clone();
         outcome.asked_about = decisions.asked_about.clone();
         outcome.exposed = decisions.exposed.clone();
+        outcome.standing_refusals = policy
+            .standing_refusals()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        outcome.worked_around = policy.refusals().len() - outcome.standing_refusals.len();
         outcome.clean = policy.finish();
     }
     if let Some(retained) = retained {
@@ -3207,6 +3218,8 @@ where
         watches: state.watches,
         timing: state.spent.finish(),
         clean: false,
+        standing_refusals: Vec::new(),
+        worked_around: 0,
         display,
         // The turn's own, and only those: what a hook had to say is the caller's to place, since
         // it belongs to the moments around this turn as much as to the rounds inside it.
@@ -3722,6 +3735,8 @@ where
             // Wrapped per call rather than once for the turn, because the borrow has to be given
             // back: the loop above hands the same confirmer to the next call. What it counted is
             // taken off the tool figure below.
+            // Before the held-call check below, which can refuse without dispatching.
+            policy.call_began();
             let mut asking = crate::confirm::Timed::new(confirmer);
             let ran_at = Instant::now();
             let refused = if state.repeats.is_held(call) {
@@ -3815,6 +3830,7 @@ where
                     read,
                 ),
             };
+            policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;
 

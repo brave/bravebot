@@ -2446,6 +2446,11 @@ session-stands-for-tool = { $tool } appelé sans demander dans ce projet
 session-answered-already = déjà répondu : { $question }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
+session-refusals-left =
+    { $count ->
+        [one] le tour s'est terminé avec un appel refusé resté sans suite. Refusé : { $first }
+       *[other] le tour s'est terminé avec { $count } appels refusés restés sans suite. Premier refus : { $first }
+    }
 session-model-substituted =
     { $asked } n'a pas été servi : l'adresse a répondu avec { $served }. Lancez
     `bravebot doctor` si un abonnement était attendu.
