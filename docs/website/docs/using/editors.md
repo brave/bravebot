@@ -46,8 +46,8 @@ you answer about trusting a directory is remembered.
 
 Text the model or a command produced and nobody vouched for is shown behind a bar down the left
 side, as it is in the terminal. A question the editor integration has no lines for is refused
-without being shown. A picture or an HTML tag in a message is cut by a space, so the editor shows
-its address and does not load it.
+without being shown. A picture or an HTML tag with an attribute in a message is cut by a space, so the editor shows its
+address and does not load it.
 
 ## Settings that approve for you
 
