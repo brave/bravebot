@@ -3238,13 +3238,23 @@ fn path_argument<S: Sink>(
         ),
         (None, None) => Err("error: one of 'path' or 'path_ref' is required".to_string()),
         (Some(path), None) => {
-            let shown = policy
+            let mut shown = policy
                 .read_planner_argument(tool, "path", &path)
                 .map_err(|denial| format!("refused: {denial}"))?;
             refuse_denied_path(policy, workspace, purpose, &shown)?;
             // A `..` into an open directory is reported, trusted and keyed as the absolute path it
             // lands on, which is what the rules above were also asked about (TRUST-10).
-            let shown = workspace.climbed_to(&shown).unwrap_or(shown);
+            //
+            // The labelled value is respelled the same way, with the label it arrived with: a
+            // write is endorsed for `released` and its gate consumes the endorsement for the
+            // value it is handed, so the two have to be the one string.
+            let path = match workspace.climbed_to(&shown) {
+                Some(landing) => {
+                    shown = landing;
+                    Labelled::new(shown.clone(), path.label())
+                }
+                None => path,
+            };
             Ok(PathArgument {
                 path,
                 destination: Destination::Named,

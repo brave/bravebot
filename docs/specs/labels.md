@@ -14,7 +14,7 @@ guards:
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 27
+      - crates/agent/src/tools.rs: 28
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
@@ -22,7 +22,7 @@ guards:
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 117
+      - crates/core/src/policy.rs: 118
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
