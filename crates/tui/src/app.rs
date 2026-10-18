@@ -5214,6 +5214,13 @@ fn run_turn_animated(
     // Cloned rather than borrowed so the worker owns everything it needs. Config and Workspace
     // are cheap handles; Egress builds its own connection pool.
     let worker_config = config.clone();
+    // The model a `/agent` line's definition names answers this turn, so its window is the budget
+    // the turn compacts against (BACKEND-7). Taken in the worker's copy, so the session's own
+    // budget is what it was once the turn is over, and in the worker, so the listing it may ask
+    // for does not hold the screen.
+    let addressed_model = addressed
+        .as_ref()
+        .and_then(|addressed| addressed.model.clone());
     let worker_workspace = workspace.clone();
     // No round limit: the person reading this screen is the bound, and a stop reaches a turn
     // mid-round. A number here would only interrupt work that was going fine.
@@ -5325,6 +5332,7 @@ fn run_turn_animated(
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
         let egress = Egress::new();
+        let worker_config = config_for_turn(&worker_config, addressed_model.as_deref());
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
@@ -7421,6 +7429,73 @@ mod tests {
             bravebot_config::bedrock::CONTEXT_WINDOW
         );
         assert!(!config.budget_is_guessed());
+    }
+
+    /// BACKEND-14, COMPACT-9: with no pick the model in force is the configured default, and its
+    /// window is the budget. Looked up under `None` the default stood at 24,000 for a model
+    /// advertising 131,072, which is three quarters of the conversation it could have held.
+    #[test]
+    fn a_session_with_no_pick_adopts_the_window_of_the_configured_default() {
+        let mut config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        let mut session = Session::new("none");
+        assert_eq!(session.model(), None);
+
+        adopt_budget_for_current_model(&mut session, &mut config);
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::bedrock::CONTEXT_WINDOW
+        );
+        assert!(!config.budget_is_guessed());
+    }
+
+    /// BACKEND-7: the model a `/agent` line's definition names answers the turn, so the turn
+    /// compacts against that model's window. The session's own budget is not moved, because the
+    /// next turn on the session's model has to compare with its own.
+    #[test]
+    fn a_turn_addressed_to_a_definition_naming_a_model_takes_that_models_window() {
+        let config = a_config_with_a_named_roster();
+
+        let turn = config_for_turn(&config, Some("opus-arn"));
+
+        assert_eq!(
+            turn.context_budget,
+            bravebot_config::bedrock::CONTEXT_WINDOW
+        );
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET,
+            "the session's own budget moved"
+        );
+        assert_eq!(
+            config_for_turn(&config, None).context_budget,
+            config.context_budget,
+            "a definition naming no model leaves the session's budget"
+        );
+    }
+
+    /// BACKEND-7: where the listing for the addressed model cannot be read, the turn takes the
+    /// default budget and not the session model's window, which describes a different model. The
+    /// regression it rejects is `config_for_turn` returning early with the session's window.
+    #[test]
+    fn a_turn_addressed_to_a_model_whose_listing_fails_does_not_keep_the_session_window() {
+        use bravebot_config::env_var;
+        let (endpoint, _asked) = a_listing_server("this is not a roster");
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::ENDPOINT => Some(endpoint.clone()),
+            env_var::KEY_ID => Some("a-key-id".into()),
+            env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        assert!(config.adopt_window(Some(131_072)));
+        assert!(list_models(&config, Some("other-model")).is_err());
+
+        let turn = config_for_turn(&config, Some("other-model"));
+
+        assert_eq!(turn.context_budget, bravebot_config::DEFAULT_CONTEXT_BUDGET);
+        assert_eq!(config.context_budget, 131_072);
     }
 
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file

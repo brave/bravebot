@@ -1467,6 +1467,22 @@ impl Config {
         changed
     }
 
+    /// Take the window of the model that answers a request: `model` where one is named, otherwise
+    /// the configured default, which is what a request naming none asks for. `advertised` is given
+    /// that model's name and reports the window its roster states, or `None` where the roster does
+    /// not describe it or could not be fetched, which leaves the default budget in place.
+    ///
+    /// The rule both clients apply, so the roster each one reads is the only part that differs
+    /// between them. Returns whether the budget changed, as [`Config::adopt_window`] does.
+    pub fn adopt_window_of_model_in_force(
+        &mut self,
+        model: Option<&str>,
+        advertised: impl FnOnce(&str) -> Option<u64>,
+    ) -> bool {
+        let in_force = model.unwrap_or(&self.default_model).to_string();
+        self.adopt_window(advertised(&in_force))
+    }
+
     /// The gateway serving `model`, and the name to ask it for.
     ///
     /// The model names the service, so this is the whole of how a request reaches a gateway. Two
@@ -1778,6 +1794,25 @@ mod tests {
         let mut config = Config::from_lookup(complete_env).unwrap();
         assert!(config.adopt_window(Some(102_400)));
         assert_eq!(config.context_budget, 102_400);
+    }
+
+    /// The model in force is the one named, or the configured default where none is: the roster is
+    /// asked about that name. Asking about the pick alone, or about the first row, is the fault.
+    #[test]
+    fn the_window_taken_is_that_of_the_named_model_or_else_the_default() {
+        let mut config = Config::from_lookup(complete_env).unwrap();
+        config.default_model = "the-default".into();
+        let mut asked = Vec::new();
+        assert!(config.adopt_window_of_model_in_force(Some("named"), |m| {
+            asked.push(m.to_string());
+            Some(102_400)
+        }));
+        config.adopt_window_of_model_in_force(None, |m| {
+            asked.push(m.to_string());
+            None
+        });
+        assert_eq!(asked, ["named", "the-default"]);
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
     }
 
     /// A cramped window is taken at its word. Raising it to something more comfortable would put
