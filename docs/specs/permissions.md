@@ -350,9 +350,11 @@ refused by a rule naming `config/app.env` whether or not `config` or the file is
 under each other name the open directories hold for it, found by device and inode, so a hard link to
 a denied file is refused in a read and in a write. The walk covers every directory, and where
 it reaches the search cap or cannot list a directory while a `Read` or `Edit` deny rule is in force
-the call is refused. This is on Unix only. The second name can add a refusal or a question and never
-removes one. On Windows a name that reads as something other than the file it
-spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
+the call is refused. A file under an open directory that is the same directory as another open one
+(a macOS firmlink or a Linux bind mount, once a person has opened it with `/add-dir`) is also judged
+under its name beneath each of them, found by device and inode of the directory. This is on Unix
+only. The second name can add a refusal or a question and never removes one. On Windows a name
+that reads as something other than the file it spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's. A `run` redirection's
 target, read or written, is held to the same refusal as a file tool's path. A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
@@ -433,6 +435,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::a_hard_link_is_found_by_device_and_inode_and_the_walk_gives_up_at_its_cap`
 `verified-by: bravebot_agent::tools::a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule`
+`verified-by: bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`
+`verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_second_path_to_the_tree`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_file_an_edit_rule_denies_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_created_through_a_link_to_it`

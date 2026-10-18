@@ -3365,6 +3365,19 @@ fn refuse_denied_path_as<S: Sink>(
         None if policy.any_path_is_denied() => return Err(denied_by_rule(shown, None)),
         None => {}
     }
+    // A second path to a directory that is open (a firmlink, a bind mount) spells the file in a way
+    // no rule about the first path matches, and no link is followed to say so.
+    // Where a name is not UTF-8 no rule can be written about it, so a rule about a path is refused
+    // rather than passed, as for the hard links above.
+    match workspace.same_tree_names(path) {
+        Some(names) => {
+            for name in &names {
+                ask(policy, name)?;
+            }
+        }
+        None if policy.any_path_is_denied() => return Err(denied_by_rule(shown, None)),
+        None => {}
+    }
     // A definition's limit is written about workspace-relative names, so it is judged on the name
     // given in that spelling (`/work/docs/a.md` is `docs/a.md`) and on the file the name lands on
     // (`docs/link` is wherever the link goes). Both have to be inside: a link outside the limit
