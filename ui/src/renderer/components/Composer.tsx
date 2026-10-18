@@ -566,7 +566,8 @@ function ContextMeter({ session, model, tokens, archived, compacting, canCompact
           {!!archived && <span> · Earlier context summarised</span>}
         </span>
       </button>
-      <div className="context-popover" data-test="context-popover">
+      {/* Drawn only while open, so a closed popover adds no second copy of the reading to the page. */}
+      {open && <div className="context-popover" data-test="context-popover">
         <p className="context-said">{said}</p>
         {share && <p className="context-detail">{share} context tokens</p>}
         {!!archived && <p className="context-detail">Earlier context summarised</p>}
@@ -580,7 +581,7 @@ function ContextMeter({ session, model, tokens, archived, compacting, canCompact
             </div>
           </>
         )}
-      </div>
+      </div>}
     </ButtonMenu>
   )
 }
