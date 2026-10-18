@@ -557,12 +557,53 @@ def resolve_or_stop(tree):
     if files:
         git("add", "-A", "--", *files, cwd=tree)
         remember_resolved(tree, files)
-    done = run(
-        "git", "rebase", "--continue", cwd=tree, check=False, env={**os.environ, "GIT_EDITOR": "true"}
-    )
+    resume = ["git", "rebase", "--continue"]
+    env = {**os.environ, "GIT_EDITOR": "true"}
+    done = run(*resume, cwd=tree, check=False, env=env)
+    if done.returncode and rebase_dir(tree) is not None:
+        # git refuses while a pick it could not commit sits staged; only then is it committed here.
+        committed = commit_unsigned_pick(tree)
+        if committed is not None:
+            if committed.returncode:
+                return committed.stderr
+            done = run(*resume, cwd=tree, check=False, env=env)
     if done.returncode and rebase_dir(tree) is None:
         die(f"git rebase --continue failed:\n{(done.stderr or done.stdout).strip()}")
     return done.stderr
+
+
+def pick_target(tree, line):
+    """The commit a todo or done line picks, or None for any other line."""
+    words = line.split()
+    if len(words) < 2 or words[0] not in ("pick", "p"):
+        return None
+    found = run("git", "rev-parse", "--verify", "--quiet", f"{words[1]}^{{commit}}", cwd=tree, check=False)
+    return found.stdout.strip() or None
+
+
+def commit_unsigned_pick(tree):
+    """Commit a pick that git left staged because it could not write the commit.
+
+    git refuses `rebase --continue` while changes are staged. Most failures also put the same pick back at
+    the head of the todo list, and that copy is dropped so the pick is not applied twice. The commit keeps
+    the pick's message and author, and is signed as the person's configuration says. Returns None when the
+    rebase is not stopped that way, else the `git commit` result, which is a failure when signing failed
+    again; the todo list is then left as it was.
+    """
+    state = rebase_dir(tree)
+    stopped = run("git", "rev-parse", "--verify", "--quiet", "REBASE_HEAD^{commit}", cwd=tree, check=False)
+    if state is None or stopped.returncode or unmerged(tree) or succeeds("diff", "--cached", "--quiet", cwd=tree):
+        return None
+    sha = stopped.stdout.strip()
+    done = (state / "done").read_text(encoding="utf-8").splitlines() if (state / "done").is_file() else []
+    if not done or pick_target(tree, done[-1]) != sha:
+        return None
+    todo = state / "git-rebase-todo"
+    lines = todo.read_text(encoding="utf-8").splitlines(keepends=True) if todo.is_file() else []
+    committed = run("git", "commit", "--no-edit", "-C", "REBASE_HEAD", cwd=tree, check=False)
+    if not committed.returncode and lines and pick_target(tree, lines[0]) == sha:
+        todo.write_text("".join(lines[1:]), encoding="utf-8")
+    return committed
 
 
 def stop_reason(text):

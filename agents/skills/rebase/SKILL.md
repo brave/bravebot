@@ -53,6 +53,8 @@ the pr-fix skill.
    label: read [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md)
    first.
 3. `python3 agents/skills/rebase/rebase.py continue <pr>`, repeating 2 until it prints `next: push`.
+   A pick git could not sign stops with its changes staged; `continue` commits it with its message and
+   author, signing as the person's configuration says, and goes on.
 4. `python3 agents/skills/rebase/rebase.py check <pr>` runs only what the files resolved in step 2
    call for: for Rust, `cargo fmt --check`, clippy on the crates touched and any resolved test
    binary; `check-spec`, `check-locales`, `check-security` or `check-versions` where a spec, catalog,

@@ -336,6 +336,126 @@ def test_a_worktree_in_the_middle_of_a_rebase_still_holds_its_branch():
         }, "a rebase holds its branch, and a worktree that is only detached holds none"
 
 
+def signing(works, key):
+    """Environment that makes every commit sign with `key`, or fail to, whatever the host's own configuration says."""
+    settings = {
+        "commit.gpgsign": "true",
+        "gpg.format": "ssh",
+        "gpg.ssh.program": "ssh-keygen" if works else "false",
+        "user.signingkey": str(key),
+    }
+    env = {"GIT_CONFIG_COUNT": str(len(settings))}
+    for number, (name, value) in enumerate(settings.items()):
+        env[f"GIT_CONFIG_KEY_{number}"] = name
+        env[f"GIT_CONFIG_VALUE_{number}"] = value
+    return env
+
+
+def a_signing_key(root):
+    key = root / "key"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    return key
+
+
+def test_a_pick_that_failed_to_sign_is_committed_with_its_message_and_author_and_picked_once():
+    """git leaves the pick staged and rescheduled, and `rebase --continue` refuses until the changes are committed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone, key = a_plain_clone(root), a_signing_key(root)
+        feature_in(clone, root / "tree")
+        tree = root / "tree"
+        for name, author in (("b.txt", "Other <other@example.com>"), ("c.txt", None)):
+            (tree / name).write_text(f"{name}\n")
+            git("add", name, cwd=tree)
+            by = [f"--author={author}"] if author else []
+            git("commit", "-q", "-m", f"add {name}", *by, cwd=tree)
+        (clone / "z.txt").write_text("main moves\n")
+        git("add", "z.txt", cwd=clone)
+        git("commit", "-q", "-m", "main moves", cwd=clone)
+        with mock.patch.dict(os.environ, signing(False, key)):
+            stopped = subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True, text=True)
+            assert stopped.returncode and pr_worktree.rebase_dir(tree), "the pick could not be signed, which is the fixture's point"
+            assert git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "git leaves the pick staged"
+            code, out = quietly(pr_worktree.resolve_or_stop, tree)
+        assert code is not None and pr_worktree.rebase_dir(tree), "a failure to sign stops the rebase and says what git said"
+        todo = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
+        assert todo.count("pick") == 2 and git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "the failed commit left the todo and the index alone"
+
+        with mock.patch.dict(os.environ, signing(True, key)):
+            assert pr_worktree.commit_unsigned_pick(tree).returncode == 0
+            todo = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
+            assert todo.count("pick") == 1 and "add c.txt" in todo, "the rescheduled copy of the committed pick is gone"
+            code, out = quietly(pr_worktree.resolve_or_stop, tree)
+        assert pr_worktree.rebase_dir(tree) is None, code
+        log = git("log", "--format=%an|%s", "main..HEAD", cwd=tree).splitlines()
+        assert [one.split("|", 1)[1] for one in log] == ["add c.txt", "add b.txt"], log
+        assert log[1] == "Other|add b.txt", "the pick keeps its author"
+        assert pr_worktree.signed("HEAD", tree) and pr_worktree.signed("HEAD^", tree), "signing happened as configured"
+        assert git("status", "--porcelain", cwd=tree) == "", "the pick was not applied a second time"
+        assert git("ls-tree", "--name-only", "HEAD", cwd=tree).split() == ["a.txt", "b.txt", "c.txt", "z.txt"]
+
+
+def test_a_pick_git_did_not_reschedule_is_committed_and_the_next_pick_still_runs():
+    """Some signing failures stop the rebase without putting the pick back; the todo list then starts at the next pick."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone, key = a_plain_clone(root), a_signing_key(root)
+        feature_in(clone, root / "tree")
+        tree = root / "tree"
+        for name in ("b.txt", "c.txt"):
+            (tree / name).write_text(f"{name}\n")
+            git("add", name, cwd=tree)
+            git("commit", "-q", "-m", f"add {name}", cwd=tree)
+        (clone / "z.txt").write_text("main moves\n")
+        git("add", "z.txt", cwd=clone)
+        git("commit", "-q", "-m", "main moves", cwd=clone)
+        with mock.patch.dict(os.environ, signing(False, key)):
+            subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True)
+        todo = pr_worktree.rebase_dir(tree) / "git-rebase-todo"
+        todo.write_text("".join(todo.read_text().splitlines(keepends=True)[1:]))
+        with mock.patch.dict(os.environ, signing(True, key)):
+            quietly(pr_worktree.resolve_or_stop, tree)
+        assert pr_worktree.rebase_dir(tree) is None
+        assert git("log", "--format=%s", "main..HEAD", cwd=tree).splitlines() == ["add c.txt", "add b.txt"]
+
+
+def test_a_conflict_the_person_staged_continues_through_git_with_its_edited_message():
+    """git's own continue handles a resolved pick, so the pick is not recommitted from REBASE_HEAD."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        feature_in(clone, root / "tree")
+        tree = root / "tree"
+        (tree / "a.txt").write_text("from the branch\n")
+        git("commit", "-q", "-am", "branch", cwd=tree)
+        (clone / "a.txt").write_text("from main\n")
+        git("commit", "-q", "-am", "main", cwd=clone)
+        subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True)
+        (tree / "a.txt").write_text("both\n")
+        git("add", "a.txt", cwd=tree)
+        (pr_worktree.rebase_dir(tree) / "message").write_text("branch, resolved\n")
+        quietly(pr_worktree.resolve_or_stop, tree)
+        assert pr_worktree.rebase_dir(tree) is None
+        assert git("log", "-1", "--format=%s", cwd=tree) == "branch, resolved"
+
+
+def test_a_stop_at_a_conflict_is_left_to_git():
+    """Only a pick that stopped with nothing unmerged is committed here; a conflict is for the person to resolve."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        feature_in(clone, root / "tree")
+        tree = root / "tree"
+        (tree / "a.txt").write_text("from the branch\n")
+        git("commit", "-q", "-am", "branch", cwd=tree)
+        (clone / "a.txt").write_text("from main\n")
+        git("commit", "-q", "-am", "main", cwd=clone)
+        subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True)
+        before = git("rev-parse", "HEAD", cwd=tree)
+        assert pr_worktree.commit_unsigned_pick(tree) is None
+        assert git("rev-parse", "HEAD", cwd=tree) == before
+
+
 def test_a_branch_where_a_new_worktree_would_go_is_not_called_a_reuse():
     """A note on every run teaches the model to skip it, so it is printed only when the place is unexpected."""
     with tempfile.TemporaryDirectory() as tmp:
