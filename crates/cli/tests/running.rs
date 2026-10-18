@@ -2859,6 +2859,45 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
     );
 }
 
+/// `--bg` starts the session in another process that has nobody to refuse to, so the refusal is
+/// made in the terminal that typed it: no host is started, nothing is added to the roster, and the
+/// status is the configuration one.
+///
+/// Left out, the fifth way of starting a session sends the prompt to Brave's endpoint with no
+/// subscription to spend and prints that a session started.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
+    let scratch = Scratch::new("cli-running-bg-no-service");
+    let output = in_a_terminal(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--bg", "say", "something"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+        assert!(
+            transcript.contains(route),
+            "the start refused without saying that {route} is a way to configure one: {transcript}"
+        );
+    }
+    assert!(
+        !transcript.contains("started"),
+        "a session was reported started on a machine with nothing to serve it: {transcript}"
+    );
+    let jobs = scratch.path.join(".bravebot/jobs");
+    assert!(
+        !jobs.exists()
+            || std::fs::read_dir(&jobs)
+                .expect("read the roster")
+                .next()
+                .is_none(),
+        "a refused start left an entry in the roster"
+    );
+}
+
 /// CLI-31. A model `-i` is given that nothing serves ends the start before the terminal is taken,
 /// as the same name given to a one-shot run's `--model` does, rather than opening a session whose
 /// first turn could not be sent.
