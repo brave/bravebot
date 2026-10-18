@@ -354,7 +354,8 @@ impl Confinement {
     /// Why a stage keeps the network under a closed setting, in words fixed here so the line a
     /// person reads never carries a name the plan chose.
     fn egress_reason(&self, step: &Step) -> Option<&'static str> {
-        // Under `read-only` no reason keeps the network (SANDBOX-22).
+        // `network()` already closes it, but `egress()` and `network_for_the_trail` would hand a
+        // read-only stage the network back through a reason (SANDBOX-22).
         if self.mode == SandboxMode::ReadOnly {
             return None;
         }
