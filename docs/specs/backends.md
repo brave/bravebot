@@ -2376,7 +2376,7 @@ as the `model` key is, and the switch is decided by a category the driver derive
 ### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
 
 A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
-sent again, at most twice, as before. Where the answer was a 429 and carried a `Retry-After`
+sent again, at most twice. Where the answer was a 429 and carried a `Retry-After`
 header the wait before the next request is the one it asked for instead of the doubling from one
 second; any other status keeps the doubling whatever the header said. The
 header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
