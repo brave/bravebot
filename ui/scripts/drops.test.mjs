@@ -137,6 +137,15 @@ test('a path holding a replacement character is refused before it is resolved, e
   assert.deepEqual(asked, [], 'the bridge is not asked about it')
 })
 
+test('a link resolving to a name holding a replacement character is refused too', async () => {
+  const link = join(outside, 'plain.png')
+  symlinkSync(at('target\uFFFD.png'), link)
+  asked.length = 0
+  const [outcome] = await main.stageDrops('s1', [link], classify)
+  assert.deepEqual(outcome, { kind: 'skipped', name: 'plain.png', why: 'unreadable' })
+  assert.deepEqual(asked, [], 'the bridge is not asked about it')
+})
+
 test('a bridge that cannot say what the files are stages none of them', async () => {
   const failing = async () => { throw new Error('the agent is not running') }
   assert.deepEqual((await main.stageDrops('s1', [png, md], failing)).map((outcome) => outcome.why), ['unreadable', 'unreadable'])

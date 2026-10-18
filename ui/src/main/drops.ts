@@ -80,6 +80,8 @@ export async function stageDrops(session: unknown, paths: unknown, classify: Cla
     } catch {
       return { kind: 'skipped', name, why: 'unreadable' }
     }
+    // A link's target name can be just as lossy as a dropped one.
+    if (real.includes('\uFFFD')) return { kind: 'skipped', name, why: 'unreadable' }
     const size = regularFile(real)
     if (size === 'folder') return { kind: 'skipped', name, why: 'folder' }
     if (size === null) return { kind: 'skipped', name, why: 'unreadable' }
