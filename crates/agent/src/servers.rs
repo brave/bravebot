@@ -834,7 +834,12 @@ fn planned(
     let (named, arguments) = argv
         .split_first()
         .ok_or_else(|| problem(&mcp::Problem::Program))?;
-    let program = resolve(named, path.as_deref(), &searched)?;
+    // Read only where it means something, so another platform's environment is asked for nothing.
+    let pathext = match cfg!(windows) {
+        true => executable_extensions(environment("PATHEXT").as_deref()),
+        false => Vec::new(),
+    };
+    let program = resolve(named, path.as_deref(), &searched, &pathext)?;
     Ok(Plan::Stdio {
         program,
         arguments: arguments.to_vec(),
@@ -962,8 +967,33 @@ pub fn refused_declaration(
     }
 }
 
+/// The extensions Windows starts a program through directly, from `%PATHEXT%` where it is set, each
+/// with its leading dot. `.bat` and `.cmd` are left out: they start through `cmd.exe`, which reads
+/// the line again as its own syntax, and the sandbox refuses an argument it would act on.
+///
+/// Empty off Windows, where a program is found under the name it was given.
+fn executable_extensions(pathext: Option<&OsStr>) -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let given = pathext.and_then(OsStr::to_str).unwrap_or(".COM;.EXE");
+    given
+        .split(';')
+        .map(|extension| extension.trim().to_ascii_lowercase())
+        .filter(|extension| matches!(extension.as_str(), ".com" | ".exe"))
+        .collect()
+}
+
 /// The path a declaration's program starts from.
-fn resolve(program: &str, path: Option<&OsStr>, searched: &[PathBuf]) -> Result<PathBuf, String> {
+///
+/// A name with no extension is also tried with each of `extensions`, after the name itself, which
+/// is how Windows finds `npx` as `npx.exe`.
+fn resolve(
+    program: &str,
+    path: Option<&OsStr>,
+    searched: &[PathBuf],
+    extensions: &[String],
+) -> Result<PathBuf, String> {
     let given = Path::new(program);
     if given.is_absolute() {
         return Ok(given.to_path_buf());
@@ -974,9 +1004,17 @@ fn resolve(program: &str, path: Option<&OsStr>, searched: &[PathBuf]) -> Result<
     if path.is_none() {
         return Err(t!(servers_program_without_path, program = shown(program)).to_string());
     }
+    let spellings: Vec<String> = std::iter::once(program.to_string())
+        .chain(
+            extensions
+                .iter()
+                .filter(|_| given.extension().is_none())
+                .map(|extension| format!("{program}{extension}")),
+        )
+        .collect();
     searched
         .iter()
-        .map(|directory| directory.join(program))
+        .flat_map(|directory| spellings.iter().map(move |name| directory.join(name)))
         .find(|candidate| startable(candidate) && candidate.to_str().is_some())
         .ok_or_else(|| t!(servers_program_not_found, program = shown(program)).to_string())
 }
@@ -2615,31 +2653,82 @@ mod tests {
         let path = bin.as_os_str();
 
         assert_eq!(
-            resolve("weather-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve("weather-mcp", Some(path), std::slice::from_ref(&bin), &[]),
             Ok(program.clone())
         );
         assert_eq!(
-            resolve(program.to_str().unwrap(), None, &[]),
+            resolve(program.to_str().unwrap(), None, &[], &[]),
             Ok(program.clone()),
             "an absolute program needs no PATH"
         );
         assert_eq!(
-            resolve("weather-mcp", None, &[]),
+            resolve("weather-mcp", None, &[], &[]),
             Err(t!(servers_program_without_path, program = "weather-mcp").to_string())
         );
         assert_eq!(
-            resolve("other-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve("other-mcp", Some(path), std::slice::from_ref(&bin), &[]),
             Err(t!(servers_program_not_found, program = "other-mcp").to_string())
         );
         assert_eq!(
-            resolve("sh", Some(path), std::slice::from_ref(&bin)),
+            resolve("sh", Some(path), std::slice::from_ref(&bin), &[]),
             Err(t!(servers_program_not_found, program = "sh").to_string()),
             "a program on this process's own PATH and not on the one named is not found"
         );
         assert_eq!(
-            resolve("bin/weather-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve(
+                "bin/weather-mcp",
+                Some(path),
+                std::slice::from_ref(&bin),
+                &[]
+            ),
             Err(t!(servers_program_relative, program = "bin/weather-mcp").to_string())
         );
+    }
+
+    #[test]
+    fn a_name_with_no_extension_is_found_under_the_extension_windows_would_add() {
+        let root = scratch("cli-servers-resolve-extension");
+        let bin = root.join("bin");
+        let exe = installed(&bin, "npx.exe");
+        installed(&bin, "plain");
+        installed(&bin, "plain.exe");
+        installed(&bin, "tool.js.exe");
+        let dirs = [bin.clone()];
+        let path = bin.as_os_str();
+        let extensions = vec![".exe".to_string()];
+
+        assert_eq!(resolve("npx", Some(path), &dirs, &extensions), Ok(exe));
+        assert_eq!(
+            resolve("npx", Some(path), &dirs, &[]),
+            Err(t!(servers_program_not_found, program = "npx").to_string()),
+            "with no extension to add the name is looked up as it was written"
+        );
+        assert_eq!(
+            resolve("plain", Some(path), &dirs, &extensions),
+            Ok(bin.join("plain")),
+            "the name as written is tried before a spelling of it"
+        );
+        assert_eq!(
+            resolve("npx.exe", Some(path), &dirs, &extensions),
+            Ok(bin.join("npx.exe"))
+        );
+        assert_eq!(
+            resolve("tool.js", Some(path), &dirs, &extensions),
+            Err(t!(servers_program_not_found, program = "tool.js").to_string()),
+            "a name that has an extension is not given another"
+        );
+    }
+
+    #[test]
+    fn only_the_extensions_a_program_starts_under_directly_are_added() {
+        let given = OsString::from(".COM;.EXE;.BAT;.CMD;.VBS");
+        let added = executable_extensions(Some(given.as_os_str()));
+        if cfg!(windows) {
+            assert_eq!(added, vec![".com".to_string(), ".exe".to_string()]);
+            assert_eq!(executable_extensions(None), added, "the default list");
+        } else {
+            assert!(added.is_empty(), "no extension is added off Windows");
+        }
     }
 
     #[test]

@@ -1022,9 +1022,14 @@ directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for 
 than adopted, readable by nobody else, and removed once the server has stopped. A runner there
 fetches its package again each session, which is the trade incognito already makes.
 
-A platform with no confinement for this, which is Windows today, starts no stdio server and says
-so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
-not started either, and the line says why.
+A platform with no confinement for this starts no stdio server and says so, and asks nobody about
+one it could not start. On Windows the confinement is the AppContainer, and a program named without
+an extension is also looked for as `.com` and `.exe`, the `%PATHEXT%` spellings a container starts
+directly; `.bat` and `.cmd` are not, since they start through `cmd.exe`. Where the sandbox cannot
+be built, the server is not started either, and the line says why.
+
+`verified-by: bravebot_agent::servers::a_name_with_no_extension_is_found_under_the_extension_windows_would_add`
+`verified-by: bravebot_agent::servers::only_the_extensions_a_program_starts_under_directly_are_added`
 
 `verified-by: bravebot_config::mcp::a_value_is_stored_under_its_name_and_one_written_as_a_name_is_refused_unrepeated`
 `verified-by: bravebot_config::mcp::an_env_block_is_stored_values_and_an_object_of_variables_is_not_a_list_of_names`
@@ -1783,9 +1788,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **A server's line is read whole.** The client reads each line a server writes to its end before
   looking at it, with no bound, so a started server that writes one line without end holds this
   process's memory while it does.
-- **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
-  policy on, so the line says the platform has no confinement for one yet, which is
-  [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
+  directory and the directories its program is found in changes the access list of each, so a run
+  that ends without cleanup leaves the entries behind. A server there may also start a
+  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.
