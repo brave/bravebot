@@ -3077,6 +3077,9 @@ goal-quarantined =
 goal-spent =
     the goal has sent the work back { $rounds } times without being met, and has stopped rather
     than carrying on
+goal-stalled =
+    the goal has sent the work back without a turn making a tool call, and has stopped sending
+    it; it is still set, and your next prompt is judged against it
 goal-failed = the goal could not be checked ({ $problem }), so it is cleared
 goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =

@@ -1641,7 +1641,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
-        goal.not_met("nothing above runs the tests".to_string());
+        goal.not_met("nothing above runs the tests".to_string(), 1);
 
         let mut facts = facts(&config, &trust);
         facts.goal = Some(&goal);
@@ -1885,7 +1885,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
-        goal.not_met("nothing above runs the tests".to_string());
+        goal.not_met("nothing above runs the tests".to_string(), 1);
         goal.pause();
 
         let mut facts = facts(&config, &trust);
@@ -3328,7 +3328,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
-        goal.not_met("nothing above runs the tests".to_string());
+        goal.not_met("nothing above runs the tests".to_string(), 1);
         let mut mixed = facts(&config, &trust);
         mixed.goal = Some(&goal);
         mixed.auto_vetting = true;
