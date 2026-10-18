@@ -2221,6 +2221,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 prompt_at: reporter.prompt_at(),
                 agent,
                 started,
+                events: sink.stamped(),
             },
         );
     }

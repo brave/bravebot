@@ -11041,6 +11041,42 @@ fn a_one_shot_run_is_written_down_and_names_its_session() {
     assert!(written, "no record named {id} under {records:?}");
 }
 
+/// SESSION-1, TRACE-5: a one-shot run keeps the trail of what its gates decided beside its record,
+/// and a run that continues the session adds its own turn to the same file. Without it the
+/// trail is printed under `--trace` and lost, and resuming the session shows nothing for the turn.
+#[test]
+fn a_one_shot_run_keeps_its_audit_trail_beside_the_record() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-trail").with_settings(&settings_for(&gateway));
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "first question"]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let id = session_of(&stdout).expect("the run named its session");
+    let trail_of = |id: &str| {
+        let records = scratch.path.join(".bravebot").join("sessions");
+        std::fs::read_dir(&records)
+            .expect("the sessions directory")
+            .flatten()
+            .map(|project| project.path().join(format!("{id}.audit.jsonl")))
+            .find_map(|path| std::fs::read_to_string(path).ok())
+    };
+    let first = trail_of(&id).expect("no trail file beside the record");
+    assert!(!first.is_empty(), "the trail is empty");
+    assert!(
+        first.lines().all(|line| line.contains(r#""turn":1"#)),
+        "{first}"
+    );
+
+    let (output, _, stderr) = a_recorded_run(&scratch, &["-p", "second question", "--resume", &id]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let both = trail_of(&id).expect("the trail went away");
+    assert!(both.starts_with(&first), "the first turn's lines changed");
+    assert!(
+        both.lines().any(|line| line.contains(r#""turn":2"#)),
+        "the continued turn left no lines: {both}"
+    );
+}
+
 /// NAME-10: `--session-ref <id>` puts the newest part of that earlier session in front of the
 /// planner in a run of its own, a run without the flag sees none of it, and an id that names no
 /// session is refused before anything is sent.

@@ -251,6 +251,8 @@ impl Stream {
 #[derive(Default)]
 pub struct Streaming {
     recorded: RecordingSink,
+    /// The same events with the time of each, which is what the session's trail file holds.
+    stamped: bravebot_session::audit::Trail,
     stream: Option<Stream>,
 }
 
@@ -258,12 +260,17 @@ impl Streaming {
     pub fn new(stream: Option<Stream>) -> Self {
         Self {
             recorded: RecordingSink::new(),
+            stamped: bravebot_session::audit::Trail::new(),
             stream,
         }
     }
 
     pub fn recorded(&self) -> &RecordingSink {
         &self.recorded
+    }
+
+    pub fn stamped(&self) -> &[bravebot_session::audit::Stamped] {
+        self.stamped.events()
     }
 }
 
@@ -285,10 +292,12 @@ impl Sink for Streaming {
                 reason: reason.clone(),
             }));
         }
+        self.stamped.emit(event.clone());
         self.recorded.emit(event);
     }
 
     fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.stamped.recording_for(delegate);
         self.recorded.recording_for(delegate);
     }
 }
