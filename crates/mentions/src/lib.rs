@@ -646,6 +646,17 @@ mod tests {
         assert_eq!(referenced("@crates/tui/lib.rs"), vec!["crates/tui/lib.rs"]);
     }
 
+    /// An address inside a sentence is not a reference: only a word that begins with `@` is, so
+    /// nothing in `me@example.com` is collected, and a real reference beside it still is.
+    #[test]
+    fn an_address_inside_a_sentence_is_not_collected_as_a_reference() {
+        assert!(referenced("mail me@example.com now").is_empty());
+        assert_eq!(
+            referenced("mail me@example.com about @notes.md"),
+            vec!["notes.md".to_string()]
+        );
+    }
+
     /// A finished name is decided from the workspace, so the cap that bounds what is displayed
     /// cannot change the answer, and a directory is still somewhere to type through.
     #[test]

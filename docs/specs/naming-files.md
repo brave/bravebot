@@ -109,6 +109,7 @@ content into the turn that no gesture chose.
 `verified-by: bravebot_tui::references::an_address_in_a_sentence_is_not_a_reference`
 `verified-by: bravebot_mentions::lib::a_directory_is_not_collected_as_a_file`
 `verified-by: bravebot_mentions::lib::a_bare_at_sign_names_nothing`
+`verified-by: bravebot_mentions::lib::an_address_inside_a_sentence_is_not_collected_as_a_reference`
 `verified-by: bravebot_mentions::lib::what_counts_as_a_reference_being_typed`
 `verified-by: bravebot_mentions::lib::every_referenced_file_is_collected`
 
