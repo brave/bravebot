@@ -143,6 +143,8 @@ pub const DENIED: &[&str] = &[
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",
+    "drops.classify",
+    "pastes.check",
     // Work that runs without a request, or a plan walked as one run.
     "watches.list",
     "watches.add",

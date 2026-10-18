@@ -240,9 +240,9 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
-`drive-at-mentions`, `drive-connectors`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
-`drive-manual-walkthrough`, `drive-mcp`, `drive-permission-mode`, `drive-plan`,
-`drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+`drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
+`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-paste`,
+`drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the

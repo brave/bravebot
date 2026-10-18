@@ -1,4 +1,5 @@
 import type { FileAttachment } from '../shared/files'
+import type { Staged, Staging } from './staging'
 import type {
   Checking,
   Hook,
@@ -115,10 +116,12 @@ export interface Live {
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[] }[]
+  queued?: { prompt: string; attachments: FileAttachment[]; staged: Staged[] }[]
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null
+  /** What drops and pastes staged in this session's composer, and the counter its markers are numbered by. */
+  staging?: Staging
 }
 
 /**

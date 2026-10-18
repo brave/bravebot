@@ -582,7 +582,7 @@ fn turn_params(session: &str, blocks: Option<&Value>) -> Result<Value, String> {
                     .ok_or("a resource link holds a string `uri`")?;
                 let path = path_of(uri)
                     .ok_or_else(|| format!("only a file: link can be attached, not {uri}"))?;
-                if bravebot_agent::workspace::media_for(&path).is_some() {
+                if bravebot_filetype::by_name::media_for(&path).is_some() {
                     attachments.push(path);
                 } else {
                     dropped.push(path);
