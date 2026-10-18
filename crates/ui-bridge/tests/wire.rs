@@ -446,11 +446,20 @@ fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
         said[0],
         json!({
             "kind": "session_message", "direction": "from",
+            "heading": "message from session 11111111 (fix the build) · (T,pub)", "kept": null,
             "session": "11111111-1111-4111-8111-111111111111", "name": "fix the build",
             "label": "(T,pub)", "text": "go ahead"
         })
     );
     assert_eq!(said[1]["text"], json!(null));
+    assert_eq!(
+        said[1]["kept"],
+        json!("its words were kept from the planner and are not in this record")
+    );
+    assert_eq!(
+        said[2]["heading"],
+        json!("message to session 22222222 (build) · (T,priv)")
+    );
     assert_eq!(said[2]["direction"], json!("to"));
     assert_eq!(
         said[2]["session"],

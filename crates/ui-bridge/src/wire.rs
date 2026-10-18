@@ -356,6 +356,8 @@ fn said(said: &Said) -> Value {
         } => json!({
             "kind": "session_message",
             "direction": "from",
+            "heading": bravebot_agent::messages::heading(true, from, name, label),
+            "kept": text.is_none().then(bravebot_agent::messages::kept),
             "session": from,
             "name": name,
             "label": label,
@@ -369,6 +371,8 @@ fn said(said: &Said) -> Value {
         } => json!({
             "kind": "session_message",
             "direction": "to",
+            "heading": bravebot_agent::messages::heading(false, to, name, label),
+            "kept": null,
             "session": to,
             "name": name,
             "label": label,

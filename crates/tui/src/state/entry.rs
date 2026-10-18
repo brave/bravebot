@@ -391,7 +391,7 @@ impl Entry {
             }
             None => {
                 text.push('\n');
-                text.push_str(t!(session_message_kept));
+                text.push_str(&bravebot_agent::messages::kept());
             }
         }
         Self::blank(Speaker::Message, text)

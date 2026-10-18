@@ -192,7 +192,7 @@ export type Entry = (
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
-  | { kind: 'session-message'; id: string; direction: 'from' | 'to'; session: string; name: string; label: string; text: string | null }
+  | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
   | { kind: 'replayed-tool'; id: string; text: string; why: string }
 ) & { interrupted?: boolean; turn?: number }
@@ -241,6 +241,8 @@ export function fromSaid(said: Said[]): Entry[] {
           kind: 'session-message',
           id: nextId(),
           direction: entry.direction,
+          heading: entry.heading,
+          kept: entry.kept,
           session: entry.session,
           name: entry.name,
           label: entry.label,

@@ -7,10 +7,45 @@
 //! message, so a sender cannot choose how it is introduced.
 
 use crate::lsp::pictured;
+use bravebot_i18n::t;
 use std::fmt;
 
 /// How many characters of the sender's id the frame and the screen name.
 pub const ID_SHOWN: usize = 8;
+
+/// The start of a session's id, as the list of background sessions and the frame name it.
+pub fn id_shown(id: &str) -> String {
+    id.chars().take(ID_SHOWN).collect()
+}
+
+/// The heading a screen draws over a message between sessions, from the record's fields, so the
+/// terminal and the window read one sentence (MSG-11). `incoming` is a message that reached this
+/// session's planner; otherwise it is one its planner sent, and `session` is the receiver.
+pub fn heading(incoming: bool, session: &str, name: &str, label: &str) -> String {
+    let session = id_shown(session);
+    if incoming {
+        t!(
+            session_message_heading,
+            from = session,
+            name = name,
+            label = label
+        )
+        .to_string()
+    } else {
+        t!(
+            session_message_sent_heading,
+            to = session,
+            name = name,
+            label = label
+        )
+        .to_string()
+    }
+}
+
+/// The sentence under the heading of a message whose words the planner was not given.
+pub fn kept() -> String {
+    t!(session_message_kept).to_string()
+}
 
 /// The longest sender name the frame carries, the length the roster list cuts a name to.
 const NAME_SHOWN: usize = 60;

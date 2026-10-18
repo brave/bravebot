@@ -97,13 +97,6 @@ fn lines_in(text: &str) -> usize {
 
 /// One replayed line.
 ///
-/// The start of a session's id, as the list of background sessions and the frame name it.
-fn id_shown(id: &str) -> String {
-    id.chars()
-        .take(bravebot_agent::messages::ID_SHOWN)
-        .collect()
-}
-
 /// A line the agent composed is drawn as the message it was, which is what this transcript has
 /// always drawn for one and what a file read for a turn has to keep being: the record says where
 /// the prompt was, so the context around it is drawn without asking what any of it says. There is
@@ -131,13 +124,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
                 },
             ..
         } => Entry::session_message(
-            t!(
-                session_message_heading,
-                from = id_shown(from),
-                name = name.as_str(),
-                label = label.as_str()
-            )
-            .to_string(),
+            bravebot_agent::messages::heading(true, from, name, label),
             text.as_deref(),
         ),
         Said::Sent {
@@ -146,13 +133,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
             label,
             text,
         } => Entry::session_message(
-            t!(
-                session_message_sent_heading,
-                to = id_shown(to),
-                name = name.as_str(),
-                label = label.as_str()
-            )
-            .to_string(),
+            bravebot_agent::messages::heading(false, to, name, label),
             Some(text),
         ),
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),

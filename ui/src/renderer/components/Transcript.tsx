@@ -1801,9 +1801,9 @@ function Card({
       // earns this row. The words are quoted, and are the sender's where the message came in.
       return (
         <div className="session-message">
-          <strong>{entry.direction === 'from' ? 'Message from session' : 'Message to session'} {entry.session.slice(0, 8)} ({entry.name}) · {entry.label}</strong>
+          <strong>{entry.heading}</strong>
           {entry.text === null
-            ? <span>Its words were kept from the planner and are not in this record</span>
+            ? <span>{entry.kept}</span>
             : <blockquote>{entry.text}</blockquote>}
         </div>
       )
