@@ -153,7 +153,11 @@ worth cutting and nothing is sent, which costs nothing and says nothing. Only a 
 **failed** stops it being tried again for the rest of the turn, because a call that errored once
 is not free to repeat.
 
-`/compact` asks for the same work on demand, at any size, and does not consult the budget.
+`/compact` asks for the same work on demand, at any size, and does not consult the budget. The
+desktop asks for it the same way, through the bridge's `session.compact` (the context meter's
+**Compact now** and **Chat ▸ Compact Conversation**): it holds the session as a turn would, so a
+turn sent meanwhile is refused and one stopped is reported as stopped, and a session with nothing
+old enough to give up is told so and sends nothing.
 
 **Why the default sits well below any real window.** A budget above the window never fires, so
 being wrong upward does not make compaction late, it removes it. The default was once set above
@@ -168,6 +172,9 @@ a fallback rather than the usual case: see COMPACT-9.
 `verified-by: bravebot_agent::turn::a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted`
 `verified-by: bravebot_agent::turn::a_summariser_that_failed_is_not_asked_again_for_the_rest_of_the_turn`
 `verified-by: bravebot_agent::turn::a_turn_is_summarised_more_than_once_as_the_rounds_build_up`
+`verified-by: bravebot_ui_bridge::compact::compacting_summarises_the_earlier_exchanges_and_the_next_turn_carries_the_summary`
+`verified-by: bravebot_ui_bridge::compact::a_session_with_nothing_old_enough_to_summarise_is_told_so_and_nothing_is_sent`
+`verified-by: bravebot_ui_bridge::compact::a_summary_can_be_stopped_and_a_turn_is_refused_while_it_runs`
 `verified-by: by-construction (the default budget is asserted below the smallest useful window at compile time)`
 
 <a id="COMPACT-9"></a>

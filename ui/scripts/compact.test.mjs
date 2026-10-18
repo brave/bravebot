@@ -13,6 +13,7 @@ const { apply } = load('src/renderer/apply.ts')
 const { canCompact } = load('src/renderer/can-send.ts')
 const t = load('src/renderer/transcript.ts')
 const { NOTHING_OPEN, isEnabled, parseWindowState, command } = load('src/shared/commands.ts')
+const { holding, compactedBot } = load('src/main/holding.ts')
 
 const point = { steps: 1, turn: 1, prompt: 0, text: 'first', paths: [], gaps: [] }
 const live = (more = {}) => ({
@@ -78,4 +79,26 @@ test('Compact Conversation is offered only on an idle session somebody has spoke
   assert.equal(isEnabled(item.requires, state), true)
   assert.equal(parseWindowState({ ...state, canCompact: undefined }), null, 'a state that leaves it out enables nothing')
   assert.equal(parseWindowState(state).canCompact, true)
+})
+
+test('a compaction holds its session from the compacting phase until it ends, either way', () => {
+  assert.deepEqual(holding({ event: 'phase', session: 's1', data: { phase: 'compacting' } }), { session: 's1', begins: true })
+  assert.equal(holding({ event: 'phase', session: 's1', data: { phase: 'thinking' } }), null)
+  assert.deepEqual(holding({ event: 'compact.done', session: 's1', data: { compacted: false } }), { session: 's1', begins: false })
+  assert.deepEqual(holding({ event: 'compact.error', session: 's1', data: { category: 'cancelled', stopped: true } }), { session: 's1', begins: false })
+  assert.deepEqual(holding({ event: 'turn.started', session: 's1', data: {} }), { session: 's1', begins: true })
+  assert.equal(holding({ event: 'compact.done', data: { compacted: true } }), null, 'an event about no session holds nothing')
+})
+
+test('a bot whose archive a compaction raised is owed a consolidation, and only then', () => {
+  const done = (data) => ({ event: 'compact.done', session: 's1', data: { summarised: 4, kept: 2, tokens: 1, wonBack: 1, ...data } })
+  const helper = (archived) => (handle) => (handle === 's1' ? { slug: 'helper', archived } : null)
+
+  assert.deepEqual(compactedBot(done({ compacted: true, archived: 2 }), helper(1)),
+    { handle: 's1', slug: 'helper', archived: 2, consolidate: true })
+  assert.deepEqual(compactedBot(done({ compacted: true, archived: 1 }), helper(1)),
+    { handle: 's1', slug: 'helper', archived: 1, consolidate: false }, 'the archive is still noted, with nothing owed')
+  assert.equal(compactedBot(done({ compacted: true, archived: 2 }), () => null), null, 'a session with no bot behind it')
+  assert.equal(compactedBot(done({ compacted: false }), helper(0)), null, 'nothing was old enough')
+  assert.equal(compactedBot({ event: 'turn.done', session: 's1', data: { archived: 2 } }, helper(1)), null, 'a turn is answered elsewhere')
 })

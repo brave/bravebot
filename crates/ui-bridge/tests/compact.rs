@@ -193,6 +193,58 @@ fn a_session_with_nothing_old_enough_to_summarise_is_told_so_and_nothing_is_sent
     assert_eq!(done.name, "compact.done", "{:?}", done.data);
     assert_eq!(done.data["compacted"], false);
     assert_eq!(requests.try_iter().count(), 1, "a summary was asked for");
+    window
+        .once_free("session.rewind", json!({"session": session, "steps": 1}))
+        .unwrap_or_else(|failure| panic!("the rewind point was given up: {failure:?}"));
+}
+
+#[test]
+fn a_session_on_the_first_view_cannot_be_compacted_and_nothing_is_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("compact-old-view");
+    let (config, requests, _server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+    window.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+
+    let refused = window
+        .dispatch("session.compact", json!({"session": session}))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(
+        refused.message.contains("does not support compaction"),
+        "{refused:?}"
+    );
+    assert_eq!(requests.try_iter().count(), 0, "a summary was asked for");
+}
+
+#[test]
+fn a_malformed_model_is_refused_before_anything_is_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("compact-bad-model");
+    let (config, requests, _server) = endpoint::endpoint(after_talking(vec![]), None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+    window.talk(&session);
+
+    let refused = window
+        .once_free("session.compact", json!({"session": session, "model": " "}))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(
+        refused.message.contains("non-empty model ID"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        requests.try_iter().count(),
+        TALK.len(),
+        "a summary was asked for"
+    );
 }
 
 #[test]
