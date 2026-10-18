@@ -11007,6 +11007,28 @@ mod tests {
         );
     }
 
+    /// The usual way of being away is walking off during a turn: the report of it arrives in a loop
+    /// that is not the idle one, and has to be recorded there as well (CMD-20).
+    #[test]
+    fn leaving_and_returning_during_a_turn_are_recorded() {
+        let mut session = Session::new("none");
+        let turns = crate::away::FEWEST_TURNS;
+
+        took_input(&mut session, &TermEvent::FocusLost);
+        session.complete("done", Vec::new(), 0);
+        let later = std::time::Instant::now() + crate::away::IDLE;
+        assert!(
+            session.away.due(later, turns),
+            "the terminal was left during the turn and the report was dropped"
+        );
+
+        took_input(&mut session, &TermEvent::FocusGained);
+        assert!(
+            !session.away.due(later, turns),
+            "returning during a turn was dropped, so a recap is owed to a person who is here"
+        );
+    }
+
     /// The loop's idle pass: a line somebody queued goes before the recap, the recap is asked for
     /// once, and the Recap arm marking it done is what stops it coming round again on every pass.
     #[test]
