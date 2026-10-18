@@ -81,6 +81,35 @@ pub(super) fn answered_sentences(
     (note, stopped, bound_text)
 }
 
+/// What a spent token budget adds beside a delegate's report: a clause for the person's note and
+/// a sentence for the planner, both empty where the delegate carried no budget or stayed under it.
+///
+/// Two counts the driver holds: the budget its spec fixed and the tokens its backend reported,
+/// never a report's bytes (DELEGATE-29). `answered` says whether there is a report to sit beside:
+/// where there is none, the sentence says the same task will not get further.
+pub(super) fn budget_sentences(
+    budget: Option<u64>,
+    tokens: u64,
+    answered: bool,
+) -> (String, String) {
+    let Some(budget) = budget.filter(|budget| tokens >= *budget) else {
+        return (String::new(), String::new());
+    };
+    match answered {
+        true => (
+            format!("it spent its budget of {budget} tokens, so it may not be finished"),
+            format!(" It spent its budget of {budget} tokens and may not be finished."),
+        ),
+        false => (
+            format!("having spent its budget of {budget} tokens"),
+            format!(
+                " It had spent its budget of {budget} tokens, so the same task will not get \
+                 further."
+            ),
+        ),
+    }
+}
+
 /// The person's note and the planner's message for a delegate that ended without answering.
 pub(super) fn unfinished_account(
     finish: &Finish,

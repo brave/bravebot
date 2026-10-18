@@ -147,12 +147,50 @@ pub(super) fn nudges(
     }
 }
 
+/// Take the tools away from the next request once this delegate has spent its token budget, and
+/// say so to the person and to the planner. Whether it did.
+///
+/// The delegate's own total, from the usage its backend reported and the delegates it has
+/// collected, against a figure its spec fixed: no reply or tool result is read (DELEGATE-29). Not
+/// `spend_limit::hold`, which asks a person, and a delegate has none. Called after a round and
+/// again once a delegate's spend has been collected, so a child's spend counts against its
+/// parent before the parent's next request.
+pub(super) fn stop_at_token_budget<R: Reporter>(
+    may_call_tools: &mut bool,
+    task: &Task,
+    tokens: u64,
+    reporter: &mut R,
+    conversation: &mut Conversation,
+) -> bool {
+    let Some(budget) = task
+        .delegate
+        .as_ref()
+        .and_then(bravebot_core::delegate::DelegateSpec::budget)
+        .filter(|budget| tokens >= *budget && *may_call_tools)
+    else {
+        return false;
+    };
+    *may_call_tools = false;
+    reporter.narration(t!(delegate_budget_narration, budget = budget).to_string());
+    conversation.push_composed_from(
+        Message::user(format!(
+            "{TOOL_BUDGET_SPENT} You have spent your budget of {budget} tokens and have no more \
+             tool calls. Answer now with what you know. If the work is not finished, say what \
+             you found and what is left to do."
+        )),
+        Composed::Notice,
+        Provenance::Driver,
+    );
+    true
+}
+
 /// Take the tools away from the next request once the budget is spent or a person has stopped this
 /// delegate, and say so to the person and to the planner.
 pub(super) fn limit_the_tools<R: Reporter>(
     may_call_tools: &mut bool,
     task: &Task,
     steps: usize,
+    tokens: u64,
     reporter: &mut R,
     conversation: &mut Conversation,
 ) {
@@ -182,6 +220,8 @@ pub(super) fn limit_the_tools<R: Reporter>(
             Composed::Notice,
             Provenance::Driver,
         );
+    } else if stop_at_token_budget(may_call_tools, task, tokens, reporter, conversation) {
+        // Said by the call itself.
     } else if let Some(limit) = task
         .rounds
         .filter(|limit| steps >= *limit && *may_call_tools)
@@ -251,6 +291,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         };
         let spawning_model = spawning_model.clone();
         let rounds = seeded.spec.rounds();
+        let budget = seeded.spec.budget();
         let stop = seeded.stop.clone();
         let stopped_by = stop.clone();
         let handle = scope.spawn(move || {
@@ -291,6 +332,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
             seeded: vouched,
             checkout,
             rounds,
+            budget,
             stop,
             handle,
         });

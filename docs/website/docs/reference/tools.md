@@ -925,6 +925,7 @@ of capabilities, and gets back one report.
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
+| `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
 | `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
 
 | Kind | Holds | For |
@@ -961,6 +962,14 @@ mail server.
 A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
 no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
 never adds a server.
+
+**`budget` stops a delegate at a spend.** A delegate that has used its budget in tokens loses its
+tools for its next request and answers with what it has, and the report arrives with a sentence
+saying the budget was spent and the work may not be finished. A call's figure never raises the
+budget its definition sets, and in a fan-out it applies to each delegate separately. A delegate that
+starts delegates of its own gives them at most what it has left, divided between the ones one call
+starts, and what a child spends counts against it. One with nothing left starts none. A request that has started finishes, so a delegate can pass its budget by one request.
+The figure is tokens only, never credits.
 
 **`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
 checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.

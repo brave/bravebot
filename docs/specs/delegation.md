@@ -210,8 +210,9 @@ Every kind carries a round limit: 60 for a `reader`, 80 for a `checker` and 120 
 definition may name its own with `rounds:`, a whole number above zero, and its delegate runs to
 that number instead. Each kind also carries a ceiling no definition passes: 120 for a `reader`
 and 160 for a `checker`, twice their own, and 200 for a `worker`, the bound on a turn nobody is
-watching. The call sets no bound at all. On the limiting round the delegate loses its tools rather
-than its run, and answers with what it has.
+watching. The call sets no round bound at all. On the limiting round the delegate loses its tools
+rather than its run, and answers with what it has. [DELEGATE-29](#DELEGATE-29) adds a bound in
+tokens.
 
 A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
 says so, naming the definition, the number it asked for and the number it is given. An empty
@@ -293,6 +294,74 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+
+<a id="DELEGATE-29"></a>
+### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
+
+A definition may name a token budget with `budget:`, written as `/limit` takes a figure for tokens
+(`500000`, `500k`, `2m`). The `spawn_agent` call may name one as well
+([AGENT-7](tools/spawn-agent.md#AGENT-7)). A delegate carries the least of the figures that
+apply, so a call can lower a definition's budget and cannot raise it. An absent or empty `budget:`
+line names none, as an empty `rounds:` line names no number, and a delegate with no budget is
+bounded by its rounds alone. A value that is not a count of tokens above zero, a count of credits
+included, is a definition that does not load, and the notice names its file, as for `rounds:`
+([DELEGATE-6](#DELEGATE-6)). A later definition of a name meets the budget of the one it replaces
+and keeps the lower, so a project file can lower a person's own budget and cannot remove it.
+
+The budget is spent when the tokens the delegate's backend reported, those of the delegates it
+collected included, reach it. The delegate then loses its tools for its next request and answers
+with what it has, as it does on its limiting round ([DELEGATE-6](#DELEGATE-6)). It is not asked
+the session limit's question ([TURN-8](turns.md#TURN-8)): that question goes to a person, and a
+delegate has none.
+
+The driver says so beside the report, as [DELEGATE-26](#DELEGATE-26) does for rounds. The planner's
+message and the person's note name the budget and say the work may not be finished, and a delegate
+that spent its budget and then did not answer is told of in the same terms as one that spent its
+rounds, with the sentence that the same task will not get further. The trail names the budget a
+delegate carries when it starts, and says at its end whether the token budget, the round limit or
+both ended it.
+
+**A delegate under delegate.** A child is given the least of its own figures and the tokens its
+parent has left under its own budget when the child starts. The delegates of one fan-out divide
+what is left between them, so together they carry no more than the parent had. A parent with
+nothing left starts no delegate, and the refusal takes no number. What a child spends is added to
+its parent's total when the parent collects its report, so a parent cannot spend more than its
+budget by handing work down. A child still running when its parent's budget is reached keeps
+running to its own figure, which is at most what the parent had left.
+
+**Known limits.** Tokens are known only after a request completes, so a delegate may pass its
+budget by one request. A backend that reports no usage is counted from the words of its replies
+([TURN-5](turns.md#TURN-5)), and a budget is compared with that count. Credits are a session-wide
+counter and cannot be attributed to one delegate while its siblings run, so a budget is in tokens
+only.
+
+**Why a call may set it though the call sets no round bound.** [DELEGATE-6](#DELEGATE-6) keeps
+the round bound out of the planner's call because a number that lengthens a bound is authority a
+file somebody vouched for gave. A figure that can only lower a bound gives the planner none: the
+most it can do is stop its own delegate sooner, and the delegate's capabilities and what it may
+reach are exactly what they were.
+
+**What the comparison reads.** Two counts the driver holds, the tokens its backends reported and a
+figure from a vouched definition or a public call field. It reads no reply or tool result, so no
+decision is taken from untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_core::delegate::a_later_definition_meets_the_budget_of_the_one_it_replaces`
+`verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
+`verified-by: bravebot_core::policy::a_call_budget_bounds_a_definition_that_names_none`
+`verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
+`verified-by: bravebot_core::policy::a_child_is_never_given_more_than_its_parent_has_left`
+`verified-by: bravebot_core::policy::a_run_with_no_budget_left_starts_no_delegate`
+`verified-by: bravebot_agent::turn::a_fan_out_divides_what_its_parent_has_left_between_its_delegates`
+`verified-by: bravebot_core::policy::a_delegates_end_names_the_budget_it_spent`
+`verified-by: bravebot_agent::agents::a_definition_reads_the_token_budget_it_names`
+`verified-by: bravebot_agent::agents::a_budget_line_that_is_not_a_count_of_tokens_is_not_a_definition`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_loses_its_tools_and_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_under_its_token_budget_is_unaffected_by_it`
+`verified-by: bravebot_agent::turn::a_backend_reporting_no_usage_does_not_trip_the_token_budget`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_and_failed_says_the_budget_was_spent`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_sentence_about_a_spent_token_budget`
+`verified-by: bravebot_agent::turn::a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_parent`
 
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn

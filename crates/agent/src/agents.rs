@@ -79,6 +79,8 @@ enum Read {
     /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
     /// rather than as an English reason placed into one.
     NotACount,
+    /// A definition whose `budget:` is not a count of tokens above zero, which is also not loaded.
+    NotABudget,
 }
 
 /// Why a definition that asked to keep a memory keeps none, which its author is told.
@@ -195,6 +197,20 @@ fn read_definition(text: &str, origin: &str) -> Read {
             return Read::NotACount;
         };
         definition = definition.with_rounds(rounds);
+    }
+
+    // Refused for the reason `rounds:` is: its author believes the figure is in force. A count
+    // of credits is refused with the rest, since a session-wide counter cannot be attributed to
+    // one delegate while its siblings run.
+    if let Some(written) = declared
+        .get("budget")
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+    {
+        let Some(tokens) = budget_in(written) else {
+            return Read::NotABudget;
+        };
+        definition = definition.with_budget(tokens);
     }
 
     // `project` and `local` are one file here, since whether it is committed is the person's to
@@ -385,6 +401,13 @@ fn rounds_in(written: &str) -> Option<usize> {
         Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => Some(usize::MAX),
         Err(_) => None,
     }
+}
+
+/// The tokens a `budget:` value names, in the words `/limit` accepts, or nothing where it names no
+/// count of tokens above zero.
+fn budget_in(written: &str) -> Option<u64> {
+    let limit = bravebot_config::limit::parse(written, bravebot_config::limit::Unit::Tokens)?;
+    (limit.unit == bravebot_config::limit::Unit::Tokens).then_some(limit.figure)
 }
 
 /// Whether this is a name a definition may go by.
@@ -753,6 +776,13 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         Read::NotACount => {
             notices.push(Notice::from_message(t!(
                 delegate_rounds_not_a_count,
+                definition = origin
+            )));
+            return;
+        }
+        Read::NotABudget => {
+            notices.push(Notice::from_message(t!(
+                delegate_budget_not_a_count,
                 definition = origin
             )));
             return;
@@ -1169,6 +1199,7 @@ mod tests {
             Read::Definition { definition, .. } => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
             Read::NotACount => panic!("skipped: its rounds are not a count"),
+            Read::NotABudget => panic!("skipped: its budget is not a count of tokens"),
             Read::Skipped(why) => panic!("skipped: {why}"),
         }
     }
@@ -1766,6 +1797,62 @@ mod tests {
             [
                 ".bravebot/agents/migrator.md was skipped: its rounds must be a whole number above \
               zero"
+            ]
+        );
+    }
+
+    /// `budget:` takes the words `/limit` does. An absent or empty line names no budget, as an
+    /// empty `rounds:` line names no number.
+    #[test]
+    fn a_definition_reads_the_token_budget_it_names() {
+        let read = |line: &str| {
+            definition_of(&format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\n{line}---\n\n\
+                 body\n"
+            ))
+        };
+
+        assert_eq!(read("budget: 2m\n").budget(), Some(2_000_000));
+        assert_eq!(read("budget: 500k tokens\n").budget(), Some(500_000));
+        assert_eq!(read("budget: \"750000\"\n").budget(), Some(750_000));
+        assert_eq!(read("budget:\n").budget(), None);
+        assert_eq!(read("").budget(), None);
+    }
+
+    /// A value that is no count of tokens above zero, credits included, is refused rather than
+    /// left unbounded, since whoever wrote it believes it is in force, and the notice names the
+    /// file.
+    #[test]
+    fn a_budget_line_that_is_not_a_count_of_tokens_is_not_a_definition() {
+        for written in ["0", "-5", "lots", "1.5m", "12 rounds", "3 credits", "off"] {
+            let text = format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\nbudget: \
+                 {written}\n---\n"
+            );
+            assert!(
+                matches!(read_definition(&text, "test"), Read::NotABudget),
+                "'{written}' was read as a budget"
+            );
+        }
+
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                "---\nname: migrator\ndescription: d\nkind: worker\nbudget: lots\n---\n",
+                ".bravebot/agents/migrator.md",
+            ),
+            ".bravebot/agents/migrator.md",
+            &mut definitions,
+            &mut notices,
+        );
+        assert!(definitions.get("migrator").is_none());
+        let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                ".bravebot/agents/migrator.md was skipped: its budget must be a count of tokens \
+                 above zero, such as 500k or 2m"
             ]
         );
     }

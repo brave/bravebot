@@ -419,6 +419,12 @@ pub struct Tools<'a> {
     /// instead which effects may happen with nobody to see them. The identifier is what the reading
     /// back uses to tell this session's own answers from an earlier session's.
     pub remembering: Option<&'a str>,
+    /// The tokens this run has left under its own budget, where it carries one.
+    ///
+    /// Read when it starts a delegate, so a child is never given more than its parent has left
+    /// (DELEGATE-29). Two counts the driver holds: the budget the spec fixed and the tokens the
+    /// run has reported so far, the delegates it has collected included.
+    pub budget_left: Option<u64>,
     /// The advisor this turn may consult, and what it has been asked so far, or `None` where the
     /// session named none.
     ///
@@ -9228,6 +9234,17 @@ fn spawn_agent<S: Sink, R: Reporter>(
         Ok(keeping) => keeping,
         Err(refusal) => return Produced::problem(refusal),
     };
+    let budget = match budget_asked(arguments) {
+        Ok(budget) => budget,
+        Err(refusal) => return Produced::problem(refusal),
+    };
+    // What the run has left is shared by the delegates of one call, so a fan-out divides it
+    // rather than giving each the whole of it (DELEGATE-29). Fewer tokens than delegates leaves a
+    // share of zero, which the kernel refuses like a run with nothing left, so the delegates
+    // never carry more between them than the parent had.
+    let parent_left = tools
+        .budget_left
+        .map(|left| left / tasks.len().max(1) as u64);
 
     let mut produced = Produced::new(
         Labelled::trusted(String::new()),
@@ -9252,7 +9269,13 @@ fn spawn_agent<S: Sink, R: Reporter>(
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        let spec = match policy.before_delegate(&kind, task, keeping.as_ref()) {
+        let spec = match policy.before_delegate_within(
+            &kind,
+            task,
+            keeping.as_ref(),
+            budget.as_ref(),
+            parent_left,
+        ) {
             Ok(spec) => spec,
             Err(denial) if started.is_empty() => {
                 return Produced::problem(format!("refused: {denial}"));
@@ -9583,6 +9606,32 @@ fn servers_kept(arguments: &Value) -> Result<Option<Labelled<Vec<String>>>, Stri
         names,
         bravebot_core::label::Label::untrusted_public(),
     )))
+}
+
+/// The token budget a `spawn_agent` call gives each of its delegates, where it names one
+/// (DELEGATE-29).
+///
+/// A whole number of tokens above zero, or the words `/limit` takes for one such as `500k` or
+/// `2m`. Only the shape is checked here: the kernel takes the least of this, the definition's and
+/// what the run has left, once the integrity gate has passed.
+fn budget_asked(arguments: &Value) -> Result<Option<Labelled<u64>>, String> {
+    Ok(budget_figure(arguments)?
+        .map(|figure| Labelled::new(figure, bravebot_core::label::Label::untrusted_public())))
+}
+
+/// The figure a call's `budget` field names, where it names one.
+fn budget_figure(arguments: &Value) -> Result<Option<u64>, String> {
+    let figure = match arguments.get("budget") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Number(number)) => number.as_u64().filter(|figure| *figure > 0),
+        Some(Value::String(written)) => bravebot_config::limit::parse_count(written),
+        Some(_) => None,
+    };
+    figure.map(Some).ok_or_else(|| {
+        "error: 'budget' must be a count of tokens above zero, such as 500000 or \"500k\"; leave \
+         it out to set none"
+            .to_string()
+    })
 }
 
 /// Read a skill the planner was listed.
@@ -12044,6 +12093,51 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("{malformed} was taken for a list of names"));
             assert!(refused.contains("must be an array"), "{refused}");
+        }
+    }
+
+    /// DELEGATE-29. A figure is a count of tokens above zero, as a number or in `/limit`'s words,
+    /// and anything else is refused with what the field takes, so a malformed figure never reaches
+    /// the kernel as "no budget".
+    #[test]
+    fn a_budget_that_is_not_a_count_of_tokens_is_refused() {
+        assert!(matches!(budget_asked(&json!({"task": "t"})), Ok(None)));
+        assert!(matches!(budget_asked(&json!({"budget": null})), Ok(None)));
+        for (written, tokens) in [
+            (json!(40_000), 40_000),
+            (json!("500k"), 500_000),
+            (json!("2m"), 2_000_000),
+            (json!("750000"), 750_000),
+        ] {
+            assert_eq!(
+                budget_figure(&json!({ "budget": written })),
+                Ok(Some(tokens)),
+                "{written}"
+            );
+        }
+        let labelled = budget_asked(&json!({"budget": "2m"}))
+            .expect("a count")
+            .expect("named");
+        assert_eq!(
+            labelled.label(),
+            bravebot_core::label::Label::untrusted_public(),
+            "labelled other than as a planner's argument"
+        );
+
+        for malformed in [
+            json!(0),
+            json!(-5),
+            json!(1.5),
+            json!("0"),
+            json!("lots"),
+            json!("3 credits"),
+            json!([5]),
+            json!(true),
+        ] {
+            let refused = budget_asked(&json!({ "budget": malformed }))
+                .err()
+                .unwrap_or_else(|| panic!("{malformed} was taken for a budget"));
+            assert!(refused.contains("must be a count of tokens"), "{refused}");
         }
     }
 
@@ -18064,6 +18158,7 @@ mod tests {
                 sandbox: bravebot_sandbox::SandboxMode::default(),
                 asks_about_unconfined: false,
                 remembering: None,
+                budget_left: None,
                 advising: None,
                 messaging: None,
             })

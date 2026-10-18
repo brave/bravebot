@@ -372,6 +372,10 @@ it, so a session that spends none, with no subscription imported, is never stopp
 credits, and tokens spent do not reach one. The question is built from that count, the limit and fixed words, and reads no reply or tool
 result.
 
+**A delegate's own budget is separate.** A delegate is never asked this question. What it spends
+reaches the session's total when it is collected, and a token budget of its own
+([DELEGATE-29](delegation.md#DELEGATE-29)) stops it by removing its tools, with nobody asked.
+
 **Asked each time.** The question carries a key of its own on every ask, because an interface may
 remember an answer by key, and the same figures can come back after a stop.
 

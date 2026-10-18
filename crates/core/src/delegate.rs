@@ -318,6 +318,12 @@ pub struct Definition {
     /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
     /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
     rounds: Option<usize>,
+    /// The most tokens the definition lets one delegate spend, where it names a figure.
+    ///
+    /// `None` is no budget, so only the rounds bound it. Met with the one it replaced rather
+    /// than taken over, since a figure only restricts and a later definition may lower it and
+    /// may not take it away.
+    budget: Option<u64>,
     /// Whether a run under it keeps a memory, a file in the working directory named after it.
     ///
     /// Set only for a name a path segment can be made of, which is decided where the file is read.
@@ -361,6 +367,7 @@ impl Definition {
             skills: None,
             servers: None,
             rounds: None,
+            budget: None,
             memory: false,
             checkout: false,
             writes: Vec::new(),
@@ -388,6 +395,7 @@ impl Definition {
             skills: None,
             servers: None,
             rounds: None,
+            budget: None,
             memory: false,
             checkout: false,
             writes: Vec::new(),
@@ -479,6 +487,17 @@ impl Definition {
     /// Ask for this many rounds, which its kind's ceiling still holds.
     pub fn with_rounds(mut self, rounds: usize) -> Self {
         self.rounds = Some(rounds);
+        self
+    }
+
+    /// The most tokens its delegate may spend, where its definition names a figure.
+    pub fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
+    /// Hold its delegate to this many tokens, beyond which it loses its tools and answers.
+    pub fn with_budget(mut self, tokens: u64) -> Self {
+        self.budget = Some(tokens);
         self
     }
 
@@ -818,6 +837,10 @@ impl Definitions {
             }
         }
 
+        definition.budget = match (definition.budget, existing.budget) {
+            (Some(asked), Some(held)) => Some(asked.min(held)),
+            (asked, held) => asked.or(held),
+        };
         definition.kind = loaded;
         definition.writes = writes;
         definition.tools = tools;
@@ -1146,6 +1169,9 @@ pub struct DelegateSpec {
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
+    /// The most tokens it may spend, where one is fixed: the least of its definition's figure,
+    /// the call's and what its parent had left.
+    budget: Option<u64>,
     /// The tree it belongs to, which is the one the delegates it spawns draw on.
     tree: Tree,
     /// What the context of the run that wrote its task held, which its own context starts
@@ -1187,6 +1213,7 @@ impl DelegateSpec {
             task: task.into(),
             capabilities,
             rounds,
+            budget: definition.budget(),
             tree,
             holds: Confidentiality::Public,
         }
@@ -1194,6 +1221,17 @@ impl DelegateSpec {
 
     pub(crate) fn holding(mut self, held: Confidentiality) -> Self {
         self.holds = held;
+        self
+    }
+
+    /// Lower the budget to this figure where it is below the one it carries. A figure from the
+    /// call or the parent's remainder can only restrict what a vouched definition set
+    /// (DELEGATE-29), so it never raises it.
+    pub(crate) fn budgeted_to(mut self, tokens: Option<u64>) -> Self {
+        self.budget = match (self.budget, tokens) {
+            (Some(held), Some(asked)) => Some(held.min(asked)),
+            (held, asked) => held.or(asked),
+        };
         self
     }
 
@@ -1315,6 +1353,11 @@ impl DelegateSpec {
         self.rounds
     }
 
+    /// How many tokens it may spend before it has to answer, where a figure was fixed.
+    pub fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
     /// The delegate as the audit trail describes it: what it is and what it holds, never the
     /// task, which can be long.
     pub fn describe(&self) -> String {
@@ -1332,8 +1375,12 @@ impl DelegateSpec {
         } else {
             format!("a {} delegate ({})", self.definition, self.kind)
         };
+        let budget = match self.budget {
+            Some(tokens) => format!(" and {tokens} tokens"),
+            None => String::new(),
+        };
         format!(
-            "{} is {what} holding {held} for at most {} rounds",
+            "{} is {what} holding {held} for at most {} rounds{budget}",
             self.id, self.rounds
         )
     }
@@ -1917,6 +1964,32 @@ mod tests {
                 assert_eq!(definition.rounds_beyond_its_kind(), Some(asked), "{name}");
             }
         }
+    }
+
+    /// A budget only restricts, so a later definition of the name may lower it and may not take
+    /// it away: the project file that replaces a person's own cannot spend more than theirs.
+    #[test]
+    fn a_later_definition_meets_the_budget_of_the_one_it_replaces() {
+        let named = |budget: Option<u64>| {
+            let definition =
+                Definition::from_file("reviewer", "reviews", Kind::Reader, None, "", "a file");
+            match budget {
+                Some(tokens) => definition.with_budget(tokens),
+                None => definition,
+            }
+        };
+        let after = |first: Option<u64>, second: Option<u64>| {
+            let mut definitions = Definitions::default();
+            definitions.insert(named(first));
+            definitions.insert(named(second));
+            definitions.get("reviewer").expect("selectable").budget()
+        };
+
+        assert_eq!(after(Some(500), Some(900)), Some(500));
+        assert_eq!(after(Some(900), Some(500)), Some(500));
+        assert_eq!(after(Some(500), None), Some(500));
+        assert_eq!(after(None, Some(500)), Some(500));
+        assert_eq!(after(None, None), None);
     }
 
     /// A bound is not authority, so a replacement's own number is the one in force, as its body

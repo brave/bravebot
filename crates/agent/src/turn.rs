@@ -922,6 +922,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             profile: task.profile.as_deref(),
             cache: task.cache.as_deref(),
             remembering: task.remembering.as_deref(),
+            budget_left: None,
             advising: None,
             messaging: None,
             delegated: false,
@@ -1253,6 +1254,9 @@ struct Working<'scope> {
     /// The most rounds of tool calls its spec allows, which the record of how it ended counts
     /// against (TRACE-8).
     rounds: usize,
+    /// The most tokens its spec allows, which what it reports having spent is compared with when
+    /// it ends (DELEGATE-29).
+    budget: Option<u64>,
     /// What a person set, where they stopped this delegate alone (DELEGATE-25).
     stop: bravebot_core::cancel::DelegateStop,
     handle: std::thread::ScopedJoinHandle<
@@ -1610,7 +1614,17 @@ fn collect_delegates<S: Sink, R: Reporter>(
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
 
         let finish = delegate_end::finish_of(&delegated, ran);
-        policy.record_delegate_end(id, working.rounds, finish);
+        // What its own backend reported it spent, which on a failed run is the part that completed.
+        let tokens = match &delegated {
+            Ok(delegated) => delegated.usage.total(),
+            Err(_) => partial.tokens,
+        };
+        policy.record_delegate_end_within(
+            id,
+            working.rounds,
+            working.budget.map(|budget| (budget, tokens)),
+            finish,
+        );
 
         // After the decisions it made are taken back, so a rule that distrusts a path survives the
         // withdrawal of the rest (CHECKOUT-12).
@@ -1639,6 +1653,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     working.rounds,
                     working.stop.was_honoured(),
                 );
+                let (note, bound) = match working.stop.was_honoured() {
+                    true => (note, bound),
+                    false => {
+                        let (said, told) =
+                            delegate_end::budget_sentences(working.budget, tokens, true);
+                        let note = match said.is_empty() {
+                            true => note,
+                            false => format!("{note}; {said}"),
+                        };
+                        (note, format!("{bound}{told}"))
+                    }
+                };
                 let slot = conversation.next_reference();
                 let presented = match policy.present(
                     "delegate",
@@ -1697,7 +1723,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 account.add_spent(&partial);
                 let (note, body) =
                     delegate_end::unfinished_account(&finish, ran, working.rounds, id);
-                (note, body, true, None, Provenance::Driver)
+                let (said, told) = delegate_end::budget_sentences(working.budget, tokens, false);
+                let note = match said.is_empty() {
+                    true => note,
+                    false => format!("{note}, {said}"),
+                };
+                (
+                    note,
+                    format!("{body}{told}"),
+                    true,
+                    None,
+                    Provenance::Driver,
+                )
             }
         };
 
@@ -3313,6 +3350,16 @@ where
             state.steps,
         )?;
 
+        // After the collection above, which adds what a finished delegate spent, so a delegate
+        // whose child took it past its budget goes to the planner's next request without tools.
+        round_steps::stop_at_token_budget(
+            &mut state.may_call_tools,
+            task,
+            state.account.tokens,
+            reporter,
+            conversation,
+        );
+
         reporter.spent(crate::outcome::Spent {
             timing: state.spent.finish(),
 
@@ -3615,6 +3662,7 @@ where
             &mut state.may_call_tools,
             task,
             state.steps,
+            state.account.tokens,
             reporter,
             conversation,
         );
@@ -3799,6 +3847,11 @@ where
                         profile: task.profile.as_deref(),
                         cache: task.cache.as_deref(),
                         remembering: task.remembering.as_deref(),
+                        budget_left: task
+                            .delegate
+                            .as_ref()
+                            .and_then(bravebot_core::delegate::DelegateSpec::budget)
+                            .map(|budget| budget.saturating_sub(state.account.tokens)),
                         advising: advisor.map(|model| crate::advisor::Advising {
                             model,
                             context: &request.messages,
@@ -4729,6 +4782,7 @@ mod tests {
                 seeded,
                 checkout: None,
                 rounds: 60,
+                budget: None,
                 stop: Default::default(),
                 handle: worker,
             }];
@@ -4807,6 +4861,7 @@ mod tests {
                     seeded: seeded.clone(),
                     checkout: None,
                     rounds: 120,
+                    budget: None,
                     stop: Default::default(),
                     handle: stopped,
                 },
@@ -4816,6 +4871,7 @@ mod tests {
                     seeded: seeded.clone(),
                     checkout: None,
                     rounds: 60,
+                    budget: None,
                     stop: Default::default(),
                     handle: lost,
                 },
@@ -4911,6 +4967,7 @@ mod tests {
                 seeded: seeded.clone(),
                 checkout: None,
                 rounds: 1,
+                budget: None,
                 stop: Default::default(),
                 handle: answered,
             }];
@@ -4943,6 +5000,99 @@ mod tests {
         assert!(
             told.contains("It stopped at its limit of 1 round and may not be finished."),
             "a planner handed a reference was not told the delegate stopped at its bound: {told}"
+        );
+    }
+
+    /// DELEGATE-29 where the report is quarantined. The sentence about a spent token budget is
+    /// the driver's own and sits beside the report, so the planner reads the same words whether it
+    /// is shown the text or handed a reference to it. An untrusted report is given here directly,
+    /// since a delegate's own context meets nothing untrusted on the ordinary paths.
+    #[test]
+    fn a_quarantined_report_carries_the_sentence_about_a_spent_token_budget() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect a quarantined report");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        // The label a delegate whose own context met untrusted bytes earns, taken from the kernel
+        // rather than written here, so the test cannot give a report a label the kernel would not.
+        let report = policy.label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND".to_string());
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Ok(crate::delegate::Delegated {
+                            report,
+                            kind: "one-round".to_string(),
+                            usage: bravebot_aichat::protocol::Usage {
+                                prompt_tokens: 900,
+                                completion_tokens: 200,
+                                cached: Default::default(),
+                            },
+                        }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(900),
+                        worked: Default::default(),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 60,
+                budget: Some(1000),
+                stop: Default::default(),
+                handle: answered,
+            }];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut crate::outcome::Spent::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+                &mut Worked::default(),
+                0,
+            )
+            .unwrap();
+        });
+
+        let told = conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .find(|text| text.contains("The one-round delegate d1 has finished."))
+            .expect("the planner was never told the delegate finished");
+        assert!(
+            !told.contains("WHAT-THE-UNVOUCHED-LOOK-FOUND"),
+            "an untrusted report was shown to the planner, so nothing here was tested: {told}"
+        );
+        assert!(
+            told.contains("It spent its budget of 1000 tokens and may not be finished."),
+            "a planner handed a reference was not told the delegate spent its token budget: {told}"
         );
     }
 
@@ -5006,6 +5156,7 @@ mod tests {
                         seeded: seeded.clone(),
                         checkout: None,
                         rounds: 1,
+                        budget: None,
                         stop: Default::default(),
                         handle: answered,
                     }
@@ -5132,6 +5283,7 @@ mod tests {
                     seeded: seeded.clone(),
                     checkout: None,
                     rounds: 1,
+                    budget: None,
                     stop: Default::default(),
                     handle: answered,
                 }];
