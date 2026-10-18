@@ -12,6 +12,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/reach.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/trusted.rs

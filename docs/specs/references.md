@@ -7,6 +7,7 @@ governs:
   - crates/ui-bridge/src/mentions.rs
   - crates/config/src/settings.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/reach.rs
   - crates/agent/src/preamble.rs
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
