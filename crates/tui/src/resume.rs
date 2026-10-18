@@ -34,7 +34,7 @@ pub struct Picker {
     /// What has been typed to narrow it.
     search: String,
     /// A refusal to show under the list, cleared by the next key.
-    note: Option<&'static str>,
+    note: Option<String>,
     /// Which of the matching sessions is under the cursor.
     selected: usize,
     /// The project these sessions belong to, for the heading.
@@ -51,6 +51,8 @@ pub struct Picker {
     corpus: Option<Corpus>,
     /// For each session whose words hold the phrase, the line that does.
     said: HashMap<String, String>,
+    /// Whether a running background session holds a record, which Enter refuses (BG-9).
+    held: fn(&str) -> bool,
 }
 
 impl Picker {
@@ -66,6 +68,7 @@ impl Picker {
             reads_from: None,
             corpus: None,
             said: HashMap::new(),
+            held: bravebot_session::jobs::is_running,
         }
     }
 
@@ -79,6 +82,13 @@ impl Picker {
     #[cfg(test)]
     fn with_corpus(mut self, corpus: Corpus) -> Self {
         self.corpus = Some(corpus);
+        self
+    }
+
+    /// Ask `held` rather than the roster whether a running background session holds a record.
+    #[cfg(test)]
+    fn with_held(mut self, held: fn(&str) -> bool) -> Self {
+        self.held = held;
         self
     }
 
@@ -248,7 +258,7 @@ pub enum Outcome {
     /// Distinct from `Continue` so the refusal is said out loud. A picker that quietly ignored
     /// Enter would look broken, and the reason is worth knowing: the record is still there to
     /// read, it just has nothing to carry on from.
-    Refused(&'static str),
+    Refused(String),
 }
 
 /// Why a manifest run cannot be picked up.
@@ -258,6 +268,19 @@ pub enum Outcome {
 /// the same, because what a run produced is worth reading whether or not it can be resumed.
 pub fn manifest_note() -> &'static str {
     t!(resume_manifest_run)
+}
+
+/// How much of a background session's name the refusal quotes, so that the id after it is not
+/// cut off at the edge of a 100 column terminal.
+const NAME_SHOWN: usize = 12;
+
+/// The refusal for choosing a record a running background session holds, which names the session
+/// and says how to join it, or `None` where `held` says nothing holds it (BG-9).
+fn held_note(id: &str, held: impl Fn(&str) -> bool) -> Option<String> {
+    if !held(id) {
+        return None;
+    }
+    Some(bravebot_session::jobs::held_refusal(id, NAME_SHOWN))
 }
 
 /// Interpret one key press.
@@ -276,7 +299,11 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
     match code {
         KeyCode::Esc => Outcome::Cancel,
         KeyCode::Enter => match picker.chosen() {
-            Some(session) if session.manifest => Outcome::Refused(manifest_note()),
+            Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
+            Some(session) => match held_note(&session.id, picker.held) {
+                Some(note) => Outcome::Refused(note),
+                None => Outcome::Resume,
+            },
             _ => Outcome::Resume,
         },
         KeyCode::Up => {
@@ -527,7 +554,7 @@ fn draw(frame: &mut Frame, picker: &Picker) {
 
     frame.render_widget(Paragraph::new(list_lines(picker, layout[3])), layout[3]);
 
-    let (footer, colour) = match picker.note {
+    let (footer, colour) = match &picker.note {
         Some(note) => (format!("  {note}"), theme::note()),
         None if picker.within_a_session => {
             (format!("  {}", t!(resume_keys_within)), theme::muted())
@@ -940,8 +967,35 @@ mod tests {
         );
         assert_eq!(
             handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
-            Outcome::Refused(manifest_note())
+            Outcome::Refused(manifest_note().to_string())
         );
+    }
+
+    /// BG-9: a record a running background session holds is refused on Enter in the picker, with
+    /// the line that tells the person to attach; a record nothing holds is picked as before.
+    #[test]
+    fn a_session_a_background_session_holds_cannot_be_picked() {
+        fn holds_the_second(id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut picker = Picker::new(
+            vec![
+                summary("1111111111", "free", 200),
+                summary("2222222222", "held", 100),
+            ],
+            "/work",
+        )
+        .with_held(holds_the_second);
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Resume
+        );
+        picker.down();
+        let Outcome::Refused(note) = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE)
+        else {
+            panic!("a held session was picked");
+        };
+        assert!(note.contains("bravebot attach 22222222"), "{note}");
     }
 
     #[test]

@@ -16,6 +16,7 @@
 //!
 //! The state a process wrote is therefore only believed while it is live (BG-6).
 
+use bravebot_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -355,6 +356,21 @@ pub fn is_running(id: &str) -> bool {
         .and_then(|roster| roster.get(id))
         .is_some_and(|seen| seen.live)
 }
+
+/// The refusal for resuming a record a running background session holds, which names the session
+/// and says how to join it (BG-9). The name is cut to `name_shown` characters, so that a surface
+/// with little width keeps the id after it. Every surface that refuses uses this one sentence.
+pub fn held_refusal(id: &str, name_shown: usize) -> String {
+    let name = Roster::readable()
+        .and_then(|roster| roster.get(id))
+        .map(|seen| crate::search::clean(&seen.job.name, name_shown))
+        .unwrap_or_default();
+    let id: String = id.chars().take(HELD_ID_SHOWN).collect();
+    t!(resume_held_by_background, name = name, id = id).to_string()
+}
+
+/// How much of a session id the refusal quotes, the same eight characters `attach` is given.
+const HELD_ID_SHOWN: usize = 8;
 
 impl Roster {
     /// The roster of the person running this, for reading. `None` where there is no home.
@@ -774,6 +790,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let roster = Roster::at(dir.path().join("jobs"));
         (dir, roster)
+    }
+
+    /// BG-9: the refusal every surface shows quotes the same eight characters of the id that
+    /// `attach` is given, and says how to join the session.
+    #[test]
+    fn the_refusal_to_resume_a_held_record_quotes_the_start_of_its_id() {
+        let said = held_refusal("0123456789abcdef", usize::MAX);
+        assert!(said.contains("bravebot attach 01234567"), "{said}");
+        assert!(!said.contains("012345678"), "{said}");
     }
 
     fn job(id: &str) -> Job {

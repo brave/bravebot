@@ -381,12 +381,7 @@ pub(crate) fn refuse_to_resume(id: &str) -> ExitCode {
 
 /// Why a session a background process is running cannot be resumed by a second one.
 pub(crate) fn held_by_a_background_session(id: &str) -> String {
-    let name = Roster::readable()
-        .and_then(|roster| roster.get(id))
-        .map(|seen| shown(&seen.job.name))
-        .unwrap_or_default();
-    let id: String = id.chars().take(ID_SHOWN).collect();
-    t!(resume_held_by_background, name = name, id = id).to_string()
+    bravebot_session::jobs::held_refusal(id, usize::MAX)
 }
 
 /// What a terminal does for a session that is not running.
