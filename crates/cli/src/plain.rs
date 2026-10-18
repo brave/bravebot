@@ -87,6 +87,11 @@ pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     )
 }
 
+/// The definition a resumed session's record names, which it works under again (ADDRESS-3).
+fn recorded_definition(resumed: Option<&bravebot_session::sessions::Record>) -> Option<&str> {
+    resumed.and_then(|record| record.agent.as_deref())
+}
+
 /// The mode every turn runs under: a background session's process holds the one it was started
 /// in and is never in bypass, and a session in lines is in bypass only when the flag asked (BG-8).
 fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> PermissionMode {
@@ -322,15 +327,13 @@ fn run(
     // (ADDRESS-5).
     // The `agent` setting stands in where `--agent` named nothing, and a name it gives that matches
     // nothing is said and the session goes on without one (ADDRESS-13).
-    // A session resumed from a record that names a definition is left as it was before the
-    // setting existed: it does not take the setting's, which the record outranks.
-    let recorded = resumed
-        .as_ref()
-        .is_some_and(|record| record.agent.is_some());
-    let configured = settings.agent().filter(|_| !recorded);
-    let by_setting = agent.is_none() && configured.is_some();
-    let wanted = agent.or_else(|| configured.map(str::to_string));
-    let definitions = wanted.as_ref().map(|_| {
+    // A session resumed from a record that names a definition works under it unless this command
+    // line named one, as a foreground resume does: a background process is started with the
+    // session's id alone, so the record is the only place its name survives (ADDRESS-3). The
+    // record outranks the setting, as it does for a foreground session.
+    let recorded = recorded_definition(resumed.as_ref());
+    let configured = settings.agent();
+    let definitions = (agent.is_some() || recorded.is_some() || configured.is_some()).then(|| {
         bravebot_agent::agents::resolved(
             &workspace,
             home.as_deref(),
@@ -339,23 +342,39 @@ fn run(
             &mut RecordingSink::new(),
         )
     });
-    let agent = match wanted
-        .as_deref()
-        .zip(definitions.as_ref())
-        .map(|(name, definitions)| bravebot_tui::app::definition_named(&config, definitions, name))
-        .transpose()
-    {
-        Ok(agent) => agent,
-        Err(bravebot_tui::app::Unusable::Missing(why)) if by_setting => {
-            asking.say(&t!(
-                cli_agent_setting_gone,
-                definition = wanted.as_deref().unwrap_or_default()
-            ));
-            asking.say(&why);
-            None
-        }
-        Err(refused) => return fail(Ending::Argument, refused.into_message()),
-    };
+    let mut by_setting = false;
+    let agent =
+        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, configured, |name| {
+            bravebot_tui::app::definition_named(
+                &config,
+                definitions.as_ref().expect("a name was given"),
+                name,
+            )
+        }) {
+            Ok(bravebot_tui::app::Settled::Under {
+                found,
+                by_setting: setting,
+                ..
+            }) => {
+                by_setting = setting;
+                Some(found)
+            }
+            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
+                asking.say(&t!(cli_agent_setting_gone, definition = name.as_str()));
+                asking.say(&why);
+                None
+            }
+            Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
+                asking.say(&t!(
+                    session_recorded_definition_gone,
+                    definition = name.as_str()
+                ));
+                asking.say(&why);
+                None
+            }
+            Ok(bravebot_tui::app::Settled::Nothing) => None,
+            Err(refused) => return fail(Ending::Argument, refused),
+        };
     // With the definition's model, because the opening line named the session's before the name
     // was matched, and every prompt asks for the definition's.
     if let Some(agent) = &agent {
@@ -2321,6 +2340,48 @@ mod tests {
         assert_eq!(named.handle.agent(), Some("another"));
         let fresh = Kept::opening(root, "3-4", None, Some("another"));
         assert_eq!(fresh.handle.agent(), Some("another"));
+    }
+
+    /// A background process is started with the session's id alone, so the name its record holds is
+    /// the only source it has for the definition the session was working under (ADDRESS-3).
+    #[test]
+    fn a_resumed_session_works_under_the_definition_its_record_names() {
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": "1-2",
+                "directory": "/tmp/x",
+                "title": "a session",
+                "started": 1,
+                "updated": 1,
+                "turns": 1,
+                "tokens": 0,
+                "conversation": {
+                    "messages": [],
+                    "context": "trusted",
+                    "references": 0,
+                    "archive": [],
+                    "measured": 0,
+                    "asked_to_write": false,
+                },
+                "agent": "reader",
+            }))
+            .expect("a record");
+        assert_eq!(recorded_definition(Some(&record)), Some("reader"));
+        assert_eq!(recorded_definition(None), None);
+        let settled = bravebot_tui::app::settle_definition(
+            None,
+            recorded_definition(Some(&record)),
+            Some("set"),
+            |name| Ok::<_, bravebot_tui::app::Unusable>(name.to_string()),
+        );
+        assert!(
+            matches!(
+                settled,
+                Ok(bravebot_tui::app::Settled::Under { ref name, by_setting: false, .. })
+                    if name == "reader"
+            ),
+            "the resumed session did not settle on the recorded name"
+        );
     }
 
     /// With no answer kept about this directory the question is put, and a yes is the answer that
