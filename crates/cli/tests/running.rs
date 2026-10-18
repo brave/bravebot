@@ -7841,6 +7841,133 @@ fn an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on() {
     );
 }
 
+/// A background session's process started on the record of a one-shot run made under `--agent
+/// rule-reviewer`, which is how `bravebot attach` starts one again: with the session's id and
+/// nothing else. Returns the home, the host process, and the id.
+///
+/// The definition is deleted first where `keep_definition` is false.
+#[cfg(unix)]
+fn a_host_resumed_from_a_record_naming_a_definition(
+    gateway: &Gateway,
+    keep_definition: bool,
+) -> (ShortHome, std::process::Child, String) {
+    let home = ShortHome::new();
+    let state = home.0.join(".bravebot");
+    std::fs::create_dir_all(state.join("agents")).expect("the definitions directory");
+    std::fs::write(state.join("settings.json"), settings_for(gateway)).expect("settings");
+    std::fs::write(
+        state.join("agents/rule-reviewer.md"),
+        a_definition("rule-reviewer", "kind: reader\n"),
+    )
+    .expect("the definition");
+    let work = home.0.join("work");
+    std::fs::create_dir_all(&work).expect("a directory to work in");
+
+    let first = bravebot_started_in(
+        &home.0,
+        &work,
+        AT_A_GATEWAY,
+        &["--json", "--agent", "rule-reviewer", "-p", "FIRST-QUESTION"],
+    );
+    let (stdout, stderr) = said(&first);
+    assert_eq!(first.status.code(), Some(0), "{stdout}\n{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    assert_eq!(saved_record_in(&home.0, &id)["agent"], "rule-reviewer");
+    let _ = requests(gateway);
+    if !keep_definition {
+        std::fs::remove_file(state.join("agents/rule-reviewer.md")).expect("delete the definition");
+    }
+
+    let job = state.join(format!("jobs/{id}"));
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    std::fs::write(job.join("first-prompt"), "SECOND-QUESTION").expect("the first prompt");
+    let host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", &id])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+    (home, host, id)
+}
+
+/// The record of `id` once its second turn is written, which the host does after the reply.
+#[cfg(unix)]
+fn the_record_after_the_second_turn(home: &Path, id: &str) -> serde_json::Value {
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let record = saved_record_in(home, id);
+        if record["turns"].as_u64().is_some_and(|turns| turns >= 2) {
+            return record;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the second turn was never recorded: {record}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// ADDRESS-3 over the process: a background session's process is started with the session's id and
+/// nothing else, so a resume of a record naming a definition has only the record to learn it from.
+/// The turn's request is addressed to the definition and withholds its writes only if the turn
+/// worked under it, and the record still names it afterwards.
+#[cfg(unix)]
+#[test]
+fn a_background_session_resumed_from_a_record_naming_a_definition_works_under_it() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let (home, mut host, id) = a_host_resumed_from_a_record_naming_a_definition(&gateway, true);
+
+    let sent = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the resumed turn reached the gateway");
+    assert!(
+        sent.contains("SECOND-QUESTION")
+            && sent.contains("addressed this turn to rule-reviewer")
+            && !sent.contains(r#""name":"write_file""#),
+        "the resumed turn did not work under the recorded definition: {sent}"
+    );
+    let record = the_record_after_the_second_turn(&home.0, &id);
+    let _ = host.kill();
+    let _ = host.wait();
+    assert_eq!(
+        record["agent"], "rule-reviewer",
+        "the resume rewrote the record to name no definition"
+    );
+}
+
+/// ADDRESS-3 over the process, the other arm: a record naming a definition that has gone since is
+/// not worked under, and the record stops claiming turns it did not narrow.
+#[cfg(unix)]
+#[test]
+fn a_background_session_resumed_from_a_record_naming_a_gone_definition_goes_on_without_it() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let (home, mut host, id) = a_host_resumed_from_a_record_naming_a_definition(&gateway, false);
+
+    let sent = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the resumed turn reached the gateway");
+    assert!(
+        sent.contains("SECOND-QUESTION") && !sent.contains("addressed this turn to"),
+        "the resumed turn worked under a definition that was not found: {sent}"
+    );
+    let record = the_record_after_the_second_turn(&home.0, &id);
+    let _ = host.kill();
+    let _ = host.wait();
+    assert!(
+        record["agent"].is_null(),
+        "the record still claims a definition the turns were not under: {record}"
+    );
+}
+
 /// ADDRESS-13: a manifest run is addressed to no definition, so the setting is not applied to it.
 /// The definition exists and the setting names it, so a run that applied the setting would say the
 /// setting chose it and name it in the result object.
@@ -8310,7 +8437,7 @@ fn failed_manifest_usage_survives_json_and_reload() {
 }
 
 /// The saved record of one session, found by its id under the scratch project's sessions folder.
-fn saved_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+fn saved_record_in(home: &Path, id: &str) -> serde_json::Value {
     fn find(path: &Path, name: &str) -> Option<PathBuf> {
         for entry in std::fs::read_dir(path).ok()? {
             let path = entry.ok()?.path();
@@ -8324,12 +8451,13 @@ fn saved_record(scratch: &Scratch, id: &str) -> serde_json::Value {
         }
         None
     }
-    let file = find(
-        &scratch.path.join(".bravebot/sessions"),
-        &format!("{id}.json"),
-    )
-    .unwrap_or_else(|| panic!("no record for {id}"));
+    let file = find(&home.join(".bravebot/sessions"), &format!("{id}.json"))
+        .unwrap_or_else(|| panic!("no record for {id}"));
     serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
+}
+
+fn saved_record(scratch: &Scratch, id: &str) -> serde_json::Value {
+    saved_record_in(&scratch.path, id)
 }
 
 /// A one-shot turn is timed like a turn in the full-screen interface (SESSION-12), the record's
