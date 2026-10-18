@@ -1358,6 +1358,10 @@ The conversation comes back through the same restore an interactive resume uses,
 what a planner may be shown is held in one place and a continued one-shot run cannot be shown more
 than an interactive one would.
 
+The record carries the turn's timing under its number ([SESSION-12](sessions.md#SESSION-12)), as a
+turn in a session does, and a continued run adds its own entry beside the earlier ones. The
+session's start is when the run began, not when its record was written.
+
 `--continue` and a failed run: the record of a run that failed is not written, so a continuation
 after a failure carries on the last turn that completed. What the failed turn did to the working
 directory is not in any record, and the result object of a failed run carries `null` for `session`.
@@ -1373,6 +1377,7 @@ process that holds the record is known.
 `verified-by: bravebot_cli::running::a_task_continuing_the_latest_session_adds_a_turn_to_its_record`
 `verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
 `verified-by: bravebot_cli::running::an_incognito_run_is_not_recorded_and_cannot_be_continued`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_timing_and_when_it_began`
 `verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_task_naming_a_manifest_record_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_record_a_running_session_holds_is_not_resumed`
