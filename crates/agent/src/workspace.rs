@@ -1321,15 +1321,19 @@ impl Workspace {
     /// Every ancestor of where the name lands is compared with every open directory, so a tree
     /// opened by one name inside another's is found as well. Always empty off Unix, where the file
     /// index is not in the standard library.
+    ///
+    /// `None` where one of the names is not UTF-8, which no rule can be written about and whose
+    /// lossy rendering would be matched as a different file's name, so the caller does not read it
+    /// as "no other name".
     #[cfg(unix)]
-    pub(crate) fn same_tree_names(&self, named: &str) -> Vec<String> {
+    pub(crate) fn same_tree_names(&self, named: &str) -> Option<Vec<String>> {
         use std::os::unix::fs::MetadataExt;
 
         if self.added_directories().is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let Ok(resolved) = self.resolve(named) else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         let roots: Vec<PathBuf> = std::iter::once(self.root.clone())
             .chain(self.added_directories())
@@ -1344,15 +1348,23 @@ impl Workspace {
             .iter()
             .filter_map(|root| Some((root, identity(root)?)))
             .collect();
-        Self::names_in_the_same_directories(&resolved, &opened, identity)
-            .iter()
-            .map(|path| self.relative_display(path))
-            .collect()
+        self.displayed_if_utf8(&Self::names_in_the_same_directories(
+            &resolved, &opened, identity,
+        ))
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn same_tree_names(&self, _named: &str) -> Vec<String> {
-        Vec::new()
+    pub(crate) fn same_tree_names(&self, _named: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
+    /// `paths` spelled relative to the workspace root, or `None` if any is not UTF-8.
+    #[cfg(unix)]
+    fn displayed_if_utf8(&self, paths: &[PathBuf]) -> Option<Vec<String>> {
+        paths
+            .iter()
+            .map(|path| path.to_str().map(|_| self.relative_display(path)))
+            .collect()
     }
 
     /// `resolved` re-rooted at each open directory that is the same directory as one of its
@@ -6269,11 +6281,11 @@ mod tests {
             .expect("the firmlink path opens");
 
         let typed = format!("{second}/src/a.md");
-        assert_eq!(workspace.same_tree_names(&typed), ["src/a.md"]);
-        assert_eq!(workspace.same_tree_names("src/a.md"), [typed]);
+        assert_eq!(workspace.same_tree_names(&typed).unwrap(), ["src/a.md"]);
+        assert_eq!(workspace.same_tree_names("src/a.md").unwrap(), [typed]);
         let created = format!("{second}/not-yet.md");
-        assert_eq!(workspace.same_tree_names(&created), ["not-yet.md"]);
-        assert_eq!(workspace.same_tree_names("not-yet.md"), [created]);
+        assert_eq!(workspace.same_tree_names(&created).unwrap(), ["not-yet.md"]);
+        assert_eq!(workspace.same_tree_names("not-yet.md").unwrap(), [created]);
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -6297,6 +6309,26 @@ mod tests {
         let mut found = workspace.hard_links(".env").unwrap();
         found.sort();
         assert_eq!(found, [".env", "x-\u{FFFD}"]);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A second name under another open directory that is not UTF-8 is not rendered as its lossy
+    /// lookalike (PATH-003): the names are not given, so a caller with a deny rule refuses, and a
+    /// name that really holds the replacement character is given under its own spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_tree_name_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("tree-name-bytes");
+        let invalid = workspace.root().join(OsStr::from_bytes(b"x-\xff"));
+        assert_eq!(workspace.displayed_if_utf8(&[invalid]), None);
+        let lookalike = workspace.root().join("x-\u{FFFD}");
+        assert_eq!(
+            workspace.displayed_if_utf8(&[lookalike]),
+            Some(vec!["x-\u{FFFD}".to_string()])
+        );
         let _ = std::fs::remove_dir_all(path);
     }
 

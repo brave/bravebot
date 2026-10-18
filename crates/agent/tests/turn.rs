@@ -3905,6 +3905,49 @@ fn a_denied_file_is_not_read_through_a_second_path_to_the_tree() {
     }
 }
 
+/// The same second path gates a write and an edit (PERM-7): a denied file keeps its bytes when a
+/// call names it under the second path, and a file no rule covers is still written.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_denied_file_is_not_written_or_edited_through_a_second_path_to_the_tree() {
+    let scratch = Scratch::new("permissions-write-denied-through-a-firmlink");
+    std::fs::create_dir(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/a.md"), "SECRET_TOKEN=hunter2").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = format!(
+        "/System/Volumes/Data{}",
+        workspace.root().to_str().expect("utf-8 root")
+    );
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+    let write = format!(r#"{{"path":"{second}/src/a.md","contents":"overwritten"}}"#);
+    let edit =
+        format!(r#"{{"path":"{second}/src/a.md","old_text":"hunter2","new_text":"overwritten"}}"#);
+    let control = format!(r#"{{"path":"{second}/src/b.md","contents":"allowed"}}"#);
+    run_calls_under(
+        &workspace,
+        rules(&["Edit(src/a.md)"], &[], &[]),
+        trusting_the_workspace(),
+        &[
+            ("write_file", &control),
+            ("write_file", &write),
+            ("edit_file", &edit),
+        ],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/a.md")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "a denied file was changed through a second path"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/b.md")).unwrap(),
+        "allowed",
+        "a file no rule covers is written through the second path, so the refusals above are the rules'"
+    );
+}
+
 /// A deny rule is about the file (PERM-7), so every name the volume opens it by is refused with the
 /// name the rule spells, in a read and in a write. The planner is sent nothing from the file and
 /// the file keeps its bytes. The rules are read for the volume the file is on, as a session reads
