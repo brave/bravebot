@@ -137,9 +137,11 @@ nothing read from a model or a tool is ever interpreted as a message of the prot
 messages an editor writes are read as requests, notifications and answers.
 
 Text a model wrote is also sent without what makes an editor fetch something on arrival. A
-markdown image and an HTML tag that loads a resource are cut by a space, so that an address the
-model built from what it read is shown and not requested, and a control character is pictured as in
-the terminal. A link is sent as written, since drawing one loads nothing.
+markdown image and every HTML tag, closing tag, comment and instruction are cut by a space, except
+a bare tag, one with no attribute, whose kind loads nothing (so `<script>`, `<style>` and `<img>`
+are cut even bare), so that an address the model built from what it read is shown and not
+requested, and a control character is pictured as in the terminal. A link is sent as written,
+since drawing one loads nothing.
 
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_looks_like_a_protocol_message_is_only_text`
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_would_make_an_editor_fetch_something_is_cut`

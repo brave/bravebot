@@ -21618,6 +21618,55 @@ fn a_run_under_read_only_reads_the_machine_and_cannot_write_the_session() {
     assert!(refused.contains(commit_fails), "{refused}");
 }
 
+/// SANDBOX-22: `read-only` closes the network whatever `run.network` says, so a program that
+/// connects out fails, where the same connection under `workspace-write` succeeds. The target is a
+/// listener on this machine's loopback, which is all the sandbox needs to tell open from closed and
+/// the stand-in for the host a `git push` or `gh pr create` would reach. The control is the
+/// connection under `workspace-write`: a test of `read-only` alone passes on a machine that cannot
+/// connect at all. The regression it rejects is a `read-only` that leaves the session's network
+/// open, as it was before the mode closed it.
+#[test]
+fn a_run_under_read_only_cannot_connect_out_and_one_under_workspace_write_can() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    if read_only_cannot_run_here() {
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("address").port();
+    let command = format!("bash -c 'exec 3<>/dev/tcp/127.0.0.1/{port}'");
+    let session = |name: &str| {
+        let root = outside_the_session(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a session directory");
+        root
+    };
+    let told = |root: &std::path::Path, mode| {
+        let (first, second) = requests_for_one_run_at(root, &command, mode);
+        (first, message_from(&second, "Result of run").to_string())
+    };
+
+    let control = session("read-only-network-control");
+    let (_, connected) = told(&control, WorkspaceWrite);
+    let held = session("read-only-network-held");
+    let (first, refused) = told(&held, ReadOnly);
+    for directory in [&control, &held] {
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    assert!(
+        connected.contains("It exited 0."),
+        "the control did not connect: {connected}"
+    );
+    assert!(
+        refused.contains("It failed: step 1 exited"),
+        "read-only let a program connect out: {refused}"
+    );
+    assert!(
+        first.contains("The network is closed in this mode"),
+        "{first}"
+    );
+}
+
 /// SANDBOX-22: `strict` is the deny-by-default profile, so a program cannot read a file outside the
 /// session that `workspace-write` lets it read, and a failure says what it ran under. The control is the
 /// same read under `workspace-write`. The regression it rejects is `strict` reading the machine.

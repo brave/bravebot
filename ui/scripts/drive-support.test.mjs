@@ -123,7 +123,7 @@ test('launchLive returns the app and its first window with the list shown and er
 
 test('the selector constants name the classes the renderer owns', () => {
   const read = (file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', file), 'utf8')
-  assert.match(read('Composer.tsx'), /<footer className="composer">/)
+  assert.match(read('Composer.tsx'), /<footer className="composer"[ >]/)
   assert.match(read('Composer.tsx'), /querySelector\('textarea'\)/)
   assert.match(read('Sidebar.tsx'), /className="sidebar-tabs"/)
   assert.equal(COMPOSER_INPUT, '.composer textarea')

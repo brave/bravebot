@@ -36,6 +36,8 @@ export async function callBot(request: {
   grounded: boolean
   model: string | null
   attachments?: string[]
+  drops?: string[]
+  pastes?: string[]
 }): Promise<void> {
   unwrap(await window.bravebot.sendBotTurn(request))
 }

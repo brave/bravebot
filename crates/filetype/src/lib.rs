@@ -1,5 +1,5 @@
-//! Whether the start of a file says it is text, and whether a directory's name says a walk of the
-//! tree steps over it.
+//! Whether the start of a file says it is text, what a file's name says it is, and whether a
+//! directory's name says a walk of the tree steps over it.
 //!
 //! The agent refuses to read a binary file into a turn, and the desktop's file helper checks a
 //! named file before the agent sees it. Both ask this crate, so a file the helper lets through is a
@@ -7,7 +7,13 @@
 //!
 //! The agent's search and the list of files offered for an `@` name skip the same directories, so
 //! what a person is shown and what a search covers are one idea of the tree.
+//!
+//! A file dropped on the terminal or on the desktop window, and a picture the agent is asked to
+//! read, are judged by name in [`by_name`], so every front end attaches the same files under the
+//! same markers.
 #![forbid(unsafe_code)]
+
+pub mod by_name;
 
 /// Bytes inspected when deciding whether a file is text.
 pub const SNIFF_BYTES: usize = 8_192;

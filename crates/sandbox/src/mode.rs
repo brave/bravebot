@@ -45,6 +45,17 @@ impl SandboxMode {
         }
     }
 
+    /// The network a stage under this mode is held to, given the session's setting: `read-only`
+    /// closes it whatever the setting says, because it holds back what a program changes off this
+    /// machine as well as on it (SANDBOX-22). The one place that rule is decided, so what the
+    /// sandbox enforces and what the screens report cannot drift apart.
+    pub fn network_in_force(self, setting: crate::network::Network) -> crate::network::Network {
+        match self {
+            Self::ReadOnly => crate::network::Network::Closed,
+            _ => setting,
+        }
+    }
+
     /// The mode a word names, or `None`.
     ///
     /// Exact and lower case, as the permission modes are read: a value that is almost a mode is
