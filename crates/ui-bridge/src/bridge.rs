@@ -2283,7 +2283,7 @@ fn work(work: Work) {
         session,
         project,
         state,
-        config,
+        mut config,
         attribution,
         output_cap,
         download_cap,
@@ -2310,6 +2310,9 @@ fn work(work: Work) {
         answers,
         finished,
     } = work;
+    // The model that answers is the one this turn names, and the configuration was built without
+    // asking which. Taken here, on the worker, because the roster may be a request away.
+    crate::models::adopt_window(&mut config, model.as_deref());
 
     // Held for the length of the turn. Nothing else contends for it: a session with a
     // turn in flight refuses another one.

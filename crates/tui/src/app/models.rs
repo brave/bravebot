@@ -226,10 +226,13 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
     let Ok(models) = list_models(config, session.model()) else {
         return;
     };
-    if config.adopt_window(advertised_window(&models, session.model())) {
+    let in_force = session.model().unwrap_or(&config.default_model).to_string();
+    // The model in force, not the pick: with no pick the configured default is what a request names
+    // (BACKEND-14, COMPACT-9). `automatic` is a roster row that states no window, so it still leaves
+    // the default in place.
+    if config.adopt_window(advertised_window(&models, Some(&in_force))) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
-    let in_force = session.model().unwrap_or(&config.default_model).to_string();
     config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
@@ -298,6 +301,18 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     config.adopt_window(advertised_window(&models, Some(model)));
     config.adopt_inputs(model, advertised_inputs(&models, Some(model)));
     reads_effort(&models, model)
+}
+
+/// The configuration a turn is run on: the session's, with the window of the model that answers it
+/// where a `/agent` line's definition names one other than the session's (BACKEND-7).
+///
+/// A copy, so the session's own budget is what it was once the turn is over.
+pub(super) fn config_for_turn(config: &Config, addressed_model: Option<&str>) -> Config {
+    let mut turn = config.clone();
+    if let Some(model) = addressed_model {
+        adopt_listing_for_model(&mut turn, model);
+    }
+    turn
 }
 
 /// Whether a reply matching a schema can be asked of `model`, as far as its listing says.
